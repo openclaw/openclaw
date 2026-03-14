@@ -21,7 +21,7 @@ var __exportAll = (all, no_symbols) => {
 const t$6 = globalThis, e$13 = t$6.ShadowRoot && (void 0 === t$6.ShadyCSS || t$6.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, s$8 = Symbol(), o$14 = new WeakMap();
 var n$12 = class {
 	constructor(t, e, o) {
-		if (this._$cssResult$ = !0, o !== s$8) throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");
+		if (this._$cssResult$ = !0, o !== s$8) {throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");}
 		this.cssText = t, this.t = e;
 	}
 	get styleSheet() {
@@ -39,20 +39,20 @@ var n$12 = class {
 };
 const r$11 = (t) => new n$12("string" == typeof t ? t : t + "", void 0, s$8), i$9 = (t, ...e) => {
 	const o = 1 === t.length ? t[0] : e.reduce((e, s, o) => e + ((t) => {
-		if (!0 === t._$cssResult$) return t.cssText;
-		if ("number" == typeof t) return t;
+		if (!0 === t._$cssResult$) {return t.cssText;}
+		if ("number" == typeof t) {return t;}
 		throw Error("Value passed to 'css' function must be a 'css' function result: " + t + ". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.");
 	})(s) + t[o + 1], t[0]);
 	return new n$12(o, t, s$8);
 }, S$1 = (s, o) => {
-	if (e$13) s.adoptedStyleSheets = o.map((t) => t instanceof CSSStyleSheet ? t : t.styleSheet);
-	else for (const e of o) {
+	if (e$13) {s.adoptedStyleSheets = o.map((t) => t instanceof CSSStyleSheet ? t : t.styleSheet);}
+	else {for (const e of o) {
 		const o = document.createElement("style"), n = t$6.litNonce;
 		void 0 !== n && o.setAttribute("nonce", n), o.textContent = e.cssText, s.appendChild(o);
-	}
+	}}
 }, c$6 = e$13 ? (t) => t : (t) => t instanceof CSSStyleSheet ? ((t) => {
 	let e = "";
-	for (const s of t.cssRules) e += s.cssText;
+	for (const s of t.cssRules) {e += s.cssText;}
 	return r$11(e);
 })(t) : t;
 
@@ -134,20 +134,20 @@ var y$1 = class extends HTMLElement {
 		return this.elementProperties.get(t) ?? b$1;
 	}
 	static _$Ei() {
-		if (this.hasOwnProperty(d$2("elementProperties"))) return;
+		if (this.hasOwnProperty(d$2("elementProperties"))) {return;}
 		const t = n$11(this);
 		t.finalize(), void 0 !== t.l && (this.l = [...t.l]), this.elementProperties = new Map(t.elementProperties);
 	}
 	static finalize() {
-		if (this.hasOwnProperty(d$2("finalized"))) return;
+		if (this.hasOwnProperty(d$2("finalized"))) {return;}
 		if (this.finalized = !0, this._$Ei(), this.hasOwnProperty(d$2("properties"))) {
 			const t = this.properties, s = [...r$10(t), ...o$13(t)];
-			for (const i of s) this.createProperty(i, t[i]);
+			for (const i of s) {this.createProperty(i, t[i]);}
 		}
 		const t = this[Symbol.metadata];
 		if (null !== t) {
 			const s = litPropertyMetadata.get(t);
-			if (void 0 !== s) for (const [t, i] of s) this.elementProperties.set(t, i);
+			if (void 0 !== s) {for (const [t, i] of s) {this.elementProperties.set(t, i);}}
 		}
 		this._$Eh = new Map();
 		for (const [t, s] of this.elementProperties) {
@@ -159,9 +159,9 @@ var y$1 = class extends HTMLElement {
 	static finalizeStyles(s) {
 		const i = [];
 		if (Array.isArray(s)) {
-			const e = new Set(s.flat(1 / 0).reverse());
-			for (const s of e) i.unshift(c$6(s));
-		} else void 0 !== s && i.push(c$6(s));
+			const e = new Set(s.flat(1 / 0).toReversed());
+			for (const s of e) {i.unshift(c$6(s));}
+		} else {void 0 !== s && i.push(c$6(s));}
 		return i;
 	}
 	static _$Eu(t, s) {
@@ -182,7 +182,7 @@ var y$1 = class extends HTMLElement {
 	}
 	_$E_() {
 		const t = new Map(), s = this.constructor.elementProperties;
-		for (const i of s.keys()) this.hasOwnProperty(i) && (t.set(i, this[i]), delete this[i]);
+		for (const i of s.keys()) {this.hasOwnProperty(i) && (t.set(i, this[i]), delete this[i]);}
 		t.size > 0 && (this._$Ep = t);
 	}
 	createRenderRoot() {
@@ -218,7 +218,7 @@ var y$1 = class extends HTMLElement {
 	requestUpdate(t, s, i, e = !1, h) {
 		if (void 0 !== t) {
 			const r = this.constructor;
-			if (!1 === e && (h = this[t]), i ??= r.getPropertyOptions(t), !((i.hasChanged ?? f$3)(h, s) || i.useDefault && i.reflect && h === this._$Ej?.get(t) && !this.hasAttribute(r._$Eu(t, i)))) return;
+			if (!1 === e && (h = this[t]), i ??= r.getPropertyOptions(t), !((i.hasChanged ?? f$3)(h, s) || i.useDefault && i.reflect && h === this._$Ej?.get(t) && !this.hasAttribute(r._$Eu(t, i)))) {return;}
 			this.C(t, s, i);
 		}
 		!1 === this.isUpdatePending && (this._$ES = this._$EP());
@@ -240,17 +240,17 @@ var y$1 = class extends HTMLElement {
 		return this.performUpdate();
 	}
 	performUpdate() {
-		if (!this.isUpdatePending) return;
+		if (!this.isUpdatePending) {return;}
 		if (!this.hasUpdated) {
 			if (this.renderRoot ??= this.createRenderRoot(), this._$Ep) {
-				for (const [t, s] of this._$Ep) this[t] = s;
+				for (const [t, s] of this._$Ep) {this[t] = s;}
 				this._$Ep = void 0;
 			}
 			const t = this.constructor.elementProperties;
-			if (t.size > 0) for (const [s, i] of t) {
+			if (t.size > 0) {for (const [s, i] of t) {
 				const { wrapped: t } = i, e = this[s];
 				!0 !== t || this._$AL.has(s) || void 0 === e || this.C(s, void 0, i, e);
-			}
+			}}
 		}
 		let t = !1;
 		const s = this._$AL;
@@ -296,7 +296,7 @@ const t$5 = globalThis, i$7 = (t) => t, s$7 = t$5.trustedTypes, e$11 = s$7 ? s$7
 	values: s
 }), b = x(1), w = x(2), T = x(3), E = Symbol.for("lit-noChange"), A = Symbol.for("lit-nothing"), C = new WeakMap(), P = l$3.createTreeWalker(l$3, 129);
 function V(t, i) {
-	if (!u$2(t) || !t.hasOwnProperty("raw")) throw Error("invalid template strings array");
+	if (!u$2(t) || !t.hasOwnProperty("raw")) {throw Error("invalid template strings array");}
 	return void 0 !== e$11 ? e$11.createHTML(i) : i;
 }
 const N = (t, i) => {
@@ -305,7 +305,7 @@ const N = (t, i) => {
 	for (let i = 0; i < s; i++) {
 		const s = t[i];
 		let a, u, d = -1, f = 0;
-		for (; f < s.length && (c.lastIndex = f, u = c.exec(s), null !== u);) f = c.lastIndex, c === v$1 ? "!--" === u[1] ? c = _ : void 0 !== u[1] ? c = m$2 : void 0 !== u[2] ? (y.test(u[2]) && (n = RegExp("</" + u[2], "g")), c = p$1) : void 0 !== u[3] && (c = p$1) : c === p$1 ? ">" === u[0] ? (c = n ?? v$1, d = -1) : void 0 === u[1] ? d = -2 : (d = c.lastIndex - u[2].length, a = u[1], c = void 0 === u[3] ? p$1 : "\"" === u[3] ? $ : g) : c === $ || c === g ? c = p$1 : c === _ || c === m$2 ? c = v$1 : (c = p$1, n = void 0);
+		for (; f < s.length && (c.lastIndex = f, u = c.exec(s), null !== u);) {f = c.lastIndex, c === v$1 ? "!--" === u[1] ? c = _ : void 0 !== u[1] ? c = m$2 : void 0 !== u[2] ? (y.test(u[2]) && (n = RegExp("</" + u[2], "g")), c = p$1) : void 0 !== u[3] && (c = p$1) : c === p$1 ? ">" === u[0] ? (c = n ?? v$1, d = -1) : void 0 === u[1] ? d = -2 : (d = c.lastIndex - u[2].length, a = u[1], c = void 0 === u[3] ? p$1 : "\"" === u[3] ? $ : g) : c === $ || c === g ? c = p$1 : c === _ || c === m$2 ? c = v$1 : (c = p$1, n = void 0);}
 		const x = c === p$1 && t[i + 1].startsWith("/>") ? " " : "";
 		l += c === v$1 ? s + r$9 : d >= 0 ? (e.push(a), s.slice(0, d) + h$5 + s.slice(d) + o$12 + x) : s + o$12 + (-2 === d ? i : x);
 	}
@@ -323,7 +323,7 @@ var S = class S {
 		}
 		for (; null !== (r = P.nextNode()) && d.length < u;) {
 			if (1 === r.nodeType) {
-				if (r.hasAttributes()) for (const t of r.getAttributeNames()) if (t.endsWith(h$5)) {
+				if (r.hasAttributes()) {for (const t of r.getAttributeNames()) {if (t.endsWith(h$5)) {
 					const i = v[a++], s = r.getAttribute(t).split(o$12), e = /([.?@])?(.*)/.exec(i);
 					d.push({
 						type: 1,
@@ -332,32 +332,32 @@ var S = class S {
 						strings: s,
 						ctor: "." === e[1] ? I : "?" === e[1] ? L : "@" === e[1] ? z : H
 					}), r.removeAttribute(t);
-				} else t.startsWith(o$12) && (d.push({
+				} else {t.startsWith(o$12) && (d.push({
 					type: 6,
 					index: l
-				}), r.removeAttribute(t));
+				}), r.removeAttribute(t));}}}
 				if (y.test(r.tagName)) {
 					const t = r.textContent.split(o$12), i = t.length - 1;
 					if (i > 0) {
 						r.textContent = s$7 ? s$7.emptyScript : "";
-						for (let s = 0; s < i; s++) r.append(t[s], c$4()), P.nextNode(), d.push({
+						for (let s = 0; s < i; s++) {r.append(t[s], c$4()), P.nextNode(), d.push({
 							type: 2,
 							index: ++l
-						});
+						});}
 						r.append(t[i], c$4());
 					}
 				}
-			} else if (8 === r.nodeType) if (r.data === n$10) d.push({
+			} else if (8 === r.nodeType) {if (r.data === n$10) {d.push({
 				type: 2,
 				index: l
-			});
+			});}
 			else {
 				let t = -1;
-				for (; -1 !== (t = r.data.indexOf(o$12, t + 1));) d.push({
+				for (; -1 !== (t = r.data.indexOf(o$12, t + 1));) {d.push({
 					type: 7,
 					index: l
-				}), t += o$12.length - 1;
-			}
+				}), t += o$12.length - 1;}
+			}}
 			l++;
 		}
 	}
@@ -367,7 +367,7 @@ var S = class S {
 	}
 };
 function M$1(t, i, s = t, e) {
-	if (i === E) return i;
+	if (i === E) {return i;}
 	let h = void 0 !== e ? s._$Co?.[e] : s._$Cl;
 	const o = a(i) ? void 0 : i._$litDirective$;
 	return h?.constructor !== o && (h?._$AO?.(!1), void 0 === o ? h = void 0 : (h = new o(t), h._$AT(t, s, e)), void 0 !== e ? (s._$Co ??= [])[e] = h : s._$Cl = h), void 0 !== h && (i = M$1(t, h._$AS(t, i.values), h, e)), i;
@@ -397,7 +397,7 @@ var R = class {
 	}
 	p(t) {
 		let i = 0;
-		for (const s of this._$AV) void 0 !== s && (void 0 !== s.strings ? (s._$AI(t, s, i), i += s.strings.length - 2) : s._$AI(t[i])), i++;
+		for (const s of this._$AV) {void 0 !== s && (void 0 !== s.strings ? (s._$AI(t, s, i), i += s.strings.length - 2) : s._$AI(t[i])), i++;}
 	}
 };
 var k = class k {
@@ -432,7 +432,7 @@ var k = class k {
 	}
 	$(t) {
 		const { values: i, _$litType$: s } = t, e = "number" == typeof s ? this._$AC(t) : (void 0 === s.el && (s.el = S.createElement(V(s.h, s.h[0]), this.options)), s);
-		if (this._$AH?._$AD === e) this._$AH.p(i);
+		if (this._$AH?._$AD === e) {this._$AH.p(i);}
 		else {
 			const t = new R(e, this), s = t.u(this.options);
 			t.p(i), this.T(s), this._$AH = t;
@@ -446,7 +446,7 @@ var k = class k {
 		u$2(this._$AH) || (this._$AH = [], this._$AR());
 		const i = this._$AH;
 		let s, e = 0;
-		for (const h of t) e === i.length ? i.push(s = new k(this.O(c$4()), this.O(c$4()), this, this.options)) : s = i[e], s._$AI(h), e++;
+		for (const h of t) {e === i.length ? i.push(s = new k(this.O(c$4()), this.O(c$4()), this, this.options)) : s = i[e], s._$AI(h), e++;}
 		e < i.length && (this._$AR(s && s._$AB.nextSibling, e), i.length = e);
 	}
 	_$AR(t = this._$AA.nextSibling, s) {
@@ -472,11 +472,11 @@ var H = class {
 	_$AI(t, i = this, s, e) {
 		const h = this.strings;
 		let o = !1;
-		if (void 0 === h) t = M$1(this, t, i, 0), o = !a(t) || t !== this._$AH && t !== E, o && (this._$AH = t);
+		if (void 0 === h) {t = M$1(this, t, i, 0), o = !a(t) || t !== this._$AH && t !== E, o && (this._$AH = t);}
 		else {
 			const e = t;
 			let n, r;
-			for (t = h[0], n = 0; n < h.length - 1; n++) r = M$1(this, e[s + n], i, n), r === E && (r = this._$AH[n]), o ||= !a(r) || r !== this._$AH[n], r === A ? t = A : t !== A && (t += (r ?? "") + h[n + 1]), this._$AH[n] = r;
+			for (t = h[0], n = 0; n < h.length - 1; n++) {r = M$1(this, e[s + n], i, n), r === E && (r = this._$AH[n]), o ||= !a(r) || r !== this._$AH[n], r === A ? t = A : t !== A && (t += (r ?? "") + h[n + 1]), this._$AH[n] = r;}
 		}
 		o && !e && this.j(t);
 	}
@@ -505,7 +505,7 @@ var z = class extends H {
 		super(t, i, s, e, h), this.type = 5;
 	}
 	_$AI(t, i = this) {
-		if ((t = M$1(this, t, i, 0) ?? A) === E) return;
+		if ((t = M$1(this, t, i, 0) ?? A) === E) {return;}
 		const s = this._$AH, e = t === A && s !== A || t.capture !== s.capture || t.once !== s.once || t.passive !== s.passive, h = t !== A && (s === A || e);
 		e && this.element.removeEventListener(this.name, this, s), h && this.element.addEventListener(this.name, this, t), this._$AH = t;
 	}
@@ -613,7 +613,7 @@ const t$4 = {
 	values: e
 });
 var i$5 = class {
-	constructor(t) {}
+	
 	get _$AU() {
 		return this._$AM._$AU;
 	}
@@ -669,18 +669,18 @@ var i$5 = class {
 */
 const u = (e, s, t) => {
 	const r = new Map();
-	for (let l = s; l <= t; l++) r.set(e[l], l);
+	for (let l = s; l <= t; l++) {r.set(e[l], l);}
 	return r;
 }, c$2 = e$10(class extends i$5 {
 	constructor(e) {
-		if (super(e), e.type !== t$4.CHILD) throw Error("repeat() can only be used in text expressions");
+		if (super(e), e.type !== t$4.CHILD) {throw Error("repeat() can only be used in text expressions");}
 	}
 	dt(e, s, t) {
 		let r;
 		void 0 === t ? t = s : void 0 !== s && (r = s);
 		const l = [], o = [];
 		let i = 0;
-		for (const s of e) l[i] = r ? r(s, i) : i, o[i] = t(s, i), i++;
+		for (const s of e) {l[i] = r ? r(s, i) : i, o[i] = t(s, i), i++;}
 		return {
 			values: o,
 			keys: l
@@ -691,24 +691,24 @@ const u = (e, s, t) => {
 	}
 	update(s, [t, r, c]) {
 		const d = M(s), { values: p$3, keys: a } = this.dt(t, r, c);
-		if (!Array.isArray(d)) return this.ut = a, p$3;
+		if (!Array.isArray(d)) {return this.ut = a, p$3;}
 		const h = this.ut ??= [], v$2 = [];
 		let m, y, x = 0, j = d.length - 1, k = 0, w = p$3.length - 1;
-		for (; x <= j && k <= w;) if (null === d[x]) x++;
-		else if (null === d[j]) j--;
-		else if (h[x] === a[k]) v$2[k] = u$1(d[x], p$3[k]), x++, k++;
-		else if (h[j] === a[w]) v$2[w] = u$1(d[j], p$3[w]), j--, w--;
-		else if (h[x] === a[w]) v$2[w] = u$1(d[x], p$3[w]), v(s, v$2[w + 1], d[x]), x++, w--;
-		else if (h[j] === a[k]) v$2[k] = u$1(d[j], p$3[k]), v(s, d[x], d[j]), j--, k++;
-		else if (void 0 === m && (m = u(a, k, w), y = u(h, x, j)), m.has(h[x])) if (m.has(h[j])) {
+		for (; x <= j && k <= w;) {if (null === d[x]) {x++;}
+		else if (null === d[j]) {j--;}
+		else if (h[x] === a[k]) {v$2[k] = u$1(d[x], p$3[k]), x++, k++;}
+		else if (h[j] === a[w]) {v$2[w] = u$1(d[j], p$3[w]), j--, w--;}
+		else if (h[x] === a[w]) {v$2[w] = u$1(d[x], p$3[w]), v(s, v$2[w + 1], d[x]), x++, w--;}
+		else if (h[j] === a[k]) {v$2[k] = u$1(d[j], p$3[k]), v(s, d[x], d[j]), j--, k++;}
+		else if (void 0 === m && (m = u(a, k, w), y = u(h, x, j)), m.has(h[x])) {if (m.has(h[j])) {
 			const e = y.get(a[k]), t = void 0 !== e ? d[e] : null;
 			if (null === t) {
 				const e = v(s, d[x]);
 				u$1(e, p$3[k]), v$2[k] = e;
-			} else v$2[k] = u$1(t, p$3[k]), v(s, d[x], t), d[e] = null;
+			} else {v$2[k] = u$1(t, p$3[k]), v(s, d[x], t), d[e] = null;}
 			k++;
-		} else h$4(d[j]), j--;
-		else h$4(d[x]), x++;
+		} else {h$4(d[j]), j--;}}
+		else {h$4(d[x]), x++;}}
 		for (; k <= w;) {
 			const e = v(s, v$2[w + 1]);
 			u$1(e, p$3[k]), v$2[k++] = e;
@@ -755,7 +755,7 @@ function n$7(n) {
 		}, this.host = t, void 0 !== s.context) {
 			const t = s;
 			this.context = t.context, this.callback = t.callback, this.subscribe = t.subscribe ?? !1;
-		} else this.context = s, this.callback = i, this.subscribe = h ?? !1;
+		} else {this.context = s, this.callback = i, this.subscribe = h ?? !1;}
 		this.host.addController(this);
 	}
 	hostConnected() {
@@ -787,11 +787,11 @@ var s$2 = class {
 	}
 	constructor(s) {
 		this.subscriptions = new Map(), this.updateObservers = () => {
-			for (const [s, { disposer: t }] of this.subscriptions) s(this.o, t);
+			for (const [s, { disposer: t }] of this.subscriptions) {s(this.o, t);}
 		}, void 0 !== s && (this.value = s);
 	}
 	addCallback(s, t, i) {
-		if (!i) return void s(this.value);
+		if (!i) {return void s(this.value);}
 		this.subscriptions.has(s) || this.subscriptions.set(s, {
 			disposer: () => {
 				this.subscriptions.delete(s);
@@ -821,14 +821,14 @@ var s$2 = class {
 var i$3 = class extends s$2 {
 	constructor(s, e, i) {
 		super(void 0 !== e.context ? e.initialValue : i), this.onContextRequest = (t) => {
-			if (t.context !== this.context) return;
+			if (t.context !== this.context) {return;}
 			const s = t.contextTarget ?? t.composedPath()[0];
 			s !== this.host && (t.stopPropagation(), this.addCallback(t.callback, s, t.subscribe));
 		}, this.onProviderRequest = (s) => {
-			if (s.context !== this.context) return;
-			if ((s.contextTarget ?? s.composedPath()[0]) === this.host) return;
+			if (s.context !== this.context) {return;}
+			if ((s.contextTarget ?? s.composedPath()[0]) === this.host) {return;}
 			const e = new Set();
-			for (const [s, { consumerHost: i }] of this.subscriptions) e.has(s) || (e.add(s), i.dispatchEvent(new s$4(this.context, i, s, !0)));
+			for (const [s, { consumerHost: i }] of this.subscriptions) {e.has(s) || (e.add(s), i.dispatchEvent(new s$4(this.context, i, s, !0)));}
 			s.stopPropagation();
 		}, this.host = s, void 0 !== e.context ? this.context = e.context : this.context = e, this.attachListeners(), this.host.addController?.(this);
 	}
@@ -848,7 +848,7 @@ var i$3 = class extends s$2 {
 	constructor() {
 		this.pendingContextRequests = new Map(), this.onContextProvider = (t) => {
 			const s = this.pendingContextRequests.get(t.context);
-			if (void 0 === s) return;
+			if (void 0 === s) {return;}
 			this.pendingContextRequests.delete(t.context);
 			const { requests: o } = s;
 			for (const { elementRef: s, callbackRef: n } of o) {
@@ -856,7 +856,7 @@ var i$3 = class extends s$2 {
 				void 0 === o || void 0 === c || o.dispatchEvent(new s$4(t.context, o, c, !0));
 			}
 		}, this.onContextRequest = (e) => {
-			if (!0 !== e.subscribe) return;
+			if (!0 !== e.subscribe) {return;}
 			const t = e.contextTarget ?? e.composedPath()[0], s = e.callback;
 			let o = this.pendingContextRequests.get(e.context);
 			void 0 === o && this.pendingContextRequests.set(e.context, o = {
@@ -885,7 +885,7 @@ var i$3 = class extends s$2 {
 */ function e$7({ context: e }) {
 	return (n, i) => {
 		const r = new WeakMap();
-		if ("object" == typeof i) return {
+		if ("object" == typeof i) {return {
 			get() {
 				return n.get.call(this);
 			},
@@ -898,7 +898,7 @@ var i$3 = class extends s$2 {
 					initialValue: n
 				})), n;
 			}
-		};
+		};}
 		{
 			n.constructor.addInitializer(((n) => {
 				r.set(n, new i$3(n, { context: e }));
@@ -1136,7 +1136,7 @@ const color = (src) => `
   `;
 const getInverseKey = (key) => {
 	const match = key.match(/^([a-z]+)(\d+)$/);
-	if (!match) return key;
+	if (!match) {return key;}
 	const [, prefix, shadeStr] = match;
 	const shade = parseInt(shadeStr, 10);
 	const target = 100 - shade;
@@ -1587,7 +1587,7 @@ function isObject$1(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isComponentArrayReference(value) {
-	if (!isObject$1(value)) return false;
+	if (!isObject$1(value)) {return false;}
 	return "explicitList" in value || "template" in value;
 }
 function isStringValue(value) {
@@ -1600,9 +1600,9 @@ function isBooleanValue(value) {
 	return isObject$1(value) && ("path" in value || "literal" in value && typeof value.literal === "boolean" || "literalBoolean" in value);
 }
 function isAnyComponentNode(value) {
-	if (!isObject$1(value)) return false;
+	if (!isObject$1(value)) {return false;}
 	const hasBaseKeys = "id" in value && "type" in value && "properties" in value;
-	if (!hasBaseKeys) return false;
+	if (!hasBaseKeys) {return false;}
 	return true;
 }
 function isResolvedAudioPlayer(props) {
@@ -1612,7 +1612,7 @@ function isResolvedButton(props) {
 	return isObject$1(props) && "child" in props && isAnyComponentNode(props.child) && "action" in props;
 }
 function isResolvedCard(props) {
-	if (!isObject$1(props)) return false;
+	if (!isObject$1(props)) {return false;}
 	if (!("child" in props)) {
 		if (!("children" in props)) {
 			return false;
@@ -1726,7 +1726,7 @@ var A2uiMessageProcessor = class A2uiMessageProcessor {
 	*/
 	getData(node, relativePath, surfaceId = A2uiMessageProcessor.DEFAULT_SURFACE_ID) {
 		const surface = this.#getOrCreateSurface(surfaceId);
-		if (!surface) return null;
+		if (!surface) {return null;}
 		let finalPath;
 		if (relativePath === "." || relativePath === "") {
 			finalPath = node.dataContextPath ?? "/";
@@ -1741,7 +1741,7 @@ var A2uiMessageProcessor = class A2uiMessageProcessor {
 			return;
 		}
 		const surface = this.#getOrCreateSurface(surfaceId);
-		if (!surface) return;
+		if (!surface) {return;}
 		let finalPath;
 		if (relativePath === "." || relativePath === "") {
 			finalPath = node.dataContextPath ?? "/";
@@ -1782,10 +1782,10 @@ var A2uiMessageProcessor = class A2uiMessageProcessor {
 	#convertKeyValueArrayToMap(arr) {
 		const map = new this.#mapCtor();
 		for (const item of arr) {
-			if (!isObject$1(item) || !("key" in item)) continue;
+			if (!isObject$1(item) || !("key" in item)) {continue;}
 			const key = item.key;
 			const valueKey = this.#findValueKey(item);
-			if (!valueKey) continue;
+			if (!valueKey) {continue;}
 			let value = item[valueKey];
 			if (valueKey === "valueMap" && Array.isArray(value)) {
 				value = this.#convertKeyValueArrayToMap(value);
@@ -1872,7 +1872,7 @@ var A2uiMessageProcessor = class A2uiMessageProcessor {
 		const segments = this.#normalizePath(path).split("/").filter((s) => s);
 		let current = root;
 		for (const segment of segments) {
-			if (current === undefined || current === null) return null;
+			if (current === undefined || current === null) {return null;}
 			if (current instanceof Map) {
 				current = current.get(segment);
 			} else if (Array.isArray(current) && /^\d+$/.test(segment)) {
@@ -2210,14 +2210,14 @@ var __publicField = (obj, key, value) => {
 	return value;
 };
 var __accessCheck = (obj, member, msg) => {
-	if (!member.has(obj)) throw TypeError("Cannot " + msg);
+	if (!member.has(obj)) {throw TypeError("Cannot " + msg);}
 };
 var __privateIn = (member, obj) => {
-	if (Object(obj) !== obj) throw TypeError("Cannot use the \"in\" operator on this value");
+	if (Object(obj) !== obj) {throw TypeError("Cannot use the \"in\" operator on this value");}
 	return member.has(obj);
 };
 var __privateAdd = (obj, member, value) => {
-	if (member.has(obj)) throw TypeError("Cannot add the same private member more than once");
+	if (member.has(obj)) {throw TypeError("Cannot add the same private member more than once");}
 	member instanceof WeakSet ? member.add(obj) : member.set(obj, value);
 };
 var __privateMethod = (obj, member, method) => {
@@ -2579,11 +2579,11 @@ var Signal;
 			}
 		}
 		get() {
-			if (!(0, Signal2.isState)(this)) throw new TypeError("Wrong receiver type for Signal.State.prototype.get");
+			if (!(0, Signal2.isState)(this)) {throw new TypeError("Wrong receiver type for Signal.State.prototype.get");}
 			return signalGetFn.call(this[NODE]);
 		}
 		set(newValue) {
-			if (!(0, Signal2.isState)(this)) throw new TypeError("Wrong receiver type for Signal.State.prototype.set");
+			if (!(0, Signal2.isState)(this)) {throw new TypeError("Wrong receiver type for Signal.State.prototype.set");}
 			if (isInNotificationPhase()) {
 				throw new Error("Writes to signals not permitted during Watcher callback");
 			}
@@ -2615,7 +2615,7 @@ var Signal;
 			}
 		}
 		get() {
-			if (!(0, Signal2.isComputed)(this)) throw new TypeError("Wrong receiver type for Signal.Computed.prototype.get");
+			if (!(0, Signal2.isComputed)(this)) {throw new TypeError("Wrong receiver type for Signal.Computed.prototype.get");}
 			return computedGet(this[NODE]);
 		}
 	}
@@ -2659,7 +2659,7 @@ var Signal;
 				throw new TypeError("Called hasSinks without a Signal argument");
 			}
 			const liveConsumerNode = signal[NODE].liveConsumerNode;
-			if (!liveConsumerNode) return false;
+			if (!liveConsumerNode) {return false;}
 			return liveConsumerNode.length > 0;
 		}
 		subtle2.hasSinks = hasSinks;
@@ -2668,7 +2668,7 @@ var Signal;
 				throw new TypeError("Called hasSources without a Computed or Watcher argument");
 			}
 			const producerNode = signal[NODE].producerNode;
-			if (!producerNode) return false;
+			if (!producerNode) {return false;}
 			return producerNode.length > 0;
 		}
 		subtle2.hasSources = hasSources;
@@ -2808,9 +2808,9 @@ const ARRAY_WRITE_THEN_READ_METHODS = new Set([
 	"unshift"
 ]);
 function convertToInt(prop) {
-	if (typeof prop === "symbol") return null;
+	if (typeof prop === "symbol") {return null;}
 	const num = Number(prop);
-	if (isNaN(num)) return null;
+	if (isNaN(num)) {return null;}
 	return num % 1 === 0 ? num : null;
 }
 var SignalArray = class SignalArray {
@@ -4060,7 +4060,7 @@ function r$4(r) {
 const s$1 = new Signal.subtle.Watcher(() => {
 	i$2 || (i$2 = !0, queueMicrotask(() => {
 		i$2 = !1;
-		for (const t of s$1.getPending()) t.get();
+		for (const t of s$1.getPending()) {t.get();}
 		s$1.watch();
 	}));
 }), h$3 = Symbol("SignalWatcherBrand"), e$3 = new FinalizationRegistry((i) => {
@@ -4086,7 +4086,7 @@ function o$7(i) {
 			});
 		}
 		_$S_() {
-			if (void 0 !== this.h) return;
+			if (void 0 !== this.h) {return;}
 			this._$Su = new Signal.Computed(() => {
 				this._$So.get(), super.performUpdate();
 			});
@@ -4097,7 +4097,7 @@ function o$7(i) {
 			n$4.set(i, this), e$3.register(this, i), i.watch(this._$Su), i.watch(...Array.from(this._$St).map(([t]) => t));
 		}
 		_$Sp() {
-			if (void 0 === this.h) return;
+			if (void 0 === this.h) {return;}
 			let i = !1;
 			this.h.unwatch(...Signal.subtle.introspectSources(this.h).filter((t) => {
 				var s;
@@ -4135,20 +4135,20 @@ function o$7(i) {
 * SPDX-License-Identifier: BSD-3-Clause
 */ const s = (i, t) => {
 	const e = i._$AN;
-	if (void 0 === e) return !1;
-	for (const i of e) i._$AO?.(t, !1), s(i, t);
+	if (void 0 === e) {return !1;}
+	for (const i of e) {i._$AO?.(t, !1), s(i, t);}
 	return !0;
 }, o$6 = (i) => {
 	let t, e;
 	do {
-		if (void 0 === (t = i._$AM)) break;
+		if (void 0 === (t = i._$AM)) {break;}
 		e = t._$AN, e.delete(i), i = t;
 	} while (0 === e?.size);
 }, r$3 = (i) => {
 	for (let t; t = i._$AM; i = t) {
 		let e = t._$AN;
-		if (void 0 === e) t._$AN = e = new Set();
-		else if (e.has(i)) break;
+		if (void 0 === e) {t._$AN = e = new Set();}
+		else if (e.has(i)) {break;}
 		e.add(i), c(t);
 	}
 };
@@ -4157,9 +4157,9 @@ function h$2(i) {
 }
 function n$3(i, t = !1, e = 0) {
 	const r = this._$AH, h = this._$AN;
-	if (void 0 !== h && 0 !== h.size) if (t) if (Array.isArray(r)) for (let i = e; i < r.length; i++) s(r[i], !1), o$6(r[i]);
-	else null != r && (s(r, !1), o$6(r));
-	else s(this, i);
+	if (void 0 !== h && 0 !== h.size) {if (t) {if (Array.isArray(r)) {for (let i = e; i < r.length; i++) {s(r[i], !1), o$6(r[i]);}}
+	else {null != r && (s(r, !1), o$6(r));}}
+	else {s(this, i);}}
 }
 const c = (i) => {
 	i.type == t$4.CHILD && (i._$AP ??= n$3, i._$AQ ??= h$2);
@@ -4175,7 +4175,7 @@ var f = class extends i$5 {
 		i !== this.isConnected && (this.isConnected = i, i ? this.reconnected?.() : this.disconnected?.()), t && (s(this, i), o$6(this));
 	}
 	setValue(t) {
-		if (r$8(this._$Ct)) this._$Ct._$AI(t, this);
+		if (r$8(this._$Ct)) {this._$Ct._$AI(t, this);}
 		else {
 			const i = [...this._$Ct._$AH];
 			i[this._$Ci] = t, this._$Ct._$AI(i, this, 0);
@@ -4194,7 +4194,7 @@ let o$5 = !1;
 const n$2 = new Signal.subtle.Watcher(async () => {
 	o$5 || (o$5 = !0, queueMicrotask(() => {
 		o$5 = !1;
-		for (const i of n$2.getPending()) i.get();
+		for (const i of n$2.getPending()) {i.get();}
 		n$2.watch();
 	}));
 });
@@ -4249,7 +4249,7 @@ const h$1 = e$10(r$2);
 function* o$3(o, f) {
 	if (void 0 !== o) {
 		let i = 0;
-		for (const t of o) yield f(t, i++);
+		for (const t of o) {yield f(t, i++);}
 	}
 }
 
@@ -4322,7 +4322,7 @@ var __runInitializers$19 = void 0 && (void 0).__runInitializers || function(this
 };
 var __esDecorate$19 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -4331,10 +4331,10 @@ var __esDecorate$19 = void 0 && (void 0).__esDecorate || function(ctor, descript
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -4342,17 +4342,17 @@ var __esDecorate$19 = void 0 && (void 0).__esDecorate || function(ctor, descript
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 let Root = (() => {
@@ -4515,12 +4515,12 @@ let Root = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Root = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#surfaceId_accessor_storage = (__runInitializers$19(this, _instanceExtraInitializers), __runInitializers$19(this, _surfaceId_initializers, null));
 		get surfaceId() {
@@ -4985,7 +4985,7 @@ let Root = (() => {
 * SPDX-License-Identifier: BSD-3-Clause
 */ const e$2 = e$10(class extends i$5 {
 	constructor(t) {
-		if (super(t), t.type !== t$4.ATTRIBUTE || "class" !== t.name || t.strings?.length > 2) throw Error("`classMap()` can only be used in the `class` attribute and must be the only part in the attribute.");
+		if (super(t), t.type !== t$4.ATTRIBUTE || "class" !== t.name || t.strings?.length > 2) {throw Error("`classMap()` can only be used in the `class` attribute and must be the only part in the attribute.");}
 	}
 	render(t) {
 		return " " + Object.keys(t).filter((s) => t[s]).join(" ") + " ";
@@ -4993,11 +4993,11 @@ let Root = (() => {
 	update(s, [i]) {
 		if (void 0 === this.st) {
 			this.st = new Set(), void 0 !== s.strings && (this.nt = new Set(s.strings.join(" ").split(/\s/).filter((t) => "" !== t)));
-			for (const t in i) i[t] && !this.nt?.has(t) && this.st.add(t);
+			for (const t in i) {i[t] && !this.nt?.has(t) && this.st.add(t);}
 			return this.render(i);
 		}
 		const r = s.element.classList;
-		for (const t of this.st) t in i || (r.remove(t), this.st.delete(t));
+		for (const t of this.st) {t in i || (r.remove(t), this.st.delete(t));}
 		for (const t in i) {
 			const s = !!i[t];
 			s === this.st.has(t) || this.nt?.has(t) || (s ? (r.add(t), this.st.add(t)) : (r.remove(t), this.st.delete(t)));
@@ -5012,7 +5012,7 @@ let Root = (() => {
 * SPDX-License-Identifier: BSD-3-Clause
 */ const n$1 = "important", i = " !" + n$1, o$2 = e$10(class extends i$5 {
 	constructor(t) {
-		if (super(t), t.type !== t$4.ATTRIBUTE || "style" !== t.name || t.strings?.length > 2) throw Error("The `styleMap` directive must be used in the `style` attribute and must be the only part in the attribute.");
+		if (super(t), t.type !== t$4.ATTRIBUTE || "style" !== t.name || t.strings?.length > 2) {throw Error("The `styleMap` directive must be used in the `style` attribute and must be the only part in the attribute.");}
 	}
 	render(t) {
 		return Object.keys(t).reduce((e, r) => {
@@ -5022,8 +5022,8 @@ let Root = (() => {
 	}
 	update(e, [r]) {
 		const { style: s } = e.element;
-		if (void 0 === this.ft) return this.ft = new Set(Object.keys(r)), this.render(r);
-		for (const t of this.ft) null == r[t] && (this.ft.delete(t), t.includes("-") ? s.removeProperty(t) : s[t] = null);
+		if (void 0 === this.ft) {return this.ft = new Set(Object.keys(r)), this.render(r);}
+		for (const t of this.ft) {null == r[t] && (this.ft.delete(t), t.includes("-") ? s.removeProperty(t) : s[t] = null);}
 		for (const t in r) {
 			const e = r[t];
 			if (null != e) {
@@ -5038,7 +5038,7 @@ let Root = (() => {
 
 var __esDecorate$18 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -5047,10 +5047,10 @@ var __esDecorate$18 = void 0 && (void 0).__esDecorate || function(ctor, descript
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -5058,17 +5058,17 @@ var __esDecorate$18 = void 0 && (void 0).__esDecorate || function(ctor, descript
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$18 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -5114,12 +5114,12 @@ let Audio = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Audio = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#url_accessor_storage = __runInitializers$18(this, _url_initializers, null);
 		get url() {
@@ -5193,7 +5193,7 @@ let Audio = (() => {
 
 var __esDecorate$17 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -5202,10 +5202,10 @@ var __esDecorate$17 = void 0 && (void 0).__esDecorate || function(ctor, descript
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -5213,17 +5213,17 @@ var __esDecorate$17 = void 0 && (void 0).__esDecorate || function(ctor, descript
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$17 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -5269,12 +5269,12 @@ let Button = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Button = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#action_accessor_storage = __runInitializers$17(this, _action_initializers, null);
 		get action() {
@@ -5326,7 +5326,7 @@ let Button = (() => {
 
 var __esDecorate$16 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -5335,10 +5335,10 @@ var __esDecorate$16 = void 0 && (void 0).__esDecorate || function(ctor, descript
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -5346,17 +5346,17 @@ var __esDecorate$16 = void 0 && (void 0).__esDecorate || function(ctor, descript
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$16 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -5384,12 +5384,12 @@ let Card = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Card = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		static {
 			this.styles = [structuralStyles, i$9`
@@ -5434,7 +5434,7 @@ let Card = (() => {
 
 var __esDecorate$15 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -5443,10 +5443,10 @@ var __esDecorate$15 = void 0 && (void 0).__esDecorate || function(ctor, descript
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -5454,17 +5454,17 @@ var __esDecorate$15 = void 0 && (void 0).__esDecorate || function(ctor, descript
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$15 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -5528,12 +5528,12 @@ let Checkbox = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Checkbox = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#value_accessor_storage = __runInitializers$15(this, _value_initializers, null);
 		get value() {
@@ -5643,7 +5643,7 @@ let Checkbox = (() => {
 
 var __esDecorate$14 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -5652,10 +5652,10 @@ var __esDecorate$14 = void 0 && (void 0).__esDecorate || function(ctor, descript
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -5663,17 +5663,17 @@ var __esDecorate$14 = void 0 && (void 0).__esDecorate || function(ctor, descript
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$14 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -5743,12 +5743,12 @@ let Column = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Column = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#alignment_accessor_storage = __runInitializers$14(this, _alignment_initializers, "stretch");
 		get alignment() {
@@ -5844,7 +5844,7 @@ let Column = (() => {
 
 var __esDecorate$13 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -5853,10 +5853,10 @@ var __esDecorate$13 = void 0 && (void 0).__esDecorate || function(ctor, descript
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -5864,17 +5864,17 @@ var __esDecorate$13 = void 0 && (void 0).__esDecorate || function(ctor, descript
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$13 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -5980,12 +5980,12 @@ let DateTimeInput = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			DateTimeInput = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#value_accessor_storage = __runInitializers$13(this, _value_initializers, null);
 		get value() {
@@ -6148,7 +6148,7 @@ let DateTimeInput = (() => {
 
 var __esDecorate$12 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -6157,10 +6157,10 @@ var __esDecorate$12 = void 0 && (void 0).__esDecorate || function(ctor, descript
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -6168,17 +6168,17 @@ var __esDecorate$12 = void 0 && (void 0).__esDecorate || function(ctor, descript
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$12 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -6206,12 +6206,12 @@ let Divider = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Divider = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		static {
 			this.styles = [structuralStyles, i$9`
@@ -6243,7 +6243,7 @@ let Divider = (() => {
 
 var __esDecorate$11 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -6252,10 +6252,10 @@ var __esDecorate$11 = void 0 && (void 0).__esDecorate || function(ctor, descript
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -6263,17 +6263,17 @@ var __esDecorate$11 = void 0 && (void 0).__esDecorate || function(ctor, descript
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$11 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -6319,12 +6319,12 @@ let Icon = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Icon = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#name_accessor_storage = __runInitializers$11(this, _name_initializers, null);
 		get name() {
@@ -6399,7 +6399,7 @@ let Icon = (() => {
 
 var __esDecorate$10 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -6408,10 +6408,10 @@ var __esDecorate$10 = void 0 && (void 0).__esDecorate || function(ctor, descript
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -6419,17 +6419,17 @@ var __esDecorate$10 = void 0 && (void 0).__esDecorate || function(ctor, descript
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$10 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -6511,12 +6511,12 @@ let Image = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Image = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#url_accessor_storage = __runInitializers$10(this, _url_initializers, null);
 		get url() {
@@ -6595,7 +6595,7 @@ let Image = (() => {
 			return b`<section
       class=${e$2(classes)}
       style=${o$2({
-				...this.theme.additionalStyles?.Image ?? {},
+				...this.theme.additionalStyles?.Image,
 				"--object-fit": this.fit ?? "fill"
 			})}
     >
@@ -6615,7 +6615,7 @@ let Image = (() => {
 
 var __esDecorate$9 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -6624,10 +6624,10 @@ var __esDecorate$9 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -6635,17 +6635,17 @@ var __esDecorate$9 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$9 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -6694,12 +6694,12 @@ let List = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			List = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#direction_accessor_storage = __runInitializers$9(this, _direction_initializers, "vertical");
 		get direction() {
@@ -6805,7 +6805,7 @@ function extractNumberValue(val, component, processor, surfaceId) {
 
 var __esDecorate$8 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -6814,10 +6814,10 @@ var __esDecorate$8 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -6825,17 +6825,17 @@ var __esDecorate$8 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$8 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -6917,12 +6917,12 @@ let MultipleChoice = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			MultipleChoice = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#description_accessor_storage = __runInitializers$8(this, _description_initializers, null);
 		get description() {
@@ -7046,7 +7046,7 @@ const o$1 = new WeakMap(), n = e$10(class extends f {
 			const i = this.ht ?? globalThis;
 			let s = o$1.get(i);
 			void 0 === s && (s = new WeakMap(), o$1.set(i, s)), void 0 !== s.get(this.G) && this.G.call(this.ht, void 0), s.set(this.G, t), void 0 !== t && this.G.call(this.ht, t);
-		} else this.G.value = t;
+		} else {this.G.value = t;}
 	}
 	get lt() {
 		return "function" == typeof this.G ? o$1.get(this.ht ?? globalThis)?.get(this.G) : this.G?.value;
@@ -7061,7 +7061,7 @@ const o$1 = new WeakMap(), n = e$10(class extends f {
 
 var __esDecorate$7 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -7070,10 +7070,10 @@ var __esDecorate$7 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -7081,17 +7081,17 @@ var __esDecorate$7 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$7 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -7102,7 +7102,7 @@ var __runInitializers$7 = void 0 && (void 0).__runInitializers || function(thisA
 	return useValue ? value : void 0;
 };
 var __setFunctionName = void 0 && (void 0).__setFunctionName || function(f, name, prefix) {
-	if (typeof name === "symbol") name = name.description ? "[".concat(name.description, "]") : "";
+	if (typeof name === "symbol") {name = name.description ? "[".concat(name.description, "]") : "";}
 	return Object.defineProperty(f, "name", {
 		configurable: true,
 		value: prefix ? "".concat(prefix, " ", name) : name
@@ -7178,12 +7178,12 @@ let Modal = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Modal = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		static {
 			this.styles = [structuralStyles, i$9`
@@ -7299,7 +7299,7 @@ let Modal = (() => {
 
 var __esDecorate$6 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -7308,10 +7308,10 @@ var __esDecorate$6 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -7319,17 +7319,17 @@ var __esDecorate$6 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$6 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -7399,12 +7399,12 @@ let Row = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Row = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#alignment_accessor_storage = __runInitializers$6(this, _alignment_initializers, "stretch");
 		get alignment() {
@@ -7500,7 +7500,7 @@ let Row = (() => {
 
 var __esDecorate$5 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -7509,10 +7509,10 @@ var __esDecorate$5 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -7520,17 +7520,17 @@ var __esDecorate$5 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$5 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -7648,12 +7648,12 @@ let Slider = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Slider = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#value_accessor_storage = __runInitializers$5(this, _value_initializers, null);
 		get value() {
@@ -7786,7 +7786,7 @@ let Slider = (() => {
 
 var __esDecorate$4 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -7795,10 +7795,10 @@ var __esDecorate$4 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -7806,17 +7806,17 @@ var __esDecorate$4 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$4 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -7898,12 +7898,12 @@ let Surface = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Surface = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#surfaceId_accessor_storage = __runInitializers$4(this, _surfaceId_initializers, null);
 		get surfaceId() {
@@ -8019,7 +8019,7 @@ let Surface = (() => {
 
 var __esDecorate$3 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -8028,10 +8028,10 @@ var __esDecorate$3 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -8039,17 +8039,17 @@ var __esDecorate$3 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$3 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -8113,12 +8113,12 @@ let Tabs = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Tabs = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#titles_accessor_storage = __runInitializers$3(this, _titles_initializers, null);
 		get titles() {
@@ -8221,7 +8221,7 @@ let Tabs = (() => {
 
 var __esDecorate$2 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -8230,10 +8230,10 @@ var __esDecorate$2 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -8241,17 +8241,17 @@ var __esDecorate$2 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$2 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -8333,12 +8333,12 @@ let TextField = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			TextField = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#text_accessor_storage = __runInitializers$2(this, _text_initializers, null);
 		get text() {
@@ -8444,13 +8444,13 @@ let TextField = (() => {
 * SPDX-License-Identifier: BSD-3-Clause
 */ var e = class extends i$5 {
 	constructor(i) {
-		if (super(i), this.it = A, i.type !== t$4.CHILD) throw Error(this.constructor.directiveName + "() can only be used in child bindings");
+		if (super(i), this.it = A, i.type !== t$4.CHILD) {throw Error(this.constructor.directiveName + "() can only be used in child bindings");}
 	}
 	render(r) {
-		if (r === A || null == r) return this._t = void 0, this.it = r;
-		if (r === E) return r;
-		if ("string" != typeof r) throw Error(this.constructor.directiveName + "() called with a non-string value");
-		if (r === this.it) return this._t;
+		if (r === A || null == r) {return this._t = void 0, this.it = r;}
+		if (r === E) {return r;}
+		if ("string" != typeof r) {throw Error(this.constructor.directiveName + "() called with a non-string value");}
+		if (r === this.it) {return this._t;}
 		this.it = r;
 		const s = [r];
 		return s.raw = s, this._t = {
@@ -8636,7 +8636,7 @@ function Url() {
 }
 const protocolPattern = /^([a-z0-9.+-]+:)/i;
 const portPattern = /:[0-9]*$/;
-const simplePathPattern = /^(\/\/?(?!\/)[^\?\s]*)(\?[^\s]*)?$/;
+const simplePathPattern = /^(\/\/?(?!\/)[^?\s]*)(\?[^\s]*)?$/;
 const delims = [
 	"<",
 	">",
@@ -8688,7 +8688,7 @@ const slashedProtocol = {
 	"file:": true
 };
 function urlParse(url, slashesDenoteHost) {
-	if (url && url instanceof Url) return url;
+	if (url && url instanceof Url) {return url;}
 	const u = new Url();
 	u.parse(url, slashesDenoteHost);
 	return u;
@@ -8714,7 +8714,7 @@ Url.prototype.parse = function(url, slashesDenoteHost) {
 		this.protocol = proto;
 		rest = rest.substr(proto.length);
 	}
-	if (slashesDenoteHost || proto || rest.match(/^\/\/[^@\/]+@[^@\/]+/)) {
+	if (slashesDenoteHost || proto || rest.match(/^\/\/[^@/]+@[^@/]+/)) {
 		slashes = rest.substr(0, 2) === "//";
 		if (slashes && !(proto && hostlessProtocol[proto])) {
 			rest = rest.substr(2);
@@ -8843,9 +8843,9 @@ var regex_default$4 = /[\0-\x1F\x7F-\x9F]/;
 
 var regex_default$3 = /[\xAD\u0600-\u0605\u061C\u06DD\u070F\u0890\u0891\u08E2\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]|\uD804[\uDCBD\uDCCD]|\uD80D[\uDC30-\uDC3F]|\uD82F[\uDCA0-\uDCA3]|\uD834[\uDD73-\uDD7A]|\uDB40[\uDC01\uDC20-\uDC7F]/;
 
-var regex_default$2 = /[!-#%-\*,-\/:;\?@\[-\]_\{\}\xA1\xA7\xAB\xB6\xB7\xBB\xBF\u037E\u0387\u055A-\u055F\u0589\u058A\u05BE\u05C0\u05C3\u05C6\u05F3\u05F4\u0609\u060A\u060C\u060D\u061B\u061D-\u061F\u066A-\u066D\u06D4\u0700-\u070D\u07F7-\u07F9\u0830-\u083E\u085E\u0964\u0965\u0970\u09FD\u0A76\u0AF0\u0C77\u0C84\u0DF4\u0E4F\u0E5A\u0E5B\u0F04-\u0F12\u0F14\u0F3A-\u0F3D\u0F85\u0FD0-\u0FD4\u0FD9\u0FDA\u104A-\u104F\u10FB\u1360-\u1368\u1400\u166E\u169B\u169C\u16EB-\u16ED\u1735\u1736\u17D4-\u17D6\u17D8-\u17DA\u1800-\u180A\u1944\u1945\u1A1E\u1A1F\u1AA0-\u1AA6\u1AA8-\u1AAD\u1B5A-\u1B60\u1B7D\u1B7E\u1BFC-\u1BFF\u1C3B-\u1C3F\u1C7E\u1C7F\u1CC0-\u1CC7\u1CD3\u2010-\u2027\u2030-\u2043\u2045-\u2051\u2053-\u205E\u207D\u207E\u208D\u208E\u2308-\u230B\u2329\u232A\u2768-\u2775\u27C5\u27C6\u27E6-\u27EF\u2983-\u2998\u29D8-\u29DB\u29FC\u29FD\u2CF9-\u2CFC\u2CFE\u2CFF\u2D70\u2E00-\u2E2E\u2E30-\u2E4F\u2E52-\u2E5D\u3001-\u3003\u3008-\u3011\u3014-\u301F\u3030\u303D\u30A0\u30FB\uA4FE\uA4FF\uA60D-\uA60F\uA673\uA67E\uA6F2-\uA6F7\uA874-\uA877\uA8CE\uA8CF\uA8F8-\uA8FA\uA8FC\uA92E\uA92F\uA95F\uA9C1-\uA9CD\uA9DE\uA9DF\uAA5C-\uAA5F\uAADE\uAADF\uAAF0\uAAF1\uABEB\uFD3E\uFD3F\uFE10-\uFE19\uFE30-\uFE52\uFE54-\uFE61\uFE63\uFE68\uFE6A\uFE6B\uFF01-\uFF03\uFF05-\uFF0A\uFF0C-\uFF0F\uFF1A\uFF1B\uFF1F\uFF20\uFF3B-\uFF3D\uFF3F\uFF5B\uFF5D\uFF5F-\uFF65]|\uD800[\uDD00-\uDD02\uDF9F\uDFD0]|\uD801\uDD6F|\uD802[\uDC57\uDD1F\uDD3F\uDE50-\uDE58\uDE7F\uDEF0-\uDEF6\uDF39-\uDF3F\uDF99-\uDF9C]|\uD803[\uDEAD\uDF55-\uDF59\uDF86-\uDF89]|\uD804[\uDC47-\uDC4D\uDCBB\uDCBC\uDCBE-\uDCC1\uDD40-\uDD43\uDD74\uDD75\uDDC5-\uDDC8\uDDCD\uDDDB\uDDDD-\uDDDF\uDE38-\uDE3D\uDEA9]|\uD805[\uDC4B-\uDC4F\uDC5A\uDC5B\uDC5D\uDCC6\uDDC1-\uDDD7\uDE41-\uDE43\uDE60-\uDE6C\uDEB9\uDF3C-\uDF3E]|\uD806[\uDC3B\uDD44-\uDD46\uDDE2\uDE3F-\uDE46\uDE9A-\uDE9C\uDE9E-\uDEA2\uDF00-\uDF09]|\uD807[\uDC41-\uDC45\uDC70\uDC71\uDEF7\uDEF8\uDF43-\uDF4F\uDFFF]|\uD809[\uDC70-\uDC74]|\uD80B[\uDFF1\uDFF2]|\uD81A[\uDE6E\uDE6F\uDEF5\uDF37-\uDF3B\uDF44]|\uD81B[\uDE97-\uDE9A\uDFE2]|\uD82F\uDC9F|\uD836[\uDE87-\uDE8B]|\uD83A[\uDD5E\uDD5F]/;
+var regex_default$2 = /[!-#%-*,-/:;?@[-\]_{}\xA1\xA7\xAB\xB6\xB7\xBB\xBF\u037E\u0387\u055A-\u055F\u0589\u058A\u05BE\u05C0\u05C3\u05C6\u05F3\u05F4\u0609\u060A\u060C\u060D\u061B\u061D-\u061F\u066A-\u066D\u06D4\u0700-\u070D\u07F7-\u07F9\u0830-\u083E\u085E\u0964\u0965\u0970\u09FD\u0A76\u0AF0\u0C77\u0C84\u0DF4\u0E4F\u0E5A\u0E5B\u0F04-\u0F12\u0F14\u0F3A-\u0F3D\u0F85\u0FD0-\u0FD4\u0FD9\u0FDA\u104A-\u104F\u10FB\u1360-\u1368\u1400\u166E\u169B\u169C\u16EB-\u16ED\u1735\u1736\u17D4-\u17D6\u17D8-\u17DA\u1800-\u180A\u1944\u1945\u1A1E\u1A1F\u1AA0-\u1AA6\u1AA8-\u1AAD\u1B5A-\u1B60\u1B7D\u1B7E\u1BFC-\u1BFF\u1C3B-\u1C3F\u1C7E\u1C7F\u1CC0-\u1CC7\u1CD3\u2010-\u2027\u2030-\u2043\u2045-\u2051\u2053-\u205E\u207D\u207E\u208D\u208E\u2308-\u230B\u2329\u232A\u2768-\u2775\u27C5\u27C6\u27E6-\u27EF\u2983-\u2998\u29D8-\u29DB\u29FC\u29FD\u2CF9-\u2CFC\u2CFE\u2CFF\u2D70\u2E00-\u2E2E\u2E30-\u2E4F\u2E52-\u2E5D\u3001-\u3003\u3008-\u3011\u3014-\u301F\u3030\u303D\u30A0\u30FB\uA4FE\uA4FF\uA60D-\uA60F\uA673\uA67E\uA6F2-\uA6F7\uA874-\uA877\uA8CE\uA8CF\uA8F8-\uA8FA\uA8FC\uA92E\uA92F\uA95F\uA9C1-\uA9CD\uA9DE\uA9DF\uAA5C-\uAA5F\uAADE\uAADF\uAAF0\uAAF1\uABEB\uFD3E\uFD3F\uFE10-\uFE19\uFE30-\uFE52\uFE54-\uFE61\uFE63\uFE68\uFE6A\uFE6B\uFF01-\uFF03\uFF05-\uFF0A\uFF0C-\uFF0F\uFF1A\uFF1B\uFF1F\uFF20\uFF3B-\uFF3D\uFF3F\uFF5B\uFF5D\uFF5F-\uFF65]|\uD800[\uDD00-\uDD02\uDF9F\uDFD0]|\uD801\uDD6F|\uD802[\uDC57\uDD1F\uDD3F\uDE50-\uDE58\uDE7F\uDEF0-\uDEF6\uDF39-\uDF3F\uDF99-\uDF9C]|\uD803[\uDEAD\uDF55-\uDF59\uDF86-\uDF89]|\uD804[\uDC47-\uDC4D\uDCBB\uDCBC\uDCBE-\uDCC1\uDD40-\uDD43\uDD74\uDD75\uDDC5-\uDDC8\uDDCD\uDDDB\uDDDD-\uDDDF\uDE38-\uDE3D\uDEA9]|\uD805[\uDC4B-\uDC4F\uDC5A\uDC5B\uDC5D\uDCC6\uDDC1-\uDDD7\uDE41-\uDE43\uDE60-\uDE6C\uDEB9\uDF3C-\uDF3E]|\uD806[\uDC3B\uDD44-\uDD46\uDDE2\uDE3F-\uDE46\uDE9A-\uDE9C\uDE9E-\uDEA2\uDF00-\uDF09]|\uD807[\uDC41-\uDC45\uDC70\uDC71\uDEF7\uDEF8\uDF43-\uDF4F\uDFFF]|\uD809[\uDC70-\uDC74]|\uD80B[\uDFF1\uDFF2]|\uD81A[\uDE6E\uDE6F\uDEF5\uDF37-\uDF3B\uDF44]|\uD81B[\uDE97-\uDE9A\uDFE2]|\uD82F\uDC9F|\uD836[\uDE87-\uDE8B]|\uD83A[\uDD5E\uDD5F]/;
 
-var regex_default$1 = /[\$\+<->\^`\|~\xA2-\xA6\xA8\xA9\xAC\xAE-\xB1\xB4\xB8\xD7\xF7\u02C2-\u02C5\u02D2-\u02DF\u02E5-\u02EB\u02ED\u02EF-\u02FF\u0375\u0384\u0385\u03F6\u0482\u058D-\u058F\u0606-\u0608\u060B\u060E\u060F\u06DE\u06E9\u06FD\u06FE\u07F6\u07FE\u07FF\u0888\u09F2\u09F3\u09FA\u09FB\u0AF1\u0B70\u0BF3-\u0BFA\u0C7F\u0D4F\u0D79\u0E3F\u0F01-\u0F03\u0F13\u0F15-\u0F17\u0F1A-\u0F1F\u0F34\u0F36\u0F38\u0FBE-\u0FC5\u0FC7-\u0FCC\u0FCE\u0FCF\u0FD5-\u0FD8\u109E\u109F\u1390-\u1399\u166D\u17DB\u1940\u19DE-\u19FF\u1B61-\u1B6A\u1B74-\u1B7C\u1FBD\u1FBF-\u1FC1\u1FCD-\u1FCF\u1FDD-\u1FDF\u1FED-\u1FEF\u1FFD\u1FFE\u2044\u2052\u207A-\u207C\u208A-\u208C\u20A0-\u20C0\u2100\u2101\u2103-\u2106\u2108\u2109\u2114\u2116-\u2118\u211E-\u2123\u2125\u2127\u2129\u212E\u213A\u213B\u2140-\u2144\u214A-\u214D\u214F\u218A\u218B\u2190-\u2307\u230C-\u2328\u232B-\u2426\u2440-\u244A\u249C-\u24E9\u2500-\u2767\u2794-\u27C4\u27C7-\u27E5\u27F0-\u2982\u2999-\u29D7\u29DC-\u29FB\u29FE-\u2B73\u2B76-\u2B95\u2B97-\u2BFF\u2CE5-\u2CEA\u2E50\u2E51\u2E80-\u2E99\u2E9B-\u2EF3\u2F00-\u2FD5\u2FF0-\u2FFF\u3004\u3012\u3013\u3020\u3036\u3037\u303E\u303F\u309B\u309C\u3190\u3191\u3196-\u319F\u31C0-\u31E3\u31EF\u3200-\u321E\u322A-\u3247\u3250\u3260-\u327F\u328A-\u32B0\u32C0-\u33FF\u4DC0-\u4DFF\uA490-\uA4C6\uA700-\uA716\uA720\uA721\uA789\uA78A\uA828-\uA82B\uA836-\uA839\uAA77-\uAA79\uAB5B\uAB6A\uAB6B\uFB29\uFBB2-\uFBC2\uFD40-\uFD4F\uFDCF\uFDFC-\uFDFF\uFE62\uFE64-\uFE66\uFE69\uFF04\uFF0B\uFF1C-\uFF1E\uFF3E\uFF40\uFF5C\uFF5E\uFFE0-\uFFE6\uFFE8-\uFFEE\uFFFC\uFFFD]|\uD800[\uDD37-\uDD3F\uDD79-\uDD89\uDD8C-\uDD8E\uDD90-\uDD9C\uDDA0\uDDD0-\uDDFC]|\uD802[\uDC77\uDC78\uDEC8]|\uD805\uDF3F|\uD807[\uDFD5-\uDFF1]|\uD81A[\uDF3C-\uDF3F\uDF45]|\uD82F\uDC9C|\uD833[\uDF50-\uDFC3]|\uD834[\uDC00-\uDCF5\uDD00-\uDD26\uDD29-\uDD64\uDD6A-\uDD6C\uDD83\uDD84\uDD8C-\uDDA9\uDDAE-\uDDEA\uDE00-\uDE41\uDE45\uDF00-\uDF56]|\uD835[\uDEC1\uDEDB\uDEFB\uDF15\uDF35\uDF4F\uDF6F\uDF89\uDFA9\uDFC3]|\uD836[\uDC00-\uDDFF\uDE37-\uDE3A\uDE6D-\uDE74\uDE76-\uDE83\uDE85\uDE86]|\uD838[\uDD4F\uDEFF]|\uD83B[\uDCAC\uDCB0\uDD2E\uDEF0\uDEF1]|\uD83C[\uDC00-\uDC2B\uDC30-\uDC93\uDCA0-\uDCAE\uDCB1-\uDCBF\uDCC1-\uDCCF\uDCD1-\uDCF5\uDD0D-\uDDAD\uDDE6-\uDE02\uDE10-\uDE3B\uDE40-\uDE48\uDE50\uDE51\uDE60-\uDE65\uDF00-\uDFFF]|\uD83D[\uDC00-\uDED7\uDEDC-\uDEEC\uDEF0-\uDEFC\uDF00-\uDF76\uDF7B-\uDFD9\uDFE0-\uDFEB\uDFF0]|\uD83E[\uDC00-\uDC0B\uDC10-\uDC47\uDC50-\uDC59\uDC60-\uDC87\uDC90-\uDCAD\uDCB0\uDCB1\uDD00-\uDE53\uDE60-\uDE6D\uDE70-\uDE7C\uDE80-\uDE88\uDE90-\uDEBD\uDEBF-\uDEC5\uDECE-\uDEDB\uDEE0-\uDEE8\uDEF0-\uDEF8\uDF00-\uDF92\uDF94-\uDFCA]/;
+var regex_default$1 = /[$+<->^`|~\xA2-\xA6\xA8\xA9\xAC\xAE-\xB1\xB4\xB8\xD7\xF7\u02C2-\u02C5\u02D2-\u02DF\u02E5-\u02EB\u02ED\u02EF-\u02FF\u0375\u0384\u0385\u03F6\u0482\u058D-\u058F\u0606-\u0608\u060B\u060E\u060F\u06DE\u06E9\u06FD\u06FE\u07F6\u07FE\u07FF\u0888\u09F2\u09F3\u09FA\u09FB\u0AF1\u0B70\u0BF3-\u0BFA\u0C7F\u0D4F\u0D79\u0E3F\u0F01-\u0F03\u0F13\u0F15-\u0F17\u0F1A-\u0F1F\u0F34\u0F36\u0F38\u0FBE-\u0FC5\u0FC7-\u0FCC\u0FCE\u0FCF\u0FD5-\u0FD8\u109E\u109F\u1390-\u1399\u166D\u17DB\u1940\u19DE-\u19FF\u1B61-\u1B6A\u1B74-\u1B7C\u1FBD\u1FBF-\u1FC1\u1FCD-\u1FCF\u1FDD-\u1FDF\u1FED-\u1FEF\u1FFD\u1FFE\u2044\u2052\u207A-\u207C\u208A-\u208C\u20A0-\u20C0\u2100\u2101\u2103-\u2106\u2108\u2109\u2114\u2116-\u2118\u211E-\u2123\u2125\u2127\u2129\u212E\u213A\u213B\u2140-\u2144\u214A-\u214D\u214F\u218A\u218B\u2190-\u2307\u230C-\u2328\u232B-\u2426\u2440-\u244A\u249C-\u24E9\u2500-\u2767\u2794-\u27C4\u27C7-\u27E5\u27F0-\u2982\u2999-\u29D7\u29DC-\u29FB\u29FE-\u2B73\u2B76-\u2B95\u2B97-\u2BFF\u2CE5-\u2CEA\u2E50\u2E51\u2E80-\u2E99\u2E9B-\u2EF3\u2F00-\u2FD5\u2FF0-\u2FFF\u3004\u3012\u3013\u3020\u3036\u3037\u303E\u303F\u309B\u309C\u3190\u3191\u3196-\u319F\u31C0-\u31E3\u31EF\u3200-\u321E\u322A-\u3247\u3250\u3260-\u327F\u328A-\u32B0\u32C0-\u33FF\u4DC0-\u4DFF\uA490-\uA4C6\uA700-\uA716\uA720\uA721\uA789\uA78A\uA828-\uA82B\uA836-\uA839\uAA77-\uAA79\uAB5B\uAB6A\uAB6B\uFB29\uFBB2-\uFBC2\uFD40-\uFD4F\uFDCF\uFDFC-\uFDFF\uFE62\uFE64-\uFE66\uFE69\uFF04\uFF0B\uFF1C-\uFF1E\uFF3E\uFF40\uFF5C\uFF5E\uFFE0-\uFFE6\uFFE8-\uFFEE\uFFFC\uFFFD]|\uD800[\uDD37-\uDD3F\uDD79-\uDD89\uDD8C-\uDD8E\uDD90-\uDD9C\uDDA0\uDDD0-\uDDFC]|\uD802[\uDC77\uDC78\uDEC8]|\uD805\uDF3F|\uD807[\uDFD5-\uDFF1]|\uD81A[\uDF3C-\uDF3F\uDF45]|\uD82F\uDC9C|\uD833[\uDF50-\uDFC3]|\uD834[\uDC00-\uDCF5\uDD00-\uDD26\uDD29-\uDD64\uDD6A-\uDD6C\uDD83\uDD84\uDD8C-\uDDA9\uDDAE-\uDDEA\uDE00-\uDE41\uDE45\uDF00-\uDF56]|\uD835[\uDEC1\uDEDB\uDEFB\uDF15\uDF35\uDF4F\uDF6F\uDF89\uDFA9\uDFC3]|\uD836[\uDC00-\uDDFF\uDE37-\uDE3A\uDE6D-\uDE74\uDE76-\uDE83\uDE85\uDE86]|\uD838[\uDD4F\uDEFF]|\uD83B[\uDCAC\uDCB0\uDD2E\uDEF0\uDEF1]|\uD83C[\uDC00-\uDC2B\uDC30-\uDC93\uDCA0-\uDCAE\uDCB1-\uDCBF\uDCC1-\uDCCF\uDCD1-\uDCF5\uDD0D-\uDDAD\uDDE6-\uDE02\uDE10-\uDE3B\uDE40-\uDE48\uDE50\uDE51\uDE60-\uDE65\uDF00-\uDFFF]|\uD83D[\uDC00-\uDED7\uDEDC-\uDEEC\uDEF0-\uDEFC\uDF00-\uDF76\uDF7B-\uDFD9\uDFE0-\uDFEB\uDFF0]|\uD83E[\uDC00-\uDC0B\uDC10-\uDC47\uDC50-\uDC59\uDC60-\uDC87\uDC90-\uDCAD\uDCB0\uDCB1\uDD00-\uDE53\uDE60-\uDE6D\uDE70-\uDE7C\uDE80-\uDE88\uDE90-\uDEBD\uDEBF-\uDEC5\uDECE-\uDEDB\uDEE0-\uDEE8\uDEF0-\uDEF8\uDF00-\uDF92\uDF94-\uDFCA]/;
 
 var regex_default = /[ \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/;
 
@@ -11300,9 +11300,9 @@ function decodeStrict(data, options = EntityLevel.XML) {
 */
 function encode$1(data, options = EntityLevel.XML) {
 	const opts = typeof options === "number" ? { level: options } : options;
-	if (opts.mode === EncodingMode.UTF8) return escapeUTF8(data);
-	if (opts.mode === EncodingMode.Attribute) return escapeAttribute(data);
-	if (opts.mode === EncodingMode.Text) return escapeText(data);
+	if (opts.mode === EncodingMode.UTF8) {return escapeUTF8(data);}
+	if (opts.mode === EncodingMode.Attribute) {return escapeAttribute(data);}
+	if (opts.mode === EncodingMode.Text) {return escapeText(data);}
 	if (opts.level === EntityLevel.HTML) {
 		if (opts.mode === EncodingMode.ASCII) {
 			return encodeNonAsciiHTML(data);
@@ -12636,8 +12636,8 @@ function process_inlines(tokens, state) {
 				lastChar = text.charCodeAt(t.index - 1);
 			} else {
 				for (j = i - 1; j >= 0; j--) {
-					if (tokens[j].type === "softbreak" || tokens[j].type === "hardbreak") break;
-					if (!tokens[j].content) continue;
+					if (tokens[j].type === "softbreak" || tokens[j].type === "hardbreak") {break;}
+					if (!tokens[j].content) {continue;}
 					lastChar = tokens[j].content.charCodeAt(tokens[j].content.length - 1);
 					break;
 				}
@@ -12647,8 +12647,8 @@ function process_inlines(tokens, state) {
 				nextChar = text.charCodeAt(pos);
 			} else {
 				for (j = i + 1; j < tokens.length; j++) {
-					if (tokens[j].type === "softbreak" || tokens[j].type === "hardbreak") break;
-					if (!tokens[j].content) continue;
+					if (tokens[j].type === "softbreak" || tokens[j].type === "hardbreak") {break;}
+					if (!tokens[j].content) {continue;}
 					nextChar = tokens[j].content.charCodeAt(0);
 					break;
 				}
@@ -12746,7 +12746,7 @@ function text_join(state) {
 	const blockTokens = state.tokens;
 	const l = blockTokens.length;
 	for (let j = 0; j < l; j++) {
-		if (blockTokens[j].type !== "inline") continue;
+		if (blockTokens[j].type !== "inline") {continue;}
 		const tokens = blockTokens[j].children;
 		const max = tokens.length;
 		for (curr = 0; curr < max; curr++) {
@@ -12871,9 +12871,9 @@ function StateBlock(src, md, env, tokens) {
 StateBlock.prototype.push = function(type, tag, nesting) {
 	const token = new Token(type, tag, nesting);
 	token.block = true;
-	if (nesting < 0) this.level--;
+	if (nesting < 0) {this.level--;}
 	token.level = this.level;
-	if (nesting > 0) this.level++;
+	if (nesting > 0) {this.level++;}
 	this.tokens.push(token);
 	return token;
 };
@@ -13066,8 +13066,8 @@ function table(state, startLine, endLine, silent) {
 		return false;
 	}
 	columns = escapedSplit(lineText);
-	if (columns.length && columns[0] === "") columns.shift();
-	if (columns.length && columns[columns.length - 1] === "") columns.pop();
+	if (columns.length && columns[0] === "") {columns.shift();}
+	if (columns.length && columns[columns.length - 1] === "") {columns.pop();}
 	const columnCount = columns.length;
 	if (columnCount === 0 || columnCount !== aligns.length) {
 		return false;
@@ -13121,8 +13121,8 @@ function table(state, startLine, endLine, silent) {
 			break;
 		}
 		columns = escapedSplit(lineText);
-		if (columns.length && columns[0] === "") columns.shift();
-		if (columns.length && columns[columns.length - 1] === "") columns.pop();
+		if (columns.length && columns[0] === "") {columns.shift();}
+		if (columns.length && columns[columns.length - 1] === "") {columns.pop();}
 		autocompletedCells += columnCount - columns.length;
 		if (autocompletedCells > MAX_AUTOCOMPLETED_CELLS) {
 			break;
@@ -13489,14 +13489,14 @@ function list(state, startLine, endLine, silent) {
 		isOrdered = true;
 		start = state.bMarks[nextLine] + state.tShift[nextLine];
 		markerValue = Number(state.src.slice(start, posAfterMarker - 1));
-		if (isTerminatingParagraph && markerValue !== 1) return false;
+		if (isTerminatingParagraph && markerValue !== 1) {return false;}
 	} else if ((posAfterMarker = skipBulletListMarker(state, nextLine)) >= 0) {
 		isOrdered = false;
 	} else {
 		return false;
 	}
 	if (isTerminatingParagraph) {
-		if (state.skipSpaces(posAfterMarker) >= state.eMarks[nextLine]) return false;
+		if (state.skipSpaces(posAfterMarker) >= state.eMarks[nextLine]) {return false;}
 	}
 	if (silent) {
 		return true;
@@ -13744,7 +13744,7 @@ function reference(state, startLine, _endLine, silent) {
 	let titleRes = state.md.helpers.parseLinkTitle(str, pos, max);
 	while (titleRes.can_continue) {
 		const lineContent = getNextLine(nextLine);
-		if (lineContent === null) break;
+		if (lineContent === null) {break;}
 		str += lineContent;
 		pos = max;
 		max = str.length;
@@ -14224,7 +14224,7 @@ ParserBlock.prototype.tokenize = function(state, startLine, endLine) {
 				break;
 			}
 		}
-		if (!ok) throw new Error("none of the block rules matched");
+		if (!ok) {throw new Error("none of the block rules matched");}
 		state.tight = !hasEmptyLines;
 		if (state.isEmpty(state.line - 1)) {
 			hasEmptyLines = true;
@@ -14370,21 +14370,21 @@ function text(state, silent) {
 
 const SCHEME_RE = /(?:^|[^a-z0-9.+-])([a-z][a-z0-9.+-]*)$/i;
 function linkify(state, silent) {
-	if (!state.md.options.linkify) return false;
-	if (state.linkLevel > 0) return false;
+	if (!state.md.options.linkify) {return false;}
+	if (state.linkLevel > 0) {return false;}
 	const pos = state.pos;
 	const max = state.posMax;
-	if (pos + 3 > max) return false;
-	if (state.src.charCodeAt(pos) !== 58) return false;
-	if (state.src.charCodeAt(pos + 1) !== 47) return false;
-	if (state.src.charCodeAt(pos + 2) !== 47) return false;
+	if (pos + 3 > max) {return false;}
+	if (state.src.charCodeAt(pos) !== 58) {return false;}
+	if (state.src.charCodeAt(pos + 1) !== 47) {return false;}
+	if (state.src.charCodeAt(pos + 2) !== 47) {return false;}
 	const match = state.pending.match(SCHEME_RE);
-	if (!match) return false;
+	if (!match) {return false;}
 	const proto = match[1];
 	const link = state.md.linkify.matchAtStart(state.src.slice(pos - proto.length));
-	if (!link) return false;
+	if (!link) {return false;}
 	let url = link.url;
-	if (url.length <= proto.length) return false;
+	if (url.length <= proto.length) {return false;}
 	let urlEnd = url.length;
 	while (urlEnd > 0 && url.charCodeAt(urlEnd - 1) === 42) {
 		urlEnd--;
@@ -14393,7 +14393,7 @@ function linkify(state, silent) {
 		url = url.slice(0, urlEnd);
 	}
 	const fullUrl = state.md.normalizeLink(url);
-	if (!state.md.validateLink(fullUrl)) return false;
+	if (!state.md.validateLink(fullUrl)) {return false;}
 	if (!silent) {
 		state.pending = state.pending.slice(0, -proto.length);
 		const token_o = state.push("link_open", "a", 1);
@@ -14421,7 +14421,7 @@ function newline(state, silent) {
 		if (pmax >= 0 && state.pending.charCodeAt(pmax) === 32) {
 			if (pmax >= 1 && state.pending.charCodeAt(pmax - 1) === 32) {
 				let ws = pmax - 1;
-				while (ws >= 1 && state.pending.charCodeAt(ws - 1) === 32) ws--;
+				while (ws >= 1 && state.pending.charCodeAt(ws - 1) === 32) {ws--;}
 				state.pending = state.pending.slice(0, ws);
 				state.push("hardbreak", "br", 0);
 			} else {
@@ -14450,9 +14450,9 @@ for (let i = 0; i < 256; i++) {
 function escape(state, silent) {
 	let pos = state.pos;
 	const max = state.posMax;
-	if (state.src.charCodeAt(pos) !== 92) return false;
+	if (state.src.charCodeAt(pos) !== 92) {return false;}
 	pos++;
-	if (pos >= max) return false;
+	if (pos >= max) {return false;}
 	let ch1 = state.src.charCodeAt(pos);
 	if (ch1 === 10) {
 		if (!silent) {
@@ -14461,7 +14461,7 @@ function escape(state, silent) {
 		pos++;
 		while (pos < max) {
 			ch1 = state.src.charCodeAt(pos);
-			if (!isSpace(ch1)) break;
+			if (!isSpace(ch1)) {break;}
 			pos++;
 		}
 		state.pos = pos;
@@ -14505,7 +14505,7 @@ function backtick(state, silent) {
 	const marker = state.src.slice(start, pos);
 	const openerLength = marker.length;
 	if (state.backticksScanned && (state.backticks[openerLength] || 0) <= start) {
-		if (!silent) state.pending += marker;
+		if (!silent) {state.pending += marker;}
 		state.pos += openerLength;
 		return true;
 	}
@@ -14529,7 +14529,7 @@ function backtick(state, silent) {
 		state.backticks[closerLength] = matchStart;
 	}
 	state.backticksScanned = true;
-	if (!silent) state.pending += marker;
+	if (!silent) {state.pending += marker;}
 	state.pos += openerLength;
 	return true;
 }
@@ -14924,10 +14924,10 @@ function autolink(state, silent) {
 	const start = state.pos;
 	const max = state.posMax;
 	for (;;) {
-		if (++pos >= max) return false;
+		if (++pos >= max) {return false;}
 		const ch = state.src.charCodeAt(pos);
-		if (ch === 60) return false;
-		if (ch === 62) break;
+		if (ch === 60) {return false;}
+		if (ch === 62) {break;}
 	}
 	const url = state.src.slice(start + 1, pos);
 	if (AUTOLINK_RE.test(url)) {
@@ -15001,8 +15001,8 @@ function html_inline(state, silent) {
 	if (!silent) {
 		const token = state.push("html_inline", "", 0);
 		token.content = match[0];
-		if (isLinkOpen(token.content)) state.linkLevel++;
-		if (isLinkClose(token.content)) state.linkLevel--;
+		if (isLinkOpen(token.content)) {state.linkLevel++;}
+		if (isLinkClose(token.content)) {state.linkLevel--;}
 	}
 	state.pos += match[0].length;
 	return true;
@@ -15013,8 +15013,8 @@ const NAMED_RE = /^&([a-z][a-z0-9]{1,31});/i;
 function entity(state, silent) {
 	const pos = state.pos;
 	const max = state.posMax;
-	if (state.src.charCodeAt(pos) !== 38) return false;
-	if (pos + 1 >= max) return false;
+	if (state.src.charCodeAt(pos) !== 38) {return false;}
+	if (pos + 1 >= max) {return false;}
 	const ch = state.src.charCodeAt(pos + 1);
 	if (ch === 35) {
 		const match = state.src.slice(pos).match(DIGITAL_RE);
@@ -15051,7 +15051,7 @@ function entity(state, silent) {
 function processDelimiters(delimiters) {
 	const openersBottom = {};
 	const max = delimiters.length;
-	if (!max) return;
+	if (!max) {return;}
 	let headerIdx = 0;
 	let lastTokenIdx = -2;
 	const jumps = [];
@@ -15063,7 +15063,7 @@ function processDelimiters(delimiters) {
 		}
 		lastTokenIdx = closer.token;
 		closer.length = closer.length || 0;
-		if (!closer.close) continue;
+		if (!closer.close) {continue;}
 		if (!openersBottom.hasOwnProperty(closer.marker)) {
 			openersBottom[closer.marker] = [
 				-1,
@@ -15079,7 +15079,7 @@ function processDelimiters(delimiters) {
 		let newMinOpenerIdx = openerIdx;
 		for (; openerIdx > minOpenerIdx; openerIdx -= jumps[openerIdx] + 1) {
 			const opener = delimiters[openerIdx];
-			if (opener.marker !== closer.marker) continue;
+			if (opener.marker !== closer.marker) {continue;}
 			if (opener.open && opener.end < 0) {
 				let isOddMatch = false;
 				if (opener.close || closer.open) {
@@ -15124,9 +15124,9 @@ function fragments_join(state) {
 	const tokens = state.tokens;
 	const max = state.tokens.length;
 	for (curr = last = 0; curr < max; curr++) {
-		if (tokens[curr].nesting < 0) level--;
+		if (tokens[curr].nesting < 0) {level--;}
 		tokens[curr].level = level;
-		if (tokens[curr].nesting > 0) level++;
+		if (tokens[curr].nesting > 0) {level++;}
 		if (tokens[curr].type === "text" && curr + 1 < max && tokens[curr + 1].type === "text") {
 			tokens[curr + 1].content = tokens[curr].content + tokens[curr + 1].content;
 		} else {
@@ -15737,11 +15737,11 @@ LinkifyIt.prototype.match = function match(text) {
 LinkifyIt.prototype.matchAtStart = function matchAtStart(text) {
 	this.__text_cache__ = text;
 	this.__index__ = -1;
-	if (!text.length) return null;
+	if (!text.length) {return null;}
 	const m = this.re.schema_at_start.exec(text);
-	if (!m) return null;
+	if (!m) {return null;}
 	const len = this.testSchemaAt(text, m[2], m[0].length);
-	if (!len) return null;
+	if (!len) {return null;}
 	this.__schema__ = m[2];
 	this.__index__ = m.index + m[1].length;
 	this.__last_index__ = m.index + m[0].length + len;
@@ -15770,9 +15770,9 @@ LinkifyIt.prototype.tlds = function tlds(list, keepOld) {
 		compile(this);
 		return this;
 	}
-	this.__tlds__ = this.__tlds__.concat(list).sort().filter(function(el, idx, arr) {
+	this.__tlds__ = this.__tlds__.concat(list).toSorted().filter(function(el, idx, arr) {
 		return el !== arr[idx - 1];
-	}).reverse();
+	}).toReversed();
 	compile(this);
 	return this;
 };
@@ -16843,7 +16843,7 @@ function renderMarkdownToHtmlString(value) {
 
 var __esDecorate$1 = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -16852,10 +16852,10 @@ var __esDecorate$1 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -16863,17 +16863,17 @@ var __esDecorate$1 = void 0 && (void 0).__esDecorate || function(ctor, descripto
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers$1 = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -16940,12 +16940,12 @@ let Text = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Text = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#text_accessor_storage = __runInitializers$1(this, _text_initializers, null);
 		get text() {
@@ -17027,9 +17027,9 @@ let Text = (() => {
 			], {}))}`;
 		}
 		#areHintedStyles(styles) {
-			if (typeof styles !== "object") return false;
-			if (Array.isArray(styles)) return false;
-			if (!styles) return false;
+			if (typeof styles !== "object") {return false;}
+			if (Array.isArray(styles)) {return false;}
+			if (!styles) {return false;}
 			const expected = [
 				"h1",
 				"h2",
@@ -17045,7 +17045,7 @@ let Text = (() => {
 		#getAdditionalStyles() {
 			let additionalStyles = {};
 			const styles = this.theme.additionalStyles?.Text;
-			if (!styles) return additionalStyles;
+			if (!styles) {return additionalStyles;}
 			if (this.#areHintedStyles(styles)) {
 				const hint = this.usageHint ?? "body";
 				additionalStyles = styles[hint];
@@ -17076,7 +17076,7 @@ let Text = (() => {
 
 var __esDecorate = void 0 && (void 0).__esDecorate || function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
 	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
@@ -17085,10 +17085,10 @@ var __esDecorate = void 0 && (void 0).__esDecorate || function(ctor, descriptorI
 	var _, done = false;
 	for (var i = decorators.length - 1; i >= 0; i--) {
 		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
 		var result = (0, decorators[i])(kind === "accessor" ? {
@@ -17096,17 +17096,17 @@ var __esDecorate = void 0 && (void 0).__esDecorate || function(ctor, descriptorI
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
 		} else if (_ = accept(result)) {
-			if (kind === "field") initializers.unshift(_);
-			else descriptor[key] = _;
+			if (kind === "field") {initializers.unshift(_);}
+			else {descriptor[key] = _;}
 		}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 var __runInitializers = void 0 && (void 0).__runInitializers || function(thisArg, initializers, value) {
@@ -17152,12 +17152,12 @@ let Video = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Video = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#url_accessor_storage = __runInitializers(this, _url_initializers, null);
 		get url() {

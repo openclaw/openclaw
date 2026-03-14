@@ -172,6 +172,8 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hold: () => {},
+      resume: () => {},
     };
     // shouldDropFinalPayloads short-circuits to [] when the pipeline streamed
     // without aborting, so hasSentPayload is never reached.
