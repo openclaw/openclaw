@@ -372,6 +372,7 @@ Docs: https://docs.openclaw.ai
 - Agents/embedded runner: carry provider-observed overflow token counts into compaction so overflow retries and diagnostics use the rejected live prompt size instead of only transcript estimates. (#40357) thanks @rabsef-bicrym.
 - Agents/compaction transcript updates: emit a transcript-update event immediately after successful embedded compaction so downstream listeners observe the post-compact transcript without waiting for a later write. (#25558) thanks @rodrigouroz.
 - Agents/sessions_spawn: use the target agent workspace for cross-agent spawned runs instead of inheriting the caller workspace, so child sessions load the correct workspace-scoped instructions and persona files. (#40176) Thanks @moshehbenavraham.
+
 - Models/google-vertex Gemini flash-lite normalization: apply existing bare-ID preview normalization to `google-vertex` model refs and provider configs so `google-vertex/gemini-3.1-flash-lite` resolves as `gemini-3.1-flash-lite-preview`. (#42435) thanks @scoootscooob.
 
 ## 2026.3.7
