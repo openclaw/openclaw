@@ -464,6 +464,11 @@ export function createExecTool(
         : (explicitTimeoutSec ?? defaultTimeoutSec);
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
+      if (params.pty === true && sandbox) {
+        warnings.push(
+          "Warning: pty is not supported in sandbox mode; the pty:true parameter will be ignored.",
+        );
+      }
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
