@@ -708,6 +708,9 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: sessionKey,
+    // Preserve the existing session label so heartbeat polls don't overwrite
+    // the user-facing displayName with "heartbeat" (#42495).
+    ConversationLabel: entry?.origin?.label,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
