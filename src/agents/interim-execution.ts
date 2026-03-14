@@ -10,6 +10,13 @@ const INTERIM_EXECUTION_HINTS = [
   "working on it",
   "retrying now",
   "auto-announce when done",
+  "我继续处理",
+  "我继续执行",
+  "我来继续执行",
+  "我先处理一下",
+  "处理中",
+  "完成后回报",
+  "完成后同步",
 ] as const;
 
 function normalizeInterimExecutionText(value: string): string {

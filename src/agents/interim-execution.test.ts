@@ -7,6 +7,8 @@ describe("isLikelyInterimExecutionMessage", () => {
     expect(isLikelyInterimExecutionMessage("working on it, it'll auto-announce when done")).toBe(
       true,
     );
+    expect(isLikelyInterimExecutionMessage("我继续处理，完成后回报")).toBe(true);
+    expect(isLikelyInterimExecutionMessage("我先处理一下，完成后同步")).toBe(true);
   });
 
   it("rejects substantive final content", () => {
@@ -15,6 +17,9 @@ describe("isLikelyInterimExecutionMessage", () => {
     ).toBe(false);
     expect(isLikelyInterimExecutionMessage("The total should be about $40.")).toBe(false);
     expect(isLikelyInterimExecutionMessage("You should have your summary ready by tomorrow.")).toBe(
+      false,
+    );
+    expect(isLikelyInterimExecutionMessage("我已经处理完成，下面是最终结果和后续建议。")).toBe(
       false,
     );
   });
