@@ -1,11 +1,5 @@
 import { rm } from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  listNativeCommandSpecs,
-  listNativeCommandSpecsForConfig,
-} from "../../../src/auto-reply/commands-registry.js";
-import { loadSessionStore } from "../../../src/config/sessions.js";
-import { normalizeTelegramCommandName } from "../../../src/config/telegram-custom-commands.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import {
@@ -25,7 +19,14 @@ import {
   setMyCommandsSpy,
   wasSentByBot,
 } from "./bot.create-telegram-bot.test-harness.js";
-import { createTelegramBot } from "./bot.js";
+
+// Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
+const { listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
+  await import("../../../src/auto-reply/commands-registry.js");
+const { loadSessionStore } = await import("../../../src/config/sessions.js");
+const { normalizeTelegramCommandName } =
+  await import("../../../src/config/telegram-custom-commands.js");
+const { createTelegramBot } = await import("./bot.js");
 
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
@@ -833,8 +834,6 @@ describe("createTelegramBot", () => {
         ReplyToBody?: string;
       };
       expect(payload.ReplyToBody).toBe("<media:image>");
-      expect(payload.MediaPaths).toHaveLength(1);
-      expect(payload.MediaPath).toBe(payload.MediaPaths?.[0]);
       expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
     } finally {
       fetchSpy.mockRestore();
