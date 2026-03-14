@@ -17,6 +17,11 @@ import {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
+import {
+  extractShortModelName,
+  resolveResponsePrefixTemplate,
+  type ResponsePrefixContext,
+} from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
@@ -769,14 +774,22 @@ export async function runHeartbeatOnce(opts: {
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    const prefixContext: ResponsePrefixContext = {};
+    const onModelSelected = (ctx: { provider: string; model: string; thinkLevel?: string }) => {
+      prefixContext.provider = ctx.provider;
+      prefixContext.model = extractShortModelName(ctx.model);
+      prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
+      prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+    };
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
           heartbeatModelOverride,
           suppressToolErrorWarnings,
           bootstrapContextMode,
+          onModelSelected,
         }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode, onModelSelected };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
@@ -809,7 +822,8 @@ export async function runHeartbeatOnce(opts: {
     }
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
-    const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
+    const resolvedResponsePrefix = resolveResponsePrefixTemplate(responsePrefix, prefixContext);
+    const normalized = normalizeHeartbeatReply(replyPayload, resolvedResponsePrefix, ackMaxChars);
     // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
     // The model should be responding with exec results, not ack tokens.
     // Also, if normalized.text is empty due to token stripping but we have exec completion,
