@@ -139,7 +139,7 @@ describe("runReplyAgent execution-task interim retry", () => {
     expect(result).toMatchObject({ text: "Done. Here is the concrete result." });
   });
 
-  it("does not rerun when a subagent run is already active", async () => {
+  it("normalizes interim acknowledgements when a background executor is already active", async () => {
     listSubagentRunsForRequesterMock.mockReset().mockReturnValue([
       {
         runId: "child-1",
@@ -159,7 +159,9 @@ describe("runReplyAgent execution-task interim retry", () => {
     const result = await createRun();
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ text: "on it" });
+    expect(result).toMatchObject({
+      text: "On it. A background run is already in progress and will report back when it is done.",
+    });
   });
 
   it("does not rerun when the first turn already returns substantive content", async () => {
