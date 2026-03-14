@@ -157,7 +157,7 @@
 ## AI-Assisted PRs
 
 - Follow `CONTRIBUTING.md` for the current AI-assisted PR expectations.
-- If AI materially helped write the PR, mark it as AI-assisted in the PR title or description.
+- Mark the PR as AI-assisted in the PR title or description.
 - In the PR description, state the testing level truthfully (`untested`, `lightly tested`, or `fully tested`).
 - Confirm you understand the code you are submitting; do not present generated code as reviewed if you have not validated it.
 - Include prompts or session logs when practical.
