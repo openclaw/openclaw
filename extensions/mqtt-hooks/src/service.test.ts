@@ -227,7 +227,7 @@ describe("createMqttHooksService", () => {
     });
   });
 
-  it("drops oversized payloads before computing dedupe hashes", async () => {
+  it("drops oversized payloads before queueing or computing dedupe hashes", async () => {
     const fakeClient = new FakeMqttClient();
     const logger = createLogger();
     const payloadHasher = vi.fn(() => "oversized-hash");
@@ -240,6 +240,13 @@ describe("createMqttHooksService", () => {
         subscriptions: [
           {
             id: "alerts",
+            topic: "home/alerts/#",
+            qos: 1,
+            action: "wake",
+            ignoreRetainedOnStartup: false,
+          },
+          {
+            id: "alerts-copy",
             topic: "home/alerts/#",
             qos: 1,
             action: "wake",
@@ -267,6 +274,57 @@ describe("createMqttHooksService", () => {
     await vi.waitFor(() => {
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("payload too large"));
     });
+    expect(logger.warn).toHaveBeenCalledOnce();
+    expect(payloadHasher).not.toHaveBeenCalled();
+    expect(sharedMocks.dispatchWakeIngressAction).not.toHaveBeenCalled();
+
+    await service.stop?.({
+      config: {},
+      stateDir: "/tmp/openclaw-state",
+      logger,
+    });
+  });
+
+  it("ignores retained startup payloads before applying the payload-size guard", async () => {
+    const fakeClient = new FakeMqttClient();
+    const logger = createLogger();
+    const payloadHasher = vi.fn(() => "retained-hash");
+    const service = createMqttHooksService({
+      pluginConfig: resolveMqttHooksPluginConfig({
+        broker: { url: "mqtt://broker.local:1883" },
+        runtime: {
+          maxPayloadBytes: 4,
+        },
+        subscriptions: [
+          {
+            id: "alerts",
+            topic: "home/alerts/#",
+            qos: 1,
+            action: "wake",
+          },
+        ],
+      }),
+      clientFactory: () => fakeClient as never,
+      payloadHasher,
+    });
+
+    await service.start({
+      config: {},
+      stateDir: "/tmp/openclaw-state",
+      logger,
+    });
+
+    fakeClient.emit("connect");
+    fakeClient.emit("message", "home/alerts/kitchen", Buffer.from("oversized"), {
+      qos: 1,
+      retain: true,
+      dup: false,
+    });
+
+    await vi.waitFor(() => {
+      expect(fakeClient.subscribed).toEqual([{ topic: "home/alerts/#", qos: 1 }]);
+    });
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("payload too large"));
     expect(payloadHasher).not.toHaveBeenCalled();
     expect(sharedMocks.dispatchWakeIngressAction).not.toHaveBeenCalled();
 

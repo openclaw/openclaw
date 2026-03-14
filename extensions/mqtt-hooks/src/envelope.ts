@@ -3,6 +3,19 @@ import type { MqttMessageEnvelope, MqttMessagePacket, MqttSubscriptionConfig } f
 
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
+export function assertMqttPayloadSize(params: {
+  subscriptionId: string;
+  payloadSize: number;
+  maxPayloadBytes: number;
+}): void {
+  if (params.payloadSize <= params.maxPayloadBytes) {
+    return;
+  }
+  throw new Error(
+    `payload too large for subscription ${params.subscriptionId}: ${params.payloadSize} bytes exceeds ${params.maxPayloadBytes}`,
+  );
+}
+
 export function buildMqttMessageEnvelope(params: {
   subscription: MqttSubscriptionConfig;
   packet: MqttMessagePacket;
@@ -10,11 +23,11 @@ export function buildMqttMessageEnvelope(params: {
   maxPayloadBytes: number;
 }): MqttMessageEnvelope {
   const payloadSize = params.packet.payload.byteLength;
-  if (payloadSize > params.maxPayloadBytes) {
-    throw new Error(
-      `payload too large for subscription ${params.subscription.id}: ${payloadSize} bytes exceeds ${params.maxPayloadBytes}`,
-    );
-  }
+  assertMqttPayloadSize({
+    subscriptionId: params.subscription.id,
+    payloadSize,
+    maxPayloadBytes: params.maxPayloadBytes,
+  });
 
   const envelope: MqttMessageEnvelope = {
     subscriptionId: params.subscription.id,

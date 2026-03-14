@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/mqtt-hooks";
 import { buildMqttDedupeKey, createMqttMessageDedupe } from "./dedupe.js";
 import { dispatchMqttEnvelope } from "./dispatch.js";
-import { buildMqttMessageEnvelope } from "./envelope.js";
+import { assertMqttPayloadSize, buildMqttMessageEnvelope } from "./envelope.js";
 import {
   closeMqttClient,
   createDefaultMqttClientFactory,
@@ -248,24 +248,31 @@ export function createMqttHooksService(params: {
         }
 
         const normalizedPacket = normalizePacket(topic, payload, packet);
-        for (const subscription of matchingSubscriptions) {
-          const accepted = queue.enqueue(async () => {
-            if (
+        const processableSubscriptions = matchingSubscriptions.filter(
+          (subscription) =>
+            !(
               startupRetainedGuard &&
               subscription.ignoreRetainedOnStartup &&
               normalizedPacket.retain
-            ) {
-              return;
-            }
+            ),
+        );
+        if (processableSubscriptions.length === 0) {
+          return;
+        }
 
-            const payloadSize = normalizedPacket.payload.byteLength;
-            if (payloadSize > params.pluginConfig.runtime.maxPayloadBytes) {
-              ctx.logger.warn(
-                `mqtt-hooks: failed to process topic ${topic} for ${subscription.id}: payload too large for subscription ${subscription.id}: ${payloadSize} bytes exceeds ${params.pluginConfig.runtime.maxPayloadBytes}`,
-              );
-              return;
-            }
+        try {
+          assertMqttPayloadSize({
+            subscriptionId: processableSubscriptions[0].id,
+            payloadSize: normalizedPacket.payload.byteLength,
+            maxPayloadBytes: params.pluginConfig.runtime.maxPayloadBytes,
+          });
+        } catch (err) {
+          ctx.logger.warn(`mqtt-hooks: failed to process topic ${topic}: ${String(err)}`);
+          return;
+        }
 
+        for (const subscription of processableSubscriptions) {
+          const accepted = queue.enqueue(async () => {
             const dedupeKey = buildMqttDedupeKey({
               subscriptionId: subscription.id,
               topic: normalizedPacket.topic,
