@@ -220,6 +220,11 @@ const OP_GRANT_CHAR: Record<FsOp, string> = {
   exec: "x",
 };
 
+// Valid perm strings are exactly 3 chars: [r-][w-][x-].
+// Validated at parse time by validateAccessPolicyConfig, but also checked here
+// as defense-in-depth so a malformed value never accidentally grants access.
+const VALID_PERM_RE = /^[r-][w-][x-]$/;
+
 /**
  * Returns true if the given permission string grants the requested operation.
  * An absent or malformed string is treated as "---" (deny all).
@@ -227,7 +232,7 @@ const OP_GRANT_CHAR: Record<FsOp, string> = {
  * including typos fails closed rather than accidentally granting access.
  */
 function permAllows(perm: PermStr | undefined, op: FsOp): boolean {
-  if (!perm) {
+  if (!perm || !VALID_PERM_RE.test(perm)) {
     return false;
   }
   return perm[OP_INDEX[op]] === OP_GRANT_CHAR[op];
@@ -567,12 +572,18 @@ export function applyScriptPolicyOverride(
   // resolveArgv0 always returns the realpathSync result, so both forms must be
   // normalized the same way or the lookup silently misses, skipping sha256 verification.
   const scripts = policy.scripts;
-  const override = scripts
-    ? (Object.entries(scripts).find(
+  const rawOverride = scripts
+    ? Object.entries(scripts).find(
         ([k]) =>
           k !== "policy" && path.normalize(resolveScriptKey(k)) === path.normalize(resolvedArgv0),
-      )?.[1] as import("../config/types.tools.js").ScriptPolicyEntry | undefined)
+      )?.[1]
     : undefined;
+  // Reject non-object entries (e.g. true, "oops") — a truthy primitive would
+  // otherwise skip sha256 verification and act as an unchecked override grant.
+  const override =
+    rawOverride != null && typeof rawOverride === "object" && !Array.isArray(rawOverride)
+      ? (rawOverride as import("../config/types.tools.js").ScriptPolicyEntry)
+      : undefined;
   if (!override) {
     return { policy };
   }
@@ -610,9 +621,16 @@ export function applyScriptPolicyOverride(
   // a broadly denied subtree).
   const { scripts: _scripts, ...base } = policy;
   const merged: AccessPolicyConfig = { ...base };
+
+  // Merge scripts["policy"] (shared base for all matching scripts) with the
+  // per-script entry policy. Per-script wins on conflict (applied last).
+  const sharedPolicy = scripts?.["policy"];
+  const mergedOverride: Record<string, PermStr> = {
+    ...sharedPolicy,
+    ...override.policy,
+  };
   return {
     policy: merged,
-    overrideRules:
-      override.policy && Object.keys(override.policy).length > 0 ? override.policy : undefined,
+    overrideRules: Object.keys(mergedOverride).length > 0 ? mergedOverride : undefined,
   };
 }

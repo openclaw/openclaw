@@ -325,6 +325,32 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     expect(bindArgs[secretIdx]).toBe("--ro-bind-try");
   });
 
+  it('script override "---" rule targeting a file does not emit --tmpfs (bwrap rejects file paths)', () => {
+    // The base-rules loop has an isDir guard before --tmpfs; the scriptOverrideRules loop must too.
+    // /etc/hosts is a real file; emitting --tmpfs /etc/hosts would make bwrap fail at runtime.
+    const config: AccessPolicyConfig = { policy: { "/**": "r--" } };
+    const overrides = { "/etc/hosts": "---" as const };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const args = generateBwrapArgs(config, HOME, overrides);
+      const tmpfsMounts = args
+        .map((a, i) => (a === "--tmpfs" ? args[i + 1] : null))
+        .filter(Boolean);
+      expect(tmpfsMounts).not.toContain("/etc/hosts");
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining("/etc/hosts"));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('script override "---" rule targeting a non-existent path emits --tmpfs (assumed directory)', () => {
+    const config: AccessPolicyConfig = { policy: { "/**": "r--" } };
+    const overrides = { "/nonexistent-path-for-test/**": "---" as const };
+    const args = generateBwrapArgs(config, HOME, overrides);
+    const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
+    expect(tmpfsMounts).toContain("/nonexistent-path-for-test");
+  });
+
   it('script override "-w-" under restrictive base emits --bind-try, not --tmpfs', () => {
     // Greptile: permAllowsWrite && (r || defaultR) condition was wrong — for -w- without /**
     // both flags are false so it fell to else → --tmpfs, silently blocking writes.

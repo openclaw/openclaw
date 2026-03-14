@@ -255,7 +255,18 @@ export function generateBwrapArgs(
       } else if (perm[0] === "r") {
         args.push("--ro-bind-try", p, p);
       } else {
-        args.push("--tmpfs", p);
+        // Mirror the base-rules isDir guard — bwrap --tmpfs only accepts directories.
+        let isDir = true;
+        try {
+          isDir = fs.statSync(p).isDirectory();
+        } catch {
+          // Non-existent — assume directory (forward-protection).
+        }
+        if (isDir) {
+          args.push("--tmpfs", p);
+        } else {
+          _warnBwrapFileDenyOnce(p);
+        }
       }
     }
   }

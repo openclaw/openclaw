@@ -243,6 +243,18 @@ describe("checkAccessPolicy — malformed permission characters fail closed", ()
     const config = { policy: { "/tmp/**": "rWx" as unknown as "rwx" } };
     expect(checkAccessPolicy("/tmp/foo.txt", "write", config)).toBe("deny");
   });
+
+  it("treats 'aw-' (invalid first char) as deny for write even though index 1 is 'w'", () => {
+    // defense-in-depth: full format must be [r-][w-][x-]; 'a' at index 0 fails the regex
+    // so the entire string is rejected rather than accidentally granting write.
+    const config = { policy: { "/tmp/**": "aw-" as unknown as "r--" } };
+    expect(checkAccessPolicy("/tmp/foo.txt", "write", config)).toBe("deny");
+  });
+
+  it("treats a 4-char string as deny (wrong length)", () => {
+    const config = { policy: { "/tmp/**": "rwx!" as unknown as "rwx" } };
+    expect(checkAccessPolicy("/tmp/foo.txt", "exec", config)).toBe("deny");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1028,5 +1040,63 @@ describe("applyScriptPolicyOverride", () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true });
     }
+  });
+
+  it("merges scripts['policy'] into overrideRules when a script matches", () => {
+    // scripts["policy"] is the shared base for all named script entries.
+    // It must appear in overrideRules so the tool layer and OS sandbox enforce it.
+    const base: AccessPolicyConfig = {
+      policy: { "/**": "r--" },
+      scripts: {
+        policy: { [`${HOME}/.secrets/token`]: "r--" },
+        "/my/script.sh": { policy: { "/tmp/**": "rwx" } },
+      },
+    };
+    const { overrideRules } = applyScriptPolicyOverride(base, "/my/script.sh");
+    expect(overrideRules?.[`${HOME}/.secrets/token`]).toBe("r--");
+    expect(overrideRules?.["/tmp/**"]).toBe("rwx");
+  });
+
+  it("per-script policy wins over scripts['policy'] on conflict", () => {
+    const base: AccessPolicyConfig = {
+      policy: { "/**": "r--" },
+      scripts: {
+        policy: { "/tmp/**": "r--" },
+        "/my/script.sh": { policy: { "/tmp/**": "rwx" } },
+      },
+    };
+    const { overrideRules } = applyScriptPolicyOverride(base, "/my/script.sh");
+    expect(overrideRules?.["/tmp/**"]).toBe("rwx");
+  });
+
+  it("includes scripts['policy'] even when per-script entry has no policy key", () => {
+    // A script entry with only sha256 and no policy still gets scripts["policy"] applied.
+    const base: AccessPolicyConfig = {
+      policy: { "/**": "r--" },
+      scripts: {
+        policy: { [`${HOME}/.secrets/token`]: "r--" },
+        "/my/script.sh": {},
+      },
+    };
+    const { overrideRules } = applyScriptPolicyOverride(base, "/my/script.sh");
+    expect(overrideRules?.[`${HOME}/.secrets/token`]).toBe("r--");
+  });
+
+  it("returns base policy unchanged when script entry is a non-object truthy value", () => {
+    // A malformed entry like `true` or `"oops"` must not be treated as a valid override.
+    // Without the shape check, a truthy primitive would skip sha256 and mark hasScriptOverride=true.
+    const base: AccessPolicyConfig = {
+      policy: { "/**": "r--" },
+      scripts: {
+        "/my/script.sh": true as unknown as import("../config/types.tools.js").ScriptPolicyEntry,
+      },
+    };
+    const { policy, overrideRules, hashMismatch } = applyScriptPolicyOverride(
+      base,
+      "/my/script.sh",
+    );
+    expect(overrideRules).toBeUndefined();
+    expect(hashMismatch).toBeUndefined();
+    expect(policy).toBe(base);
   });
 });
