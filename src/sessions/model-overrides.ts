@@ -6,6 +6,12 @@ export type ModelOverrideSelection = {
   isDefault?: boolean;
 };
 
+export type FutureThreadModelDefault = {
+  provider: string;
+  model: string;
+  isDefault?: boolean;
+};
+
 export function applyModelOverrideToSessionEntry(params: {
   entry: SessionEntry;
   selection: ModelOverrideSelection;
@@ -105,6 +111,40 @@ export function applyModelOverrideToSessionEntry(params: {
     delete entry.fallbackNoticeSelectedModel;
     delete entry.fallbackNoticeActiveModel;
     delete entry.fallbackNoticeReason;
+    entry.updatedAt = Date.now();
+  }
+
+  return { updated };
+}
+
+export function applyFutureThreadModelDefaultToSessionEntry(params: {
+  entry: SessionEntry;
+  selection: FutureThreadModelDefault;
+}): { updated: boolean } {
+  const { entry, selection } = params;
+  let updated = false;
+
+  if (selection.isDefault) {
+    if (entry.futureThreadProviderOverride !== undefined) {
+      delete entry.futureThreadProviderOverride;
+      updated = true;
+    }
+    if (entry.futureThreadModelOverride !== undefined) {
+      delete entry.futureThreadModelOverride;
+      updated = true;
+    }
+  } else {
+    if (entry.futureThreadProviderOverride !== selection.provider) {
+      entry.futureThreadProviderOverride = selection.provider;
+      updated = true;
+    }
+    if (entry.futureThreadModelOverride !== selection.model) {
+      entry.futureThreadModelOverride = selection.model;
+      updated = true;
+    }
+  }
+
+  if (updated) {
     entry.updatedAt = Date.now();
   }
 

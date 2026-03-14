@@ -35,6 +35,8 @@ import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenanc
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { resolveTelegramThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -308,6 +310,7 @@ export async function initSessionState(params: {
     sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
   }
   const entry = sessionStore[sessionKey];
+  const hasExistingSessionEntry = Boolean(entry);
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -457,6 +460,32 @@ export async function initSessionState(params: {
     sessionEntry.displayName = threadLabel;
   }
   const parentSessionKey = ctx.ParentSessionKey?.trim();
+  const telegramThreadParentSessionKey = resolveTelegramThreadParentSessionKey({
+    sessionKey,
+    parentSessionKey,
+  });
+  if (!hasExistingSessionEntry && telegramThreadParentSessionKey) {
+    const parentEntry = sessionStore[telegramThreadParentSessionKey];
+    const parentProvider = parentEntry?.futureThreadProviderOverride?.trim();
+    const parentModel = parentEntry?.futureThreadModelOverride?.trim();
+    // Seed brand-new Telegram thread sessions from the parent chat's
+    // future-thread default. Existing thread sessions are intentionally left
+    // untouched so model history remains stable.
+    if (
+      parentProvider &&
+      parentModel &&
+      !sessionEntry.providerOverride &&
+      !sessionEntry.modelOverride
+    ) {
+      applyModelOverrideToSessionEntry({
+        entry: sessionEntry,
+        selection: {
+          provider: parentProvider,
+          model: parentModel,
+        },
+      });
+    }
+  }
   const alreadyForked = sessionEntry.forkedFromParent === true;
   if (
     parentSessionKey &&

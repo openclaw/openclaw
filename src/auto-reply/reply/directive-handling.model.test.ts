@@ -277,4 +277,67 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.thinkingLevel).toBe("off");
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
   });
+
+  it("stores future-thread default on parent Telegram chat when /model is set in a topic", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const threadSessionKey = "agent:main:telegram:group:-100123:topic:77";
+    const parentSessionKey = "agent:main:telegram:group:-100123";
+    const sessionEntry = createSessionEntry();
+    const parentEntry = createSessionEntry({ sessionId: "parent-1" });
+    const sessionStore = {
+      [threadSessionKey]: sessionEntry,
+      [parentSessionKey]: parentEntry,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionKey: threadSessionKey,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to openai/gpt-4o");
+    expect(result?.text).toContain(
+      "New Telegram threads in this chat will default to openai/gpt-4o",
+    );
+    expect(sessionStore[parentSessionKey]?.futureThreadProviderOverride).toBe("openai");
+    expect(sessionStore[parentSessionKey]?.futureThreadModelOverride).toBe("gpt-4o");
+  });
+
+  it("clears parent future-thread default when /model resets to configured default in a Telegram topic", async () => {
+    const directives = parseInlineDirectives("/model anthropic/claude-opus-4-5");
+    const threadSessionKey = "agent:main:telegram:group:-100123:topic:77";
+    const parentSessionKey = "agent:main:telegram:group:-100123";
+    const sessionEntry = createSessionEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+    });
+    const parentEntry = createSessionEntry({
+      sessionId: "parent-2",
+      futureThreadProviderOverride: "openai",
+      futureThreadModelOverride: "gpt-4o",
+    });
+    const sessionStore = {
+      [threadSessionKey]: sessionEntry,
+      [parentSessionKey]: parentEntry,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionKey: threadSessionKey,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Model reset to default");
+    expect(result?.text).toContain(
+      "New Telegram threads in this chat now follow the default model.",
+    );
+    expect(sessionStore[parentSessionKey]?.futureThreadProviderOverride).toBeUndefined();
+    expect(sessionStore[parentSessionKey]?.futureThreadModelOverride).toBeUndefined();
+  });
 });

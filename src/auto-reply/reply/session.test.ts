@@ -2133,3 +2133,91 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.to).toBe("session:webchat-main");
   });
 });
+
+describe("initSessionState Telegram future-thread model defaults", () => {
+  it("seeds new forum topic sessions from parent future-thread defaults", async () => {
+    const storePath = await createStorePath("telegram-topic-future-model-default-");
+    const parentSessionKey = "agent:main:telegram:group:-100123";
+    const topicSessionKey = "agent:main:telegram:group:-100123:topic:42";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: "parent-topic",
+        updatedAt: Date.now(),
+        futureThreadProviderOverride: "openai-codex",
+        futureThreadModelOverride: "gpt-5.3-codex",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello topic",
+        SessionKey: topicSessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.providerOverride).toBe("openai-codex");
+    expect(result.sessionEntry.modelOverride).toBe("gpt-5.3-codex");
+  });
+
+  it("seeds new Telegram DM threaded sessions from parent future-thread defaults", async () => {
+    const storePath = await createStorePath("telegram-dm-thread-future-model-default-");
+    const parentSessionKey = "agent:main:telegram:default:direct:12345";
+    const threadSessionKey = "agent:main:telegram:default:direct:12345:thread:12345:9001";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: "parent-dm",
+        updatedAt: Date.now(),
+        futureThreadProviderOverride: "openai-codex",
+        futureThreadModelOverride: "gpt-5.3-codex",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello dm thread",
+        SessionKey: threadSessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.providerOverride).toBe("openai-codex");
+    expect(result.sessionEntry.modelOverride).toBe("gpt-5.3-codex");
+  });
+
+  it("does not mutate existing thread sessions when parent future-thread defaults change", async () => {
+    const storePath = await createStorePath("telegram-existing-thread-not-retrofit-");
+    const parentSessionKey = "agent:main:telegram:group:-100123";
+    const topicSessionKey = "agent:main:telegram:group:-100123:topic:42";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: "parent-topic-existing",
+        updatedAt: Date.now(),
+        futureThreadProviderOverride: "openai-codex",
+        futureThreadModelOverride: "gpt-5.3-codex",
+      },
+      [topicSessionKey]: {
+        sessionId: "existing-topic",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "existing topic ping",
+        SessionKey: topicSessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionEntry.providerOverride).toBeUndefined();
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+  });
+});

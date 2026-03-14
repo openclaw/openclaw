@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   resolveAgentDir,
   resolveDefaultAgentId,
@@ -16,7 +17,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  applyFutureThreadModelDefaultToSessionEntry,
+  applyModelOverrideToSessionEntry,
+} from "../../sessions/model-overrides.js";
+import { resolveTelegramThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveProfileOverride } from "./directive-handling.auth.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { enqueueModeSwitchEvents } from "./directive-handling.shared.js";
@@ -171,6 +176,29 @@ export async function persistInlineDirectives(params: {
             },
             profileOverride,
           });
+          const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
+            sessionKey,
+          });
+          if (telegramParentSessionKey) {
+            const parentEntry =
+              sessionStore[telegramParentSessionKey] ??
+              ({
+                sessionId: crypto.randomUUID(),
+                updatedAt: Date.now(),
+              } satisfies SessionEntry);
+            const { updated: parentUpdated } = applyFutureThreadModelDefaultToSessionEntry({
+              entry: parentEntry,
+              selection: {
+                provider: resolved.ref.provider,
+                model: resolved.ref.model,
+                isDefault,
+              },
+            });
+            if (parentUpdated) {
+              sessionStore[telegramParentSessionKey] = parentEntry;
+              updated = true;
+            }
+          }
           provider = resolved.ref.provider;
           model = resolved.ref.model;
           const nextLabel = `${provider}/${model}`;
@@ -198,6 +226,12 @@ export async function persistInlineDirectives(params: {
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
           store[sessionKey] = sessionEntry;
+          const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
+            sessionKey,
+          });
+          if (telegramParentSessionKey && sessionStore[telegramParentSessionKey]) {
+            store[telegramParentSessionKey] = sessionStore[telegramParentSessionKey]!;
+          }
         });
       }
       enqueueModeSwitchEvents({

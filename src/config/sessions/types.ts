@@ -112,6 +112,13 @@ export type SessionEntry = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
+  /**
+   * Parent-chat default for future thread/topic sessions.
+   * This is intentionally separate from providerOverride/modelOverride so
+   * existing threads do not retroactively change when a thread picks a model.
+   */
+  futureThreadProviderOverride?: string;
+  futureThreadModelOverride?: string;
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;
