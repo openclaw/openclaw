@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createSendCfgThreadingRuntime,
+  expectProvidedCfgSkipsRuntimeLoad,
+  expectRuntimeCfgFallback,
+} from "../../test-utils/send-config.js";
 import type { IrcClient } from "./client.js";
 import type { CoreConfig } from "./types.js";
 
@@ -27,20 +32,7 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("./runtime.js", () => ({
-  getIrcRuntime: () => ({
-    config: {
-      loadConfig: hoisted.loadConfig,
-    },
-    channel: {
-      text: {
-        resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
-        convertMarkdownTables: hoisted.convertMarkdownTables,
-      },
-      activity: {
-        record: hoisted.record,
-      },
-    },
-  }),
+  getIrcRuntime: () => createSendCfgThreadingRuntime(hoisted),
 }));
 
 vi.mock("./accounts.js", () => ({
@@ -87,8 +79,9 @@ describe("sendMessageIrc cfg threading", () => {
       accountId: "work",
     });
 
-    expect(hoisted.loadConfig).not.toHaveBeenCalled();
-    expect(hoisted.resolveIrcAccount).toHaveBeenCalledWith({
+    expectProvidedCfgSkipsRuntimeLoad({
+      loadConfig: hoisted.loadConfig,
+      resolveAccount: hoisted.resolveIrcAccount,
       cfg: providedCfg,
       accountId: "work",
     });
@@ -106,8 +99,9 @@ describe("sendMessageIrc cfg threading", () => {
 
     await sendMessageIrc("#ops", "ping", { client });
 
-    expect(hoisted.loadConfig).toHaveBeenCalledTimes(1);
-    expect(hoisted.resolveIrcAccount).toHaveBeenCalledWith({
+    expectRuntimeCfgFallback({
+      loadConfig: hoisted.loadConfig,
+      resolveAccount: hoisted.resolveIrcAccount,
       cfg: runtimeCfg,
       accountId: undefined,
     });
