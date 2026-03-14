@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../config/config.js";
 import {
+  buildChromeMcpLaunchPlanForTest,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp.js";
+
+vi.mock("../config/config.js", () => ({
+  loadConfig: vi.fn(),
+}));
 
 type ToolCall = {
   name: string;
@@ -79,6 +85,99 @@ function createFakeSession(): ChromeMcpSession {
 describe("chrome MCP page parsing", () => {
   beforeEach(async () => {
     await resetChromeMcpSessionsForTest();
+    vi.mocked(loadConfig).mockReturnValue({
+      browser: {
+        profiles: {
+          "chrome-live": {
+            driver: "existing-session",
+            attachOnly: true,
+            color: "#00AA00",
+          },
+        },
+      },
+    });
+  });
+
+  it("uses autoConnect for desktop existing-session profiles", () => {
+    const plan = buildChromeMcpLaunchPlanForTest("chrome-live");
+    expect(plan.mode).toBe("autoConnect");
+    expect(plan.args).toContain("--autoConnect");
+  });
+
+  it("uses headless launch flags for headless existing-session profiles", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      browser: {
+        headless: true,
+        noSandbox: true,
+        executablePath: "/usr/bin/google-chrome-stable",
+        extraArgs: ["--disable-dev-shm-usage"],
+        profiles: {
+          "chrome-live": {
+            driver: "existing-session",
+            attachOnly: true,
+            color: "#00AA00",
+          },
+        },
+      },
+    });
+
+    const plan = buildChromeMcpLaunchPlanForTest("chrome-live");
+    expect(plan.mode).toBe("headless");
+    expect(plan.args).toEqual(
+      expect.arrayContaining([
+        "--headless",
+        "--userDataDir",
+        expect.stringContaining("/browser/chrome-live/user-data"),
+        "--executablePath",
+        "/usr/bin/google-chrome-stable",
+        "--chromeArg",
+        "--no-sandbox",
+        "--chromeArg",
+        "--disable-setuid-sandbox",
+        "--chromeArg",
+        "--disable-dev-shm-usage",
+      ]),
+    );
+  });
+
+  it("uses browserUrl for MCP profiles configured with an HTTP target", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      browser: {
+        profiles: {
+          "chrome-live": {
+            driver: "existing-session",
+            attachOnly: true,
+            cdpUrl: "http://127.0.0.1:9222",
+            color: "#00AA00",
+          },
+        },
+      },
+    });
+
+    const plan = buildChromeMcpLaunchPlanForTest("chrome-live");
+    expect(plan.mode).toBe("browserUrl");
+    expect(plan.args).toEqual(expect.arrayContaining(["--browserUrl", "http://127.0.0.1:9222"]));
+  });
+
+  it("uses wsEndpoint for MCP profiles configured with a WebSocket target", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      browser: {
+        profiles: {
+          "chrome-live": {
+            driver: "existing-session",
+            attachOnly: true,
+            cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc",
+            color: "#00AA00",
+          },
+        },
+      },
+    });
+
+    const plan = buildChromeMcpLaunchPlanForTest("chrome-live");
+    expect(plan.mode).toBe("browserUrl");
+    expect(plan.args).toEqual(
+      expect.arrayContaining(["--wsEndpoint", "ws://127.0.0.1:9222/devtools/browser/abc"]),
+    );
   });
 
   it("parses list_pages text responses when structuredContent is missing", async () => {
