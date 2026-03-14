@@ -499,6 +499,9 @@ class WebControlUiApp extends LitElement {
   @state() safeEditMode = true;
   @state() checkpointName = "before-change";
   @state() restoreRef = "checkpoint/web-control-ui-YYYYMMDD-HHMMSS-before-change";
+  @state() sessionsLoading = false;
+  @state() sessionsError: string | null = null;
+  @state() sessionRows: SessionRow[] = [];
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -565,6 +568,38 @@ class WebControlUiApp extends LitElement {
     } finally {
       this.chatLoading = false;
     }
+  }
+
+  private async loadSessionsList() {
+    if (!this.client || this.connectionState !== "connected") {
+      return;
+    }
+    this.sessionsLoading = true;
+    this.sessionsError = null;
+    try {
+      const result = await this.client.request<{ sessions?: SessionRow[] }>("sessions.list", {});
+      this.sessionRows = Array.isArray(result.sessions)
+        ? result.sessions
+            .filter((row): row is SessionRow => Boolean(row && typeof row.key === "string"))
+            .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+        : [];
+    } catch (error) {
+      this.sessionsError = String(error);
+    } finally {
+      this.sessionsLoading = false;
+    }
+  }
+
+  private async switchSession(nextSessionKey: string) {
+    if (!nextSessionKey || nextSessionKey === this.sessionKey) {
+      return;
+    }
+    this.sessionKey = nextSessionKey;
+    this.chatMessages = [];
+    this.chatStream = "";
+    this.chatRunId = null;
+    this.errorMessage = null;
+    await this.loadChatHistory();
   }
 
   private handleChatEvent(payload?: ChatEventPayload) {
@@ -642,6 +677,7 @@ class WebControlUiApp extends LitElement {
         this.connectionState = "connected";
         this.hello = hello;
         void this.loadSummaries();
+        void this.loadSessionsList();
         void this.loadChatHistory();
       },
       onClose: ({ code, reason, error }) => {
@@ -789,6 +825,17 @@ class WebControlUiApp extends LitElement {
   private currentDevUrl() {
     const token = this.gatewayToken.trim();
     return token ? `http://localhost:4173/#token=${token}` : "http://localhost:4173/#token=<gateway-token>";
+  }
+
+  private formatSessionTime(updatedAt?: number | null) {
+    if (!updatedAt) {
+      return "-";
+    }
+    try {
+      return new Date(updatedAt).toLocaleString("zh-CN", { hour12: false });
+    } catch {
+      return String(updatedAt);
+    }
   }
 
   private messageKey(message: ChatMessage, index: number) {
@@ -1048,9 +1095,10 @@ class WebControlUiApp extends LitElement {
                   @input=${(event: InputEvent) => {
                     this.chatInput = (event.target as HTMLTextAreaElement).value;
                   }}
-                  placeholder="例如：把首页做成左侧导航 + 主聊天区 + 右侧推荐面板，整体更像 Notion，但保留深色玻璃感。"
+                  placeholder="例如：把某个 agent 会话打开出来，并且让左侧能快速切换所有子会话。"
                 ></textarea>
                 <div class="chat-actions">
+                  <button class="secondary" type="button" @click=${() => this.loadSessionsList()}>刷新会话</button>
                   <button class="secondary" type="button" @click=${() => this.loadChatHistory()}>刷新历史</button>
                   <button type="button" @click=${() => this.sendChat()} ?disabled=${this.chatSending}>${this.chatSending ? "发送中..." : "发送"}</button>
                 </div>
@@ -1058,6 +1106,32 @@ class WebControlUiApp extends LitElement {
             </section>
 
             <div class="section-stack">
+              <section class="panel">
+                <h2>Session Browser</h2>
+                <p class="subtitle">打开每个 agent / session 的入口。点一下就切到对应会话并刷新聊天记录。</p>
+                <div class="memory-actions" style="margin-bottom: 12px; justify-content: space-between;">
+                  <div class="muted">当前会话：${this.sessionKey}</div>
+                  <button class="secondary" type="button" @click=${() => this.loadSessionsList()} ?disabled=${this.sessionsLoading}>${this.sessionsLoading ? "刷新中..." : "刷新会话列表"}</button>
+                </div>
+                ${this.sessionsError ? html`<p style="margin-bottom:12px;color:#fca5a5;">${this.sessionsError}</p>` : null}
+                <div class="session-browser">
+                  ${this.sessionRows.map(
+                    (session) => html`
+                      <button
+                        type="button"
+                        class="session-item ${session.key === this.sessionKey ? "active" : ""}"
+                        @click=${() => this.switchSession(session.key)}
+                      >
+                        <div><strong>${session.label?.trim() || session.key}</strong></div>
+                        <div class="session-meta">key: ${session.key}</div>
+                        <div class="session-meta">kind: ${session.kind ?? "-"} · model: ${session.model ?? "-"}</div>
+                      </button>
+                    `,
+                  )}
+                  ${!this.sessionsLoading && this.sessionRows.length === 0 ? html`<div class="muted">当前还没有拉到 session 列表。</div>` : null}
+                </div>
+              </section>
+
               <section class="panel">
                 <h2>Preference Memory</h2>
                 <p class="subtitle">这层保留。因为纯提示词要真正连续，偏好记忆不能丢。</p>
@@ -1247,3 +1321,6 @@ class WebControlUiApp extends LitElement {
     `;
   }
 }
+
+
+
