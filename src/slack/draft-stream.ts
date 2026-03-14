@@ -11,6 +11,7 @@ export type SlackDraftStream = {
   clear: () => Promise<void>;
   stop: () => void;
   forceNewMessage: () => void;
+  waitForInFlight: () => Promise<void>;
   messageId: () => string | undefined;
   channelId: () => string | undefined;
 };
@@ -134,6 +135,7 @@ export function createSlackDraftStream(params: {
     clear,
     stop,
     forceNewMessage,
+    waitForInFlight: loop.waitForInFlight,
     messageId: () => streamMessageId,
     channelId: () => streamChannelId,
   };

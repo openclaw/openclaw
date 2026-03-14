@@ -122,6 +122,37 @@ describe("createSlackDraftStream", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it("waitForInFlight resolves only after a concurrent in-flight send completes", async () => {
+    let resolveSend!: () => void;
+    const slowSend = vi.fn<DraftSendFn>(
+      () =>
+        new Promise<{ channelId: string; messageId: string }>((resolve) => {
+          resolveSend = () => resolve({ channelId: "C123", messageId: "111.222" });
+        }),
+    );
+    const { stream } = createDraftStreamHarness({ send: slowSend });
+
+    stream.update("hello");
+    void stream.flush(); // kick off the in-flight send without awaiting
+
+    stream.stop(); // stop the loop while the send is still pending
+    const waitPromise = stream.waitForInFlight();
+
+    let resolved = false;
+    void waitPromise.then(() => {
+      resolved = true;
+    });
+
+    // Not yet resolved — send is still in flight
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    resolveSend(); // complete the in-flight send
+    await waitPromise;
+    expect(resolved).toBe(true);
+    expect(stream.messageId()).toBe("111.222");
+  });
+
   it("clear warns when cleanup fails", async () => {
     const remove = vi.fn<DraftRemoveFn>(async () => {
       throw new Error("cleanup failed");
