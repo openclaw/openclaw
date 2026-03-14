@@ -88,6 +88,7 @@ async function probeZaiChatCompletions(params: {
 
 export async function detectZaiEndpoint(params: {
   apiKey: string;
+  endpoint?: ZaiEndpointId;
   timeoutMs?: number;
   fetchFn?: typeof fetch;
 }): Promise<ZaiDetectedEndpoint | null> {
@@ -97,50 +98,80 @@ export async function detectZaiEndpoint(params: {
   }
 
   const timeoutMs = params.timeoutMs ?? 5_000;
-
-  // Prefer GLM-5 on the general API endpoints.
-  const glm5: Array<{ endpoint: ZaiEndpointId; baseUrl: string }> = [
-    { endpoint: "global", baseUrl: ZAI_GLOBAL_BASE_URL },
-    { endpoint: "cn", baseUrl: ZAI_CN_BASE_URL },
-  ];
-  for (const candidate of glm5) {
-    const result = await probeZaiChatCompletions({
-      baseUrl: candidate.baseUrl,
-      apiKey: params.apiKey,
-      modelId: "glm-5",
-      timeoutMs,
-      fetchFn: params.fetchFn,
-    });
-    if (result.ok) {
-      return {
-        endpoint: candidate.endpoint,
-        baseUrl: candidate.baseUrl,
+  const probeCandidates = (() => {
+    const general = [
+      {
+        endpoint: "global" as const,
+        baseUrl: ZAI_GLOBAL_BASE_URL,
         modelId: "glm-5",
-        note: `Verified GLM-5 on ${candidate.endpoint} endpoint.`,
-      };
-    }
-  }
+        note: "Verified GLM-5 on global endpoint.",
+      },
+      {
+        endpoint: "cn" as const,
+        baseUrl: ZAI_CN_BASE_URL,
+        modelId: "glm-5",
+        note: "Verified GLM-5 on cn endpoint.",
+      },
+    ];
+    const codingGlm5 = [
+      {
+        endpoint: "coding-global" as const,
+        baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
+        modelId: "glm-5",
+        note: "Verified GLM-5 on coding-global endpoint.",
+      },
+      {
+        endpoint: "coding-cn" as const,
+        baseUrl: ZAI_CODING_CN_BASE_URL,
+        modelId: "glm-5",
+        note: "Verified GLM-5 on coding-cn endpoint.",
+      },
+    ];
+    const codingFallback = [
+      {
+        endpoint: "coding-global" as const,
+        baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
+        modelId: "glm-4.7",
+        note: "Coding Plan endpoint verified, but this key/plan does not expose GLM-5 there. Defaulting to GLM-4.7.",
+      },
+      {
+        endpoint: "coding-cn" as const,
+        baseUrl: ZAI_CODING_CN_BASE_URL,
+        modelId: "glm-4.7",
+        note: "Coding Plan CN endpoint verified, but this key/plan does not expose GLM-5 there. Defaulting to GLM-4.7.",
+      },
+    ];
 
-  // Fallback: Coding Plan endpoint (GLM-5 not available there).
-  const coding: Array<{ endpoint: ZaiEndpointId; baseUrl: string }> = [
-    { endpoint: "coding-global", baseUrl: ZAI_CODING_GLOBAL_BASE_URL },
-    { endpoint: "coding-cn", baseUrl: ZAI_CODING_CN_BASE_URL },
-  ];
-  for (const candidate of coding) {
+    switch (params.endpoint) {
+      case "global":
+        return general.filter((candidate) => candidate.endpoint === "global");
+      case "cn":
+        return general.filter((candidate) => candidate.endpoint === "cn");
+      case "coding-global":
+        return [
+          ...codingGlm5.filter((candidate) => candidate.endpoint === "coding-global"),
+          ...codingFallback.filter((candidate) => candidate.endpoint === "coding-global"),
+        ];
+      case "coding-cn":
+        return [
+          ...codingGlm5.filter((candidate) => candidate.endpoint === "coding-cn"),
+          ...codingFallback.filter((candidate) => candidate.endpoint === "coding-cn"),
+        ];
+      default:
+        return [...general, ...codingGlm5, ...codingFallback];
+    }
+  })();
+
+  for (const candidate of probeCandidates) {
     const result = await probeZaiChatCompletions({
       baseUrl: candidate.baseUrl,
       apiKey: params.apiKey,
-      modelId: "glm-4.7",
+      modelId: candidate.modelId,
       timeoutMs,
       fetchFn: params.fetchFn,
     });
     if (result.ok) {
-      return {
-        endpoint: candidate.endpoint,
-        baseUrl: candidate.baseUrl,
-        modelId: "glm-4.7",
-        note: "Coding Plan endpoint detected; GLM-5 is not available there. Defaulting to GLM-4.7.",
-      };
+      return candidate;
     }
   }
 

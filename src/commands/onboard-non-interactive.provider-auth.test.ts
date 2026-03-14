@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
@@ -18,6 +18,8 @@ type OnboardEnv = {
 };
 
 const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
+type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
+const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
 
 vi.mock("./onboard-helpers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./onboard-helpers.js")>();
@@ -26,6 +28,10 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => {
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
   };
 });
+
+vi.mock("./zai-endpoint-detect.js", () => ({
+  detectZaiEndpoint,
+}));
 
 const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
 
@@ -180,6 +186,11 @@ describe("onboard (non-interactive): provider auth", () => {
     ({ ensureAuthProfileStore, upsertAuthProfile } = await import("../agents/auth-profiles.js"));
   });
 
+  beforeEach(() => {
+    detectZaiEndpoint.mockReset();
+    detectZaiEndpoint.mockResolvedValue(null);
+  });
+
   it("stores MiniMax API key and uses global baseUrl by default", async () => {
     await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
@@ -220,6 +231,12 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("stores Z.AI API key and uses global baseUrl by default", async () => {
     await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
+      detectZaiEndpoint.mockResolvedValueOnce({
+        endpoint: "global",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        modelId: "glm-5",
+        note: "Verified GLM-5 on global endpoint.",
+      });
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "zai-api-key",
         zaiApiKey: "zai-test-key", // pragma: allowlist secret
@@ -235,6 +252,12 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("supports Z.AI CN coding endpoint auth choice", async () => {
     await withOnboardEnv("openclaw-onboard-zai-cn-", async (env) => {
+      detectZaiEndpoint.mockResolvedValueOnce({
+        endpoint: "coding-cn",
+        baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+        modelId: "glm-4.7",
+        note: "Coding Plan CN endpoint verified, but this key/plan does not expose GLM-5 there. Defaulting to GLM-4.7.",
+      });
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "zai-coding-cn",
         zaiApiKey: "zai-test-key", // pragma: allowlist secret
@@ -243,6 +266,25 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(cfg.models?.providers?.zai?.baseUrl).toBe(
         "https://open.bigmodel.cn/api/coding/paas/v4",
       );
+      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7");
+    });
+  });
+
+  it("supports Z.AI Coding Plan global endpoint with GLM-5 when available", async () => {
+    await withOnboardEnv("openclaw-onboard-zai-coding-global-", async (env) => {
+      detectZaiEndpoint.mockResolvedValueOnce({
+        endpoint: "coding-global",
+        baseUrl: "https://api.z.ai/api/coding/paas/v4",
+        modelId: "glm-5",
+        note: "Verified GLM-5 on coding-global endpoint.",
+      });
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "zai-coding-global",
+        zaiApiKey: "zai-test-key", // pragma: allowlist secret
+      });
+
+      expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
     });
   });
 

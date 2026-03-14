@@ -9,6 +9,10 @@ Docs: https://docs.openclaw.ai
 - Placeholder: replace with the first 2026.3.14 user-facing change.
 - Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) thanks @scoootscooob.
 
+### Fixes
+
+- Z.AI/onboarding: detect a working default model even for explicit `zai-coding-*` endpoint choices, so Coding Plan setup can keep the selected endpoint while defaulting to `glm-5` when available or `glm-4.7` as fallback. (#45969)
+
 ## 2026.3.13
 
 ### Changes
