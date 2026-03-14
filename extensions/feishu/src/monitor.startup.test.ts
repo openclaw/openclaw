@@ -3,7 +3,31 @@ import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtim
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
-const probeFeishuMock = vi.hoisted(() => vi.fn());
+const { probeFeishuMock, createFeishuClientMockModule, createFeishuRuntimeMockModule } = vi.hoisted(
+  () => ({
+    probeFeishuMock: vi.fn(),
+    createFeishuClientMockModule: () => ({
+      createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
+      createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
+    }),
+    createFeishuRuntimeMockModule: () => ({
+      getFeishuRuntime: () => ({
+        channel: {
+          debounce: {
+            resolveInboundDebounceMs: () => 0,
+            createInboundDebouncer: () => ({
+              enqueue: async () => {},
+              flushKey: async () => {},
+            }),
+          },
+          text: {
+            hasControlCommand: () => false,
+          },
+        },
+      }),
+    }),
+  }),
+);
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
