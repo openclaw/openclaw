@@ -40,7 +40,12 @@ export type SsrFPolicy = {
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
   "localhost.localdomain",
+  // Cloud provider IMDS hostnames — defense-in-depth alongside IP range
+  // blocking (link-local 169.254.x.x, carrier-grade NAT 100.64.0.0/10,
+  // uniqueLocal fd00::/8).  The .internal suffix rule also catches some of
+  // these, but explicit entries make the intent clear and survive refactors.
   "metadata.google.internal",
+  "metadata.azure.internal",
 ]);
 
 function normalizeHostnameSet(values?: string[]): Set<string> {
