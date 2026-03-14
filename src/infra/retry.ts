@@ -15,9 +15,11 @@ export type RetryInfo = {
   label?: string;
 };
 
+export type RetryPredicate = (err: unknown, attempt: number) => boolean;
+
 export type RetryOptions = RetryConfig & {
   label?: string;
-  shouldRetry?: (err: unknown, attempt: number) => boolean;
+  shouldRetry?: RetryPredicate;
   retryAfterMs?: (err: unknown) => number | undefined;
   onRetry?: (info: RetryInfo) => void;
 };
