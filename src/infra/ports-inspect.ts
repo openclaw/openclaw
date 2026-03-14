@@ -248,7 +248,22 @@ async function resolveWindowsImageName(pid: number): Promise<string | undefined>
   return undefined;
 }
 
+async function resolveWindowsCommandLineViaPowerShell(pid: number): Promise<string | undefined> {
+  const res = await runCommandSafe([
+    "powershell",
+    "-NoProfile",
+    "-Command",
+    `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
+  ]);
+  if (res.code !== 0) {
+    return undefined;
+  }
+  const value = res.stdout.trim();
+  return value || undefined;
+}
+
 async function resolveWindowsCommandLine(pid: number): Promise<string | undefined> {
+  // Try wmic first (fast, but deprecated/removed on modern Windows 11+).
   const res = await runCommandSafe([
     "wmic",
     "process",
@@ -258,18 +273,20 @@ async function resolveWindowsCommandLine(pid: number): Promise<string | undefine
     "CommandLine",
     "/value",
   ]);
-  if (res.code !== 0) {
+  if (res.code === 0) {
+    for (const rawLine of res.stdout.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line.toLowerCase().startsWith("commandline=")) {
+        continue;
+      }
+      const value = line.slice("commandline=".length).trim();
+      return value || undefined;
+    }
+    // wmic succeeded but produced no commandline — don't fallback.
     return undefined;
   }
-  for (const rawLine of res.stdout.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line.toLowerCase().startsWith("commandline=")) {
-      continue;
-    }
-    const value = line.slice("commandline=".length).trim();
-    return value || undefined;
-  }
-  return undefined;
+  // Fallback to PowerShell Get-CimInstance when wmic is unavailable.
+  return resolveWindowsCommandLineViaPowerShell(pid);
 }
 
 async function readWindowsListeners(
