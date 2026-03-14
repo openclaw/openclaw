@@ -16,8 +16,10 @@ import {
   browserStatus,
   browserStop,
 } from "../../browser/client.js";
-import { resolveBrowserConfig } from "../../browser/config.js";
+import { resolveBrowserConfig, resolveProfile } from "../../browser/config.js";
+import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME } from "../../browser/constants.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
+import { getBrowserProfileCapabilities } from "../../browser/profile-capabilities.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import {
   trackSessionBrowserTab,
@@ -278,6 +280,60 @@ function resolveBrowserBaseUrl(params: {
   return undefined;
 }
 
+function listUserBrowserProfiles() {
+  const cfg = loadConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  return Object.keys(resolved.profiles ?? {})
+    .map((name) => resolveProfile(resolved, name))
+    .filter((profile): profile is NonNullable<typeof profile> => Boolean(profile))
+    .filter((profile) => {
+      const capabilities = getBrowserProfileCapabilities(profile);
+      return capabilities.requiresRelay || capabilities.usesChromeMcp;
+    });
+}
+
+function resolveBrowserToolProfile(params: {
+  profile?: string;
+  browserSession?: "agent" | "user";
+}): string | undefined {
+  if (params.profile) {
+    return params.profile;
+  }
+  if (!params.browserSession) {
+    return undefined;
+  }
+  if (params.browserSession === "agent") {
+    return DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
+  }
+
+  const userProfiles = listUserBrowserProfiles();
+  const defaultUserProfile = userProfiles.find(
+    (profile) => profile.name !== DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  );
+  if (defaultUserProfile?.name === "chrome") {
+    return defaultUserProfile.name;
+  }
+  const chromeRelay = userProfiles.find((profile) => profile.name === "chrome");
+  if (chromeRelay) {
+    return chromeRelay.name;
+  }
+  if (userProfiles.length === 1) {
+    return userProfiles[0]?.name;
+  }
+  const chromeLive = userProfiles.find((profile) => profile.name === "chrome-live");
+  if (chromeLive) {
+    return chromeLive.name;
+  }
+  if (userProfiles.length === 0) {
+    throw new Error(
+      'No user-browser profile is configured. Use profile="chrome" for the extension relay or create an existing-session profile first.',
+    );
+  }
+  throw new Error(
+    `Multiple user-browser profiles are configured (${userProfiles.map((profile) => profile.name).join(", ")}). Pass profile="<name>".`,
+  );
+}
+
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -291,10 +347,12 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Profiles: use profile="chrome" for Chrome extension relay takeover (your existing Chrome tabs). Use profile="openclaw" for the isolated openclaw-managed browser.',
-      'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS use profile="chrome" (do not ask which profile).',
+      'Browser choice: use browserSession="agent" by default for the isolated OpenClaw browser. Use browserSession="user" only when logged-in browser state matters and the user is present to click/approve browser attach prompts.',
+      'browserSession="user" means the real local user browser on the host, not sandbox/node browsers. If user presence is unclear, ask first.',
+      'profile remains the explicit override. Use profile="chrome" for Chrome extension relay takeover (existing Chrome tabs). Use profile="openclaw" for the isolated OpenClaw-managed browser.',
+      'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS use browserSession="user" and prefer profile="chrome" (do not ask which profile unless ambiguous).',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      "Chrome extension relay needs an attached tab: user must click the OpenClaw Browser Relay toolbar icon on the tab (badge ON). If no tab is connected, ask them to attach it.",
+      "User-browser flows need user interaction: Chrome extension relay needs the user to click the OpenClaw Browser Relay toolbar icon on the tab (badge ON); existing-session may require approving a browser attach prompt.",
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
@@ -305,12 +363,32 @@ export function createBrowserTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const profile = readStringParam(params, "profile");
+      const browserSession = readStringParam(params, "browserSession") as
+        | "agent"
+        | "user"
+        | undefined;
+      const profile = resolveBrowserToolProfile({
+        profile: readStringParam(params, "profile"),
+        browserSession,
+      });
       const requestedNode = readStringParam(params, "node");
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
 
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
+      }
+      if (browserSession === "user") {
+        if (requestedNode || target === "node") {
+          throw new Error('browserSession="user" only supports the local host browser.');
+        }
+        if (target === "sandbox") {
+          throw new Error(
+            'browserSession="user" cannot use the sandbox browser; use target="host" or omit target.',
+          );
+        }
+      }
+      if (!target && !requestedNode && browserSession === "user") {
+        target = "host";
       }
 
       if (!target && !requestedNode && profile === "chrome") {
