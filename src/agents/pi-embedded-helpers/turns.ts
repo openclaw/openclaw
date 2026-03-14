@@ -139,13 +139,39 @@ function mergeConsecutiveAssistantTurns(
   previous: Extract<AgentMessage, { role: "assistant" }>,
   current: Extract<AgentMessage, { role: "assistant" }>,
 ): Extract<AgentMessage, { role: "assistant" }> {
-  const mergedContent = [
-    ...(Array.isArray(previous.content) ? previous.content : []),
-    ...(Array.isArray(current.content) ? current.content : []),
-  ];
+  const prevContent = Array.isArray(previous.content) ? previous.content : [];
+  const currContent = Array.isArray(current.content) ? current.content : [];
+
+  // Deduplicate tool_use blocks by ID — keep the first occurrence.
+  // Consecutive assistant messages can share tool_use IDs after session restore,
+  // compaction summary insertion, or context engine absorption.
+  // Cover all known tool block type variants across providers/transforms.
+  const TOOL_USE_TYPES = new Set(["toolCall", "toolUse", "tool_use", "functionCall"]);
+  type MaybeToolBlock = { type?: string; id?: string };
+
+  const seenToolUseIds = new Set<string>();
+  for (const block of prevContent) {
+    const b = block as MaybeToolBlock;
+    if (b && typeof b === "object" && TOOL_USE_TYPES.has(b.type ?? "") && b.id) {
+      seenToolUseIds.add(b.id);
+    }
+  }
+
+  const dedupedCurrent = currContent.filter((block) => {
+    const b = block as MaybeToolBlock;
+    if (!b || typeof b !== "object" || !TOOL_USE_TYPES.has(b.type ?? "") || !b.id) {
+      return true;
+    }
+    if (seenToolUseIds.has(b.id)) {
+      return false;
+    }
+    seenToolUseIds.add(b.id);
+    return true;
+  });
+
   return {
     ...previous,
-    content: mergedContent,
+    content: [...prevContent, ...dedupedCurrent],
     ...(current.usage && { usage: current.usage }),
     ...(current.stopReason && { stopReason: current.stopReason }),
     ...(current.errorMessage && {

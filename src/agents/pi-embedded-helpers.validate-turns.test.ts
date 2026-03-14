@@ -94,6 +94,88 @@ describe("validateGeminiTurns", () => {
     expect(result[2]).toEqual({ role: "user", content: "How are you?" });
   });
 
+  it("should deduplicate toolCall blocks by ID when merging", () => {
+    const msgs = asMessages([
+      { role: "user", content: "Hello" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "tc-1", name: "read", input: { path: "/a" } },
+          { type: "text", text: "Reading file" },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "tc-1", name: "read", input: { path: "/a" } },
+          { type: "text", text: "More text" },
+        ],
+      },
+    ]);
+
+    const result = validateGeminiTurns(msgs);
+
+    expect(result).toHaveLength(2);
+    const merged = result[1] as { content: { type: string; id?: string }[] };
+    // The duplicate toolCall (same id) should be dropped
+    const toolCalls = merged.content.filter((b) => b.type === "toolCall");
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].id).toBe("tc-1");
+    // Both text blocks should be preserved
+    const textBlocks = merged.content.filter((b) => b.type === "text");
+    expect(textBlocks).toHaveLength(2);
+  });
+
+  it("should deduplicate across tool block type variants (toolUse, tool_use)", () => {
+    const msgs = asMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tc-1", name: "read", input: {} }],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "tc-1", name: "read", input: {} },
+          { type: "tool_use", id: "tc-1", name: "read", input: {} },
+          { type: "text", text: "done" },
+        ],
+      },
+    ]);
+
+    const result = validateGeminiTurns(msgs);
+
+    expect(result).toHaveLength(1);
+    const merged = result[0] as { content: { type: string; id?: string }[] };
+    // All three tool blocks share tc-1 — only the first (from prevContent) survives
+    const toolBlocks = merged.content.filter((b) =>
+      ["toolCall", "toolUse", "tool_use"].includes(b.type),
+    );
+    expect(toolBlocks).toHaveLength(1);
+    expect(toolBlocks[0].id).toBe("tc-1");
+    // Text block preserved
+    expect(merged.content.filter((b) => b.type === "text")).toHaveLength(1);
+  });
+
+  it("should keep toolCall blocks with different IDs when merging", () => {
+    const msgs = asMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tc-1", name: "read", input: {} }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tc-2", name: "write", input: {} }],
+      },
+    ]);
+
+    const result = validateGeminiTurns(msgs);
+
+    expect(result).toHaveLength(1);
+    const merged = result[0] as { content: { type: string; id?: string }[] };
+    const toolCalls = merged.content.filter((b) => b.type === "toolCall");
+    expect(toolCalls).toHaveLength(2);
+  });
+
   it("should preserve metadata from later message when merging", () => {
     const msgs = asMessages([
       {
