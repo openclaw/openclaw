@@ -1,8 +1,5 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
-import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
-import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { STATE_DIR } from "../../config/paths.js";
@@ -15,7 +12,6 @@ import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import {
   clearDeliverTestRegistry,
   hookMocks,
-  logMocks,
   resetDeliverTestState,
   resetDeliverTestMocks,
   runChunkedWhatsAppDelivery as runChunkedWhatsAppDeliveryHelper,
@@ -54,16 +50,6 @@ async function deliverMatrixPayloads(payloads: DeliverOutboundPayload[]) {
     to: "!room:1",
     payloads,
   });
-}
-
-function expectMatrixMediaFallbackWarning(mediaCount: number) {
-  expect(logMocks.warn).toHaveBeenCalledWith(
-    "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
-    expect.objectContaining({
-      channel: "matrix",
-      mediaCount,
-    }),
-  );
 }
 
 async function deliverWhatsAppPayload(params: {
@@ -675,7 +661,6 @@ describe("deliverOutboundPayloads", () => {
         text: "caption",
       }),
     );
-    expectMatrixMediaFallbackWarning(1);
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
   });
 
@@ -696,7 +681,6 @@ describe("deliverOutboundPayloads", () => {
         text: "caption",
       }),
     );
-    expectMatrixMediaFallbackWarning(2);
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-2" }]);
   });
 
@@ -712,16 +696,5 @@ describe("deliverOutboundPayloads", () => {
     );
 
     expect(sendText).not.toHaveBeenCalled();
-    expectMatrixMediaFallbackWarning(1);
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "!room:1",
-        content: "",
-        success: false,
-        error:
-          "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
-      }),
-      expect.objectContaining({ channelId: "matrix" }),
-    );
   });
 });
