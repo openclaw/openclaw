@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isAbortError, isTransientNetworkError } from "./unhandled-rejections.js";
+import {
+  isAbortError,
+  isTransientNetworkError,
+  isTransientSqliteError,
+} from "./unhandled-rejections.js";
 
 describe("isAbortError", () => {
   it("returns true for error with name AbortError", () => {
@@ -186,4 +190,60 @@ describe("isTransientNetworkError", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
   });
+});
+
+describe("isTransientSqliteError", () => {
+  it("returns true for errors with transient SQLite codes", () => {
+    const codes = [
+      "SQLITE_CANTOPEN",
+      "SQLITE_BUSY",
+      "SQLITE_LOCKED",
+      "SQLITE_IOERR_LOCK",
+      "SQLITE_IOERR_SHORT_READ",
+      "SQLITE_IOERR_BLOCKED",
+    ];
+
+    for (const code of codes) {
+      const error = Object.assign(new Error("test"), { code });
+      expect(isTransientSqliteError(error), `code: ${code}`).toBe(true);
+    }
+  });
+
+  it("returns false for broad SQLITE_IOERR base code", () => {
+    const error = Object.assign(new Error("test"), { code: "SQLITE_IOERR" });
+    expect(isTransientSqliteError(error)).toBe(false);
+  });
+
+  it("returns false for permanent SQLITE_IOERR subtypes", () => {
+    const permanentCodes = ["SQLITE_IOERR_NOMEM", "SQLITE_IOERR_ACCESS", "SQLITE_IOERR_WRITE"];
+    for (const code of permanentCodes) {
+      const error = Object.assign(new Error("test"), { code });
+      expect(isTransientSqliteError(error), `code: ${code}`).toBe(false);
+    }
+  });
+
+  it("returns true for SQLite error nested in cause chain", () => {
+    const innerCause = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    const error = Object.assign(new Error("wrapper"), { cause: innerCause });
+    expect(isTransientSqliteError(error)).toBe(true);
+  });
+
+  it("returns false for non-SQLite errors", () => {
+    expect(isTransientSqliteError(new Error("Something went wrong"))).toBe(false);
+    expect(isTransientSqliteError(Object.assign(new Error("test"), { code: "ECONNRESET" }))).toBe(
+      false,
+    );
+  });
+
+  it("returns false for non-transient SQLite errors", () => {
+    const error = Object.assign(new Error("test"), { code: "SQLITE_CORRUPT" });
+    expect(isTransientSqliteError(error)).toBe(false);
+  });
+
+  it.each([null, undefined, "string error", 42, { message: "plain object" }])(
+    "returns false for non-SQLite input %#",
+    (value) => {
+      expect(isTransientSqliteError(value)).toBe(false);
+    },
+  );
 });
