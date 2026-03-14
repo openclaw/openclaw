@@ -541,7 +541,7 @@ export async function clearOnboardingInProgress(): Promise<void> {
  * Returns the backup path if a backup was made, undefined otherwise.
  */
 export async function backupInterruptedConfig(): Promise<string | undefined> {
-  const backupPath = CONFIG_PATH + ".interrupted-backup";
+  const backupPath = `${CONFIG_PATH}.interrupted-backup.${Date.now()}`;
   try {
     await fs.rename(CONFIG_PATH, backupPath);
     return backupPath;
