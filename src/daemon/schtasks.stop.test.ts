@@ -143,7 +143,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
         expect(spawnSync).toHaveBeenNthCalledWith(
           2,
           expect.stringMatching(/^c:\\windows\\system32\\taskkill\.exe$/i),
-          ["/T", "/PID", expect.any(String)],
+          ["/F", "/T", "/PID", "4242"],
           expect.objectContaining({ stdio: "ignore", timeout: 5_000, windowsHide: true }),
         );
       } else {
