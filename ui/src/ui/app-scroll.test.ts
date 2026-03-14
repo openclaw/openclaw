@@ -255,6 +255,45 @@ describe("streaming scroll behavior", () => {
 
     expect(container.scrollTop).toBe(container.scrollHeight);
   });
+
+  it("falls back to the document scroll target when the host is not a DOM element", async () => {
+    const target = {
+      scrollHeight: 900,
+      scrollTop: 0,
+      clientHeight: 300,
+    };
+    const originalScrollingElement = Object.getOwnPropertyDescriptor(document, "scrollingElement");
+    Object.defineProperty(document, "scrollingElement", {
+      configurable: true,
+      get: () => target as unknown as Element,
+    });
+
+    const host = {
+      updateComplete: Promise.resolve(),
+      style: { setProperty: vi.fn() } as unknown as CSSStyleDeclaration,
+      chatScrollFrame: null as number | null,
+      chatScrollTimeout: null as number | null,
+      chatHasAutoScrolled: false,
+      chatUserNearBottom: true,
+      chatNewMessagesBelow: false,
+      logsScrollFrame: null as number | null,
+      logsAtBottom: true,
+      topbarObserver: null as ResizeObserver | null,
+    };
+
+    try {
+      scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+      await host.updateComplete;
+
+      expect(target.scrollTop).toBe(target.scrollHeight);
+    } finally {
+      if (originalScrollingElement) {
+        Object.defineProperty(document, "scrollingElement", originalScrollingElement);
+      } else {
+        delete (document as { scrollingElement?: Element }).scrollingElement;
+      }
+    }
+  });
 });
 
 /* ------------------------------------------------------------------ */

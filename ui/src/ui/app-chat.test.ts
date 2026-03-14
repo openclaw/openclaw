@@ -118,4 +118,57 @@ describe("handleSendChat", () => {
     });
     expect(host.chatModelOverrides.main).toBe("gpt-5-mini");
   });
+
+  it("does not throw when deferred chat scroll runs on a plain chat host", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 1;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.patch") {
+        return { ok: true, key: "main" };
+      }
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 0,
+          defaults: { model: "gpt-5", contextTokens: null },
+          sessions: [],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatMessage: "/model gpt-5-mini",
+    });
+
+    try {
+      await handleSendChat(host);
+      await Promise.resolve();
+      vi.runAllTimers();
+      expect(host.chatModelOverrides.main).toBe("gpt-5-mini");
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
 });
