@@ -17,7 +17,7 @@ Compaction **summarizes older conversation** into a compact summary entry and ke
 - The compaction summary
 - Recent messages after the compaction point
 
-Compaction **persists** in the session’s JSONL history.
+Compaction **persists** in the session's JSONL history.
 
 ## Configuration
 
@@ -56,15 +56,37 @@ When unset, compaction uses the agent's primary model.
 
 ## Auto-compaction (default on)
 
-When a session nears or exceeds the model’s context window, OpenClaw triggers auto-compaction and may retry the original request using the compacted context.
+When a session nears or exceeds the model's context window, OpenClaw triggers auto-compaction and may retry the original request using the compacted context.
 
-You’ll see:
+You'll see:
 
 - `🧹 Auto-compaction complete` in verbose mode
 - `/status` showing `🧹 Compactions: <count>`
 
 Before compaction, OpenClaw can run a **silent memory flush** turn to store
 durable notes to disk. See [Memory](/concepts/memory) for details and config.
+
+### Compaction start notification
+
+By default, users see no feedback while compaction is running, which can cause
+confusion (the model is briefly unresponsive). Enable a user-facing notification
+with `agents.defaults.compaction.notifyOnStart`:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "notifyOnStart": true,
+        "notifyOnStartText": "🧹 Context compacting, back in a moment…"
+      }
+    }
+  }
+}
+```
+
+- `notifyOnStart` — `boolean`, default `false`. When `true`, a message is sent to the user as soon as compaction starts.
+- `notifyOnStartText` — `string`, default `"🧹 Context compacting, back in a moment…"`. Custom notification text.
 
 ## Manual compaction
 
