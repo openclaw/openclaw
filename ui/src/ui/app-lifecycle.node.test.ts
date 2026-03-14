@@ -1,4 +1,45 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+vi.mock("./app-gateway.ts", () => ({
+  connectGateway: vi.fn(),
+}));
+vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
+  loadControlUiBootstrapConfig: vi.fn(),
+}));
+vi.mock("./app-settings.ts", () => ({
+  applySettingsFromUrl: vi.fn(),
+  attachThemeListener: vi.fn(),
+  detachThemeListener: vi.fn(),
+  inferBasePath: vi.fn(() => "/"),
+  syncTabWithLocation: vi.fn(),
+  syncThemeWithSettings: vi.fn(),
+}));
+vi.mock("./app-polling.ts", () => ({
+  startLogsPolling: vi.fn(),
+  startNodesPolling: vi.fn(),
+  stopLogsPolling: vi.fn(),
+  stopNodesPolling: vi.fn(),
+  startDebugPolling: vi.fn(),
+  stopDebugPolling: vi.fn(),
+}));
+vi.mock("./app-scroll.ts", () => ({
+  observeTopbar: vi.fn(),
+  scheduleChatScroll: vi.fn(),
+  scheduleLogsScroll: vi.fn(),
+}));
+
+const windowStub = {
+  addEventListener: vi.fn(),
+  removeEventListener: vi.fn(),
+};
+
+beforeAll(() => {
+  (globalThis as Record<string, unknown>).window = windowStub;
+});
+afterAll(() => {
+  delete (globalThis as Record<string, unknown>).window;
+});
+
 import { handleDisconnected } from "./app-lifecycle.ts";
 
 function createHost() {
