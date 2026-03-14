@@ -145,7 +145,18 @@ async function appendRecord(file: string, entry: TokenUsageRecord): Promise<void
   await withFileLock(lockPath, async () => {
     const records = await readJsonArray(file);
     records.push(entry);
-    await fs.writeFile(file, JSON.stringify(records, null, 2));
+    // Write to a sibling temp file then atomically rename into place so that
+    // a crash or kill during the write never leaves token-usage.json truncated.
+    // rename(2) is atomic on POSIX when src and dst are on the same filesystem,
+    // which is guaranteed here because both paths share the same directory.
+    const tmp = `${file}.tmp.${randomBytes(4).toString("hex")}`;
+    try {
+      await fs.writeFile(tmp, JSON.stringify(records, null, 2));
+      await fs.rename(tmp, file);
+    } catch (err) {
+      await fs.unlink(tmp).catch(() => {});
+      throw err;
+    }
   });
 }
 
