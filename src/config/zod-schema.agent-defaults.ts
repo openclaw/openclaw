@@ -162,6 +162,7 @@ export const AgentDefaultsSchema = z
     typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,
     maxConcurrent: z.number().int().positive().optional(),
+    nestedMaxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
         maxConcurrent: z.number().int().positive().optional(),
