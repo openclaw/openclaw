@@ -47,9 +47,15 @@ describe("browser client", () => {
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/sandboxed session/i);
   });
 
-  it("adds useful timeout messaging for abort-like failures", async () => {
+  it("distinguishes abort from timeout in error messages", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
+    await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/cancelled/i);
+  });
+
+  it("reports timeouts without the no-retry hint", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("timed out")));
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/timed out/i);
+    await expect(browserStatus("http://127.0.0.1:18791")).rejects.not.toThrow(/Do NOT retry/i);
   });
 
   it("surfaces non-2xx responses with body text", async () => {
