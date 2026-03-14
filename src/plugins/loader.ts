@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,8 +8,10 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { normalizeUpdateChannel, resolveEffectiveUpdateChannel } from "../infra/update-channels.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
@@ -521,6 +524,155 @@ function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): voi
   initializeGlobalHookRunner(registry);
 }
 
+type LoaderInstallContext = {
+  installKind: "git" | "package" | "unknown";
+  gitTag: string | null;
+  gitBranch: string | null;
+};
+
+let cachedLoaderInstallContext: LoaderInstallContext | null = null;
+
+function readLoaderGitMetadata(root: string, args: string[]): string | null {
+  try {
+    const output = execFileSync("git", ["-C", root, ...args], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return output || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveLoaderInstallContext(): LoaderInstallContext {
+  if (cachedLoaderInstallContext) {
+    return cachedLoaderInstallContext;
+  }
+  const root =
+    resolveOpenClawPackageRootSync({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    }) ?? null;
+  if (!root) {
+    cachedLoaderInstallContext = {
+      installKind: "unknown",
+      gitTag: null,
+      gitBranch: null,
+    };
+    return cachedLoaderInstallContext;
+  }
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    cachedLoaderInstallContext = {
+      installKind: "package",
+      gitTag: null,
+      gitBranch: null,
+    };
+    return cachedLoaderInstallContext;
+  }
+  cachedLoaderInstallContext = {
+    installKind: "git",
+    gitTag: readLoaderGitMetadata(root, ["describe", "--tags", "--exact-match"]),
+    gitBranch: readLoaderGitMetadata(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
+  };
+  return cachedLoaderInstallContext;
+}
+
+function readPluginPackageDependencies(rootDir: string): string[] {
+  const packagePath = path.join(rootDir, "package.json");
+  if (!fs.existsSync(packagePath)) {
+    return [];
+  }
+  try {
+    const raw = fs.readFileSync(packagePath, "utf8");
+    const parsed = JSON.parse(raw) as { dependencies?: Record<string, unknown> };
+    return Object.keys(parsed.dependencies ?? {});
+  } catch {
+    return [];
+  }
+}
+
+function collectDependencySearchRoots(params: { rootDir: string; ceilingDir: string }): string[] {
+  const roots: string[] = [];
+  let cursor = path.resolve(params.rootDir);
+  const ceiling = path.resolve(params.ceilingDir);
+  while (true) {
+    roots.push(cursor);
+    if (cursor === ceiling) {
+      break;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return roots;
+}
+
+function hasResolvableDependency(params: {
+  dependency: string;
+  rootDir: string;
+  ceilingDir: string;
+}): boolean {
+  const dependencyParts = params.dependency.split("/");
+  for (const searchRoot of collectDependencySearchRoots({
+    rootDir: params.rootDir,
+    ceilingDir: params.ceilingDir,
+  })) {
+    const packageDir = path.join(searchRoot, "node_modules", ...dependencyParts);
+    if (fs.existsSync(packageDir)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveBundledDependencyCeiling(rootDir: string): string {
+  const bundledDir = resolveBundledPluginsDir();
+  if (!bundledDir) {
+    return rootDir;
+  }
+  const resolvedBundledDir = path.resolve(bundledDir);
+  if (!isPathInside(resolvedBundledDir, rootDir) && resolvedBundledDir !== path.resolve(rootDir)) {
+    return rootDir;
+  }
+  if (path.basename(resolvedBundledDir) === "extensions") {
+    return path.dirname(resolvedBundledDir);
+  }
+  return resolvedBundledDir;
+}
+
+function resolveMissingPluginDependencies(rootDir: string): string[] {
+  const dependencies = readPluginPackageDependencies(rootDir);
+  if (dependencies.length === 0) {
+    return [];
+  }
+  const ceilingDir = resolveBundledDependencyCeiling(rootDir);
+  const missing: string[] = [];
+  for (const dependency of dependencies) {
+    if (!hasResolvableDependency({ dependency, rootDir, ceilingDir })) {
+      missing.push(dependency);
+    }
+  }
+  return missing;
+}
+
+function buildBundledInstallRequiredMessage(params: {
+  npmSpec: string;
+  channel: "stable" | "beta";
+  missingDependencies: string[];
+}): string {
+  const missing =
+    params.missingDependencies.length > 0
+      ? ` Missing runtime dependencies: ${params.missingDependencies.join(", ")}.`
+      : "";
+  return (
+    `plugin requires separate installation on ${params.channel}; ` +
+    `run \`openclaw plugins install ${params.npmSpec}\` and restart the gateway.${missing}`
+  );
+}
+
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   const env = options.env ?? process.env;
   // Test env: default-disable plugins unless explicitly configured.
@@ -644,8 +796,21 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
   );
+  const installContext = resolveLoaderInstallContext();
+  const effectiveChannel = resolveEffectiveUpdateChannel({
+    configChannel: normalizeUpdateChannel(cfg.update?.channel),
+    installKind: installContext.installKind,
+    git:
+      installContext.gitTag || installContext.gitBranch
+        ? {
+            tag: installContext.gitTag,
+            branch: installContext.gitBranch,
+          }
+        : undefined,
+  }).channel;
 
   const seenIds = new Map<string, PluginRecord["origin"]>();
+  const deferredBundledInstallRequired = new Map<string, PluginRecord>();
   const memorySlot = normalized.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   let memorySlotMatched = false;
@@ -715,6 +880,25 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       continue;
+    }
+
+    const bundledNpmSpec = candidate.packageManifest?.install?.npmSpec?.trim();
+    if (
+      candidate.origin === "bundled" &&
+      bundledNpmSpec &&
+      (effectiveChannel === "stable" || effectiveChannel === "beta")
+    ) {
+      const missingDependencies = resolveMissingPluginDependencies(candidate.rootDir);
+      if (missingDependencies.length > 0) {
+        record.status = "error";
+        record.error = buildBundledInstallRequiredMessage({
+          npmSpec: bundledNpmSpec,
+          channel: effectiveChannel,
+          missingDependencies,
+        });
+        deferredBundledInstallRequired.set(pluginId, record);
+        continue;
+      }
     }
 
     // Fast-path bundled memory plugins that are guaranteed disabled by slot policy.
@@ -879,6 +1063,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         diagnosticMessagePrefix: "plugin failed during register: ",
       });
     }
+  }
+
+  for (const [pluginId, record] of deferredBundledInstallRequired) {
+    if (seenIds.has(pluginId)) {
+      continue;
+    }
+    registry.plugins.push(record);
+    registry.diagnostics.push({
+      level: "error",
+      pluginId: record.id,
+      source: record.source,
+      message: record.error ?? "plugin requires separate installation",
+    });
   }
 
   if (typeof memorySlot === "string" && !memorySlotMatched) {

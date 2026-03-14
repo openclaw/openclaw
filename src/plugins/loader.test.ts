@@ -26,6 +26,42 @@ async function importFreshPluginTestModules() {
   };
 }
 
+async function importPluginTestModulesWithMocks(options?: { packageRoot?: string | null }) {
+  vi.resetModules();
+  vi.unmock("node:fs");
+  vi.unmock("node:fs/promises");
+  vi.unmock("node:module");
+  vi.unmock("./hook-runner-global.js");
+  vi.unmock("./hooks.js");
+  vi.unmock("./loader.js");
+  vi.unmock("jiti");
+  if (options && "packageRoot" in options) {
+    const packageRoot = options.packageRoot ?? null;
+    vi.doMock("../infra/openclaw-root.js", async () => {
+      const actual = await vi.importActual<typeof import("../infra/openclaw-root.js")>(
+        "../infra/openclaw-root.js",
+      );
+      return {
+        ...actual,
+        resolveOpenClawPackageRootSync: () => packageRoot,
+      };
+    });
+  } else {
+    vi.unmock("../infra/openclaw-root.js");
+  }
+  const [loader, hookRunnerGlobal, hooks] = await Promise.all([
+    import("./loader.js"),
+    import("./hook-runner-global.js"),
+    import("./hooks.js"),
+  ]);
+  vi.unmock("../infra/openclaw-root.js");
+  return {
+    ...loader,
+    ...hookRunnerGlobal,
+    ...hooks,
+  };
+}
+
 const {
   __testing,
   clearPluginLoaderCache,
@@ -102,6 +138,7 @@ function writePlugin(params: {
   const filename = params.filename ?? `${params.id}.cjs`;
   mkdirSafe(dir);
   const file = path.join(dir, filename);
+  fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(file, params.body, "utf-8");
   fs.writeFileSync(
     path.join(dir, "openclaw.plugin.json"),
@@ -116,6 +153,46 @@ function writePlugin(params: {
     "utf-8",
   );
   return { dir, file, id: params.id };
+}
+
+function writePackagedPlugin(params: {
+  id: string;
+  body: string;
+  dir?: string;
+  filename?: string;
+  packageName?: string;
+  version?: string;
+  description?: string;
+  dependencies?: Record<string, string>;
+  install?: { npmSpec?: string; localPath?: string; defaultChoice?: "npm" | "local" };
+}): TempPlugin {
+  const dir = params.dir ?? path.join(makeTempDir(), params.id);
+  const filename = params.filename ?? "index.cjs";
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "package.json"),
+    JSON.stringify(
+      {
+        name: params.packageName ?? `@openclaw/${params.id}`,
+        version: params.version ?? "1.0.0",
+        description: params.description,
+        dependencies: params.dependencies,
+        openclaw: {
+          extensions: [`./${filename}`],
+          ...(params.install ? { install: params.install } : {}),
+        },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  return writePlugin({
+    id: params.id,
+    body: params.body,
+    dir,
+    filename,
+  });
 }
 
 function loadBundledMemoryPluginRegistry(options?: {
@@ -285,6 +362,29 @@ function createPluginSdkAliasFixture(params?: {
   return { root, srcFile, distFile };
 }
 
+function makeTaggedGitRepo(tag: string): string {
+  const repoRoot = makeTempDir();
+  fs.writeFileSync(path.join(repoRoot, "README.md"), `# ${tag}\n`, "utf-8");
+  execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=OpenClaw Tests",
+      "-c",
+      "user.email=tests@openclaw.invalid",
+      "commit",
+      "-qm",
+      "init",
+    ],
+    { cwd: repoRoot },
+  );
+  execFileSync("git", ["tag", tag], { cwd: repoRoot });
+  execFileSync("git", ["checkout", "-q", tag], { cwd: repoRoot });
+  return repoRoot;
+}
+
 afterEach(() => {
   clearPluginLoaderCache();
   if (prevBundledDir === undefined) {
@@ -347,6 +447,196 @@ describe("loadOpenClawPlugins", () => {
     });
 
     expectTelegramLoaded(registry);
+  });
+
+  it("reports an install hint for stable bundled plugins with unresolved package dependencies", () => {
+    const bundledDir = makeTempDir();
+    const pluginDir = path.join(bundledDir, "feishu");
+    const importedMarker = path.join(pluginDir, "imported.txt");
+    writePackagedPlugin({
+      id: "feishu",
+      dir: pluginDir,
+      dependencies: {
+        "@larksuiteoapi/node-sdk": "^1.59.0",
+      },
+      install: {
+        npmSpec: "@openclaw/feishu",
+      },
+      body: `require("node:fs").writeFileSync(${JSON.stringify(importedMarker)}, "loaded", "utf-8");
+module.exports = { id: "feishu", register() {} };`,
+    });
+
+    const registry = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir }, () =>
+      loadOpenClawPlugins({
+        cache: false,
+        config: {
+          update: { channel: "stable" },
+          plugins: {
+            allow: ["feishu"],
+            entries: {
+              feishu: { enabled: true },
+            },
+          },
+        },
+      }),
+    );
+
+    const feishu = registry.plugins.find((entry) => entry.id === "feishu");
+    expect(feishu?.status).toBe("error");
+    expect(feishu?.error).toContain("openclaw plugins install @openclaw/feishu");
+    expect(feishu?.error).toContain("@larksuiteoapi/node-sdk");
+    expect(fs.existsSync(importedMarker)).toBe(false);
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "feishu" &&
+          String(diag.message).includes("openclaw plugins install @openclaw/feishu"),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    {
+      tag: "v2026.3.8",
+      expectedChannel: "stable",
+    },
+    {
+      tag: "v2026.3.8-beta.1",
+      expectedChannel: "beta",
+    },
+  ])(
+    "reports an install hint for %s tagged git checkouts with unresolved package dependencies",
+    async ({ tag, expectedChannel }) => {
+      const repoRoot = makeTaggedGitRepo(tag);
+      const bundledDir = makeTempDir();
+      const pluginDir = path.join(bundledDir, "feishu");
+      const importedMarker = path.join(pluginDir, "imported.txt");
+      writePackagedPlugin({
+        id: "feishu",
+        dir: pluginDir,
+        dependencies: {
+          "@larksuiteoapi/node-sdk": "^1.59.0",
+        },
+        install: {
+          npmSpec: "@openclaw/feishu",
+        },
+        body: `require("node:fs").writeFileSync(${JSON.stringify(importedMarker)}, "loaded", "utf-8");
+module.exports = { id: "feishu", register() {} };`,
+      });
+
+      const { loadOpenClawPlugins: loadPluginsFromTaggedCheckout } =
+        await importPluginTestModulesWithMocks({
+          packageRoot: repoRoot,
+        });
+
+      const registry = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir }, () =>
+        loadPluginsFromTaggedCheckout({
+          cache: false,
+          config: {
+            plugins: {
+              allow: ["feishu"],
+              entries: {
+                feishu: { enabled: true },
+              },
+            },
+          },
+        }),
+      );
+
+      const feishu = registry.plugins.find((entry) => entry.id === "feishu");
+      expect(feishu?.status).toBe("error");
+      expect(feishu?.error).toContain(
+        `plugin requires separate installation on ${expectedChannel}`,
+      );
+      expect(feishu?.error).toContain("openclaw plugins install @openclaw/feishu");
+      expect(fs.existsSync(importedMarker)).toBe(false);
+    },
+  );
+
+  it("keeps bundled package plugins loadable on dev even when their declared dependencies are unresolved", () => {
+    const bundledDir = makeTempDir();
+    const pluginDir = path.join(bundledDir, "feishu");
+    const importedMarker = path.join(pluginDir, "imported.txt");
+    writePackagedPlugin({
+      id: "feishu",
+      dir: pluginDir,
+      dependencies: {
+        "@larksuiteoapi/node-sdk": "^1.59.0",
+      },
+      install: {
+        npmSpec: "@openclaw/feishu",
+      },
+      body: `require("node:fs").writeFileSync(${JSON.stringify(importedMarker)}, "loaded", "utf-8");
+module.exports = { id: "feishu", register() {} };`,
+    });
+
+    const registry = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir }, () =>
+      loadOpenClawPlugins({
+        cache: false,
+        config: {
+          update: { channel: "dev" },
+          plugins: {
+            allow: ["feishu"],
+            entries: {
+              feishu: { enabled: true },
+            },
+          },
+        },
+      }),
+    );
+
+    const feishu = registry.plugins.find((entry) => entry.id === "feishu");
+    expect(feishu?.status).toBe("loaded");
+    expect(fs.existsSync(importedMarker)).toBe(true);
+  });
+
+  it("lets a later installed copy load when the bundled stable copy is missing package dependencies", () => {
+    const bundledDir = makeTempDir();
+    writePackagedPlugin({
+      id: "feishu",
+      dir: path.join(bundledDir, "feishu"),
+      dependencies: {
+        "@larksuiteoapi/node-sdk": "^1.59.0",
+      },
+      install: {
+        npmSpec: "@openclaw/feishu",
+      },
+      body: `module.exports = { id: "feishu", register() {} };`,
+    });
+
+    const stateDir = makeTempDir();
+    const globalPluginDir = path.join(stateDir, "extensions", "feishu");
+    writePlugin({
+      id: "feishu",
+      dir: globalPluginDir,
+      filename: "index.cjs",
+      body: `module.exports = { id: "feishu", register() {} };`,
+    });
+
+    const registry = withEnv(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      () =>
+        loadOpenClawPlugins({
+          cache: false,
+          config: {
+            update: { channel: "stable" },
+            plugins: {
+              allow: ["feishu"],
+              entries: {
+                feishu: { enabled: true },
+              },
+            },
+          },
+        }),
+    );
+
+    const feishuEntries = registry.plugins.filter((entry) => entry.id === "feishu");
+    expect(feishuEntries).toHaveLength(1);
+    expect(feishuEntries[0]?.status).toBe("loaded");
+    expect(feishuEntries[0]?.origin).toBe("global");
   });
 
   it("loads bundled channel plugins when channels.<id>.enabled=true", () => {
