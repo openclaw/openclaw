@@ -149,7 +149,7 @@ export async function sendGoogleChatMessage(params: {
   if (text) {
     body.text = text;
   }
-  if (thread) {
+  if (thread && /^spaces\/[^/]+\/threads\/[^/]+$/.test(thread)) {
     body.thread = { name: thread };
   }
   if (attachments && attachments.length > 0) {
@@ -159,7 +159,7 @@ export async function sendGoogleChatMessage(params: {
     }));
   }
   const urlObj = new URL(`${CHAT_API_BASE}/${space}/messages`);
-  if (thread) {
+  if (thread && /^spaces\/[^/]+\/threads\/[^/]+$/.test(thread)) {
     urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
   }
   const url = urlObj.toString();
