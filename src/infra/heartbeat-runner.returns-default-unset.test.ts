@@ -468,7 +468,11 @@ describe("resolveHeartbeatSenderContext", () => {
 
 describe("runHeartbeatOnce", () => {
   const createHeartbeatDeps = (
-    sendWhatsApp: NonNullable<HeartbeatDeps["whatsapp"]>,
+    sendWhatsApp: (
+      to: string,
+      text: string,
+      opts?: unknown,
+    ) => Promise<{ messageId: string; toJid: string }>,
     nowMs = 0,
   ): HeartbeatDeps => ({
     whatsapp: sendWhatsApp,
@@ -547,10 +551,18 @@ describe("runHeartbeatOnce", () => {
       );
 
       replySpy.mockResolvedValue([{ text: "Let me check..." }, { text: "Final alert" }]);
-      const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["whatsapp"]>>().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({
+          messageId: "m1",
+          toJid: "jid",
+        });
 
       await runHeartbeatOnce({
         cfg,
@@ -604,10 +616,18 @@ describe("runHeartbeatOnce", () => {
         }),
       );
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
-      const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["whatsapp"]>>().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({
+          messageId: "m1",
+          toJid: "jid",
+        });
       await runHeartbeatOnce({
         cfg,
         agentId: "ops",
@@ -682,10 +702,18 @@ describe("runHeartbeatOnce", () => {
       );
 
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
-      const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["whatsapp"]>>().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({
+          messageId: "m1",
+          toJid: "jid",
+        });
       const result = await runHeartbeatOnce({
         cfg,
         agentId,
@@ -799,7 +827,13 @@ describe("runHeartbeatOnce", () => {
         replySpy.mockClear();
         replySpy.mockResolvedValue([{ text: testCase.message }]);
         const sendWhatsApp = vi
-          .fn<NonNullable<HeartbeatDeps["whatsapp"]>>()
+          .fn<
+            (
+              to: string,
+              text: string,
+              opts?: unknown,
+            ) => Promise<{ messageId: string; toJid: string }>
+          >()
           .mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
         await runHeartbeatOnce({
@@ -863,7 +897,13 @@ describe("runHeartbeatOnce", () => {
 
       replySpy.mockResolvedValue([{ text: "Final alert" }]);
       const sendWhatsApp = vi
-        .fn<NonNullable<HeartbeatDeps["whatsapp"]>>()
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
         .mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
       await runHeartbeatOnce({
@@ -935,7 +975,13 @@ describe("runHeartbeatOnce", () => {
         replySpy.mockClear();
         replySpy.mockResolvedValue(testCase.replies);
         const sendWhatsApp = vi
-          .fn<NonNullable<HeartbeatDeps["whatsapp"]>>()
+          .fn<
+            (
+              to: string,
+              text: string,
+              opts?: unknown,
+            ) => Promise<{ messageId: string; toJid: string }>
+          >()
           .mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
         await runHeartbeatOnce({
@@ -990,10 +1036,18 @@ describe("runHeartbeatOnce", () => {
       );
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
-      const sendWhatsApp = vi.fn<NonNullable<HeartbeatDeps["whatsapp"]>>().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({
+          messageId: "m1",
+          toJid: "jid",
+        });
 
       await runHeartbeatOnce({
         cfg,
@@ -1073,7 +1127,9 @@ describe("runHeartbeatOnce", () => {
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     replySpy.mockResolvedValue({ text: params.replyText ?? "Checked logs and PRs" });
     const sendWhatsApp = vi
-      .fn<NonNullable<HeartbeatDeps["whatsapp"]>>()
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
       .mockResolvedValue({ messageId: "m1", toJid: "jid" });
     const res = await runHeartbeatOnce({
       cfg,
@@ -1239,7 +1295,9 @@ describe("runHeartbeatOnce", () => {
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     replySpy.mockResolvedValue({ text: "Handled internally" });
     const sendWhatsApp = vi
-      .fn<NonNullable<HeartbeatDeps["whatsapp"]>>()
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
       .mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
     try {
@@ -1292,7 +1350,9 @@ describe("runHeartbeatOnce", () => {
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     replySpy.mockResolvedValue({ text: "Handled internally" });
     const sendWhatsApp = vi
-      .fn<NonNullable<HeartbeatDeps["whatsapp"]>>()
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
       .mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
     try {

@@ -215,7 +215,9 @@ export async function runChunkedWhatsAppDelivery(params: {
   mirror?: DeliverOutboundPayloadsParams["mirror"];
 }) {
   const sendWhatsApp = vi
-    .fn<NonNullable<OutboundSendDeps["sendWhatsApp"]>>()
+    .fn<
+      (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+    >()
     .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
     .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
   const cfg: OpenClawConfig = {

@@ -40,7 +40,10 @@ import {
   type ResolvedTelegramAccount,
   type TelegramProbe,
 } from "openclaw/plugin-sdk/telegram";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/deliver.js";
+import {
+  type OutboundSendDeps,
+  resolveOutboundSendDep,
+} from "../../../src/infra/outbound/deliver.js";
 import { getTelegramRuntime } from "./runtime.js";
 
 type TelegramSendFn = ReturnType<
@@ -83,9 +86,6 @@ function formatDuplicateTelegramTokenReason(params: {
   );
 }
 
-type TelegramSendFn = ReturnType<
-  typeof getTelegramRuntime
->["channel"]["telegram"]["sendMessageTelegram"];
 type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
 
 function buildTelegramSendOptions(params: {
@@ -116,14 +116,13 @@ async function sendTelegramOutbound(params: {
   mediaUrl?: string | null;
   mediaLocalRoots?: readonly string[] | null;
   accountId?: string | null;
-  deps?: { sendTelegram?: TelegramSendFn; [channelId: string]: unknown };
+  deps?: OutboundSendDeps;
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean | null;
 }) {
   const send =
-    (params.deps?.["telegram"] as TelegramSendFn | undefined) ??
-    params.deps?.sendTelegram ??
+    resolveOutboundSendDep<TelegramSendFn>(params.deps, "telegram") ??
     getTelegramRuntime().channel.telegram.sendMessageTelegram;
   return await send(
     params.to,
