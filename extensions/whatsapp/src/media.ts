@@ -190,8 +190,9 @@ export async function resolveLocalMediaSource(
         });
       }
       if (err.code === "not-file") {
-        throw new LocalMediaAccessError("not-file", `Local media path is not a file: ${mediaUrl}`,
-          { cause: err });
+        throw new LocalMediaAccessError("not-file", `Local media path is not a file: ${mediaUrl}`, {
+          cause: err,
+        });
       }
       throw new LocalMediaAccessError(
         "invalid-path",

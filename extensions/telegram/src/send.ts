@@ -775,9 +775,7 @@ export async function sendMessageTelegram(
     const localMedia = isTelegramApiRootLoopback(account.config.apiRoot)
       ? await resolveLocalMediaSource(mediaUrl, outboundMediaLoadOptions)
       : null;
-    const media = localMedia
-      ? null
-      : await loadWebMedia(mediaUrl, outboundMediaLoadOptions);
+    const media = localMedia ? null : await loadWebMedia(mediaUrl, outboundMediaLoadOptions);
     const kind = localMedia?.kind ?? kindFromMime(media?.contentType ?? undefined);
     const isGif = isGifMedia({
       contentType: localMedia?.contentType ?? media?.contentType,
