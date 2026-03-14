@@ -36,6 +36,7 @@ import {
   resolveUsageProviderId,
   type UsageProviderId,
 } from "../../infra/provider-usage.js";
+import { loadOpenRouterMeteredUsage } from "../../infra/provider-usage.openrouter.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
@@ -323,6 +324,64 @@ export async function modelsStatusCommand(
     return 0;
   })();
 
+  const oauthUsageProviders = Array.from(
+    new Set(
+      oauthProfiles
+        .map((profile) => resolveUsageProviderId(profile.provider))
+        .filter((provider): provider is UsageProviderId => Boolean(provider)),
+    ),
+  );
+  const oauthUsageByProvider = new Map<string, string>();
+  let oauthUsageSnapshots: Array<{
+    provider: string;
+    displayName: string;
+    windows: Array<{ label: string; usedPercent: number; resetAt?: number }>;
+    plan?: string;
+    error?: string;
+  }> | null = null;
+
+  // Fetch usage data for non-plain output (both regular status and --json)
+  // This preserves OAuth usage visibility in non-JSON status while avoiding
+  // unnecessary fetches for --plain output
+  let openrouterUsage: ReturnType<typeof loadOpenRouterMeteredUsage> | null = null;
+  if (!opts.plain) {
+    // Run OAuth and OpenRouter fetches in parallel for better performance
+    // (fixes sequential fetch latency issue flagged by bot review)
+    await Promise.all([
+      (async () => {
+        if (oauthUsageProviders.length > 0) {
+          try {
+            const usageSummary = await loadProviderUsageSummary({
+              providers: oauthUsageProviders,
+              agentDir,
+              timeoutMs: 3500,
+            });
+            const snapshots = Array.isArray(usageSummary?.providers) ? usageSummary.providers : [];
+            oauthUsageSnapshots = snapshots;
+            for (const snapshot of snapshots) {
+              const formatted = formatUsageWindowSummary(snapshot, {
+                now: Date.now(),
+                maxWindows: 2,
+                includeResets: true,
+              });
+              if (formatted) {
+                oauthUsageByProvider.set(snapshot.provider, formatted);
+              }
+            }
+          } catch {
+            // ignore usage failures
+          }
+        }
+      })(),
+      (async () => {
+        openrouterUsage = await loadOpenRouterMeteredUsage({
+          agentDir,
+          timeoutMs: 3500,
+        }).catch(() => null);
+      })(),
+    ]);
+  }
+
   if (opts.json) {
     runtime.log(
       JSON.stringify(
@@ -361,6 +420,64 @@ export async function modelsStatusCommand(
               providers: authHealth.providers,
             },
             probes: probeSummary,
+            providerUsage: {
+              schemaVersion: "1.0",
+              generatedAt: Date.now(),
+              providers: {
+                ...Object.fromEntries(
+                  (oauthUsageSnapshots ?? []).map((snapshot) => {
+                    const isCopilot = snapshot.provider === "github-copilot";
+                    return [
+                      snapshot.provider,
+                      {
+                        kind: "windowed",
+                        displayName: snapshot.displayName,
+                        status: snapshot.error ? "error" : "ok",
+                        summary: snapshot.error
+                          ? null
+                          : (oauthUsageByProvider.get(snapshot.provider) ?? null),
+                        plan: snapshot.plan ?? null,
+                        windows: snapshot.windows.map((window) => ({
+                          name: window.label,
+                          usedPercent: window.usedPercent,
+                          remainingPercent: Math.max(0, 100 - window.usedPercent),
+                          resetAt: window.resetAt ?? null,
+                        })),
+                        error: snapshot.error ?? null,
+                        ...(isCopilot
+                          ? {
+                              overage: {
+                                supported: true,
+                                enabled: null,
+                                mode: null,
+                                includedLimit: null,
+                                includedUsed: null,
+                                overageUsed: null,
+                                spendCapUsd: null,
+                                spendUsedUsd: null,
+                                spendRemainingUsd: null,
+                                source: "unknown",
+                              },
+                            }
+                          : {}),
+                      },
+                    ];
+                  }),
+                ),
+                ...(openrouterUsage
+                  ? {
+                      openrouter: {
+                        kind: openrouterUsage.kind,
+                        displayName: openrouterUsage.displayName,
+                        status: openrouterUsage.status,
+                        account: openrouterUsage.account ?? null,
+                        keys: openrouterUsage.keys,
+                        error: openrouterUsage.error ?? null,
+                      },
+                    }
+                  : {}),
+              },
+            },
           },
         },
         null,
@@ -549,36 +666,6 @@ export async function modelsStatusCommand(
   if (oauthProfiles.length === 0) {
     runtime.log(colorize(rich, theme.muted, "- none"));
   } else {
-    const usageByProvider = new Map<string, string>();
-    const usageProviders = Array.from(
-      new Set(
-        oauthProfiles
-          .map((profile) => resolveUsageProviderId(profile.provider))
-          .filter((provider): provider is UsageProviderId => Boolean(provider)),
-      ),
-    );
-    if (usageProviders.length > 0) {
-      try {
-        const usageSummary = await loadProviderUsageSummary({
-          providers: usageProviders,
-          agentDir,
-          timeoutMs: 3500,
-        });
-        for (const snapshot of usageSummary.providers) {
-          const formatted = formatUsageWindowSummary(snapshot, {
-            now: Date.now(),
-            maxWindows: 2,
-            includeResets: true,
-          });
-          if (formatted) {
-            usageByProvider.set(snapshot.provider, formatted);
-          }
-        }
-      } catch {
-        // ignore usage failures
-      }
-    }
-
     const formatStatus = (status: string) => {
       if (status === "ok") {
         return colorize(rich, theme.success, "ok");
@@ -607,7 +694,7 @@ export async function modelsStatusCommand(
 
     for (const [provider, profiles] of profilesByProvider) {
       const usageKey = resolveUsageProviderId(provider);
-      const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
+      const usage = usageKey ? oauthUsageByProvider.get(usageKey) : undefined;
       const usageSuffix = usage ? colorize(rich, theme.muted, ` usage: ${usage}`) : "";
       runtime.log(`- ${colorize(rich, theme.heading, provider)}${usageSuffix}`);
       for (const profile of profiles) {
