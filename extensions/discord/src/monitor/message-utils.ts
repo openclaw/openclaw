@@ -206,6 +206,21 @@ export function hasDiscordMessageStickers(message: Message): boolean {
   return resolveDiscordMessageStickers(message).length > 0;
 }
 
+export function hasDiscordForwardedMedia(message: Message): boolean {
+  const snapshots = resolveDiscordMessageSnapshots(message);
+  return snapshots.some((snapshot) => {
+    const msg = snapshot.message;
+    if (!msg) {
+      return false;
+    }
+    return (
+      (Array.isArray(msg.attachments) && msg.attachments.length > 0) ||
+      (Array.isArray(msg.stickers) && msg.stickers.length > 0) ||
+      (Array.isArray(msg.sticker_items) && msg.sticker_items.length > 0)
+    );
+  });
+}
+
 export async function resolveMediaList(
   message: Message,
   maxBytes: number,
