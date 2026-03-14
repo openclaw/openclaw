@@ -117,10 +117,19 @@ describe("logs cli", () => {
       expect(isTransientGatewayConnectError(new Error("gateway not connected"))).toBe(true);
       expect(isTransientGatewayConnectError(new Error("gateway connect failed: x"))).toBe(true);
       expect(
+        isTransientGatewayConnectError(new Error("gateway closed (1000 normal closure): no close reason")),
+      ).toBe(true);
+      expect(isTransientGatewayConnectError(new Error("gateway timeout after 5ms\nws://x"))).toBe(
+        true,
+      );
+      expect(
         isTransientGatewayConnectError(new Error("closed before connect ... handshakeMs=3000")),
       ).toBe(true);
       expect(isTransientGatewayConnectError(new Error("handshake timeout conn=1"))).toBe(true);
       expect(isTransientGatewayConnectError(new Error("ECONNREFUSED"))).toBe(true);
+      expect(isTransientGatewayConnectError(new Error("ETIMEDOUT"))).toBe(true);
+      expect(isTransientGatewayConnectError(new Error("EAI_AGAIN"))).toBe(true);
+      expect(isTransientGatewayConnectError(new Error("host not reachable"))).toBe(true);
       expect(isTransientGatewayConnectError(new Error("wrong password"))).toBe(false);
     });
 
