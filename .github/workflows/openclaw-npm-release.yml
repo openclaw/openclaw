@@ -69,8 +69,13 @@ jobs:
         run: pnpm release:check
 
       - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          if [[ -n "${NODE_AUTH_TOKEN:-}" ]]; then
+            printf '//registry.npmjs.org/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > "$HOME/.npmrc"
+          fi
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
 
           if [[ "$PACKAGE_VERSION" == *-beta.* ]]; then
