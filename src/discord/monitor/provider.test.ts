@@ -790,7 +790,7 @@ describe("monitorDiscordProvider", () => {
         {
           message: "Max number of daily application command creates has been reached (200)",
           retry_after: 193.632,
-          code: 30034,
+          global: false,
         },
       ),
     );
@@ -804,7 +804,7 @@ describe("monitorDiscordProvider", () => {
     expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("daily application command create limit reached"),
+      expect.stringContaining("native command deploy skipped"),
     );
   });
 
