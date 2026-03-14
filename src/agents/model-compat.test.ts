@@ -86,6 +86,14 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): 
   const normalized = normalizeModelCompat(model as Model<Api>);
   expect(supportsDeveloperRole(normalized)).toBe(false);
 }
+
+function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
+  const model = { ...baseModel(), ...overrides };
+  delete (model as { compat?: unknown }).compat;
+  const normalized = normalizeModelCompat(model as Model<Api>);
+  expect(supportsUsageInStreaming(normalized)).toBe(false);
+}
+
 function expectResolvedForwardCompat(
   model: Model<Api> | undefined,
   expected: { provider: string; id: string },
@@ -211,16 +219,11 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("leaves supportsUsageInStreaming at default for generic custom openai-completions provider", () => {
-    const model = {
-      ...baseModel(),
+  it("forces supportsUsageInStreaming off for generic custom openai-completions provider", () => {
+    expectSupportsUsageInStreamingForcedOff({
       provider: "custom-cpa",
       baseUrl: "https://cpa.example.com/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model as Model<Api>);
-    // supportsUsageInStreaming is no longer forced off — pi-ai's default (true) applies
-    expect(supportsUsageInStreaming(normalized)).toBeUndefined();
+    });
   });
 
   it("forces supportsDeveloperRole off for Qwen proxy via openai-completions", () => {
@@ -270,7 +273,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(normalized)).toBe(true);
   });
 
-  it("forces supportsDeveloperRole off but leaves supportsUsageInStreaming unset for non-native endpoints", () => {
+  it("still forces flags off when not explicitly set by user", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
@@ -279,8 +282,7 @@ describe("normalizeModelCompat", () => {
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
     expect(supportsDeveloperRole(normalized)).toBe(false);
-    // supportsUsageInStreaming is no longer forced off — pi-ai default applies
-    expect(supportsUsageInStreaming(normalized)).toBeUndefined();
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
   it("does not mutate caller model when forcing supportsDeveloperRole off", () => {
@@ -295,8 +297,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(model)).toBeUndefined();
     expect(supportsUsageInStreaming(model)).toBeUndefined();
     expect(supportsDeveloperRole(normalized)).toBe(false);
-    // supportsUsageInStreaming is not set by normalizeModelCompat — pi-ai default applies
-    expect(supportsUsageInStreaming(normalized)).toBeUndefined();
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
   it("does not override explicit compat false", () => {
