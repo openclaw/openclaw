@@ -129,7 +129,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         defaultAccount: { type: "string" },
         appId: { type: "string" },
         appSecret: secretInputJsonSchema,
-        encryptKey: { type: "string" },
+        encryptKey: secretInputJsonSchema,
         verificationToken: secretInputJsonSchema,
         domain: {
           oneOf: [
@@ -170,7 +170,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               name: { type: "string" },
               appId: { type: "string" },
               appSecret: secretInputJsonSchema,
-              encryptKey: { type: "string" },
+              encryptKey: secretInputJsonSchema,
               verificationToken: secretInputJsonSchema,
               domain: { type: "string", enum: ["feishu", "lark"] },
               connectionMode: { type: "string", enum: ["websocket", "webhook"] },

@@ -179,7 +179,7 @@ Provider options:
 
 - `channels.zalo.enabled`: enable/disable channel startup.
 - `channels.zalo.botToken`: bot token from Zalo Bot Platform.
-- `channels.zalo.tokenFile`: read token from file path.
+- `channels.zalo.tokenFile`: read token from a regular file path. Symlinks are rejected.
 - `channels.zalo.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.zalo.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`. The wizard will ask for numeric IDs.
 - `channels.zalo.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
@@ -193,7 +193,7 @@ Provider options:
 Multi-account options:
 
 - `channels.zalo.accounts.<id>.botToken`: per-account token.
-- `channels.zalo.accounts.<id>.tokenFile`: per-account token file.
+- `channels.zalo.accounts.<id>.tokenFile`: per-account regular token file. Symlinks are rejected.
 - `channels.zalo.accounts.<id>.name`: display name.
 - `channels.zalo.accounts.<id>.enabled`: enable/disable account.
 - `channels.zalo.accounts.<id>.dmPolicy`: per-account DM policy.

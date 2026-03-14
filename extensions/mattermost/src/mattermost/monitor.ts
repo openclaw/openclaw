@@ -32,7 +32,7 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk/mattermost";
 import { getMattermostRuntime } from "../runtime.js";
-import { resolveMattermostAccount } from "./accounts.js";
+import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostChannel,
@@ -70,6 +70,7 @@ import {
 import {
   createDedupeCache,
   formatInboundFromLabel,
+  normalizeMention,
   resolveThreadSessionKeys,
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
@@ -79,6 +80,7 @@ import {
   type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
+import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import { sendMessageMattermost } from "./send.js";
 import {
   DEFAULT_COMMAND_SPECS,
@@ -141,15 +143,6 @@ function resolveRuntime(opts: MonitorMattermostOpts): RuntimeEnv {
       },
     }
   );
-}
-
-function normalizeMention(text: string, mention: string | undefined): string {
-  if (!mention) {
-    return text.trim();
-  }
-  const escaped = mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`@${escaped}\\b`, "gi");
-  return text.replace(re, " ").replace(/\s+/g, " ").trim();
 }
 
 function isSystemPost(post: MattermostPost): boolean {
@@ -281,6 +274,51 @@ export function resolveMattermostReplyRootId(params: {
     return threadRootId;
   }
   return params.replyToId?.trim() || undefined;
+}
+
+export function resolveMattermostEffectiveReplyToId(params: {
+  kind: ChatType;
+  postId?: string | null;
+  replyToMode: "off" | "first" | "all";
+  threadRootId?: string | null;
+}): string | undefined {
+  const threadRootId = params.threadRootId?.trim();
+  if (threadRootId) {
+    return threadRootId;
+  }
+  if (params.kind === "direct") {
+    return undefined;
+  }
+  const postId = params.postId?.trim();
+  if (!postId) {
+    return undefined;
+  }
+  return params.replyToMode === "all" || params.replyToMode === "first" ? postId : undefined;
+}
+
+export function resolveMattermostThreadSessionContext(params: {
+  baseSessionKey: string;
+  kind: ChatType;
+  postId?: string | null;
+  replyToMode: "off" | "first" | "all";
+  threadRootId?: string | null;
+}): { effectiveReplyToId?: string; sessionKey: string; parentSessionKey?: string } {
+  const effectiveReplyToId = resolveMattermostEffectiveReplyToId({
+    kind: params.kind,
+    postId: params.postId,
+    replyToMode: params.replyToMode,
+    threadRootId: params.threadRootId,
+  });
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey: params.baseSessionKey,
+    threadId: effectiveReplyToId,
+    parentSessionKey: effectiveReplyToId ? params.baseSessionKey : undefined,
+  });
+  return {
+    effectiveReplyToId,
+    sessionKey: threadKeys.sessionKey,
+    parentSessionKey: threadKeys.parentSessionKey,
+  };
 }
 type MattermostMediaInfo = {
   path: string;
@@ -529,7 +567,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       trustedProxies: cfg.gateway?.trustedProxies,
       allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
       handleInteraction: handleModelPickerInteraction,
-      resolveSessionKey: async (channelId: string, userId: string) => {
+      resolveSessionKey: async ({ channelId, userId, post }) => {
         const channelInfo = await resolveChannelInfo(channelId);
         const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
         const teamId = channelInfo?.team_id ?? undefined;
@@ -543,7 +581,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             id: kind === "direct" ? userId : channelId,
           },
         });
-        return route.sessionKey;
+        const replyToMode = resolveMattermostReplyToMode(account, kind);
+        return resolveMattermostThreadSessionContext({
+          baseSessionKey: route.sessionKey,
+          kind,
+          postId: post.id || undefined,
+          replyToMode,
+          threadRootId: post.root_id,
+        }).sessionKey;
       },
       dispatchButtonClick: async (opts) => {
         const channelInfo = await resolveChannelInfo(opts.channelId);
@@ -562,6 +607,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             id: kind === "direct" ? opts.userId : opts.channelId,
           },
         });
+        const replyToMode = resolveMattermostReplyToMode(account, kind);
+        const threadContext = resolveMattermostThreadSessionContext({
+          baseSessionKey: route.sessionKey,
+          kind,
+          postId: opts.post.id || opts.postId,
+          replyToMode,
+          threadRootId: opts.post.root_id,
+        });
         const to = kind === "direct" ? `user:${opts.userId}` : `channel:${opts.channelId}`;
         const bodyText = `[Button click: user @${opts.userName} selected "${opts.actionName}"]`;
         const ctxPayload = core.channel.reply.finalizeInboundContext({
@@ -576,7 +629,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 ? `mattermost:group:${opts.channelId}`
                 : `mattermost:channel:${opts.channelId}`,
           To: to,
-          SessionKey: route.sessionKey,
+          SessionKey: threadContext.sessionKey,
+          ParentSessionKey: threadContext.parentSessionKey,
           AccountId: route.accountId,
           ChatType: chatType,
           ConversationLabel: `mattermost:${opts.userName}`,
@@ -588,6 +642,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           Provider: "mattermost" as const,
           Surface: "mattermost" as const,
           MessageSid: `interaction:${opts.postId}:${opts.actionId}`,
+          ReplyToId: threadContext.effectiveReplyToId,
+          MessageThreadId: threadContext.effectiveReplyToId,
           WasMentioned: true,
           CommandAuthorized: false,
           OriginatingChannel: "mattermost" as const,
@@ -612,7 +668,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           accountId: account.accountId,
         });
         const typingCallbacks = createTypingCallbacks({
-          start: () => sendTypingIndicator(opts.channelId),
+          start: () => sendTypingIndicator(opts.channelId, threadContext.effectiveReplyToId),
           onStartError: (err) => {
             logTypingFailure({
               log: (message) => logger.debug?.(message),
@@ -627,36 +683,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             ...prefixOptions,
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             deliver: async (payload: ReplyPayload) => {
-              const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-              const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
-              if (mediaUrls.length === 0) {
-                const chunkMode = core.channel.text.resolveChunkMode(
-                  cfg,
-                  "mattermost",
-                  account.accountId,
-                );
-                const chunks = core.channel.text.chunkMarkdownTextWithMode(
-                  text,
-                  textLimit,
-                  chunkMode,
-                );
-                for (const chunk of chunks.length > 0 ? chunks : [text]) {
-                  if (!chunk) continue;
-                  await sendMessageMattermost(to, chunk, {
-                    accountId: account.accountId,
-                  });
-                }
-              } else {
-                let first = true;
-                for (const mediaUrl of mediaUrls) {
-                  const caption = first ? text : "";
-                  first = false;
-                  await sendMessageMattermost(to, caption, {
-                    accountId: account.accountId,
-                    mediaUrl,
-                  });
-                }
-              }
+              await deliverMattermostReplyPayload({
+                core,
+                cfg,
+                payload,
+                to,
+                accountId: account.accountId,
+                agentId: route.agentId,
+                replyToId: resolveMattermostReplyRootId({
+                  threadRootId: threadContext.effectiveReplyToId,
+                  replyToId: payload.replyToId,
+                }),
+                textLimit,
+                tableMode,
+                sendMessage: sendMessageMattermost,
+              });
               runtime.log?.(`delivered button-click reply to ${to}`);
             },
             onError: (err, info) => {
@@ -842,6 +883,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     commandText: string;
     commandAuthorized: boolean;
     route: ReturnType<typeof core.channel.routing.resolveAgentRoute>;
+    sessionKey: string;
+    parentSessionKey?: string;
     channelId: string;
     senderId: string;
     senderName: string;
@@ -852,6 +895,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     roomLabel: string;
     teamId?: string;
     postId: string;
+    effectiveReplyToId?: string;
     deliverReplies?: boolean;
   }): Promise<string> => {
     const to = params.kind === "direct" ? `user:${params.senderId}` : `channel:${params.channelId}`;
@@ -871,7 +915,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             ? `mattermost:group:${params.channelId}`
             : `mattermost:channel:${params.channelId}`,
       To: to,
-      SessionKey: params.route.sessionKey,
+      SessionKey: params.sessionKey,
+      ParentSessionKey: params.parentSessionKey,
       AccountId: params.route.accountId,
       ChatType: params.chatType,
       ConversationLabel: fromLabel,
@@ -884,6 +929,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       Provider: "mattermost" as const,
       Surface: "mattermost" as const,
       MessageSid: `interaction:${params.postId}:${Date.now()}`,
+      ReplyToId: params.effectiveReplyToId,
+      MessageThreadId: params.effectiveReplyToId,
       Timestamp: Date.now(),
       WasMentioned: true,
       CommandAuthorized: params.commandAuthorized,
@@ -915,7 +962,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const capturedTexts: string[] = [];
     const typingCallbacks = shouldDeliverReplies
       ? createTypingCallbacks({
-          start: () => sendTypingIndicator(params.channelId),
+          start: () => sendTypingIndicator(params.channelId, params.effectiveReplyToId),
           onStartError: (err) => {
             logTypingFailure({
               log: (message) => logger.debug?.(message),
@@ -931,45 +978,34 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         ...prefixOptions,
         // Picker-triggered confirmations should stay immediate.
         deliver: async (payload: ReplyPayload) => {
-          const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          const text = core.channel.text
-            .convertMarkdownTables(payload.text ?? "", tableMode)
-            .trim();
+          const trimmedPayload = {
+            ...payload,
+            text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode).trim(),
+          };
 
           if (!shouldDeliverReplies) {
-            if (text) {
-              capturedTexts.push(text);
+            if (trimmedPayload.text) {
+              capturedTexts.push(trimmedPayload.text);
             }
             return;
           }
 
-          if (mediaUrls.length === 0) {
-            const chunkMode = core.channel.text.resolveChunkMode(
-              cfg,
-              "mattermost",
-              account.accountId,
-            );
-            const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
-            for (const chunk of chunks.length > 0 ? chunks : [text]) {
-              if (!chunk) {
-                continue;
-              }
-              await sendMessageMattermost(to, chunk, {
-                accountId: account.accountId,
-              });
-            }
-            return;
-          }
-
-          let first = true;
-          for (const mediaUrl of mediaUrls) {
-            const caption = first ? text : "";
-            first = false;
-            await sendMessageMattermost(to, caption, {
-              accountId: account.accountId,
-              mediaUrl,
-            });
-          }
+          await deliverMattermostReplyPayload({
+            core,
+            cfg,
+            payload: trimmedPayload,
+            to,
+            accountId: account.accountId,
+            agentId: params.route.agentId,
+            replyToId: resolveMattermostReplyRootId({
+              threadRootId: params.effectiveReplyToId,
+              replyToId: trimmedPayload.replyToId,
+            }),
+            textLimit,
+            // The picker path already converts and trims text before capture/delivery.
+            tableMode: "off",
+            sendMessage: sendMessageMattermost,
+          });
         },
         onError: (err, info) => {
           runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
@@ -1008,6 +1044,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     };
     userName: string;
     context: Record<string, unknown>;
+    post: MattermostPost;
   }): Promise<MattermostInteractionResponse | null> {
     const pickerState = parseMattermostModelPickerContext(params.context);
     if (!pickerState) {
@@ -1096,6 +1133,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         id: kind === "direct" ? params.payload.user_id : params.payload.channel_id,
       },
     });
+    const replyToMode = resolveMattermostReplyToMode(account, kind);
+    const threadContext = resolveMattermostThreadSessionContext({
+      baseSessionKey: route.sessionKey,
+      kind,
+      postId: params.post.id || params.payload.post_id,
+      replyToMode,
+      threadRootId: params.post.root_id,
+    });
+    const modelSessionRoute = {
+      agentId: route.agentId,
+      sessionKey: threadContext.sessionKey,
+    };
 
     const data = await buildModelsProviderData(cfg, route.agentId);
     if (data.providers.length === 0) {
@@ -1109,7 +1158,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     if (pickerState.action === "providers" || pickerState.action === "back") {
       const currentModel = resolveMattermostModelPickerCurrentModel({
         cfg,
-        route,
+        route: modelSessionRoute,
         data,
       });
       const view = renderMattermostProviderPickerView({
@@ -1128,7 +1177,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     if (pickerState.action === "list") {
       const currentModel = resolveMattermostModelPickerCurrentModel({
         cfg,
-        route,
+        route: modelSessionRoute,
         data,
       });
       const view = renderMattermostModelsPickerView({
@@ -1159,6 +1208,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           commandText: `/model ${targetModelRef}`,
           commandAuthorized: auth.commandAuthorized,
           route,
+          sessionKey: threadContext.sessionKey,
+          parentSessionKey: threadContext.parentSessionKey,
           channelId: params.payload.channel_id,
           senderId: params.payload.user_id,
           senderName: params.userName,
@@ -1169,11 +1220,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           roomLabel,
           teamId,
           postId: params.payload.post_id,
+          effectiveReplyToId: threadContext.effectiveReplyToId,
           deliverReplies: true,
         });
         const updatedModel = resolveMattermostModelPickerCurrentModel({
           cfg,
-          route,
+          route: modelSessionRoute,
           data,
           skipCache: true,
         });
@@ -1393,12 +1445,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const baseSessionKey = route.sessionKey;
     const threadRootId = post.root_id?.trim() || undefined;
-    const threadKeys = resolveThreadSessionKeys({
+    const replyToMode = resolveMattermostReplyToMode(account, kind);
+    const threadContext = resolveMattermostThreadSessionContext({
       baseSessionKey,
-      threadId: threadRootId,
-      parentSessionKey: threadRootId ? baseSessionKey : undefined,
+      kind,
+      postId: post.id,
+      replyToMode,
+      threadRootId,
     });
-    const sessionKey = threadKeys.sessionKey;
+    const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
     const historyKey = kind === "direct" ? null : sessionKey;
 
     const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
@@ -1562,7 +1617,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             : `mattermost:channel:${channelId}`,
       To: to,
       SessionKey: sessionKey,
-      ParentSessionKey: threadKeys.parentSessionKey,
+      ParentSessionKey: parentSessionKey,
       AccountId: route.accountId,
       ChatType: chatType,
       ConversationLabel: fromLabel,
@@ -1578,8 +1633,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       MessageSidFirst: allMessageIds.length > 1 ? allMessageIds[0] : undefined,
       MessageSidLast:
         allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
-      ReplyToId: threadRootId,
-      MessageThreadId: threadRootId,
+      ReplyToId: effectiveReplyToId,
+      MessageThreadId: effectiveReplyToId,
       Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
       WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
@@ -1631,7 +1686,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
 
     const typingCallbacks = createTypingCallbacks({
-      start: () => sendTypingIndicator(channelId, threadRootId),
+      start: () => sendTypingIndicator(channelId, effectiveReplyToId),
       onStartError: (err) => {
         logTypingFailure({
           log: (message) => logger.debug?.(message),
@@ -1647,42 +1702,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         typingCallbacks,
         deliver: async (payload: ReplyPayload) => {
-          const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
-          if (mediaUrls.length === 0) {
-            const chunkMode = core.channel.text.resolveChunkMode(
-              cfg,
-              "mattermost",
-              account.accountId,
-            );
-            const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
-            for (const chunk of chunks.length > 0 ? chunks : [text]) {
-              if (!chunk) {
-                continue;
-              }
-              await sendMessageMattermost(to, chunk, {
-                accountId: account.accountId,
-                replyToId: resolveMattermostReplyRootId({
-                  threadRootId,
-                  replyToId: payload.replyToId,
-                }),
-              });
-            }
-          } else {
-            let first = true;
-            for (const mediaUrl of mediaUrls) {
-              const caption = first ? text : "";
-              first = false;
-              await sendMessageMattermost(to, caption, {
-                accountId: account.accountId,
-                mediaUrl,
-                replyToId: resolveMattermostReplyRootId({
-                  threadRootId,
-                  replyToId: payload.replyToId,
-                }),
-              });
-            }
-          }
+          await deliverMattermostReplyPayload({
+            core,
+            cfg,
+            payload,
+            to,
+            accountId: account.accountId,
+            agentId: route.agentId,
+            replyToId: resolveMattermostReplyRootId({
+              threadRootId: effectiveReplyToId,
+              replyToId: payload.replyToId,
+            }),
+            textLimit,
+            tableMode,
+            sendMessage: sendMessageMattermost,
+          });
           runtime.log?.(`delivered reply to ${to}`);
         },
         onError: (err, info) => {

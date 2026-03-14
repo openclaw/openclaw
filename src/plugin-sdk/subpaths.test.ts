@@ -84,8 +84,9 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports WhatsApp helpers", () => {
-    expect(typeof whatsappSdk.resolveWhatsAppAccount).toBe("function");
-    expect(typeof whatsappSdk.whatsappOnboardingAdapter).toBe("object");
+    // WhatsApp-specific functions (resolveWhatsAppAccount, whatsappOnboardingAdapter) moved to extensions/whatsapp/src/
+    expect(typeof whatsappSdk.WhatsAppConfigSchema).toBe("object");
+    expect(typeof whatsappSdk.resolveWhatsAppOutboundTarget).toBe("function");
   });
 
   it("exports LINE helpers", () => {
@@ -96,6 +97,12 @@ describe("plugin-sdk subpath exports", () => {
   it("exports Microsoft Teams helpers", () => {
     expect(typeof msteamsSdk.resolveControlCommandGate).toBe("function");
     expect(typeof msteamsSdk.loadOutboundMediaFromUrl).toBe("function");
+  });
+
+  it("exports acpx helpers", async () => {
+    const acpxSdk = await import("openclaw/plugin-sdk/acpx");
+    expect(typeof acpxSdk.listKnownProviderAuthEnvVarNames).toBe("function");
+    expect(typeof acpxSdk.omitEnvKeysCaseInsensitive).toBe("function");
   });
 
   it("resolves bundled extension subpaths", async () => {

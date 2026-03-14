@@ -1,12 +1,14 @@
-import { sendMessageIMessage } from "../../../imessage/send.js";
-import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
+import { sendMessageIMessage } from "../../../../extensions/imessage/src/send.js";
+import { resolveOutboundSendDep, type OutboundSendDeps } from "../../../infra/outbound/deliver.js";
 import {
   createScopedChannelMediaMaxBytesResolver,
   createDirectTextMediaOutbound,
 } from "./direct-text-media.js";
 
 function resolveIMessageSender(deps: OutboundSendDeps | undefined) {
-  return deps?.sendIMessage ?? sendMessageIMessage;
+  return (
+    resolveOutboundSendDep<typeof sendMessageIMessage>(deps, "imessage") ?? sendMessageIMessage
+  );
 }
 
 export const imessageOutbound = createDirectTextMediaOutbound({

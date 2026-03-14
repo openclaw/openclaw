@@ -16,6 +16,8 @@ import {
   applyMistralProviderConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
+  applyOpencodeGoConfig,
+  applyOpencodeGoProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
@@ -676,6 +678,11 @@ describe("allowlist provider helpers", () => {
         alias: "My Opus",
       },
       {
+        applyConfig: applyOpencodeGoProviderConfig,
+        modelRef: "opencode-go/kimi-k2.5",
+        alias: "Kimi",
+      },
+      {
         applyConfig: applyOpenrouterProviderConfig,
         modelRef: OPENROUTER_DEFAULT_MODEL_REF,
         alias: "Router",
@@ -728,6 +735,10 @@ describe("default-model config helpers", () => {
       {
         applyConfig: applyOpencodeZenConfig,
         primaryModel: "opencode/claude-opus-4-6",
+      },
+      {
+        applyConfig: applyOpencodeGoConfig,
+        primaryModel: "opencode-go/kimi-k2.5",
       },
       {
         applyConfig: applyOpenrouterConfig,

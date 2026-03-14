@@ -16,6 +16,7 @@ type AuditFixture = {
 };
 
 const OPENAI_API_KEY_MARKER = "OPENAI_API_KEY"; // pragma: allowlist secret
+const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -111,6 +112,40 @@ async function seedAuditFixture(fixture: AuditFixture): Promise<void> {
 
 describe("secrets audit", () => {
   let fixture: AuditFixture;
+
+  async function writeModelsProvider(
+    overrides: Partial<{
+      apiKey: unknown;
+      headers: Record<string, unknown>;
+    }> = {},
+  ) {
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: OPENAI_API_KEY_MARKER,
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+          ...overrides,
+        },
+      },
+    });
+  }
+
+  function expectModelsFinding(
+    report: Awaited<ReturnType<typeof runSecretsAudit>>,
+    params: { code: string; jsonPath?: string; present?: boolean },
+  ) {
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === params.code &&
+          entry.file === fixture.modelsPath &&
+          (params.jsonPath === undefined || entry.jsonPath === params.jsonPath),
+      ),
+    ).toBe(params.present ?? true);
+  }
 
   beforeEach(async () => {
     fixture = await createAuditFixture();
@@ -277,209 +312,166 @@ describe("secrets audit", () => {
   });
 
   it("scans agent models.json files for plaintext provider apiKey values", async () => {
-    await writeJsonFile(fixture.modelsPath, {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions",
-          apiKey: "sk-models-plaintext", // pragma: allowlist secret
-          models: [{ id: "gpt-5", name: "gpt-5" }],
-        },
-      },
-    });
+    await writeModelsProvider({ apiKey: "sk-models-plaintext" }); // pragma: allowlist secret
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(
-      hasFinding(
-        report,
-        (entry) =>
-          entry.code === "PLAINTEXT_FOUND" &&
-          entry.file === fixture.modelsPath &&
-          entry.jsonPath === "providers.openai.apiKey",
-      ),
-    ).toBe(true);
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+    });
     expect(report.filesScanned).toContain(fixture.modelsPath);
   });
 
   it("scans agent models.json files for plaintext provider header values", async () => {
-    await writeJsonFile(fixture.modelsPath, {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions",
-          apiKey: OPENAI_API_KEY_MARKER,
-          headers: {
-            Authorization: "Bearer sk-header-plaintext", // pragma: allowlist secret
-          },
-          models: [{ id: "gpt-5", name: "gpt-5" }],
-        },
+    await writeModelsProvider({
+      headers: {
+        Authorization: "Bearer sk-header-plaintext", // pragma: allowlist secret
       },
     });
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(
-      hasFinding(
-        report,
-        (entry) =>
-          entry.code === "PLAINTEXT_FOUND" &&
-          entry.file === fixture.modelsPath &&
-          entry.jsonPath === "providers.openai.headers.Authorization",
-      ),
-    ).toBe(true);
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.headers.Authorization",
+    });
   });
 
   it("does not flag non-sensitive routing headers in models.json", async () => {
-    await writeJsonFile(fixture.modelsPath, {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions",
-          apiKey: OPENAI_API_KEY_MARKER,
-          headers: {
-            "X-Proxy-Region": "us-west",
-          },
-          models: [{ id: "gpt-5", name: "gpt-5" }],
-        },
+    await writeModelsProvider({
+      headers: {
+        "X-Proxy-Region": "us-west",
       },
     });
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(
-      hasFinding(
-        report,
-        (entry) =>
-          entry.code === "PLAINTEXT_FOUND" &&
-          entry.file === fixture.modelsPath &&
-          entry.jsonPath === "providers.openai.headers.X-Proxy-Region",
-      ),
-    ).toBe(false);
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.headers.X-Proxy-Region",
+      present: false,
+    });
   });
 
   it("does not flag models.json marker values as plaintext", async () => {
-    await writeJsonFile(fixture.modelsPath, {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions",
-          apiKey: OPENAI_API_KEY_MARKER,
-          models: [{ id: "gpt-5", name: "gpt-5" }],
-        },
-      },
-    });
+    await writeModelsProvider();
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(
-      hasFinding(
-        report,
-        (entry) =>
-          entry.code === "PLAINTEXT_FOUND" &&
-          entry.file === fixture.modelsPath &&
-          entry.jsonPath === "providers.openai.apiKey",
-      ),
-    ).toBe(false);
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+      present: false,
+    });
   });
 
   it("flags arbitrary all-caps models.json apiKey values as plaintext", async () => {
-    await writeJsonFile(fixture.modelsPath, {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions",
-          apiKey: "ALLCAPS_SAMPLE", // pragma: allowlist secret
-          models: [{ id: "gpt-5", name: "gpt-5" }],
-        },
-      },
-    });
+    await writeModelsProvider({ apiKey: "ALLCAPS_SAMPLE" }); // pragma: allowlist secret
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(
-      hasFinding(
-        report,
-        (entry) =>
-          entry.code === "PLAINTEXT_FOUND" &&
-          entry.file === fixture.modelsPath &&
-          entry.jsonPath === "providers.openai.apiKey",
-      ),
-    ).toBe(true);
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+    });
   });
 
   it("does not flag models.json header marker values as plaintext", async () => {
-    await writeJsonFile(fixture.modelsPath, {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions",
-          apiKey: OPENAI_API_KEY_MARKER,
-          headers: {
-            Authorization: "secretref-env:OPENAI_HEADER_TOKEN", // pragma: allowlist secret
-            "x-managed-token": "secretref-managed", // pragma: allowlist secret
-          },
-          models: [{ id: "gpt-5", name: "gpt-5" }],
-        },
+    await writeModelsProvider({
+      headers: {
+        Authorization: "secretref-env:OPENAI_HEADER_TOKEN", // pragma: allowlist secret
+        "x-managed-token": "secretref-managed", // pragma: allowlist secret
       },
     });
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(
-      hasFinding(
-        report,
-        (entry) =>
-          entry.code === "PLAINTEXT_FOUND" &&
-          entry.file === fixture.modelsPath &&
-          entry.jsonPath === "providers.openai.headers.Authorization",
-      ),
-    ).toBe(false);
-    expect(
-      hasFinding(
-        report,
-        (entry) =>
-          entry.code === "PLAINTEXT_FOUND" &&
-          entry.file === fixture.modelsPath &&
-          entry.jsonPath === "providers.openai.headers.x-managed-token",
-      ),
-    ).toBe(false);
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.headers.Authorization",
+      present: false,
+    });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.headers.x-managed-token",
+      present: false,
+    });
   });
 
   it("reports unresolved models.json SecretRef objects in provider headers", async () => {
-    await writeJsonFile(fixture.modelsPath, {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-completions",
-          apiKey: OPENAI_API_KEY_MARKER,
-          headers: {
-            Authorization: {
-              source: "env",
-              provider: "default",
-              id: "OPENAI_HEADER_TOKEN", // pragma: allowlist secret
-            },
-          },
-          models: [{ id: "gpt-5", name: "gpt-5" }],
+    await writeModelsProvider({
+      headers: {
+        Authorization: {
+          source: "env",
+          provider: "default",
+          id: "OPENAI_HEADER_TOKEN", // pragma: allowlist secret
         },
       },
     });
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(
-      hasFinding(
-        report,
-        (entry) =>
-          entry.code === "REF_UNRESOLVED" &&
-          entry.file === fixture.modelsPath &&
-          entry.jsonPath === "providers.openai.headers.Authorization",
-      ),
-    ).toBe(true);
+    expectModelsFinding(report, {
+      code: "REF_UNRESOLVED",
+      jsonPath: "providers.openai.headers.Authorization",
+    });
   });
 
   it("reports malformed models.json as unresolved findings", async () => {
     await fs.writeFile(fixture.modelsPath, "{bad-json", "utf8");
     const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, { code: "REF_UNRESOLVED" });
+  });
+
+  it("reports non-regular models.json files as unresolved findings", async () => {
+    await fs.rm(fixture.modelsPath, { force: true });
+    await fs.mkdir(fixture.modelsPath, { recursive: true });
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, { code: "REF_UNRESOLVED" });
+  });
+
+  it("reports oversized models.json as unresolved findings", async () => {
+    const oversizedApiKey = "a".repeat(MAX_AUDIT_MODELS_JSON_BYTES + 256);
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: oversizedApiKey,
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, { code: "REF_UNRESOLVED" });
+  });
+
+  it("scans active agent-dir override models.json even when outside state dir", async () => {
+    const externalAgentDir = path.join(fixture.rootDir, "external-agent");
+    const externalModelsPath = path.join(externalAgentDir, "models.json");
+    await fs.mkdir(externalAgentDir, { recursive: true });
+    await writeJsonFile(externalModelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "sk-external-plaintext", // pragma: allowlist secret
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({
+      env: {
+        ...fixture.env,
+        OPENCLAW_AGENT_DIR: externalAgentDir,
+      },
+    });
     expect(
       hasFinding(
         report,
-        (entry) => entry.code === "REF_UNRESOLVED" && entry.file === fixture.modelsPath,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === externalModelsPath &&
+          entry.jsonPath === "providers.openai.apiKey",
       ),
     ).toBe(true);
+    expect(report.filesScanned).toContain(externalModelsPath);
   });
 
   it("does not flag non-sensitive routing headers in openclaw config", async () => {

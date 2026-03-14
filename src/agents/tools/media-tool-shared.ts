@@ -1,5 +1,6 @@
 import path from "node:path";
 import { type Api, type Model } from "@mariozechner/pi-ai";
+import { getDefaultLocalRoots } from "../../../extensions/whatsapp/src/media.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getDefaultLocalRoots } from "../../web/media.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";

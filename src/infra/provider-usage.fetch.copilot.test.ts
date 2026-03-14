@@ -34,4 +34,40 @@ describe("fetchCopilotUsage", () => {
       { label: "Chat", usedPercent: 25 },
     ]);
   });
+
+  it("defaults missing snapshot values and clamps invalid remaining percentages", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        quota_snapshots: {
+          premium_interactions: { percent_remaining: null },
+          chat: { percent_remaining: 140 },
+        },
+      }),
+    );
+
+    const result = await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(result.windows).toEqual([
+      { label: "Premium", usedPercent: 100 },
+      { label: "Chat", usedPercent: 0 },
+    ]);
+    expect(result.plan).toBeUndefined();
+  });
+
+  it("returns an empty window list when quota snapshots are missing", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        copilot_plan: "free",
+      }),
+    );
+
+    const result = await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(result).toEqual({
+      provider: "github-copilot",
+      displayName: "Copilot",
+      windows: [],
+      plan: "free",
+    });
+  });
 });

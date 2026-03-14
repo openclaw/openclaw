@@ -315,6 +315,7 @@ describe("model compat config schema", () => {
                   requiresAssistantAfterToolResult: false,
                   requiresThinkingAsText: false,
                   requiresMistralToolIds: false,
+                  requiresOpenAiAnthropicToolPayload: true,
                 },
               },
             ],
@@ -358,6 +359,33 @@ describe("config strict validation", () => {
       customUnknownField: { nested: "value" },
     });
     expect(res.ok).toBe(false);
+  });
+
+  it("accepts documented agents.list[].params overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            model: "anthropic/claude-opus-4-6",
+            params: {
+              cacheRetention: "none",
+              temperature: 0.4,
+              maxTokens: 8192,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.list?.[0]?.params).toEqual({
+        cacheRetention: "none",
+        temperature: 0.4,
+        maxTokens: 8192,
+      });
+    }
   });
 
   it("flags legacy config entries without auto-migrating", async () => {

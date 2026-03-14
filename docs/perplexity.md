@@ -71,10 +71,13 @@ Optional legacy controls:
 
 **Via config:** run `openclaw configure --section web`. It stores the key in
 `~/.openclaw/openclaw.json` under `tools.web.search.perplexity.apiKey`.
+That field also accepts SecretRef objects.
 
 **Via environment:** set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
 in the Gateway process environment. For a gateway install, put it in
 `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
+
+If `provider: "perplexity"` is configured and the Perplexity key SecretRef is unresolved with no env fallback, startup/reload fails fast.
 
 ## Tool parameters
 

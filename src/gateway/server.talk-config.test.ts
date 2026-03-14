@@ -6,6 +6,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { validateTalkConfigResult } from "./protocol/index.js";
 import {
@@ -19,6 +20,27 @@ import { withServer } from "./test-with-server.js";
 installGatewayTestHooks({ scope: "suite" });
 
 type GatewaySocket = Parameters<Parameters<typeof withServer>[0]>[0];
+type SecretRef = { source?: string; provider?: string; id?: string };
+type TalkConfigPayload = {
+  config?: {
+    talk?: {
+      provider?: string;
+      providers?: {
+        elevenlabs?: { voiceId?: string; apiKey?: string | SecretRef };
+      };
+      resolved?: {
+        provider?: string;
+        config?: { voiceId?: string; apiKey?: string | SecretRef };
+      };
+      apiKey?: string | SecretRef;
+      voiceId?: string;
+      silenceTimeoutMs?: number;
+    };
+    session?: { mainKey?: string };
+    ui?: { seamColor?: string };
+  };
+};
+type TalkConfig = NonNullable<NonNullable<TalkConfigPayload["config"]>["talk"]>;
 const TALK_CONFIG_DEVICE_PATH = path.join(
   os.tmpdir(),
   `openclaw-talk-config-device-${process.pid}.json`,
@@ -66,6 +88,37 @@ async function writeTalkConfig(config: {
   await writeConfigFile({ talk: config });
 }
 
+async function fetchTalkConfig(
+  ws: GatewaySocket,
+  params?: { includeSecrets?: boolean } | Record<string, unknown>,
+) {
+  return rpcReq<TalkConfigPayload>(ws, "talk.config", params ?? {});
+}
+
+function expectElevenLabsTalkConfig(
+  talk: TalkConfig | undefined,
+  expected: {
+    voiceId?: string;
+    apiKey?: string | SecretRef;
+    silenceTimeoutMs?: number;
+  },
+) {
+  expect(talk?.provider).toBe("elevenlabs");
+  expect(talk?.providers?.elevenlabs?.voiceId).toBe(expected.voiceId);
+  expect(talk?.resolved?.provider).toBe("elevenlabs");
+  expect(talk?.resolved?.config?.voiceId).toBe(expected.voiceId);
+  expect(talk?.voiceId).toBe(expected.voiceId);
+
+  if ("apiKey" in expected) {
+    expect(talk?.providers?.elevenlabs?.apiKey).toEqual(expected.apiKey);
+    expect(talk?.resolved?.config?.apiKey).toEqual(expected.apiKey);
+    expect(talk?.apiKey).toEqual(expected.apiKey);
+  }
+  if ("silenceTimeoutMs" in expected) {
+    expect(talk?.silenceTimeoutMs).toBe(expected.silenceTimeoutMs);
+  }
+}
+
 describe("gateway talk.config", () => {
   it("returns redacted talk config for read scope", async () => {
     const { writeConfigFile } = await import("../config/config.js");
@@ -85,35 +138,26 @@ describe("gateway talk.config", () => {
 
     await withServer(async (ws) => {
       await connectOperator(ws, ["operator.read"]);
-      const res = await rpcReq<{
-        config?: {
-          talk?: {
-            provider?: string;
-            providers?: {
-              elevenlabs?: { voiceId?: string; apiKey?: string };
-            };
-            resolved?: {
-              provider?: string;
-              config?: { voiceId?: string; apiKey?: string };
-            };
-            apiKey?: string;
-            voiceId?: string;
-            silenceTimeoutMs?: number;
-          };
-        };
-      }>(ws, "talk.config", {});
+      const res = await fetchTalkConfig(ws);
       expect(res.ok).toBe(true);
-      expect(res.payload?.config?.talk?.provider).toBe("elevenlabs");
-      expect(res.payload?.config?.talk?.providers?.elevenlabs?.voiceId).toBe("voice-123");
-      expect(res.payload?.config?.talk?.providers?.elevenlabs?.apiKey).toBe(
-        "__OPENCLAW_REDACTED__",
-      );
-      expect(res.payload?.config?.talk?.resolved?.provider).toBe("elevenlabs");
-      expect(res.payload?.config?.talk?.resolved?.config?.voiceId).toBe("voice-123");
-      expect(res.payload?.config?.talk?.resolved?.config?.apiKey).toBe("__OPENCLAW_REDACTED__");
-      expect(res.payload?.config?.talk?.voiceId).toBe("voice-123");
-      expect(res.payload?.config?.talk?.apiKey).toBe("__OPENCLAW_REDACTED__");
-      expect(res.payload?.config?.talk?.silenceTimeoutMs).toBe(1500);
+      expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+        voiceId: "voice-123",
+        apiKey: "__OPENCLAW_REDACTED__",
+        silenceTimeoutMs: 1500,
+      });
+      expect(res.payload?.config?.session?.mainKey).toBe("main-test");
+      expect(res.payload?.config?.ui?.seamColor).toBe("#112233");
+    });
+  });
+
+  it("rejects invalid talk.config params", async () => {
+    await writeTalkConfig({ apiKey: "secret-key-abc" }); // pragma: allowlist secret
+
+    await withServer(async (ws) => {
+      await connectOperator(ws, ["operator.read"]);
+      const res = await fetchTalkConfig(ws, { includeSecrets: "yes" });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message).toContain("invalid talk.config params");
     });
   });
 
@@ -122,22 +166,25 @@ describe("gateway talk.config", () => {
 
     await withServer(async (ws) => {
       await connectOperator(ws, ["operator.read"]);
-      const res = await rpcReq(ws, "talk.config", { includeSecrets: true });
+      const res = await fetchTalkConfig(ws, { includeSecrets: true });
       expect(res.ok).toBe(false);
       expect(res.error?.message).toContain("missing scope: operator.talk.secrets");
     });
   });
 
-  it("returns secrets for operator.talk.secrets scope", async () => {
+  it.each([
+    ["operator.talk.secrets", ["operator.read", "operator.write", "operator.talk.secrets"]],
+    ["operator.admin", ["operator.read", "operator.admin"]],
+  ] as const)("returns secrets for %s scope", async (_label, scopes) => {
     await writeTalkConfig({ apiKey: "secret-key-abc" }); // pragma: allowlist secret
 
     await withServer(async (ws) => {
-      await connectOperator(ws, ["operator.read", "operator.write", "operator.talk.secrets"]);
-      const res = await rpcReq<{ config?: { talk?: { apiKey?: string } } }>(ws, "talk.config", {
-        includeSecrets: true,
-      });
+      await connectOperator(ws, [...scopes]);
+      const res = await fetchTalkConfig(ws, { includeSecrets: true });
       expect(res.ok).toBe(true);
-      expect(res.payload?.config?.talk?.apiKey).toBe("secret-key-abc");
+      expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+        apiKey: "secret-key-abc",
+      });
     });
   });
 
@@ -150,45 +197,18 @@ describe("gateway talk.config", () => {
       },
     });
 
-    await withServer(async (ws) => {
-      await connectOperator(ws, ["operator.read", "operator.write", "operator.talk.secrets"]);
-      const res = await rpcReq<{
-        config?: {
-          talk?: {
-            apiKey?: { source?: string; provider?: string; id?: string };
-            providers?: {
-              elevenlabs?: {
-                apiKey?: { source?: string; provider?: string; id?: string };
-              };
-            };
-            resolved?: {
-              provider?: string;
-              config?: {
-                apiKey?: { source?: string; provider?: string; id?: string };
-              };
-            };
-          };
-        };
-      }>(ws, "talk.config", {
-        includeSecrets: true,
-      });
-      expect(res.ok).toBe(true);
-      expect(validateTalkConfigResult(res.payload)).toBe(true);
-      expect(res.payload?.config?.talk?.apiKey).toEqual({
-        source: "env",
-        provider: "default",
-        id: "ELEVENLABS_API_KEY",
-      });
-      expect(res.payload?.config?.talk?.providers?.elevenlabs?.apiKey).toEqual({
-        source: "env",
-        provider: "default",
-        id: "ELEVENLABS_API_KEY",
-      });
-      expect(res.payload?.config?.talk?.resolved?.provider).toBe("elevenlabs");
-      expect(res.payload?.config?.talk?.resolved?.config?.apiKey).toEqual({
-        source: "env",
-        provider: "default",
-        id: "ELEVENLABS_API_KEY",
+    await withEnvAsync({ ELEVENLABS_API_KEY: "env-elevenlabs-key" }, async () => {
+      await withServer(async (ws) => {
+        await connectOperator(ws, ["operator.read", "operator.write", "operator.talk.secrets"]);
+        const res = await fetchTalkConfig(ws, { includeSecrets: true });
+        expect(res.ok).toBe(true);
+        expect(validateTalkConfigResult(res.payload)).toBe(true);
+        const secretRef = {
+          source: "env",
+          provider: "default",
+          id: "ELEVENLABS_API_KEY",
+        } satisfies SecretRef;
+        expectElevenLabsTalkConfig(res.payload?.config?.talk, { apiKey: secretRef });
       });
     });
   });
@@ -209,27 +229,11 @@ describe("gateway talk.config", () => {
 
     await withServer(async (ws) => {
       await connectOperator(ws, ["operator.read"]);
-      const res = await rpcReq<{
-        config?: {
-          talk?: {
-            provider?: string;
-            providers?: {
-              elevenlabs?: { voiceId?: string };
-            };
-            resolved?: {
-              provider?: string;
-              config?: { voiceId?: string };
-            };
-            voiceId?: string;
-          };
-        };
-      }>(ws, "talk.config", {});
+      const res = await fetchTalkConfig(ws);
       expect(res.ok).toBe(true);
-      expect(res.payload?.config?.talk?.provider).toBe("elevenlabs");
-      expect(res.payload?.config?.talk?.providers?.elevenlabs?.voiceId).toBe("voice-normalized");
-      expect(res.payload?.config?.talk?.resolved?.provider).toBe("elevenlabs");
-      expect(res.payload?.config?.talk?.resolved?.config?.voiceId).toBe("voice-normalized");
-      expect(res.payload?.config?.talk?.voiceId).toBe("voice-normalized");
+      expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+        voiceId: "voice-normalized",
+      });
     });
   });
 });

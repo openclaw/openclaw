@@ -7,9 +7,15 @@ import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
-vi.mock("@mariozechner/pi-ai", () => ({
-  completeSimple: vi.fn(),
-  // Some auth helpers import oauth provider metadata at module load time.
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  return {
+    ...original,
+    completeSimple: vi.fn(),
+  };
+});
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthProviders: () => [],
   getOAuthApiKey: vi.fn(async () => null),
 }));
@@ -54,6 +60,7 @@ const {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   parseTtsDirectives,
+  resolveOpenAITtsInstructions,
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
@@ -83,6 +90,22 @@ const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMe
   stopReason: "stop",
   timestamp: Date.now(),
 });
+
+function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawConfig {
+  return {
+    messages: {
+      tts: {
+        provider: "openai",
+        openai: {
+          apiKey: "test-key",
+          model,
+          voice: "alloy",
+          instructions: "Speak warmly",
+        },
+      },
+    },
+  };
+}
 
 describe("tts", () => {
   beforeEach(() => {
@@ -163,6 +186,20 @@ describe("tts", () => {
 
     it("treats the default endpoint with trailing slash as the default endpoint", () => {
       expect(isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/")).toBe(false);
+    });
+  });
+
+  describe("resolveOpenAITtsInstructions", () => {
+    it("keeps instructions only for gpt-4o-mini-tts variants", () => {
+      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", " Speak warmly ")).toBe(
+        "Speak warmly",
+      );
+      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts-2025-12-15", "Speak warmly")).toBe(
+        "Speak warmly",
+      );
+      expect(resolveOpenAITtsInstructions("tts-1", "Speak warmly")).toBeUndefined();
+      expect(resolveOpenAITtsInstructions("tts-1-hd", "Speak warmly")).toBeUndefined();
+      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", "   ")).toBeUndefined();
     });
   });
 
@@ -551,6 +588,51 @@ describe("tts", () => {
         const config = resolveTtsConfig(baseCfg);
         expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
       });
+    });
+  });
+
+  describe("textToSpeechTelephony – openai instructions", () => {
+    const withMockedTelephonyFetch = async (
+      run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
+    ) => {
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(2),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      try {
+        await run(fetchMock);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    };
+
+    async function expectTelephonyInstructions(
+      model: "tts-1" | "gpt-4o-mini-tts",
+      expectedInstructions: string | undefined,
+    ) {
+      await withMockedTelephonyFetch(async (fetchMock) => {
+        const result = await tts.textToSpeechTelephony({
+          text: "Hello there, friendly caller.",
+          cfg: createOpenAiTelephonyCfg(model),
+        });
+
+        expect(result.success).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(typeof init.body).toBe("string");
+        const body = JSON.parse(init.body as string) as Record<string, unknown>;
+        expect(body.instructions).toBe(expectedInstructions);
+      });
+    }
+
+    it("omits instructions for unsupported speech models", async () => {
+      await expectTelephonyInstructions("tts-1", undefined);
+    });
+
+    it("includes instructions for gpt-4o-mini-tts", async () => {
+      await expectTelephonyInstructions("gpt-4o-mini-tts", "Speak warmly");
     });
   });
 
