@@ -11,7 +11,7 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 // Note: 1M context is now GA (General Availability) as of March 2026.
 // The context-1m-2025-08-07 beta header is no longer required.
-// Keeping ANTHROPIC_1M_MODEL_PREFIXES for context window detection.
+// Keeping ANTHROPIC_1M_MODEL_PREFIXES to warn when context1m is set on an unsupported model.
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
   "fine-grained-tool-streaming-2025-05-14",
