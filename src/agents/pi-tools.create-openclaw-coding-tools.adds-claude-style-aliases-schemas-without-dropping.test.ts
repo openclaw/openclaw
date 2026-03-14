@@ -160,9 +160,8 @@ describe("createOpenClawCodingTools", () => {
   it("mentions Chrome extension relay in browser tool description", () => {
     const browser = createBrowserTool();
     expect(browser.description).toMatch(/Chrome extension/i);
-    expect(browser.description).toMatch(/browserSession="agent"/i);
-    expect(browser.description).toMatch(/browserSession="user"/i);
-    expect(browser.description).toMatch(/profile="chrome"/i);
+    expect(browser.description).toMatch(/profile="user"/i);
+    expect(browser.description).toMatch(/profile="chrome-relay"/i);
   });
   it("keeps browser tool schema properties after normalization", () => {
     const browser = defaultTools.find((tool) => tool.name === "browser");
@@ -174,7 +173,6 @@ describe("createOpenClawCodingTools", () => {
     };
     expect(parameters.properties?.action).toBeDefined();
     expect(parameters.properties?.target).toBeDefined();
-    expect(parameters.properties?.browserSession).toBeDefined();
     expect(parameters.properties?.targetUrl).toBeDefined();
     expect(parameters.properties?.request).toBeDefined();
     expect(parameters.required ?? []).toContain("action");
