@@ -116,6 +116,45 @@ describe("message tool agent routing", () => {
     expect(call?.agentId).toBe("alpha");
     expect(call?.sessionKey).toBe("agent:alpha:main");
   });
+
+  it("falls back to requesterAgentIdOverride when session key is missing", async () => {
+    mockSendResult();
+
+    const tool = createMessageTool({
+      requesterAgentIdOverride: "media-agent",
+      config: {} as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "whatsapp:+15551234567",
+      message: "hi",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.agentId).toBe("media-agent");
+    expect(call?.sessionKey).toBeUndefined();
+  });
+
+  it("prefers session-key agentId over requesterAgentIdOverride", async () => {
+    mockSendResult();
+
+    const tool = createMessageTool({
+      agentSessionKey: "agent:alpha:main",
+      requesterAgentIdOverride: "media-agent",
+      config: {} as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "telegram:123",
+      message: "hi",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.agentId).toBe("alpha");
+    expect(call?.sessionKey).toBe("agent:alpha:main");
+  });
 });
 
 describe("message tool path passthrough", () => {
