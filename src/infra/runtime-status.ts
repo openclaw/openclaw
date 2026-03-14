@@ -16,12 +16,14 @@ export function formatRuntimeStatusWithDetails({
   if (pid) {
     fullDetails.push(`pid ${pid}`);
   }
-  if (state && state.toLowerCase() !== runtimeStatus.toLowerCase()) {
-    fullDetails.push(`state ${state}`);
+  const normalizedState = state?.trim();
+  if (normalizedState && normalizedState.toLowerCase() !== runtimeStatus.toLowerCase()) {
+    fullDetails.push(`state ${normalizedState}`);
   }
   for (const detail of details) {
-    if (detail) {
-      fullDetails.push(detail);
+    const normalizedDetail = detail.trim();
+    if (normalizedDetail) {
+      fullDetails.push(normalizedDetail);
     }
   }
   return fullDetails.length > 0 ? `${runtimeStatus} (${fullDetails.join(", ")})` : runtimeStatus;
