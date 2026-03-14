@@ -188,8 +188,6 @@ export type PrivacyConfig = {
   mappings?: {
     ttl?: number;
     storePath?: string;
-    lockWaitTimeoutMs?: number;
-    lockStaleAfterMs?: number;
   };
   log?: {
     useReplacedContent?: boolean;

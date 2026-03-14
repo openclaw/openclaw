@@ -31,7 +31,6 @@ const LOCK_STALE_AFTER_MS = 30_000;
 const LOCK_RETRY_MS = 25;
 const FILE_MODE_OWNER_RW = 0o600;
 const DIR_MODE_OWNER_RWX = 0o700;
-const SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 
 /** Default storage directory. */
 function defaultStorePath(): string {
@@ -89,7 +88,13 @@ function loadOrCreateMachinePassphrase(customPath?: string): string {
 }
 
 function sleepMs(ms: number): void {
-  Atomics.wait(SLEEP_BUFFER, 0, 0, ms);
+  // Atomics.wait() throws on the Node.js main thread, so use a busy-wait
+  // with hrtime for sub-millisecond accuracy. This only runs during lock
+  // contention retries, which are rare and short-lived.
+  const end = process.hrtime.bigint() + BigInt(ms) * 1_000_000n;
+  while (process.hrtime.bigint() < end) {
+    // spin
+  }
 }
 
 /** Encrypt a plaintext string. Returns a Buffer: [IV (16)] [authTag (16)] [ciphertext]. */

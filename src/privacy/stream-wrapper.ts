@@ -269,12 +269,20 @@ function restoreStreamChunk(
   // Handle tool-call argument deltas — the model may echo masked secrets into
   // tool arguments; downstream code accumulates these deltas and executes the
   // tool with them, so we must restore placeholders here too.
-  if (chunk.type === "toolcall_delta" && chunk.delta && typeof chunk.delta === "object") {
-    const delta = chunk.delta as Record<string, unknown>;
-    if (typeof delta.arguments === "string") {
-      const restored = restoreText(delta.arguments, ctx);
-      if (restored !== delta.arguments) {
-        return { ...chunk, delta: { ...delta, arguments: restored } };
+  // Runtime emits two delta shapes: object { arguments: string } and plain string.
+  if (chunk.type === "toolcall_delta") {
+    if (typeof chunk.delta === "string") {
+      const restored = restoreText(chunk.delta, ctx);
+      if (restored !== chunk.delta) {
+        return { ...chunk, delta: restored };
+      }
+    } else if (chunk.delta && typeof chunk.delta === "object") {
+      const delta = chunk.delta as Record<string, unknown>;
+      if (typeof delta.arguments === "string") {
+        const restored = restoreText(delta.arguments, ctx);
+        if (restored !== delta.arguments) {
+          return { ...chunk, delta: { ...delta, arguments: restored } };
+        }
       }
     }
   }

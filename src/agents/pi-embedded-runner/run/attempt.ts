@@ -2125,22 +2125,31 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      // Privacy filter: replace sensitive content before sending to LLM API.
-      // Inserted before payload logger so logged payloads also have privacy content filtered.
-      const privacyEnabled = params.config?.privacy?.enabled !== false;
-      let privacyCtx: PrivacyFilterContext | undefined;
-      if (privacyEnabled) {
-        privacyCtx = createPrivacyFilterContext(params.sessionId, params.config?.privacy);
-        activeSession.agent.streamFn = wrapStreamFnPrivacyFilter(
-          activeSession.agent.streamFn,
-          privacyCtx,
-        );
-      }
-
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+
+      // Privacy filter: replace sensitive content before sending to LLM API.
+      // Applied AFTER the payload logger so privacy is the outer wrapper —
+      // the logger sees already-filtered content, preventing sensitive data in logs.
+      const privacyEnabled = params.config?.privacy?.enabled !== false;
+      let privacyCtx: PrivacyFilterContext | undefined;
+      if (privacyEnabled) {
+        try {
+          privacyCtx = createPrivacyFilterContext(params.sessionId, params.config?.privacy);
+          activeSession.agent.streamFn = wrapStreamFnPrivacyFilter(
+            activeSession.agent.streamFn,
+            privacyCtx,
+          );
+        } catch (err) {
+          // Degrade gracefully — filtering is a hardening layer, not a critical path.
+          // A read-only $HOME or unwritable storePath should not abort the entire run.
+          log.warn(
+            `[privacy] Failed to initialize privacy filter, continuing without: ${(err as Error).message}`,
+          );
+        }
       }
 
       try {
