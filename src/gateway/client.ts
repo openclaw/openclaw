@@ -617,10 +617,12 @@ export class GatewayClient {
     this.connectNonce = null;
     this.connectSent = false;
     const rawConnectDelayMs = this.opts.connectDelayMs;
+    // Default to 4s to exceed the server's 3s handshake timeout, ensuring
+    // clients don't timeout before the server completes authentication.
     const connectChallengeTimeoutMs =
       typeof rawConnectDelayMs === "number" && Number.isFinite(rawConnectDelayMs)
         ? Math.max(250, Math.min(10_000, rawConnectDelayMs))
-        : 2_000;
+        : 4_000;
     if (this.connectTimer) {
       clearTimeout(this.connectTimer);
     }
