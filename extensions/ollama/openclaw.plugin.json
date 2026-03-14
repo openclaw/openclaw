@@ -1,0 +1,9 @@
+{
+  "id": "ollama",
+  "providers": ["ollama"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

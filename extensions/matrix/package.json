@@ -1,14 +1,14 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.3.11",
+  "version": "2026.3.13",
   "description": "OpenClaw Matrix channel plugin",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-agent-core": "0.57.1",
+    "@mariozechner/pi-agent-core": "0.58.0",
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "@vector-im/matrix-bot-sdk": "0.8.0-element.3",
     "markdown-it": "14.1.1",
-    "music-metadata": "^11.12.1",
+    "music-metadata": "^11.12.3",
     "zod": "^4.3.6"
   },
   "openclaw": {

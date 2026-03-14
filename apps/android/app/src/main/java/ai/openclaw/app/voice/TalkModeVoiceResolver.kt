@@ -79,26 +79,30 @@ internal object TalkModeVoiceResolver {
     return withContext(Dispatchers.IO) {
       val url = URL("https://api.elevenlabs.io/v1/voices")
       val conn = url.openConnection() as HttpURLConnection
-      conn.requestMethod = "GET"
-      conn.connectTimeout = 15_000
-      conn.readTimeout = 15_000
-      conn.setRequestProperty("xi-api-key", apiKey)
+      try {
+        conn.requestMethod = "GET"
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 15_000
+        conn.setRequestProperty("xi-api-key", apiKey)
 
-      val code = conn.responseCode
-      val stream = if (code >= 400) conn.errorStream else conn.inputStream
-      val data = stream.readBytes()
-      if (code >= 400) {
-        val message = data.toString(Charsets.UTF_8)
-        throw IllegalStateException("ElevenLabs voices failed: $code $message")
-      }
+        val code = conn.responseCode
+        val stream = if (code >= 400) conn.errorStream else conn.inputStream
+        val data = stream?.use { it.readBytes() } ?: byteArrayOf()
+        if (code >= 400) {
+          val message = data.toString(Charsets.UTF_8)
+          throw IllegalStateException("ElevenLabs voices failed: $code $message")
+        }
 
-      val root = json.parseToJsonElement(data.toString(Charsets.UTF_8)).asObjectOrNull()
-      val voices = (root?.get("voices") as? JsonArray) ?: JsonArray(emptyList())
-      voices.mapNotNull { entry ->
-        val obj = entry.asObjectOrNull() ?: return@mapNotNull null
-        val voiceId = obj["voice_id"].asStringOrNull() ?: return@mapNotNull null
-        val name = obj["name"].asStringOrNull()
-        ElevenLabsVoice(voiceId, name)
+        val root = json.parseToJsonElement(data.toString(Charsets.UTF_8)).asObjectOrNull()
+        val voices = (root?.get("voices") as? JsonArray) ?: JsonArray(emptyList())
+        voices.mapNotNull { entry ->
+          val obj = entry.asObjectOrNull() ?: return@mapNotNull null
+          val voiceId = obj["voice_id"].asStringOrNull() ?: return@mapNotNull null
+          val name = obj["name"].asStringOrNull()
+          ElevenLabsVoice(voiceId, name)
+        }
+      } finally {
+        conn.disconnect()
       }
     }
   }

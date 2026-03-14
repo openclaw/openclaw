@@ -254,7 +254,7 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("overrides explicit supportsDeveloperRole true on non-native endpoints", () => {
+  it("respects explicit supportsDeveloperRole true on non-native endpoints", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
@@ -262,7 +262,7 @@ describe("normalizeModelCompat", () => {
       compat: { supportsDeveloperRole: true },
     };
     const normalized = normalizeModelCompat(model);
-    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsDeveloperRole(normalized)).toBe(true);
   });
 
   it("preserves explicit supportsUsageInStreaming true on non-native endpoints", () => {

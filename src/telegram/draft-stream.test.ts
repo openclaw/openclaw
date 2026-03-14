@@ -1,6 +1,7 @@
 import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTelegramDraftStream } from "./draft-stream.js";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
+import { __testing, createTelegramDraftStream } from "./draft-stream.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
 
@@ -52,6 +53,22 @@ function expectDmMessagePreviewViaSendMessage(
   expect(api.editMessageText).not.toHaveBeenCalled();
 }
 
+async function createDmDraftTransportStream(params: {
+  api?: ReturnType<typeof createMockDraftApi>;
+  previewTransport?: "draft" | "message";
+  warn?: (message: string) => void;
+}) {
+  const api = params.api ?? createMockDraftApi();
+  const stream = createDraftStream(api, {
+    thread: { id: 42, scope: "dm" },
+    previewTransport: params.previewTransport ?? "draft",
+    ...(params.warn ? { warn: params.warn } : {}),
+  });
+  stream.update("Hello");
+  await stream.flush();
+  return { api, stream };
+}
+
 function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
   const api = createMockDraftApi();
   api.sendMessage
@@ -65,6 +82,10 @@ function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
 }
 
 describe("createTelegramDraftStream", () => {
+  afterEach(() => {
+    __testing.resetTelegramDraftStreamForTests();
+  });
+
   it("sends stream preview message with message_thread_id when provided", async () => {
     const api = createMockDraftApi();
     const stream = createForumDraftStream(api);
@@ -134,14 +155,7 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("supports forcing message transport in dm threads", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, {
-      thread: { id: 42, scope: "dm" },
-      previewTransport: "message",
-    });
-
-    stream.update("Hello");
-    await stream.flush();
+    const { api } = await createDmDraftTransportStream({ previewTransport: "message" });
 
     expectDmMessagePreviewViaSendMessage(api);
     expect(api.sendMessageDraft).not.toHaveBeenCalled();
@@ -151,14 +165,7 @@ describe("createTelegramDraftStream", () => {
     const api = createMockDraftApi();
     delete (api as { sendMessageDraft?: unknown }).sendMessageDraft;
     const warn = vi.fn();
-    const stream = createDraftStream(api, {
-      thread: { id: 42, scope: "dm" },
-      previewTransport: "draft",
-      warn,
-    });
-
-    stream.update("Hello");
-    await stream.flush();
+    await createDmDraftTransportStream({ api, warn });
 
     expectDmMessagePreviewViaSendMessage(api);
     expect(warn).toHaveBeenCalledWith(
@@ -174,14 +181,7 @@ describe("createTelegramDraftStream", () => {
       ),
     );
     const warn = vi.fn();
-    const stream = createDraftStream(api, {
-      thread: { id: 42, scope: "dm" },
-      previewTransport: "draft",
-      warn,
-    });
-
-    stream.update("Hello");
-    await stream.flush();
+    const { stream } = await createDmDraftTransportStream({ api, warn });
 
     expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
     expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
@@ -355,6 +355,46 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
+  it("shares draft-id allocation across distinct module instances", async () => {
+    const draftA = await importFreshModule<typeof import("./draft-stream.js")>(
+      import.meta.url,
+      "./draft-stream.js?scope=shared-a",
+    );
+    const draftB = await importFreshModule<typeof import("./draft-stream.js")>(
+      import.meta.url,
+      "./draft-stream.js?scope=shared-b",
+    );
+    const apiA = createMockDraftApi();
+    const apiB = createMockDraftApi();
+
+    draftA.__testing.resetTelegramDraftStreamForTests();
+
+    try {
+      const streamA = draftA.createTelegramDraftStream({
+        api: apiA as unknown as Bot["api"],
+        chatId: 123,
+        thread: { id: 42, scope: "dm" },
+        previewTransport: "draft",
+      });
+      const streamB = draftB.createTelegramDraftStream({
+        api: apiB as unknown as Bot["api"],
+        chatId: 123,
+        thread: { id: 42, scope: "dm" },
+        previewTransport: "draft",
+      });
+
+      streamA.update("Message A");
+      await streamA.flush();
+      streamB.update("Message B");
+      await streamB.flush();
+
+      expect(apiA.sendMessageDraft.mock.calls[0]?.[1]).toBe(1);
+      expect(apiB.sendMessageDraft.mock.calls[0]?.[1]).toBe(2);
+    } finally {
+      draftA.__testing.resetTelegramDraftStreamForTests();
+    }
+  });
+
   it("creates new message after forceNewMessage is called", async () => {
     const { api, stream } = createForceNewMessageHarness();
 
@@ -447,32 +487,30 @@ describe("createTelegramDraftStream", () => {
     expect(stream.sendMayHaveLanded?.()).toBe(true);
   });
 
-  it("clears sendMayHaveLanded on pre-connect first preview send failures", async () => {
+  async function expectSendMayHaveLandedStateAfterFirstFailure(error: Error, expected: boolean) {
     const api = createMockDraftApi();
-    api.sendMessage.mockRejectedValueOnce(
-      Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
-    );
+    api.sendMessage.mockRejectedValueOnce(error);
     const stream = createDraftStream(api);
 
     stream.update("Hello");
     await stream.flush();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(stream.sendMayHaveLanded?.()).toBe(false);
+    expect(stream.sendMayHaveLanded?.()).toBe(expected);
+  }
+
+  it("clears sendMayHaveLanded on pre-connect first preview send failures", async () => {
+    await expectSendMayHaveLandedStateAfterFirstFailure(
+      Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+      false,
+    );
   });
 
   it("clears sendMayHaveLanded on Telegram 4xx client rejections", async () => {
-    const api = createMockDraftApi();
-    api.sendMessage.mockRejectedValueOnce(
+    await expectSendMayHaveLandedStateAfterFirstFailure(
       Object.assign(new Error("403: Forbidden"), { error_code: 403 }),
+      false,
     );
-    const stream = createDraftStream(api);
-
-    stream.update("Hello");
-    await stream.flush();
-
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(stream.sendMayHaveLanded?.()).toBe(false);
   });
 
   it("supports rendered previews with parse_mode", async () => {

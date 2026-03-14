@@ -59,13 +59,14 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
   // leave compat unchanged and let default native behavior apply.
-  // Note: explicit true values are intentionally overridden for developer role
-  // on non-native endpoints for safety.
   const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
   if (!needsForce) {
     return model;
   }
-  if (compat?.supportsDeveloperRole === false) {
+
+  // Respect explicit user opt-in for developer role on known-compatible
+  // custom endpoints.
+  if (compat?.supportsDeveloperRole === true || compat?.supportsDeveloperRole === false) {
     return model;
   }
 
