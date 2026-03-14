@@ -34,6 +34,7 @@ describe("resolveGatewayRuntimeConfig", () => {
       },
       {
         name: "loopback binding with 127.0.0.1 proxy",
+        host: "127.0.0.1",
         cfg: {
           gateway: {
             bind: "loopback" as const,
@@ -45,6 +46,7 @@ describe("resolveGatewayRuntimeConfig", () => {
       },
       {
         name: "loopback binding with ::1 proxy",
+        host: "127.0.0.1",
         cfg: {
           gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: ["::1"] },
         },
@@ -52,6 +54,7 @@ describe("resolveGatewayRuntimeConfig", () => {
       },
       {
         name: "loopback binding with loopback cidr proxy",
+        host: "127.0.0.1",
         cfg: {
           gateway: {
             bind: "loopback" as const,
@@ -61,8 +64,8 @@ describe("resolveGatewayRuntimeConfig", () => {
         },
         expectedBindHost: "127.0.0.1",
       },
-    ])("allows $name", async ({ cfg, expectedBindHost }) => {
-      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+    ])("allows $name", async ({ cfg, expectedBindHost, host }) => {
+      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789, host });
       expect(result.authMode).toBe("trusted-proxy");
       expect(result.bindHost).toBe(expectedBindHost);
     });
@@ -70,6 +73,7 @@ describe("resolveGatewayRuntimeConfig", () => {
     it.each([
       {
         name: "loopback binding without trusted proxies",
+        host: "127.0.0.1",
         cfg: {
           gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: [] },
         },
@@ -78,6 +82,7 @@ describe("resolveGatewayRuntimeConfig", () => {
       },
       {
         name: "loopback binding without loopback trusted proxy",
+        host: "127.0.0.1",
         cfg: {
           gateway: {
             bind: "loopback" as const,
@@ -101,8 +106,8 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedMessage:
           "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
       },
-    ])("rejects $name", async ({ cfg, expectedMessage }) => {
-      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789 })).rejects.toThrow(
+    ])("rejects $name", async ({ cfg, expectedMessage, host }) => {
+      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789, host })).rejects.toThrow(
         expectedMessage,
       );
     });
@@ -139,12 +144,13 @@ describe("resolveGatewayRuntimeConfig", () => {
       },
       {
         name: "loopback binding with explicit none auth",
+        host: "127.0.0.1",
         cfg: { gateway: { bind: "loopback" as const, auth: { mode: "none" as const } } },
         expectedAuthMode: "none",
         expectedBindHost: "127.0.0.1",
       },
-    ])("allows $name", async ({ cfg, expectedAuthMode, expectedBindHost }) => {
-      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+    ])("allows $name", async ({ cfg, expectedAuthMode, expectedBindHost, host }) => {
+      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789, host });
       expect(result.authMode).toBe(expectedAuthMode);
       expect(result.bindHost).toBe(expectedBindHost);
     });
@@ -286,6 +292,7 @@ describe("resolveGatewayRuntimeConfig", () => {
             },
           },
         },
+        host: "127.0.0.1",
         port: 18789,
       });
 
