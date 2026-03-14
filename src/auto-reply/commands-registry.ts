@@ -523,6 +523,9 @@ export function shouldHandleTextCommands(params: ShouldHandleTextCommandsParams)
   if (params.commandSource === "native") {
     return true;
   }
+  if (params.cfg.commands?.text === false && params.cfg.commands?.textForce) {
+    return false;
+  }
   if (params.cfg.commands?.text !== false) {
     return true;
   }
