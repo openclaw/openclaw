@@ -260,6 +260,7 @@ export function createMqttHooksService(params: {
           return;
         }
 
+        // Enforce payload size before computing dedupe hash to reject oversized payloads early
         try {
           assertMqttPayloadSize({
             subscriptionId: processableSubscriptions[0].id,
@@ -328,6 +329,7 @@ export function createMqttHooksService(params: {
       }
       runToken += 1;
       stopped = true;
+      // Guard the startup retained timer during shutdown to prevent late timer firing
       clearStartupGuardTimer();
       startupRetainedGuard = false;
 
