@@ -9,8 +9,6 @@ const INTERIM_EXECUTION_HINTS = [
   "i will gather",
   "working on it",
   "retrying now",
-  "should be about",
-  "should have your summary",
   "auto-announce when done",
 ] as const;
 

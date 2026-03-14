@@ -13,6 +13,10 @@ describe("isLikelyInterimExecutionMessage", () => {
     expect(
       isLikelyInterimExecutionMessage("Here are the final results and the next concrete steps."),
     ).toBe(false);
+    expect(isLikelyInterimExecutionMessage("The total should be about $40.")).toBe(false);
+    expect(isLikelyInterimExecutionMessage("You should have your summary ready by tomorrow.")).toBe(
+      false,
+    );
   });
 
   it("rejects empty text", () => {
