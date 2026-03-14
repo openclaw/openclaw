@@ -401,7 +401,12 @@ _${rootCmd}_root_completion() {
 
 ${generateZshSubcommands(program, rootCmd)}
 
-compdef _${rootCmd}_root_completion ${rootCmd}
+if ! (( $+functions[compdef] )); then
+  autoload -Uz compinit
+  compinit -i -C >/dev/null 2>&1
+fi
+
+(( $+functions[compdef] )) && compdef _${rootCmd}_root_completion ${rootCmd}
 `;
   return script;
 }
