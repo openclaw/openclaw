@@ -249,6 +249,7 @@ export function renderChatControls(state: AppViewState) {
       <circle cx="12" cy="12" r="3"></circle>
     </svg>
   `;
+  const sessionOptions = state.sessionsResult?.sessions ?? [];
   return html`
     <div class="chat-controls">
       <label class="field chat-controls__session">
