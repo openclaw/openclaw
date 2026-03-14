@@ -193,6 +193,8 @@ type BindingScope = {
 
 type EvaluatedBindingsCache = {
   bindingsRef: OpenClawConfig["bindings"];
+  channelsRef: OpenClawConfig["channels"];
+  agentsRef: OpenClawConfig["agents"];
   byChannel: Map<string, EvaluatedBindingsByChannel>;
   byChannelAccount: Map<string, EvaluatedBinding[]>;
   byChannelAccountIndex: Map<string, EvaluatedBindingsIndex>;
@@ -204,6 +206,7 @@ const resolvedRouteCacheByCfg = new WeakMap<
   OpenClawConfig,
   {
     bindingsRef: OpenClawConfig["bindings"];
+    channelsRef: OpenClawConfig["channels"];
     agentsRef: OpenClawConfig["agents"];
     sessionRef: OpenClawConfig["session"];
     byKey: Map<string, ResolvedAgentRoute>;
@@ -416,12 +419,19 @@ function getEvaluatedBindingsForChannelAccount(
   accountId: string,
 ): EvaluatedBinding[] {
   const bindingsRef = cfg.bindings;
+  const channelsRef = cfg.channels;
+  const agentsRef = cfg.agents;
   const existing = evaluatedBindingsCacheByCfg.get(cfg);
   const cache =
-    existing && existing.bindingsRef === bindingsRef
+    existing &&
+    existing.bindingsRef === bindingsRef &&
+    existing.channelsRef === channelsRef &&
+    existing.agentsRef === agentsRef
       ? existing
       : {
           bindingsRef,
+          channelsRef,
+          agentsRef,
           byChannel: buildEvaluatedBindingsByChannel(cfg),
           byChannelAccount: new Map<string, EvaluatedBinding[]>(),
           byChannelAccountIndex: new Map<string, EvaluatedBindingsIndex>(),
@@ -510,6 +520,7 @@ function resolveRouteCacheForConfig(cfg: OpenClawConfig): Map<string, ResolvedAg
   if (
     existing &&
     existing.bindingsRef === cfg.bindings &&
+    existing.channelsRef === cfg.channels &&
     existing.agentsRef === cfg.agents &&
     existing.sessionRef === cfg.session
   ) {
@@ -518,6 +529,7 @@ function resolveRouteCacheForConfig(cfg: OpenClawConfig): Map<string, ResolvedAg
   const byKey = new Map<string, ResolvedAgentRoute>();
   resolvedRouteCacheByCfg.set(cfg, {
     bindingsRef: cfg.bindings,
+    channelsRef: cfg.channels,
     agentsRef: cfg.agents,
     sessionRef: cfg.session,
     byKey,

@@ -1,6 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
-import { listRouteBindings } from "../config/bindings.js";
+import { listRouteBindings, synthesizeDiscordAccountBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
@@ -15,7 +15,9 @@ function normalizeBindingChannelId(raw?: string | null): string | null {
 }
 
 export function listBindings(cfg: OpenClawConfig): AgentRouteBinding[] {
-  return listRouteBindings(cfg);
+  const explicit = listRouteBindings(cfg);
+  const synthesized = synthesizeDiscordAccountBindings(cfg, explicit);
+  return [...explicit, ...synthesized];
 }
 
 function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
