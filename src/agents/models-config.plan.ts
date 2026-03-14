@@ -33,12 +33,24 @@ async function resolveProvidersForModelsJson(params: {
 }): Promise<Record<string, ProviderConfig>> {
   const { cfg, agentDir, env } = params;
   const explicitProviders = cfg.models?.providers ?? {};
+  const hasExplicitProviders = Object.keys(explicitProviders).length > 0;
+
+  // When explicit providers are configured, skip implicit discovery entirely
+  // to avoid unrelated outbound API calls / latency (#33327).
+  if (hasExplicitProviders) {
+    return mergeProviders({
+      implicit: undefined,
+      explicit: explicitProviders,
+    });
+  }
+
   const implicitProviders = await resolveImplicitProviders({
     agentDir,
     config: cfg,
     env,
     explicitProviders,
   });
+
   return mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,
@@ -65,6 +77,7 @@ async function resolveProvidersForMode(params: {
   providers: Record<string, ProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
   explicitBaseUrlProviders: ReadonlySet<string>;
+  hasExplicitProviders?: boolean;
 }): Promise<Record<string, ProviderConfig>> {
   if (params.mode !== "merge") {
     return params.providers;
@@ -73,10 +86,21 @@ async function resolveProvidersForMode(params: {
   if (!isRecord(existing) || !isRecord(existing.providers)) {
     return params.providers;
   }
-  const existingProviders = existing.providers as Record<
+  let existingProviders = existing.providers as Record<
     string,
     NonNullable<ModelsConfig["providers"]>[string]
   >;
+
+  // When explicit providers are configured, prune previously-written implicit
+  // providers from the existing models.json that are no longer in the resolved
+  // set, so stale auto-detected entries do not remain routable (#33327).
+  if (params.hasExplicitProviders) {
+    const nextKeys = new Set(Object.keys(params.providers));
+    existingProviders = Object.fromEntries(
+      Object.entries(existingProviders).filter(([key]) => nextKeys.has(key)),
+    );
+  }
+
   return mergeWithExistingProviderSecrets({
     nextProviders: params.providers,
     existingProviders: existingProviders as Record<string, ExistingProviderConfig>,
@@ -112,12 +136,14 @@ export async function planOpenClawModelsJson(params: {
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? providers;
+  const hasExplicitProviders = Object.keys(cfg.models?.providers ?? {}).length > 0;
   const mergedProviders = await resolveProvidersForMode({
     mode,
     existingParsed: params.existingParsed,
     providers: normalizedProviders,
     secretRefManagedProviders,
     explicitBaseUrlProviders: resolveExplicitBaseUrlProviders(cfg.models),
+    hasExplicitProviders,
   });
   const secretEnforcedProviders =
     enforceSourceManagedProviderSecrets({
