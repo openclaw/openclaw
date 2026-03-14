@@ -279,9 +279,28 @@ function isExtensionFile(filePath: string): boolean {
   return !filePath.endsWith(".d.ts");
 }
 
+const IGNORED_SCAN_DIRS = new Set([
+  "node_modules",
+  ".git",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".mypy_cache",
+  ".pytest_cache",
+  "browser_data",
+  ".cache",
+  "dist",
+  "build",
+  ".next",
+  ".nuxt",
+]);
+
 function shouldIgnoreScannedDirectory(dirName: string): boolean {
   const normalized = dirName.trim().toLowerCase();
   if (!normalized) {
+    return true;
+  }
+  if (IGNORED_SCAN_DIRS.has(normalized)) {
     return true;
   }
   if (normalized.endsWith(".bak")) {
@@ -463,8 +482,19 @@ function discoverInDirectory(params: {
     if (!entry.isDirectory()) {
       continue;
     }
-    if (shouldIgnoreScannedDirectory(entry.name)) {
+    // Always ignore .git and node_modules at any depth.
+    // For other common build directories, skip only when there's no manifest
+    // — a real plugin could legitimately be named "dist", "build", etc.
+    const dirLower = entry.name.trim().toLowerCase();
+    if (dirLower === "node_modules" || dirLower === ".git") {
       continue;
+    }
+    if (shouldIgnoreScannedDirectory(entry.name)) {
+      // Check if there's a manifest before skipping — don't ignore real plugins
+      const hasManifest = fs.existsSync(path.join(fullPath, "package.json"));
+      if (!hasManifest) {
+        continue;
+      }
     }
 
     const rejectHardlinks = params.origin !== "bundled";
