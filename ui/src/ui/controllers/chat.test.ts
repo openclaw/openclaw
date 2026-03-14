@@ -4,6 +4,7 @@ import {
   abortChatRun,
   handleChatEvent,
   loadChatHistory,
+  resetStalledChatStream,
   sendChatMessage,
   type ChatEventPayload,
   type ChatState,
@@ -19,6 +20,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
+    chatStreamLastActivityAt: null,
     chatThinkingLevel: null,
     client: null,
     connected: true,
@@ -629,5 +631,82 @@ describe("loadChatHistory", () => {
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
+  });
+});
+
+describe("resetStalledChatStream", () => {
+  it("returns false when no active run", () => {
+    const state = createState();
+    expect(resetStalledChatStream(state)).toBe(false);
+  });
+
+  it("returns false when stream is within timeout", () => {
+    const now = Date.now();
+    const state = createState({
+      chatRunId: "run-1",
+      chatStreamStartedAt: now - 10_000,
+      chatStreamLastActivityAt: now - 10_000,
+    });
+    expect(resetStalledChatStream(state, now)).toBe(false);
+    expect(state.chatRunId).toBe("run-1");
+  });
+
+  it("resets stalled stream after timeout and preserves partial text", () => {
+    const now = Date.now();
+    const state = createState({
+      chatRunId: "run-1",
+      chatStream: "Partial response so far",
+      chatStreamStartedAt: now - 120_000,
+      chatStreamLastActivityAt: now - 70_000,
+    });
+    expect(resetStalledChatStream(state, now)).toBe(true);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+    expect(state.chatStreamLastActivityAt).toBe(null);
+    expect(state.lastError).toBe("Response timed out. Please try again.");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Partial response so far" }],
+    });
+  });
+
+  it("resets stalled stream without preserving empty text", () => {
+    const now = Date.now();
+    const state = createState({
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: now - 120_000,
+      chatStreamLastActivityAt: now - 70_000,
+    });
+    expect(resetStalledChatStream(state, now)).toBe(true);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatMessages).toEqual([]);
+    expect(state.lastError).toBe("Response timed out. Please try again.");
+  });
+
+  it("uses chatStreamStartedAt when no lastActivity recorded", () => {
+    const now = Date.now();
+    const state = createState({
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamStartedAt: now - 70_000,
+      chatStreamLastActivityAt: null,
+    });
+    expect(resetStalledChatStream(state, now)).toBe(true);
+    expect(state.chatRunId).toBe(null);
+  });
+
+  it("does not preserve NO_REPLY stream text", () => {
+    const now = Date.now();
+    const state = createState({
+      chatRunId: "run-1",
+      chatStream: "NO_REPLY",
+      chatStreamStartedAt: now - 120_000,
+      chatStreamLastActivityAt: now - 70_000,
+    });
+    expect(resetStalledChatStream(state, now)).toBe(true);
+    expect(state.chatMessages).toEqual([]);
   });
 });
