@@ -168,6 +168,7 @@ export function createFollowupRunner(params: {
           }),
           run: async (provider, model, runOptions) => {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
+            let attemptCompactionCount = 0;
             try {
               const result = await runEmbeddedPiAgent({
                 sessionId: queued.run.sessionId,
