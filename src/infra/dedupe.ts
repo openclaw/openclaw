@@ -2,6 +2,7 @@ import { pruneMapToMaxSize } from "./map-size.js";
 
 export type DedupeCache = {
   check: (key: string | undefined | null, now?: number) => boolean;
+  mark: (key: string | undefined | null, now?: number) => boolean;
   peek: (key: string | undefined | null, now?: number) => boolean;
   delete: (key: string | undefined | null) => void;
   clear: () => void;
@@ -65,6 +66,14 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
       touch(key, now);
       prune(now);
       return false;
+    },
+    mark: (key, now = Date.now()) => {
+      if (!key) {
+        return false;
+      }
+      touch(key, now);
+      prune(now);
+      return true;
     },
     peek: (key, now = Date.now()) => {
       if (!key) {

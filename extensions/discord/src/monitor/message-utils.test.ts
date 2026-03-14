@@ -20,6 +20,7 @@ vi.mock("../../../../src/globals.js", () => ({
 const {
   __resetDiscordChannelInfoCacheForTest,
   resolveDiscordChannelInfo,
+  resolveDiscordFallbackChannelType,
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
   resolveForwardedMediaList,
@@ -139,6 +140,28 @@ describe("resolveDiscordMessageChannelId", () => {
     },
   ] as const)("$name", ({ params, expected }) => {
     expect(resolveDiscordMessageChannelId(params)).toBe(expected);
+  });
+});
+
+describe("resolveDiscordFallbackChannelType", () => {
+  it("reads channel type from message.channel when present", () => {
+    expect(
+      resolveDiscordFallbackChannelType(
+        asMessage({
+          channel: { type: ChannelType.DM },
+        }),
+      ),
+    ).toBe(ChannelType.DM);
+  });
+
+  it("falls back to rawData.type", () => {
+    expect(
+      resolveDiscordFallbackChannelType(
+        asMessage({
+          rawData: { type: ChannelType.GroupDM },
+        }),
+      ),
+    ).toBe(ChannelType.GroupDM);
   });
 });
 

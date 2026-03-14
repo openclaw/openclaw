@@ -98,7 +98,9 @@ export async function runDiscordGatewayLifecycle(params: {
       return;
     }
     gatewayEmitter?.once("error", () => {});
-    gateway.options.reconnect = { maxAttempts: 0 };
+    // Let the gateway disconnect cleanly. Forcing maxAttempts=0 here can turn a
+    // normal close into a fatal reconnect error inside Carbon and crash the
+    // whole Gateway process.
     gateway.disconnect();
   };
 

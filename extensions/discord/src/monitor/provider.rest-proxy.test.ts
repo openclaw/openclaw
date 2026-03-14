@@ -1,5 +1,6 @@
+import { RequestClient } from "@buape/carbon";
 import { describe, expect, it, vi } from "vitest";
-import { resolveDiscordRestFetch } from "./rest-fetch.js";
+import { patchDiscordRequestClientFetch, resolveDiscordRestFetch } from "./rest-fetch.js";
 
 const { undiciFetchMock, proxyAgentSpy } = vi.hoisted(() => ({
   undiciFetchMock: vi.fn(),
@@ -58,5 +59,39 @@ describe("resolveDiscordRestFetch", () => {
     expect(fetcher).toBe(fetch);
     expect(runtime.error).toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("patches RequestClient instances to use the proxy fetcher", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } as const;
+    undiciFetchMock.mockClear().mockResolvedValue(
+      new Response(JSON.stringify({ id: "123" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    proxyAgentSpy.mockClear();
+
+    const fetcher = resolveDiscordRestFetch("http://proxy.test:8080", runtime);
+    const rest = patchDiscordRequestClientFetch(
+      new RequestClient("token", {
+        baseUrl: "https://discord.com/api/v10",
+        queueRequests: false,
+      }),
+      fetcher,
+    );
+
+    await rest.get("/channels/123");
+
+    expect(proxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(undiciFetchMock).toHaveBeenCalledWith(
+      "https://discord.com/api/v10/channels/123",
+      expect.objectContaining({
+        dispatcher: expect.objectContaining({ proxyUrl: "http://proxy.test:8080" }),
+      }),
+    );
   });
 });

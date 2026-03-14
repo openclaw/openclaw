@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver-runtime.js";
 import {
   createAgentEventHandler,
   createChatRunState,
@@ -20,6 +21,10 @@ vi.mock("../infra/heartbeat-visibility.js", () => ({
   })),
 }));
 
+vi.mock("../infra/outbound/deliver-runtime.js", () => ({
+  deliverOutboundPayloads: vi.fn(() => Promise.resolve([])),
+}));
+
 describe("agent event handler", () => {
   beforeEach(() => {
     vi.mocked(loadConfig).mockReturnValue({});
@@ -33,6 +38,7 @@ describe("agent event handler", () => {
 
   afterEach(() => {
     resetAgentRunContextForTest();
+    vi.mocked(deliverOutboundPayloads).mockClear();
   });
 
   function createHarness(params?: {
@@ -263,6 +269,77 @@ describe("agent event handler", () => {
     };
     expect(payload.message?.content?.[0]?.text).toBe("No");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("mirrors webchat-authored final replies only when an explicit mirror target is registered", async () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_300,
+    });
+    chatRunState.registry.add("run-mirror", {
+      sessionKey: "session-mirror",
+      clientRunId: "client-mirror",
+    });
+    registerAgentRunContext("run-mirror", {
+      sessionKey: "session-mirror",
+      webchatMirrorTarget: {
+        channel: "telegram",
+        to: "telegram:12345",
+        accountId: "default",
+        threadId: "42",
+      },
+    });
+
+    handler({
+      runId: "run-mirror",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "mirrored reply" },
+    });
+    emitLifecycleEnd(handler, "run-mirror");
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    const finalPayload = chatCalls.at(-1)?.[1] as { state?: string };
+    expect(finalPayload.state).toBe("final");
+    await vi.waitFor(() =>
+      expect(deliverOutboundPayloads).toHaveBeenCalledWith({
+        cfg: {},
+        channel: "telegram",
+        to: "telegram:12345",
+        accountId: "default",
+        threadId: "42",
+        payloads: [{ text: "mirrored reply" }],
+        bestEffort: true,
+      }),
+    );
+    nowSpy?.mockRestore();
+  });
+
+  it("does not mirror final replies when no webchat mirror target is registered", async () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_400,
+    });
+    chatRunState.registry.add("run-no-mirror", {
+      sessionKey: "session-no-mirror",
+      clientRunId: "client-no-mirror",
+    });
+
+    handler({
+      runId: "run-no-mirror",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "local only" },
+    });
+    emitLifecycleEnd(handler, "run-no-mirror");
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    const finalPayload = chatCalls.at(-1)?.[1] as { state?: string };
+    expect(finalPayload.state).toBe("final");
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     nowSpy?.mockRestore();
   });
 

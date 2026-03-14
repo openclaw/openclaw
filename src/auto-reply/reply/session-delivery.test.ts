@@ -9,14 +9,14 @@ describe("session delivery direct-session routing overrides", () => {
     "agent:main:telegram:dm:123456",
     "agent:main:telegram:direct:123456:thread:99",
     "agent:main:telegram:account-a:direct:123456:topic:ops",
-  ])("lets webchat override persisted routes for strict direct key %s", (sessionKey) => {
+  ])("keeps persisted external routes for strict direct key %s", (sessionKey) => {
     expect(
       resolveLastChannelRaw({
         originatingChannelRaw: "webchat",
         persistedLastChannel: "telegram",
         sessionKey,
       }),
-    ).toBe("webchat");
+    ).toBe("telegram");
     expect(
       resolveLastToRaw({
         originatingChannelRaw: "webchat",
@@ -25,7 +25,7 @@ describe("session delivery direct-session routing overrides", () => {
         persistedLastTo: "123456",
         sessionKey,
       }),
-    ).toBe("session:dashboard");
+    ).toBe("123456");
   });
 
   it.each([

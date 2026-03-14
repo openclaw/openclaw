@@ -63,6 +63,7 @@ import {
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { resolveWebchatMirrorTarget } from "./webchat-mirror.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 
@@ -444,7 +445,15 @@ export const agentHandlers: GatewayRequestHandlers = {
           bestEffortDeliver = true;
         }
       }
-      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+      const webchatMirrorTarget = resolveWebchatMirrorTarget({
+        client: client?.connect?.client,
+        entry: sessionEntry,
+        sessionKey: canonicalSessionKey,
+      });
+      registerAgentRunContext(idem, {
+        sessionKey: canonicalSessionKey,
+        ...(webchatMirrorTarget ? { webchatMirrorTarget } : {}),
+      });
     }
 
     const runId = idem;

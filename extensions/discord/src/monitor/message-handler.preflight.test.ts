@@ -66,6 +66,12 @@ function createPreflightArgs(params: {
   return createDiscordPreflightArgs(params);
 }
 
+function createNullChannelClient(): DiscordClient {
+  return {
+    fetchChannel: async () => null,
+  } as unknown as DiscordClient;
+}
+
 function createThreadClient(params: { threadId: string; parentId: string }): DiscordClient {
   return {
     fetchChannel: async (channelId: string) => {
@@ -88,6 +94,18 @@ function createThreadClient(params: { threadId: string; parentId: string }): Dis
       return null;
     },
   } as unknown as DiscordClient;
+}
+
+function createDirectEvent(params: {
+  channelId: string;
+  author: import("@buape/carbon").Message["author"];
+  message: import("@buape/carbon").Message;
+}): DiscordMessageEvent {
+  return {
+    channel_id: params.channelId,
+    author: params.author,
+    message: params.message,
+  } as unknown as DiscordMessageEvent;
 }
 
 async function runThreadBoundPreflight(params: {
@@ -459,6 +477,82 @@ describe("preflightDiscordMessage", () => {
     expect(result?.threadParentId).toBe(parentId);
     expect(result?.channelConfig?.allowed).toBe(true);
     expect(result?.shouldRequireMention).toBe(false);
+  });
+
+  it("keeps DM routing on the direct path when channel lookup fails", async () => {
+    const channelId = "dm-channel-1";
+    const message = createDiscordMessage({
+      id: "m-dm-1",
+      channelId,
+      content: "hello from dm",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        } as DiscordConfig,
+        data: createDirectEvent({
+          channelId,
+          author: message.author,
+          message,
+        }),
+        client: createNullChannelClient(),
+      }),
+      allowFrom: ["*"],
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.isDirectMessage).toBe(true);
+  });
+
+  it("keeps DM routing on the direct path when channel lookup returns a guild-style type", async () => {
+    const channelId = "dm-channel-guildish";
+    const message = createDiscordMessage({
+      id: "m-dm-guildish",
+      channelId,
+      content: "hello from dm",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          session: {
+            ...DEFAULT_PREFLIGHT_CFG.session,
+            dmScope: "per-channel-peer",
+          },
+        } as import("../../../../src/config/config.js").OpenClawConfig,
+        discordConfig: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        } as DiscordConfig,
+        data: createDirectEvent({
+          channelId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      allowFrom: ["*"],
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.isDirectMessage).toBe(true);
+    expect(result?.route.sessionKey).not.toContain(":discord:channel:");
+    expect(result?.baseSessionKey).not.toContain(":discord:channel:");
   });
 
   it("drops guild messages that mention another user when ignoreOtherMentions=true", async () => {
