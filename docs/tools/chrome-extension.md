@@ -62,7 +62,7 @@ After upgrading OpenClaw:
 
 ## Use it (set gateway token once)
 
-OpenClaw ships with a built-in browser profile named `chrome` that targets the extension relay on the default port.
+OpenClaw ships with a built-in browser profile named `chrome-relay` that targets the extension relay on the default port.
 
 Before first attach, open extension Options and set:
 
@@ -71,8 +71,8 @@ Before first attach, open extension Options and set:
 
 Use it:
 
-- CLI: `openclaw browser --browser-profile chrome tabs`
-- Agent tool: `browser` with `profile="chrome"`
+- CLI: `openclaw browser --browser-profile chrome-relay tabs`
+- Agent tool: `browser` with `profile="chrome-relay"`
 
 If you want a different name or a different relay port, create your own profile:
 
