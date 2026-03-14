@@ -96,7 +96,7 @@ const SKILL_COMMAND_DESCRIPTION_MAX_LENGTH = 100;
 const DEFAULT_MAX_CANDIDATES_PER_ROOT = 300;
 const DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE = 200;
 const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
-const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 30_000;
+const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 50_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
 
 function sanitizeSkillCommandName(raw: string): string {
@@ -556,9 +556,15 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
         hi = mid - 1;
       }
     }
+    const droppedSkills = skillsForPrompt.slice(lo);
     skillsForPrompt = skillsForPrompt.slice(0, lo);
     truncated = true;
     truncatedReason = "chars";
+    skillsLogger.warn(
+      `Skills truncated due to prompt char limit: included ${skillsForPrompt.length} of ${params.skills.length} skills (limit: ${limits.maxSkillsPromptChars} chars). ` +
+        `Dropped: ${droppedSkills.map((s) => s.name).join(", ")}. ` +
+        `Increase skills.limits.maxSkillsPromptChars in config to include all skills.`,
+    );
   }
 
   return { skillsForPrompt, truncated, truncatedReason };
@@ -624,8 +630,15 @@ function resolveWorkspaceSkillPromptState(
     skills: resolvedSkills,
     config: opts?.config,
   });
+  const droppedNames =
+    truncated && skillsForPrompt.length < resolvedSkills.length
+      ? resolvedSkills
+          .slice(skillsForPrompt.length)
+          .map((s) => s.name)
+          .join(", ")
+      : "";
   const truncationNote = truncated
-    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
+    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}.${droppedNames ? ` Dropped: ${droppedNames}.` : ""} Run \`openclaw skills check\` to audit or increase skills.limits.maxSkillsPromptChars in config.`
     : "";
   const prompt = [
     remoteNote,
