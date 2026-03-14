@@ -12,6 +12,7 @@ type SeenIdEntry = {
   candidate: PluginCandidate;
   recordIndex: number;
   declaredChannels: string[];
+  sourcePath: string;
 };
 
 // Precedence: config > workspace > global > bundled
@@ -208,14 +209,22 @@ export function loadPluginManifestRegistry(params: {
 
     const existing = seenIds.get(manifest.id);
     if (existing) {
-      // Check whether both candidates point to the same physical directory
-      // (e.g. via symlinks or different path representations). If so, this
-      // is a false-positive duplicate and can be silently skipped.
+      // Check whether both candidates point to the same physical directory or source file.
+      // This can happen when:
+      // 1. Same plugin discovered via different paths (e.g., symlinks)
+      // 2. Same source file with different rootDir representations
+      // 3. realpath resolution issues on some platforms
+      const sameSource = existing.sourcePath === candidate.source;
       const samePath = existing.candidate.rootDir === candidate.rootDir;
       const samePlugin = (() => {
+        // If source files are identical, it's definitely the same plugin
+        if (sameSource) {
+          return true;
+        }
         if (samePath) {
           return true;
         }
+        // Check if rootDirs resolve to the same physical location
         const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
         const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
         // If either realpath fails, fall back to path comparison for Windows compatibility
@@ -242,6 +251,7 @@ export function loadPluginManifestRegistry(params: {
             candidate,
             recordIndex: existing.recordIndex,
             declaredChannels: manifest.channels ?? [],
+            sourcePath: candidate.source,
           });
         }
         continue;
@@ -268,6 +278,7 @@ export function loadPluginManifestRegistry(params: {
         candidate,
         recordIndex: records.length,
         declaredChannels: manifest.channels ?? [],
+        sourcePath: candidate.source,
       });
     }
 

@@ -451,4 +451,63 @@ describe("loadPluginManifestRegistry", () => {
     // Should emit a duplicate warning because the channels array does NOT contain "alpha"
     expect(countDuplicateWarnings(registry)).toBe(1);
   });
+
+  it("suppresses duplicate warning when candidates have identical source file path", () => {
+    // This tests the fix for issue #45951:
+    // Same source file discovered multiple times should not trigger duplicate warning,
+    // even if rootDir representations differ.
+    const dir = makeTempDir();
+    const manifest = { id: "same-source-plugin", configSchema: { type: "object" } };
+    writeManifest(dir, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "same-source-plugin",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+      // Same source file, same rootDir - should be detected as duplicate and skipped
+      createPluginCandidate({
+        idHint: "same-source-plugin",
+        rootDir: dir,
+        origin: "global",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    // Should NOT emit a duplicate warning because both point to the same source file
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    // Should only have one plugin entry
+    expect(registry.plugins.length).toBe(1);
+  });
+
+  it("suppresses duplicate warning when source paths are identical but rootDir differs", () => {
+    // Edge case: same source file with different rootDir representations
+    // (e.g., one with trailing slash, one without, or different case on Windows)
+    const dir = makeTempDir();
+    const manifest = { id: "path-variant-plugin", configSchema: { type: "object" } };
+    writeManifest(dir, manifest);
+
+    // Create two candidates with same source but different rootDir string representations
+    // Note: On most systems, path.resolve normalizes these, but we want to be safe
+    const sourcePath = path.join(dir, "index.ts");
+    const candidates: PluginCandidate[] = [
+      {
+        idHint: "path-variant-plugin",
+        source: sourcePath,
+        rootDir: dir,
+        origin: "bundled",
+      },
+      {
+        idHint: "path-variant-plugin",
+        source: sourcePath, // Same source
+        rootDir: path.resolve(dir), // Different string representation but resolves to same
+        origin: "global",
+      },
+    ];
+
+    const registry = loadRegistry(candidates);
+    // Should NOT emit a duplicate warning
+    expect(countDuplicateWarnings(registry)).toBe(0);
+  });
 });
