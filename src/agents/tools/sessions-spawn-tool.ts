@@ -1,13 +1,14 @@
 import { Type } from "@sinclair/typebox";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
+import { CLAUDE_CODE_SPAWN_MODES, spawnClaudeCodeDirect } from "../claude-code-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 
-const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
+const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp", "claude-code"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "target",
@@ -75,7 +76,7 @@ export function createSessionsSpawnTool(
     label: "Sessions",
     name: "sessions_spawn",
     description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
+      'Spawn an isolated session (runtime="subagent", runtime="acp", or runtime="claude-code"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -89,7 +90,8 @@ export function createSessionsSpawnTool(
       }
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
-      const runtime = params.runtime === "acp" ? "acp" : "subagent";
+      const runtime =
+        params.runtime === "acp" || params.runtime === "claude-code" ? params.runtime : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
@@ -125,6 +127,35 @@ export function createSessionsSpawnTool(
           status: "error",
           error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
         });
+      }
+
+      if (runtime === "claude-code") {
+        if (Array.isArray(attachments) && attachments.length > 0) {
+          return jsonResult({
+            status: "error",
+            error:
+              "attachments are currently unsupported for runtime=claude-code; use runtime=subagent or remove attachments",
+          });
+        }
+        const result = await spawnClaudeCodeDirect(
+          {
+            task,
+            label: label || undefined,
+            cwd,
+            mode: mode && CLAUDE_CODE_SPAWN_MODES.includes(mode) ? mode : undefined,
+            resume: thread,
+            timeoutSeconds: runTimeoutSeconds,
+          },
+          {
+            agentSessionKey: opts?.agentSessionKey,
+            agentChannel: opts?.agentChannel,
+            agentAccountId: opts?.agentAccountId,
+            agentTo: opts?.agentTo,
+            agentThreadId: opts?.agentThreadId,
+            sandboxed: opts?.sandboxed,
+          },
+        );
+        return jsonResult(result);
       }
 
       if (runtime === "acp") {
