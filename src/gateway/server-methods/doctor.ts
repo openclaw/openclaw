@@ -55,6 +55,8 @@ export const doctorHandlers: GatewayRequestHandlers = {
         },
       };
       respond(true, payload, undefined);
+    } finally {
+      await manager.close();
     }
   },
 };
