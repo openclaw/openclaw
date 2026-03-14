@@ -71,6 +71,7 @@ import {
 } from "./server/plugins-http.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { detectSafety, getOnUnsafePolicy, isUnsafe } from "../security/pi-client.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -366,6 +367,37 @@ function buildPluginRequestStages(params: {
   ];
 }
 
+/**
+ * Run Prompt Inspector detection on an incoming hook message.
+ *
+ * Returns an object indicating whether the request should be blocked.
+ * Always fail-open: if detection fails or is unconfigured, `shouldBlock` is false.
+ *
+ * @param message - The hook message text to analyse.
+ * @param context - Label for log messages, e.g. "hook/agent" or "hook/mapping".
+ * @param log     - Subsystem logger for this handler instance.
+ */
+async function runHookMessageDetection(
+  message: string,
+  context: string,
+  log: SubsystemLogger,
+): Promise<{ shouldBlock: boolean }> {
+  const result = await detectSafety(message, context);
+  if (!isUnsafe(result)) {
+    return { shouldBlock: false };
+  }
+  const policy = getOnUnsafePolicy();
+  if (policy === "block") {
+    log.warn(
+      `hook message blocked by prompt injection policy: context=${context} ` +
+        `score=${result.checked ? (result.score ?? "n/a") : "n/a"}`,
+    );
+    return { shouldBlock: true };
+  }
+  // "warn" / "log": detection already emitted a warning inside detectSafety().
+  return { shouldBlock: false };
+}
+
 export function createHooksRequestHandler(
   opts: {
     getHooksConfig: () => HooksConfigResolved | null;
@@ -595,6 +627,17 @@ export function createHooksRequestHandler(
         sessionKey: sessionKey.value,
         targetAgentId,
       });
+      // P0-1: Run prompt injection detection on the hook message before dispatch.
+      // Fail-open: if detection is unavailable, processing continues normally.
+      const piCheckAgent = await runHookMessageDetection(
+        normalized.value.message,
+        "hook/agent",
+        logHooks,
+      );
+      if (piCheckAgent.shouldBlock) {
+        sendJson(res, 400, { ok: false, error: "message rejected by security policy" });
+        return true;
+      }
       const runId = dispatchAgentHook({
         ...normalized.value,
         idempotencyKey,
@@ -677,6 +720,17 @@ export function createHooksRequestHandler(
           const cachedRunId = resolveCachedHookRunId(replayKey, now);
           if (cachedRunId) {
             sendJson(res, 200, { ok: true, runId: cachedRunId });
+            return true;
+          }
+          // P0-1: Run prompt injection detection on the mapped hook message.
+          // Fail-open: if detection is unavailable, processing continues normally.
+          const piCheckMapping = await runHookMessageDetection(
+            mapped.action.message,
+            `hook/mapping:${subPath}`,
+            logHooks,
+          );
+          if (piCheckMapping.shouldBlock) {
+            sendJson(res, 400, { ok: false, error: "message rejected by security policy" });
             return true;
           }
           const runId = dispatchAgentHook({
