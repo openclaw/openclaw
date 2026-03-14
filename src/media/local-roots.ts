@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -51,6 +52,17 @@ export function getAgentScopedMediaLocalRoots(
   const normalizedWorkspaceDir = path.resolve(workspaceDir);
   if (!roots.includes(normalizedWorkspaceDir)) {
     roots.push(normalizedWorkspaceDir);
+  }
+  // When the workspace is a symlink (e.g. virtiofs mount), also add the
+  // realpath-resolved directory so assertLocalMediaAllowed matches files
+  // whose paths were resolved through the symlink.
+  try {
+    const realWorkspaceDir = fs.realpathSync(normalizedWorkspaceDir);
+    if (realWorkspaceDir !== normalizedWorkspaceDir && !roots.includes(realWorkspaceDir)) {
+      roots.push(realWorkspaceDir);
+    }
+  } catch {
+    // Workspace directory may not exist yet — ignore.
   }
   return roots;
 }
