@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { extractToolResultMediaPaths } from "./pi-embedded-subscribe.tools.js";
+import {
+  extractToolResultAudioAsVoice,
+  extractToolResultMediaPaths,
+} from "./pi-embedded-subscribe.tools.js";
 
 describe("extractToolResultMediaPaths", () => {
   it("returns empty array for null/undefined", () => {
@@ -228,5 +231,32 @@ describe("extractToolResultMediaPaths", () => {
       ],
     };
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
+  });
+});
+
+describe("extractToolResultAudioAsVoice", () => {
+  it("reads audioAsVoice from tool-result details", () => {
+    expect(
+      extractToolResultAudioAsVoice({
+        content: [{ type: "text", text: "MEDIA:/tmp/voice.ogg" }],
+        details: { audioAsVoice: true },
+      }),
+    ).toBe(true);
+  });
+
+  it("detects audioAsVoice from inline tags in legacy tool output", () => {
+    expect(
+      extractToolResultAudioAsVoice({
+        content: [{ type: "text", text: "[[audio_as_voice]]\nMEDIA:/tmp/voice.ogg" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when the tool result has no voice marker", () => {
+    expect(
+      extractToolResultAudioAsVoice({
+        content: [{ type: "text", text: "MEDIA:/tmp/voice.ogg" }],
+      }),
+    ).toBe(false);
   });
 });

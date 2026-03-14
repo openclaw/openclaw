@@ -226,7 +226,7 @@ describe("deliverWebReply", () => {
     );
   });
 
-  it("sends audio media as ptt voice note", async () => {
+  it("sends audio media as WhatsApp voice note when requested", async () => {
     const msg = makeMsg();
     (
       loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
@@ -237,7 +237,11 @@ describe("deliverWebReply", () => {
     });
 
     await deliverWebReply({
-      replyResult: { text: "cap", mediaUrl: "http://example.com/a.ogg" },
+      replyResult: {
+        text: "cap",
+        mediaUrl: "http://example.com/a.ogg",
+        audioAsVoice: true,
+      },
       msg,
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
@@ -249,10 +253,118 @@ describe("deliverWebReply", () => {
       expect.objectContaining({
         audio: expect.any(Buffer),
         ptt: true,
-        mimetype: "audio/ogg",
-        caption: "cap",
+        mimetype: "audio/ogg; codecs=opus",
       }),
     );
+    expect(msg.reply).toHaveBeenCalledWith("cap");
+  });
+
+  it("sends opus audio media as WhatsApp voice note when requested", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("aud"),
+      contentType: "audio/opus",
+      kind: "audio",
+      fileName: "voice.opus",
+    });
+
+    await deliverWebReply({
+      replyResult: {
+        text: "cap",
+        mediaUrl: "http://example.com/a.opus",
+        audioAsVoice: true,
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audio: expect.any(Buffer),
+        ptt: true,
+        mimetype: "audio/ogg; codecs=opus",
+      }),
+    );
+    expect(msg.reply).toHaveBeenCalledWith("cap");
+  });
+
+  it("sends non-voice audio without forcing ptt and keeps text as a normal reply", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("aud"),
+      contentType: "audio/mpeg",
+      kind: "audio",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/a.mp3" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audio: expect.any(Buffer),
+        mimetype: "audio/mpeg",
+      }),
+    );
+    expect(msg.sendMedia).not.toHaveBeenCalledWith(expect.objectContaining({ ptt: true }));
+    expect(msg.reply).toHaveBeenCalledWith("cap");
+  });
+
+  it("keeps deferred audio text separate from later media items", async () => {
+    const msg = makeMsg();
+    (loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void })
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("aud"),
+        contentType: "audio/mpeg",
+        kind: "audio",
+      })
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("img"),
+        contentType: "image/jpeg",
+        kind: "image",
+      });
+
+    await deliverWebReply({
+      replyResult: {
+        text: "aaaaaa",
+        mediaUrls: ["http://example.com/a.mp3", "http://example.com/b.jpg"],
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 3,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        audio: expect.any(Buffer),
+        mimetype: "audio/mpeg",
+      }),
+    );
+    expect(msg.sendMedia).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        image: expect.any(Buffer),
+        caption: undefined,
+        mimetype: "image/jpeg",
+      }),
+    );
+    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa");
+    expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa");
   });
 
   it("sends video media", async () => {

@@ -330,19 +330,29 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     return `\`\`\`txt\n${trimmed}\n\`\`\``;
   };
-  const emitToolResultMessage = (toolName: string | undefined, message: string) => {
+  const emitToolResultMessage = (
+    toolName: string | undefined,
+    message: string,
+    audioAsVoice?: boolean,
+  ) => {
     if (!params.onToolResult) {
       return;
     }
-    const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
+    const {
+      text: cleanedText,
+      mediaUrls,
+      audioAsVoice: parsedAudioAsVoice,
+    } = parseReplyDirectives(message);
     const filteredMediaUrls = filterToolResultMediaUrls(toolName, mediaUrls ?? []);
-    if (!cleanedText && filteredMediaUrls.length === 0) {
+    const resolvedAudioAsVoice = Boolean(audioAsVoice || parsedAudioAsVoice);
+    if (!cleanedText && filteredMediaUrls.length === 0 && !resolvedAudioAsVoice) {
       return;
     }
     try {
       void params.onToolResult({
         text: cleanedText,
         mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+        audioAsVoice: resolvedAudioAsVoice,
       });
     } catch {
       // ignore tool result delivery failures
@@ -354,7 +364,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     });
     emitToolResultMessage(toolName, agg);
   };
-  const emitToolOutput = (toolName?: string, meta?: string, output?: string) => {
+  const emitToolOutput = (
+    toolName?: string,
+    meta?: string,
+    output?: string,
+    audioAsVoice?: boolean,
+  ) => {
     if (!output) {
       return;
     }
@@ -362,7 +377,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       markdown: useMarkdown,
     });
     const message = `${agg}\n${formatToolOutputBlock(output)}`;
-    emitToolResultMessage(toolName, message);
+    emitToolResultMessage(toolName, message, audioAsVoice);
   };
 
   const stripBlockTags = (

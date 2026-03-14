@@ -16,7 +16,11 @@ import {
   optimizeImageToJpeg,
 } from "./media.js";
 
-const convertHeicToJpegMock = vi.fn();
+const { convertHeicToJpegMock, detectMimeMock, runFfprobeMock } = vi.hoisted(() => ({
+  convertHeicToJpegMock: vi.fn(),
+  detectMimeMock: vi.fn(),
+  runFfprobeMock: vi.fn(),
+}));
 
 vi.mock("../media/image-ops.js", async () => {
   const actual =
@@ -24,6 +28,29 @@ vi.mock("../media/image-ops.js", async () => {
   return {
     ...actual,
     convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
+  };
+});
+
+vi.mock("../media/mime.js", async () => {
+  const actual = await vi.importActual<typeof import("../media/mime.js")>("../media/mime.js");
+  detectMimeMock.mockImplementation((...args: Parameters<typeof actual.detectMime>) =>
+    actual.detectMime(...args),
+  );
+  return {
+    ...actual,
+    detectMime: (...args: Parameters<typeof actual.detectMime>) => detectMimeMock(...args),
+  };
+});
+
+vi.mock("../media/ffmpeg-exec.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../media/ffmpeg-exec.js")>("../media/ffmpeg-exec.js");
+  runFfprobeMock.mockImplementation((...args: Parameters<typeof actual.runFfprobe>) =>
+    actual.runFfprobe(...args),
+  );
+  return {
+    ...actual,
+    runFfprobe: (...args: Parameters<typeof actual.runFfprobe>) => runFfprobeMock(...args),
   };
 });
 
@@ -205,6 +232,17 @@ describe("web media loading", () => {
     // Confirm the output is actually JPEG (magic bytes 0xFF 0xD8)
     expect(result.buffer[0]).toBe(0xff);
     expect(result.buffer[1]).toBe(0xd8);
+  });
+
+  it("relabels audio-only webm files as audio before delivery", async () => {
+    const audioOnlyWebmFile = await writeTempFile(Buffer.from("fake-webm"), ".webm");
+    detectMimeMock.mockResolvedValueOnce("video/webm");
+    runFfprobeMock.mockResolvedValueOnce("audio\n");
+
+    const result = await loadWebMedia(audioOnlyWebmFile, 1024 * 1024);
+
+    expect(result.kind).toBe("audio");
+    expect(result.contentType).toBe("audio/webm");
   });
 
   it("includes URL + status in fetch errors", async () => {

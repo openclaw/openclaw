@@ -57,6 +57,7 @@ export async function deliverWebReply(params: {
     : replyResult.mediaUrl
       ? [replyResult.mediaUrl]
       : [];
+  const wantsVoiceNote = replyResult.audioAsVoice === true;
 
   const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 3) => {
     let lastErr: unknown;
@@ -112,6 +113,7 @@ export async function deliverWebReply(params: {
   }
 
   const remainingText = [...textChunks];
+  const deferredAudioText: string[] = [];
 
   // Media (with optional caption on first item)
   for (const [index, mediaUrl] of mediaList.entries()) {
@@ -138,15 +140,21 @@ export async function deliverWebReply(params: {
           "media:image",
         );
       } else if (media.kind === "audio") {
+        if (caption) {
+          deferredAudioText.push(caption);
+        }
         await sendWithRetry(
           () =>
             msg.sendMedia({
               audio: media.buffer,
-              ptt: true,
-              mimetype: media.contentType,
-              caption,
+              ...(wantsVoiceNote ? { ptt: true } : {}),
+              mimetype:
+                wantsVoiceNote &&
+                (media.contentType === "audio/ogg" || media.contentType === "audio/opus")
+                  ? "audio/ogg; codecs=opus"
+                  : media.contentType,
             }),
-          "media:audio",
+          wantsVoiceNote ? "media:voice" : "media:audio",
         );
       } else if (media.kind === "video") {
         await sendWithRetry(
@@ -206,7 +214,7 @@ export async function deliverWebReply(params: {
   }
 
   // Remaining text chunks after media
-  for (const chunk of remainingText) {
+  for (const chunk of [...deferredAudioText, ...remainingText]) {
     await msg.reply(chunk);
   }
 }

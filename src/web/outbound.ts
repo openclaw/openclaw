@@ -6,6 +6,7 @@ import { redactIdentifier } from "../logging/redact-identifier.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { markdownToWhatsApp } from "../markdown/whatsapp.js";
+import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
@@ -59,6 +60,7 @@ export async function sendMessageWhatsApp(
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
+    let audioAsVoice: boolean | undefined;
     if (options.mediaUrl) {
       const media = await loadWebMedia(options.mediaUrl, {
         maxBytes: resolveWhatsAppMediaMaxBytes(account),
@@ -68,11 +70,16 @@ export async function sendMessageWhatsApp(
       mediaBuffer = media.buffer;
       mediaType = media.contentType;
       if (media.kind === "audio") {
-        // WhatsApp expects explicit opus codec for PTT voice notes.
-        mediaType =
-          media.contentType === "audio/ogg"
+        // Only Opus/Ogg audio should be labeled as a WhatsApp voice note.
+        audioAsVoice = isVoiceCompatibleAudio({
+          contentType: media.contentType,
+          fileName: media.fileName ?? options.mediaUrl,
+        });
+        mediaType = audioAsVoice
+          ? media.contentType === "audio/ogg" || media.contentType === "audio/opus"
             ? "audio/ogg; codecs=opus"
-            : (media.contentType ?? "application/octet-stream");
+            : (media.contentType ?? "application/octet-stream")
+          : (media.contentType ?? "application/octet-stream");
       } else if (media.kind === "video") {
         text = caption ?? "";
       } else if (media.kind === "image") {
@@ -88,10 +95,11 @@ export async function sendMessageWhatsApp(
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || accountId || documentFileName
+      options.gifPlayback || accountId || documentFileName || audioAsVoice
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
+            ...(audioAsVoice ? { audioAsVoice: true } : {}),
             accountId,
           }
         : undefined;

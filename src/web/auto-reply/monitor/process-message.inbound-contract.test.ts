@@ -280,7 +280,7 @@ describe("web processMessage inbound contract", () => {
     expect(groupHistories.get("whatsapp:default:group:123@g.us") ?? []).toHaveLength(0);
   });
 
-  it("suppresses non-final WhatsApp payload delivery", async () => {
+  it("suppresses non-final non-media WhatsApp payload delivery", async () => {
     const rememberSentText = vi.fn();
     await processMessage(createWhatsAppDirectStreamingArgs({ rememberSentText }));
 
@@ -298,6 +298,27 @@ describe("web processMessage inbound contract", () => {
     await deliver?.({ text: "final payload" }, { kind: "final" });
     expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
     expect(rememberSentText).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers media-only tool payloads to WhatsApp", async () => {
+    await processMessage(createWhatsAppDirectStreamingArgs());
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const deliver = (capturedDispatchParams as any)?.dispatcherOptions?.deliver as
+      | ((payload: { text?: string; mediaUrl?: string }, info: { kind: "tool" }) => Promise<void>)
+      | undefined;
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.({ text: "MEDIA:/tmp/test.webm", mediaUrl: "/tmp/test.webm" }, { kind: "tool" });
+
+    expect(deliverWebReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          mediaUrl: "/tmp/test.webm",
+          text: undefined,
+        }),
+      }),
+    );
   });
 
   it("forces disableBlockStreaming for WhatsApp dispatch", async () => {

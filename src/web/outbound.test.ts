@@ -105,6 +105,49 @@ describe("web outbound", () => {
       "voice note",
       buf,
       "audio/ogg; codecs=opus",
+      { audioAsVoice: true },
+    );
+  });
+
+  it("maps opus audio to PTT with WhatsApp opus mime", async () => {
+    const buf = Buffer.from("audio");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "audio/opus",
+      kind: "audio",
+      fileName: "voice.opus",
+    });
+    await sendMessageWhatsApp("+1555", "voice note", {
+      verbose: false,
+      mediaUrl: "/tmp/voice.opus",
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "+1555",
+      "voice note",
+      buf,
+      "audio/ogg; codecs=opus",
+      { audioAsVoice: true },
+    );
+  });
+
+  it("keeps webm audio as regular audio", async () => {
+    const buf = Buffer.from("audio");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "audio/webm",
+      kind: "audio",
+    });
+    await sendMessageWhatsApp("+1555", "", {
+      verbose: false,
+      mediaUrl: "/tmp/voice.webm",
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "", buf, "audio/webm");
+    expect(sendMessage).not.toHaveBeenCalledWith(
+      "+1555",
+      "",
+      buf,
+      "audio/webm",
+      expect.objectContaining({ audioAsVoice: true }),
     );
   });
 
