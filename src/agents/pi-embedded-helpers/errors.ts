@@ -276,6 +276,12 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
 }
 
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+// Raw tool XML tags that some models (via OpenRouter) may emit in plain text.
+// Strip both the tags and their content since this is internal protocol. See #45856.
+const TOOL_XML_TAG_RE =
+  /<\s*(?:tool_call|tool_result)[^>]*>[\s\S]*?<\s*\/\s*(?:tool_call|tool_result)\s*>/gi;
+// Also catch self-closing or orphaned opening/closing tags
+const TOOL_XML_ORPHAN_TAG_RE = /<\s*\/?\s*(?:tool_call|tool_result)[^>]*\/?>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -472,7 +478,12 @@ function stripFinalTagsFromText(text: string): string {
   if (!text) {
     return text;
   }
-  return text.replace(FINAL_TAG_RE, "");
+  // Strip <final> tags, then raw <tool_call>/<tool_result> XML that some models emit.
+  // First strip complete tag pairs (with content), then orphaned opening/closing tags.
+  return text
+    .replace(FINAL_TAG_RE, "")
+    .replace(TOOL_XML_TAG_RE, "")
+    .replace(TOOL_XML_ORPHAN_TAG_RE, "");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
