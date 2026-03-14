@@ -158,6 +158,9 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
   <Card title="Bun" href="/install/bun" icon="zap">
     CLI-only usage via the Bun runtime.
   </Card>
+  <Card title="Claworc" href="/install/claworc" icon="/assets/claworc.svg">
+    Orchestrate multiple OpenClaw agents with Docker or Kubernetes.
+  </Card>
 </CardGroup>
 
 ## After install
