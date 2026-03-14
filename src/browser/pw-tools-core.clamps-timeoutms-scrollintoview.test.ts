@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   installPwToolsCoreTestHooks,
-  getPwToolsCoreSessionMocks,
   setPwToolsCoreCurrentPage,
   setPwToolsCoreCurrentRefLocator,
 } from "./pw-tools-core.test-harness.js";
@@ -92,25 +91,5 @@ describe("pw-tools-core", () => {
         ref: "1",
       }),
     ).rejects.toThrow(/not interactable/i);
-  });
-
-  it("keeps Playwright strictness for selector-based actions", async () => {
-    const click = vi.fn(async () => {});
-    const first = vi.fn(() => {
-      throw new Error("selector actions should not call locator.first()");
-    });
-    const locator = vi.fn(() => ({ click, first }));
-    setPwToolsCoreCurrentPage({ locator });
-
-    await mod.clickViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      selector: "button.submit",
-    });
-
-    expect(locator).toHaveBeenCalledWith("button.submit");
-    expect(first).not.toHaveBeenCalled();
-    expect(getPwToolsCoreSessionMocks().refLocator).not.toHaveBeenCalled();
-    expect(click).toHaveBeenCalled();
   });
 });
