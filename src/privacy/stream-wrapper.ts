@@ -218,7 +218,7 @@ function wrapResponseStream<T>(stream: T, ctx: PrivacyFilterContext): T {
   const bufferedRestore = createBufferedRestore(ctx);
   const queued: unknown[] = [];
 
-  const wrapped: AsyncIterable<unknown> & AsyncIterator<unknown> = {
+  const wrappedIterator: AsyncIterable<unknown> & AsyncIterator<unknown> = {
     [Symbol.asyncIterator]() {
       return this;
     },
@@ -254,7 +254,20 @@ function wrapResponseStream<T>(stream: T, ctx: PrivacyFilterContext): T {
     },
   };
 
-  return wrapped as T;
+  const wrappedStream = new Proxy(stream as object, {
+    get(target, prop) {
+      if (prop === Symbol.asyncIterator) {
+        return () => wrappedIterator;
+      }
+      const value = Reflect.get(target, prop, target);
+      if (typeof value === "function") {
+        return value.bind(target);
+      }
+      return value;
+    },
+  });
+
+  return wrappedStream as T;
 }
 
 /** Restore privacy replacements in a single stream chunk. */
