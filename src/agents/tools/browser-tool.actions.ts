@@ -74,7 +74,7 @@ function formatConsoleToolResult(result: {
 }
 
 function isChromeStaleTargetError(profile: string | undefined, err: unknown): boolean {
-  if (profile !== "chrome-relay" && profile !== "chrome") {
+  if (profile !== "chrome-relay" && profile !== "chrome" && profile !== "user") {
     return false;
   }
   const msg = String(err);
@@ -314,7 +314,7 @@ export async function executeActAction(params: {
             })) as { tabs?: unknown[] }
           ).tabs ?? [])
         : await browserTabs(baseUrl, { profile }).catch(() => []);
-      // Some Chrome relay targetIds can go stale between snapshots and actions.
+      // Some user-browser targetIds can go stale between snapshots and actions.
       // Only retry safe read-only actions, and only when exactly one tab remains attached.
       if (retryRequest && canRetryChromeActWithoutTargetId(request) && tabs.length === 1) {
         try {
@@ -334,13 +334,17 @@ export async function executeActAction(params: {
         }
       }
       if (!tabs.length) {
+        // Extension relay profiles need the toolbar icon click; Chrome MCP just needs Chrome running.
+        const isRelayProfile = profile === "chrome-relay" || profile === "chrome";
         throw new Error(
-          "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",
+          isRelayProfile
+            ? "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry."
+            : `No Chrome tabs found for profile="${profile}". Make sure Chrome is running with remote debugging enabled (chrome://inspect/#remote-debugging), approve any attach prompt, and verify open tabs. Then retry.`,
           { cause: err },
         );
       }
       throw new Error(
-        `Chrome tab not found (stale targetId?). Run action=tabs profile="chrome-relay" and use one of the returned targetIds.`,
+        `Chrome tab not found (stale targetId?). Run action=tabs profile="${profile}" and use one of the returned targetIds.`,
         { cause: err },
       );
     }
