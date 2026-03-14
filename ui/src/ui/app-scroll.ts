@@ -14,6 +14,7 @@ type ScrollHost = {
   chatHasAutoScrolled: boolean;
   chatUserNearBottom: boolean;
   chatFollowLocked: boolean;
+  chatSmoothAutoScrolling: boolean;
   chatLastScrollTop: number;
   chatNewMessagesBelow: boolean;
   logsScrollFrame: number | null;
@@ -82,7 +83,10 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
       }
       host.chatUserNearBottom = true;
       host.chatFollowLocked = false;
-      host.chatLastScrollTop = Math.max(0, target.scrollHeight - target.clientHeight);
+      host.chatSmoothAutoScrolling = smoothEnabled;
+      host.chatLastScrollTop = smoothEnabled
+        ? Math.max(target.scrollTop, 0)
+        : Math.max(0, target.scrollHeight - target.clientHeight);
       host.chatNewMessagesBelow = false;
       const retryDelay = effectiveForce ? 150 : 120;
       host.chatScrollTimeout = window.setTimeout(() => {
@@ -99,6 +103,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         latest.scrollTop = latest.scrollHeight;
         host.chatUserNearBottom = true;
         host.chatFollowLocked = false;
+        host.chatSmoothAutoScrolling = false;
         host.chatLastScrollTop = Math.max(0, latest.scrollHeight - latest.clientHeight);
       }, retryDelay);
     });
@@ -138,7 +143,11 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   const scrollingUp = currentScrollTop < host.chatLastScrollTop;
   const backAtBottom = distanceFromBottom <= FOLLOW_REACQUIRE_THRESHOLD;
 
-  if (
+  if (host.chatSmoothAutoScrolling) {
+    if (backAtBottom || !scrollingUp) {
+      host.chatSmoothAutoScrolling = false;
+    }
+  } else if (
     host.chatUserNearBottom &&
     scrollingUp &&
     distanceFromBottom > MANUAL_SCROLL_RELEASE_THRESHOLD
@@ -171,6 +180,7 @@ export function handleChatWheelIntent(host: ScrollHost, event: WheelEvent) {
     return;
   }
   cancelPendingChatScroll(host);
+  host.chatSmoothAutoScrolling = false;
   host.chatUserNearBottom = false;
   host.chatFollowLocked = true;
 }
@@ -188,6 +198,7 @@ export function resetChatScroll(host: ScrollHost) {
   host.chatHasAutoScrolled = false;
   host.chatUserNearBottom = true;
   host.chatFollowLocked = false;
+  host.chatSmoothAutoScrolling = false;
   host.chatLastScrollTop = 0;
   host.chatNewMessagesBelow = false;
 }

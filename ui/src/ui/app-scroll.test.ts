@@ -47,6 +47,7 @@ function createScrollHost(
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
+    chatSmoothAutoScrolling: false,
     chatLastScrollTop: scrollTop,
     chatNewMessagesBelow: false,
     logsScrollFrame: null as number | null,
@@ -335,6 +336,23 @@ describe("scheduleChatScroll", () => {
     expect(host.chatUserNearBottom).toBe(true);
     expect(host.chatFollowLocked).toBe(false);
     expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("does not treat smooth auto-scroll progress as upward manual scroll intent", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1200,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatFollowLocked = false;
+    host.chatSmoothAutoScrolling = true;
+    host.chatLastScrollTop = 1600;
+
+    handleChatScroll(host, createScrollEvent(2000, 1300, 400));
+
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
   });
 });
 

@@ -438,6 +438,7 @@ export class OpenClawApp extends LitElement {
   private chatHasAutoScrolled = false;
   private chatUserNearBottom = true;
   private chatFollowLocked = false;
+  private chatSmoothAutoScrolling = false;
   private chatLastScrollTop = 0;
   @state() chatNewMessagesBelow = false;
   private nodesPollInterval: number | null = null;
