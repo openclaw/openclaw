@@ -1009,7 +1009,8 @@
                   "tools/loop-detection",
                   "tools/reactions",
                   "tools/thinking",
-                  "tools/web"
+                  "tools/web",
+                  "tools/btw"
                 ]
               },
               {
@@ -1033,7 +1034,6 @@
               {
                 "group": "Skills",
                 "pages": [
-                  "tools/btw",
                   "tools/creating-skills",
                   "tools/slash-commands",
                   "tools/skills",
