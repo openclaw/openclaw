@@ -6,7 +6,7 @@ import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
+import { getProfileContext, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   const mapped = toBrowserErrorResponse(err);
@@ -136,10 +136,8 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       ctx,
       run: async (profileCtx) => {
         // Allow runtime headless override via query param (e.g. ?headless=true)
-        const headlessParam = (req.query as Record<string, string>)?.headless;
-        if (headlessParam === "true") {
-          const current = ctx.state();
-          current.resolved.headless = true;
+        const headlessParam = toBoolean(req.query.headless);
+        if (headlessParam) {
           // Headless mode only works with locally-launched profiles (openclaw driver).
           // Extension-based profiles (chrome) attach to an existing browser and cannot be made headless.
           if (profileCtx.profile.driver === "extension") {
@@ -149,6 +147,8 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
               `Headless mode is not supported with extension-based profile "${profileCtx.profile.name}". Use an openclaw-managed profile instead.`,
             );
           }
+          const current = ctx.state();
+          current.resolved.headless = true;
         }
         await profileCtx.ensureBrowserAvailable();
         res.json({ ok: true, profile: profileCtx.profile.name });
