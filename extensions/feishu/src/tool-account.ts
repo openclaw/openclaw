@@ -13,6 +13,11 @@ function normalizeOptionalAccountId(value: string | undefined): string | undefin
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeOptionalMessageChannel(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  return trimmed ? trimmed : undefined;
+}
+
 function readConfiguredDefaultAccountId(config: OpenClawPluginApi["config"]): string | undefined {
   const value = (config?.channels?.feishu as { defaultAccount?: unknown } | undefined)
     ?.defaultAccount;
@@ -39,6 +44,7 @@ export function resolveFeishuToolAccount(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
+  messageChannel?: string;
 }): ResolvedFeishuAccount {
   if (!params.api.config) {
     throw new Error("Feishu config unavailable");
@@ -47,7 +53,9 @@ export function resolveFeishuToolAccount(params: {
     cfg: params.api.config,
     accountId:
       normalizeOptionalAccountId(params.executeParams?.accountId) ??
-      readInheritedFeishuAccountId(params.api.config, params.defaultAccountId) ??
+      (normalizeOptionalMessageChannel(params.messageChannel) === "feishu"
+        ? readInheritedFeishuAccountId(params.api.config, params.defaultAccountId)
+        : undefined) ??
       readConfiguredDefaultAccountId(params.api.config),
   });
 }
@@ -56,6 +64,7 @@ export function createFeishuToolClient(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
+  messageChannel?: string;
 }): Lark.Client {
   return createFeishuClient(resolveFeishuToolAccount(params));
 }
