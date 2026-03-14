@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDecisionSummary } from "./runner.entries.js";
+import { formatDecisionSummary, sanitizeAudioTranscript } from "./runner.entries.js";
 import type { MediaUnderstandingDecision } from "./types.js";
 
 describe("media-understanding formatDecisionSummary guards", () => {
@@ -47,5 +47,21 @@ describe("media-understanding formatDecisionSummary guards", () => {
 
     expect(run).not.toThrow();
     expect(run()).toBe("audio: failed (0/1)");
+  });
+
+  it("drops known whisper subtitle-credit hallucinations", () => {
+    expect(sanitizeAudioTranscript("Субтитры сделал DimaTorzok")).toBe("");
+    expect(sanitizeAudioTranscript("Субтитры сделала DimaTorzok")).toBe("");
+    expect(sanitizeAudioTranscript("Субтитры сделали DimaTorzok")).toBe("");
+    expect(sanitizeAudioTranscript("subtitles by someguy")).toBe("");
+    expect(sanitizeAudioTranscript("translated by cool_name")).toBe("");
+  });
+
+  it("preserves normal speech transcripts", () => {
+    expect(
+      sanitizeAudioTranscript(
+        "Так, давай ты мне сейчас соберешь дайджест из всех хардбитов за ночь.",
+      ),
+    ).toBe("Так, давай ты мне сейчас соберешь дайджест из всех хардбитов за ночь.");
   });
 });
