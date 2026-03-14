@@ -114,6 +114,12 @@ function buildAutoSpawnFailureReply(error: string): ReplyPayload {
   };
 }
 
+function buildAutoSpawnAcceptedReply(): ReplyPayload {
+  return {
+    text: "On it. I started a background run and will report back when it is done.",
+  };
+}
+
 export async function runReplyAgent(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -501,6 +507,11 @@ export async function runReplyAgent(params: {
               ...runResult.meta,
               error: runResult.meta.error,
             },
+          };
+        } else {
+          runResult = {
+            ...runResult,
+            payloads: [buildAutoSpawnAcceptedReply()],
           };
         }
       }

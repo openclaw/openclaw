@@ -203,7 +203,7 @@ describe("runReplyAgent execution-task interim retry", () => {
       }),
     );
     expect(result).toMatchObject({
-      text: "working on it, it'll auto-announce when done",
+      text: "On it. I started a background run and will report back when it is done.",
     });
   });
 
