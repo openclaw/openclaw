@@ -285,11 +285,35 @@ function registerEventHandlers(
   const error = runtime?.error ?? console.error;
   const enqueue = createChatQueue();
 
+  /** Message IDs that were recalled.  Populated synchronously by the recall
+   *  handler so the chatQueue pre-dispatch check can skip them even when the
+   *  dedup cache entry hasn't been written yet (microtask-priority race). */
+  const recalledMessageIds = new Set<string>();
+  const RECALLED_ID_TTL_MS = 5 * 60_000;
+
   /** Normal dispatch - enters per-chat serial queue. */
-  const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
+  const dispatchFeishuMessage = async (event: FeishuMessageEvent, sourceMessageIds?: string[]) => {
     const chatId = event.message.chat_id?.trim() || "unknown";
-    const task = () =>
-      handleFeishuMessage({
+    const task = async () => {
+      // Yield to the event loop so pending recall events (macrotasks from
+      // WebSocket) are processed before we check.  Without this yield, the
+      // chatQueue's Promise .then() microtask drains first and the dedup /
+      // recalledMessageIds entries written by the recall handler are not
+      // visible yet.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      // Check if any source message in this dispatch was recalled while queued.
+      const idsToCheck = sourceMessageIds?.length
+        ? sourceMessageIds
+        : [event.message.message_id?.trim()].filter((id): id is string => Boolean(id));
+      for (const id of idsToCheck) {
+        if (recalledMessageIds.has(id)) {
+          log(`feishu[${accountId}]: skipping queued message — source message ${id} was recalled`);
+          return;
+        }
+      }
+
+      await handleFeishuMessage({
         cfg,
         event,
         botOpenId: botOpenIds.get(accountId),
@@ -298,6 +322,7 @@ function registerEventHandlers(
         chatHistories,
         accountId,
       });
+    };
     await enqueue(chatId, task);
   };
 
@@ -410,6 +435,13 @@ function registerEventHandlers(
       const dedupedEntries = dedupeFeishuDebounceEntriesByMessageId(entries);
       const freshEntries: FeishuMessageEvent[] = [];
       for (const entry of dedupedEntries) {
+        // Skip messages recalled between debounce-enqueue and flush.
+        const entryMsgId = entry.message.message_id?.trim();
+        if (entryMsgId && recalledMessageIds.has(entryMsgId)) {
+          log(`feishu[${accountId}]: filtering recalled message ${entryMsgId} from debounce batch`);
+          tryRecordMessage(`${accountId}:${entryMsgId}`);
+          continue;
+        }
         if (!(await isMessageAlreadyProcessed(entry))) {
           freshEntries.push(entry);
         }
@@ -452,6 +484,11 @@ function registerEventHandlers(
         return;
       }
       await recordSuppressedMessageIds(dedupedEntries, dispatchEntry.message.message_id);
+      // Collect all source message IDs so the chatQueue pre-dispatch check
+      // can skip the merged message if any source was recalled while queued.
+      const sourceMessageIds = freshEntries
+        .map((e) => e.message.message_id?.trim())
+        .filter((id): id is string => Boolean(id));
       const combinedText = freshEntries
         .map((entry) => resolveDebounceText(entry))
         .filter(Boolean)
@@ -461,24 +498,30 @@ function registerEventHandlers(
         botOpenId: botOpenIds.get(accountId),
       });
       if (!combinedText.trim()) {
-        await dispatchFeishuMessage({
+        await dispatchFeishuMessage(
+          {
+            ...dispatchEntry,
+            message: {
+              ...dispatchEntry.message,
+              mentions: mergedMentions ?? dispatchEntry.message.mentions,
+            },
+          },
+          sourceMessageIds,
+        );
+        return;
+      }
+      await dispatchFeishuMessage(
+        {
           ...dispatchEntry,
           message: {
             ...dispatchEntry.message,
+            message_type: "text",
+            content: JSON.stringify({ text: combinedText }),
             mentions: mergedMentions ?? dispatchEntry.message.mentions,
           },
-        });
-        return;
-      }
-      await dispatchFeishuMessage({
-        ...dispatchEntry,
-        message: {
-          ...dispatchEntry.message,
-          message_type: "text",
-          content: JSON.stringify({ text: combinedText }),
-          mentions: mergedMentions ?? dispatchEntry.message.mentions,
         },
-      });
+        sourceMessageIds,
+      );
     },
     onError: (err) => {
       error(`feishu[${accountId}]: inbound debounce flush failed: ${String(err)}`);
@@ -514,6 +557,12 @@ function registerEventHandlers(
         const recalledMessageId = event.message_id?.trim();
         if (!recalledMessageId) return;
         log(`feishu[${accountId}]: message recalled: ${recalledMessageId}`);
+        recalledMessageIds.add(recalledMessageId);
+        const recallCleanupTimer = setTimeout(
+          () => recalledMessageIds.delete(recalledMessageId),
+          RECALLED_ID_TTL_MS,
+        );
+        recallCleanupTimer.unref?.();
 
         // Layer 1: Remove from debounce buffer (message not yet dispatched)
         const removedCount = inboundDebouncer.removeFromBuffer(

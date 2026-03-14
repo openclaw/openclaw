@@ -61,7 +61,10 @@ export function formatPermissionError(params: {
 export function extractFeishuErrorCode(err: unknown): number | undefined {
   if (typeof err !== "object" || err === null) return undefined;
   const code = (err as { code?: number }).code;
-  return typeof code === "number" ? code : undefined;
+  if (typeof code === "number") return code;
+  // Axios-style SDK errors: err.response.data.code
+  const nested = (err as { response?: { data?: { code?: number } } }).response?.data?.code;
+  return typeof nested === "number" ? nested : undefined;
 }
 
 /**

@@ -174,6 +174,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let blockOffset = 0; // cumulative char offset: text before this was delivered in previous blocks
+  let mentionEmitted = false; // only emit @mentions on first card per turn
 
   const startStreaming = () => {
     if (!streamingEnabled || streamingStartPromise || streaming) {
@@ -211,8 +212,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     await partialUpdateQueue;
     if (streaming?.isActive()) {
       let text = streamText;
-      if (mentionTargets?.length) {
+      // When no content was ever delivered (e.g. dispatch produced no reply),
+      // replace the "⏳ Thinking..." placeholder with a fallback message so
+      // the card doesn't stay stuck in a permanent thinking state.
+      if (!text.trim()) {
+        text = "_(No response)_";
+      }
+      if (mentionTargets?.length && !mentionEmitted) {
         text = buildMentionedCardContent(mentionTargets, text);
+        mentionEmitted = true;
       }
       await streaming.close(text);
     }
@@ -231,6 +239,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onReplyStart: () => {
         deliveredFinalTexts.clear();
         blockOffset = 0;
+        mentionEmitted = false;
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }

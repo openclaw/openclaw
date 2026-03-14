@@ -151,20 +151,34 @@ export async function syncContactsFromAPI(params: {
   const client = createFeishuClient(account);
 
   // --- Tier 1: Try users list API ---
-  let users = await collectUsersViaListAPI(
+  const listResult = await collectUsersViaListAPI(
     client,
     { appId: account.appId!, domain: account.domain },
     log,
   );
+  let users = listResult.users;
 
   // --- Tier 2: Fallback to department traversal ---
   if (users.length === 0) {
-    log?.("feishu: list API returned 0 users, falling back to department traversal...");
+    // If tier 1 returned an error and tier 2 also fails, surface the error
+    if (listResult.error) {
+      log?.(
+        `feishu: list API failed (${listResult.error}), falling back to department traversal...`,
+      );
+    } else {
+      log?.("feishu: list API returned 0 users, falling back to department traversal...");
+    }
     const deptIds = await collectDepartmentIds(client, log);
     users = await collectUsersByDepartment(client, deptIds, log);
+
+    // If both tiers returned 0 users and tier 1 had an error, surface it
+    if (users.length === 0 && listResult.error) {
+      return { error: listResult.error };
+    }
   }
 
   // Insert into SQLite
+  const syncedOpenIds = new Set<string>();
   let totalSynced = 0;
   for (const user of users) {
     if (!user.open_id) continue;
@@ -172,7 +186,18 @@ export async function syncContactsFromAPI(params: {
     sqliteExecStrict(
       `INSERT OR REPLACE INTO contacts (open_id, name, en_name, email, mobile, department_name, department_id, job_title, status, updated_at) VALUES ('${esc(user.open_id)}', '${esc(user.name)}', '${esc(user.en_name)}', '${esc(user.email)}', '${esc(user.mobile)}', '${esc(user.department_id)}', '${esc(user.department_id)}', '${esc(user.job_title)}', ${user.is_activated ? 1 : 0}, datetime('now'))`,
     );
+    syncedOpenIds.add(user.open_id);
     totalSynced++;
+  }
+
+  // Prune stale contacts not present in the latest sync snapshot
+  if (totalSynced > 0) {
+    try {
+      const placeholders = [...syncedOpenIds].map((id) => `'${id.replace(/'/g, "''")}'`).join(",");
+      sqliteExecStrict(`DELETE FROM contacts WHERE open_id NOT IN (${placeholders})`);
+    } catch (err) {
+      log?.(`feishu: warning — failed to prune stale contacts: ${String(err)}`);
+    }
   }
 
   log?.(`feishu: contact sync complete, total ${totalSynced} contacts`);
@@ -195,7 +220,7 @@ async function collectUsersViaListAPI(
   client: ReturnType<typeof createFeishuClient>,
   account: { appId: string; domain?: string },
   log?: (msg: string) => void,
-): Promise<RawUser[]> {
+): Promise<{ users: RawUser[]; error?: string }> {
   const users: RawUser[] = [];
   let pageToken: string | undefined;
 
@@ -233,12 +258,10 @@ async function collectUsersViaListAPI(
           "contact:user.base:readonly",
           account.domain,
         );
-        if (permErr) {
-          log?.(`feishu: list API permission error: ${permErr}`);
-        } else {
-          log?.(`feishu: list API error: ${response.msg || `code ${response.code}`}`);
-        }
-        return [];
+        const errorMsg =
+          permErr || `Feishu list API error: ${response.msg || `code ${response.code}`}`;
+        log?.(`feishu: list API error: ${errorMsg}`);
+        return { users: [], error: errorMsg };
       }
 
       for (const u of response.data?.items ?? []) {
@@ -259,10 +282,12 @@ async function collectUsersViaListAPI(
       pageToken = response.data?.has_more ? response.data.page_token : undefined;
     } while (pageToken);
   } catch (err) {
-    log?.(`feishu: list API failed: ${String(err)}`);
+    const errorMsg = `Feishu list API failed: ${String(err)}`;
+    log?.(`feishu: ${errorMsg}`);
+    return { users: [], error: errorMsg };
   }
 
-  return users;
+  return { users };
 }
 
 /** Collect all department IDs by traversing from root (0). */

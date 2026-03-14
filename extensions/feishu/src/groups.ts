@@ -126,6 +126,7 @@ export async function syncGroupsFromAPI(params: {
 
   let pageToken: string | undefined;
   let totalSynced = 0;
+  const syncedChatIds = new Set<string>();
 
   try {
     do {
@@ -168,11 +169,24 @@ export async function syncGroupsFromAPI(params: {
         sqliteExecStrict(
           `INSERT OR REPLACE INTO groups (chat_id, name, description, owner_id, member_count, updated_at) VALUES ('${esc(group.chat_id)}', '${esc(group.name)}', '${esc(group.description)}', '${esc(group.owner_id)}', ${Number(group.member_count) || 0}, datetime('now'))`,
         );
+        syncedChatIds.add(group.chat_id);
         totalSynced++;
       }
 
       pageToken = response.data?.has_more ? response.data.page_token : undefined;
     } while (pageToken);
+
+    // Prune stale groups the bot has left
+    if (totalSynced > 0) {
+      try {
+        const placeholders = [...syncedChatIds]
+          .map((id) => `'${id.replace(/'/g, "''")}'`)
+          .join(",");
+        sqliteExecStrict(`DELETE FROM groups WHERE chat_id NOT IN (${placeholders})`);
+      } catch (err) {
+        log?.(`feishu: warning — failed to prune stale groups: ${String(err)}`);
+      }
+    }
 
     log?.(`feishu: group sync complete, total ${totalSynced} groups`);
     return { count: totalSynced };

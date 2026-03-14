@@ -144,6 +144,9 @@ export async function sendFileMessage(params: {
     log?.(`feishu: sent file message ${messageId} to ${receiveId}`);
     return { messageId };
   } catch (err) {
+    // Check upload-specific permission first (im:resource scope)
+    const uploadPermErr = checkPermissionError(err, account.appId, "im:resource", account.domain);
+    if (uploadPermErr) return { error: uploadPermErr };
     return handleSendError(err, account.appId, account.domain);
   }
 }

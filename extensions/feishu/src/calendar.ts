@@ -19,7 +19,9 @@ export type CalendarEventParams = {
   attendeeOpenIds?: string[]; // open_ids of attendees
 };
 
-type CalendarResult = { eventId: string; calendarId: string } | { error: string };
+type CalendarResult =
+  | { eventId: string; calendarId: string; attendeeWarning?: string }
+  | { error: string };
 
 /**
  * Create a calendar event and optionally add attendees.
@@ -120,6 +122,7 @@ export async function createCalendarEvent(params: {
   }
 
   // Step 3: Add attendees if provided
+  let attendeeWarning: string | undefined;
   if (event.attendeeOpenIds && event.attendeeOpenIds.length > 0) {
     try {
       const attendees = event.attendeeOpenIds.map((openId) => ({
@@ -138,18 +141,18 @@ export async function createCalendarEvent(params: {
       })) as { code?: number; msg?: string };
 
       if (attendeeResponse.code !== 0) {
-        log?.(
-          `feishu: warning - event created but failed to add attendees: ${attendeeResponse.msg || `code ${attendeeResponse.code}`}`,
-        );
+        attendeeWarning = `Event created but failed to add attendees: ${attendeeResponse.msg || `code ${attendeeResponse.code}`}`;
+        log?.(`feishu: warning - ${attendeeWarning}`);
       } else {
         log?.(`feishu: added ${event.attendeeOpenIds.length} attendees to event ${eventId}`);
       }
     } catch (err) {
-      log?.(`feishu: warning - event created but failed to add attendees: ${String(err)}`);
+      attendeeWarning = `Event created but failed to add attendees: ${String(err)}`;
+      log?.(`feishu: warning - ${attendeeWarning}`);
     }
   }
 
-  return { eventId, calendarId };
+  return { eventId, calendarId, ...(attendeeWarning ? { attendeeWarning } : {}) };
 }
 
 /**
@@ -247,6 +250,7 @@ export async function updateCalendarEvent(params: {
   }
 
   // Step 3: Add new attendees if provided
+  let attendeeWarning: string | undefined;
   if (event.attendeeOpenIds && event.attendeeOpenIds.length > 0) {
     try {
       const attendees = event.attendeeOpenIds.map((openId) => ({
@@ -265,18 +269,18 @@ export async function updateCalendarEvent(params: {
       })) as { code?: number; msg?: string };
 
       if (attendeeResponse.code !== 0) {
-        log?.(
-          `feishu: warning - event updated but failed to add attendees: ${attendeeResponse.msg || `code ${attendeeResponse.code}`}`,
-        );
+        attendeeWarning = `Event updated but failed to add attendees: ${attendeeResponse.msg || `code ${attendeeResponse.code}`}`;
+        log?.(`feishu: warning - ${attendeeWarning}`);
       } else {
         log?.(`feishu: added ${event.attendeeOpenIds.length} attendees to event ${eventId}`);
       }
     } catch (err) {
-      log?.(`feishu: warning - event updated but failed to add attendees: ${String(err)}`);
+      attendeeWarning = `Event updated but failed to add attendees: ${String(err)}`;
+      log?.(`feishu: warning - ${attendeeWarning}`);
     }
   }
 
-  return { eventId, calendarId };
+  return { eventId, calendarId, ...(attendeeWarning ? { attendeeWarning } : {}) };
 }
 
 /**
