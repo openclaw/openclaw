@@ -116,10 +116,13 @@ describe("getProxyUrlFromFetch", () => {
 
   it("returns undefined for plain fetch functions or blank metadata", () => {
     const plainFetch = vi.fn() as unknown as typeof fetch;
-    const blankMetadataFetch = vi.fn() as unknown as typeof fetch & {
-      [PROXY_FETCH_PROXY_URL]?: string;
-    };
-    blankMetadataFetch[PROXY_FETCH_PROXY_URL] = "   ";
+    const blankMetadataFetch = vi.fn() as unknown as typeof fetch;
+    Object.defineProperty(blankMetadataFetch, PROXY_FETCH_PROXY_URL, {
+      value: "   ",
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
 
     expect(getProxyUrlFromFetch(plainFetch)).toBeUndefined();
     expect(getProxyUrlFromFetch(blankMetadataFetch)).toBeUndefined();
