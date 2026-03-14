@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isSlackStreamingEnabled, resolveSlackStreamingThreadHint } from "./dispatch.js";
+import {
+  isSlackStreamingEnabled,
+  isSlackStreamingUnsupportedError,
+  resolveSlackStreamingThreadHint,
+} from "./dispatch.js";
 
 describe("slack native streaming defaults", () => {
   it("is enabled for partial mode when native streaming is on", () => {
@@ -43,5 +47,22 @@ describe("slack native streaming thread hint", () => {
         messageTs: "1000.3",
       }),
     ).toBe("2000.1");
+  });
+});
+
+describe("slack native streaming unsupported error", () => {
+  it("detects unsupported chatStream client errors", () => {
+    expect(
+      isSlackStreamingUnsupportedError(new TypeError("client.chatStream is not a function")),
+    ).toBe(true);
+    expect(isSlackStreamingUnsupportedError(new TypeError("chatStream not a function"))).toBe(true);
+  });
+
+  it("ignores non-TypeError and unrelated TypeError messages", () => {
+    expect(isSlackStreamingUnsupportedError(new Error("client.chatStream is not a function"))).toBe(
+      false,
+    );
+    expect(isSlackStreamingUnsupportedError(new TypeError("network timeout"))).toBe(false);
+    expect(isSlackStreamingUnsupportedError("client.chatStream is not a function")).toBe(false);
   });
 });
