@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **WakaTime** — Track OpenClaw messages, commands, sessions, and tool usage in WakaTime.
+  npm: `@ambiguoustr/openclaw-wakatime`
+  repo: `https://github.com/ambiguoustexture/openclaw-wakatime`
+  install: `openclaw plugins install @ambiguoustr/openclaw-wakatime`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
