@@ -71,6 +71,7 @@ import {
   pickSummaryFromPayloads,
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
+import { buildOutputHistoryBlock } from "./output-history.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
@@ -462,11 +463,16 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 
+  const outputHistoryBlock = buildOutputHistoryBlock(params.job);
+
   if (shouldWrapExternal) {
-    // Wrap external content with security boundaries
+    // Wrap external content (and any output history) with security boundaries
     const hookType = getHookType(baseSessionKey);
+    const contentToWrap = outputHistoryBlock
+      ? `${params.message}\n\n${outputHistoryBlock}`
+      : params.message;
     const safeContent = buildSafeExternalPrompt({
-      content: params.message,
+      content: contentToWrap,
       source: hookType,
       jobName: params.job.name,
       jobId: params.job.id,
@@ -477,7 +483,11 @@ export async function runCronIsolatedAgentTurn(params: {
   } else {
     // Internal/trusted source - use original format
     commandBody = `${base}\n${timeLine}`.trim();
+    if (outputHistoryBlock) {
+      commandBody = `${commandBody}\n\n${outputHistoryBlock}`;
+    }
   }
+
   commandBody = appendCronDeliveryInstruction({ commandBody, deliveryRequested });
 
   const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;

@@ -260,7 +260,8 @@ PAYLOAD TYPES (payload.kind):
 - "systemEvent": Injects text as system event into session
   { "kind": "systemEvent", "text": "<message>" }
 - "agentTurn": Runs agent with message (isolated sessions only)
-  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
+  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout>, "outputHistory": <optional-bool> }
+  - outputHistory: set true to include recent delivery outputs as context for the agent. Useful for any recurring task where seeing previous outputs helps — avoiding repetition, tracking changes, building on prior results, etc. Default: false.
 
 DELIVERY (top-level):
   { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
@@ -331,6 +332,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "thinking",
               "timeoutSeconds",
               "allowUnsafeExternalContent",
+              "outputHistory",
             ]);
             const synthetic: Record<string, unknown> = {};
             let found = false;
@@ -340,6 +342,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 found = true;
               }
             }
+            // outputHistory is a payload-level agentTurn field.  For add,
+            // leave it at the top level so normalizeCronJobCreate can first
+            // auto-create the payload from `message`, then
+            // copyTopLevelAgentTurnFields copies outputHistory in.
             // Only use the synthetic job if at least one meaningful field is present
             // (schedule, payload, message, or text are the minimum signals that the
             // LLM intended to create a job).
@@ -474,6 +480,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "wakeMode",
               "failureAlert",
               "allowUnsafeExternalContent",
+              "outputHistory",
             ]);
             const synthetic: Record<string, unknown> = {};
             let found = false;
@@ -482,6 +489,29 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 synthetic[key] = params[key];
                 found = true;
               }
+            }
+            // outputHistory is a payload-level field; move it into payload
+            // so normalization and applyCronJobPatch see it in the right place.
+            // Skip when systemEvent signals are present to avoid forcing the wrong kind.
+            if (typeof synthetic.outputHistory === "boolean") {
+              const existingPayload =
+                synthetic.payload && typeof synthetic.payload === "object"
+                  ? (synthetic.payload as Record<string, unknown>)
+                  : null;
+              const rawKind =
+                typeof existingPayload?.kind === "string"
+                  ? existingPayload.kind.trim().toLowerCase()
+                  : "";
+              const isSystemEvent = rawKind === "systemevent";
+              if (!isSystemEvent) {
+                const payload = existingPayload ?? {};
+                payload.outputHistory = synthetic.outputHistory;
+                if (!payload.kind) {
+                  payload.kind = "agentTurn";
+                }
+                synthetic.payload = payload;
+              }
+              delete synthetic.outputHistory;
             }
             if (found) {
               params.patch = synthetic;

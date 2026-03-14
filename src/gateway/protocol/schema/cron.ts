@@ -16,6 +16,7 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
       channel: Type.Optional(Type.String()),
       to: Type.Optional(Type.String()),
       bestEffortDeliver: Type.Optional(Type.Boolean()),
+      outputHistory: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
   );
@@ -240,6 +241,17 @@ export const CronJobStateSchema = Type.Object(
     lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     lastDeliveryError: Type.Optional(Type.String()),
     lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    recentOutputs: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            text: Type.String(),
+            timestamp: Type.Integer({ minimum: 0 }),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
   },
   { additionalProperties: false },
 );

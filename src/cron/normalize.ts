@@ -101,7 +101,8 @@ function coercePayload(payload: UnknownRecord) {
       typeof next.model === "string" ||
       typeof next.thinking === "string" ||
       typeof next.timeoutSeconds === "number" ||
-      typeof next.allowUnsafeExternalContent === "boolean";
+      typeof next.allowUnsafeExternalContent === "boolean" ||
+      typeof next.outputHistory === "boolean";
     if (hasMessage) {
       next.kind = "agentTurn";
     } else if (hasText) {
@@ -268,6 +269,9 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
   ) {
     payload.allowUnsafeExternalContent = next.allowUnsafeExternalContent;
   }
+  if (typeof payload.outputHistory !== "boolean" && typeof next.outputHistory === "boolean") {
+    payload.outputHistory = next.outputHistory;
+  }
 }
 
 function copyTopLevelLegacyDeliveryFields(next: UnknownRecord, payload: UnknownRecord) {
@@ -311,6 +315,7 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.to;
   delete next.bestEffortDeliver;
   delete next.provider;
+  delete next.outputHistory;
 }
 
 export function normalizeCronJobInput(
