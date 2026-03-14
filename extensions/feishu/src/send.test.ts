@@ -1,6 +1,6 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getMessageFeishu } from "./send.js";
+import { buildMarkdownCard, getMessageFeishu } from "./send.js";
 
 const { mockClientGet, mockCreateFeishuClient, mockResolveFeishuAccount } = vi.hoisted(() => ({
   mockClientGet: vi.fn(),
@@ -164,5 +164,36 @@ describe("getMessageFeishu", () => {
         content: "single payload",
       }),
     );
+  });
+});
+
+describe("buildMarkdownCard", () => {
+  it("produces Card JSON 2.0 structure for plain markdown", () => {
+    const card = buildMarkdownCard("Hello **world**");
+    expect(card.schema).toBe("2.0");
+    expect(card.config).toEqual({ wide_screen_mode: true });
+    const elements = (card.body as any).elements;
+    expect(elements).toHaveLength(1);
+    expect(elements[0]).toEqual({ tag: "markdown", content: "Hello **world**" });
+  });
+
+  it("converts markdown tables to native Feishu table components", () => {
+    const text = [
+      "Summary:",
+      "",
+      "| Name | Score |",
+      "|------|-------|",
+      "| Alice | 95 |",
+      "",
+      "End.",
+    ].join("\n");
+
+    const card = buildMarkdownCard(text);
+    const elements = (card.body as any).elements;
+    expect(elements).toHaveLength(3);
+    expect(elements[0].tag).toBe("markdown");
+    expect(elements[1].tag).toBe("table");
+    expect(elements[1].columns[0].display_name).toBe("Name");
+    expect(elements[2].tag).toBe("markdown");
   });
 });

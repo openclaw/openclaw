@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { buildMarkdownCardWithTables } from "./markdown-card.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
@@ -398,24 +399,16 @@ export async function updateCardFeishu(params: {
 
 /**
  * Build a Feishu interactive card with markdown content.
- * Cards render markdown properly (code blocks, tables, links, etc.)
- * Uses schema 2.0 format for proper markdown rendering.
+ *
+ * Uses Card JSON 2.0 format for proper markdown rendering.
+ * Automatically converts Markdown tables to native Feishu `table` components
+ * because the card markdown element does NOT support standard table syntax
+ * (`| col | col |`).  Non-table content remains as `markdown` elements.
+ *
+ * @see https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/table
  */
 export function buildMarkdownCard(text: string): Record<string, unknown> {
-  return {
-    schema: "2.0",
-    config: {
-      wide_screen_mode: true,
-    },
-    body: {
-      elements: [
-        {
-          tag: "markdown",
-          content: text,
-        },
-      ],
-    },
-  };
+  return buildMarkdownCardWithTables(text);
 }
 
 /**
