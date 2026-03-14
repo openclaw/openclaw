@@ -14,18 +14,16 @@ enum RemoteGatewayAuthIssue: Equatable {
         guard let authError = error as? GatewayConnectAuthError else {
             return nil
         }
-        switch authError.detail {
-        case .authTokenMissing:
+        switch authError.detailCode {
+        case "AUTH_TOKEN_MISSING":
             self = .tokenRequired
-        case .authTokenMismatch:
+        case "AUTH_TOKEN_MISMATCH":
             self = .tokenMismatch
-        case .authTokenNotConfigured:
+        case "AUTH_TOKEN_NOT_CONFIGURED":
             self = .gatewayTokenNotConfigured
-        case .authBootstrapTokenInvalid:
-            self = .setupCodeExpired
-        case .authPasswordMissing, .authPasswordMismatch, .authPasswordNotConfigured:
+        case "AUTH_PASSWORD_MISSING", "AUTH_PASSWORD_MISMATCH", "AUTH_PASSWORD_NOT_CONFIGURED":
             self = .passwordRequired
-        case .pairingRequired:
+        case "PAIRING_REQUIRED":
             self = .pairingRequired
         default:
             return nil

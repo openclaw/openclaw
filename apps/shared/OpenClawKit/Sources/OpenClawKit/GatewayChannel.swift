@@ -143,12 +143,12 @@ private enum GatewayConnectErrorCodes {
     static let deviceIdentityRequired = "DEVICE_IDENTITY_REQUIRED"
 }
 
-private struct GatewayConnectAuthError: LocalizedError {
-    let message: String
-    let detailCode: String?
-    let canRetryWithDeviceToken: Bool
+public struct GatewayConnectAuthError: LocalizedError {
+    public let message: String
+    public let detailCode: String?
+    public let canRetryWithDeviceToken: Bool
 
-    var errorDescription: String? { self.message }
+    public var errorDescription: String? { self.message }
 
     var isNonRecoverable: Bool {
         switch self.detailCode {
