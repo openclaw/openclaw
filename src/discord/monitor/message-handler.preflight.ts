@@ -6,8 +6,8 @@ import {
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
 import {
-  recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
+  recordPendingHistoryEntryIfEnabled,
 } from "../../auto-reply/reply/history.js";
 import {
   buildMentionRegexes,
@@ -38,7 +38,7 @@ import {
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
-  resolveDiscordOwnerAccess,
+  resolveDiscordOwnerAllowedWithRoles,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
 } from "./allow-list.js";
@@ -634,19 +634,18 @@ export async function preflightDiscordMessage(
   });
 
   if (!isDirectMessage) {
-    const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
+    const ownerAccess = resolveDiscordOwnerAllowedWithRoles({
       allowFrom: params.allowFrom,
-      sender: {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      },
-      allowNameMatching,
+      userId: sender.id,
+      userName: sender.name,
+      userTag: sender.tag,
+      memberRoleIds,
+      allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
     });
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
-        { configured: ownerAllowList != null, allowed: ownerOk },
+        { configured: ownerAccess.configured, allowed: ownerAccess.allowed },
         { configured: hasAccessRestrictions, allowed: memberAllowed },
       ],
       modeWhenAccessGroupsOff: "configured",

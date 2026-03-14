@@ -1,10 +1,10 @@
 import type {
   ButtonInteraction,
+  Client,
   ComponentData,
   ModalInteraction,
   StringSelectMenuInteraction,
 } from "@buape/carbon";
-import type { Client } from "@buape/carbon";
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -26,6 +26,7 @@ import {
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import {
   resolveDiscordMemberAllowed,
+  resolveDiscordOwnerAllowedWithRoles,
   resolveDiscordOwnerAllowFrom,
   resolveDiscordRoleAllowed,
 } from "./allow-list.js";
@@ -161,7 +162,9 @@ describe("agent components", () => {
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
     expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+    });
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -170,7 +173,9 @@ describe("agent components", () => {
     const select = createAgentSelectMenu({
       cfg: createCfg(),
       accountId: "default",
-      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
+      discordConfig: {
+        dangerouslyAllowNameMatching: true,
+      } as DiscordAccountConfig,
       dmPolicy: "allowlist",
       allowFrom: ["Alice#1234"],
     });
@@ -395,7 +400,9 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+    });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
     expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
   });
@@ -451,7 +458,10 @@ describe("discord component interactions", () => {
         id: "interaction-guild-1",
         member: { roles: [] },
       } as unknown as ModalInteraction["rawData"],
-      guild: { id: "guild-1", name: "Test Guild" } as unknown as ModalInteraction["guild"],
+      guild: {
+        id: "guild-1",
+        name: "Test Guild",
+      } as unknown as ModalInteraction["guild"],
     });
 
     await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
@@ -483,7 +493,10 @@ describe("discord component interactions", () => {
         id: "interaction-guild-2",
         member: { roles: [] },
       } as unknown as ModalInteraction["rawData"],
-      guild: { id: "guild-1", name: "Test Guild" } as unknown as ModalInteraction["guild"],
+      guild: {
+        id: "guild-1",
+        name: "Test Guild",
+      } as unknown as ModalInteraction["guild"],
     });
 
     await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
@@ -513,7 +526,10 @@ describe("resolveDiscordOwnerAllowFrom", () => {
 
   it("skips wildcard matches for owner allowFrom", () => {
     const result = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true, users: ["*"] } as DiscordChannelConfigResolved,
+      channelConfig: {
+        allowed: true,
+        users: ["*"],
+      } as DiscordChannelConfigResolved,
       sender: { id: "123" },
     });
 
@@ -522,7 +538,10 @@ describe("resolveDiscordOwnerAllowFrom", () => {
 
   it("returns a matching user id entry", () => {
     const result = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true, users: ["123"] } as DiscordChannelConfigResolved,
+      channelConfig: {
+        allowed: true,
+        users: ["123"],
+      } as DiscordChannelConfigResolved,
       sender: { id: "123" },
     });
 
@@ -531,18 +550,163 @@ describe("resolveDiscordOwnerAllowFrom", () => {
 
   it("returns the normalized name slug for name matches only when enabled", () => {
     const defaultResult = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
+      channelConfig: {
+        allowed: true,
+        users: ["Some User"],
+      } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
     });
     expect(defaultResult).toBeUndefined();
 
     const enabledResult = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
+      channelConfig: {
+        allowed: true,
+        users: ["Some User"],
+      } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
       allowNameMatching: true,
     });
 
     expect(enabledResult).toEqual(["some-user"]);
+  });
+});
+
+describe("resolveDiscordOwnerAllowedWithRoles", () => {
+  it("returns configured:false when allowFrom is empty", () => {
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: [],
+      userId: "123",
+    });
+
+    expect(result).toEqual({ configured: false, allowed: false });
+  });
+
+  it("returns configured:false when allowFrom is undefined", () => {
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: undefined,
+      userId: "123",
+    });
+
+    expect(result).toEqual({ configured: false, allowed: false });
+  });
+
+  it("allows by user ID match", () => {
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["user:123"],
+      userId: "123",
+    });
+
+    expect(result).toEqual({ configured: true, allowed: true });
+  });
+
+  it("allows by role match in guild context", () => {
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["role:456"],
+      userId: "123",
+      memberRoleIds: ["456"],
+    });
+
+    expect(result).toEqual({ configured: true, allowed: true });
+  });
+
+  it("allows when user has one of multiple roles", () => {
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["role:456", "role:789"],
+      userId: "123",
+      memberRoleIds: ["789"],
+    });
+
+    expect(result).toEqual({ configured: true, allowed: true });
+  });
+
+  it("blocks when no user or role match", () => {
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["user:123", "role:456"],
+      userId: "999",
+      memberRoleIds: ["999"],
+    });
+
+    expect(result).toEqual({ configured: true, allowed: false });
+  });
+
+  it("ignores role entries when memberRoleIds is empty (DM context)", () => {
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["role:456"],
+      userId: "123",
+      memberRoleIds: [],
+    });
+
+    expect(result).toEqual({ configured: true, allowed: false });
+  });
+
+  it("ignores role entries when memberRoleIds is undefined", () => {
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["role:456"],
+      userId: "123",
+    });
+
+    expect(result).toEqual({ configured: true, allowed: false });
+  });
+
+  it("allows with mixed user and role entries - user match", () => {
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["user:123", "role:456"],
+      userId: "123",
+      memberRoleIds: [],
+    });
+
+    expect(result).toEqual({ configured: true, allowed: true });
+  });
+
+  it("allows with mixed user and role entries - role match", () => {
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["user:123", "role:456"],
+      userId: "999",
+      memberRoleIds: ["456"],
+    });
+
+    expect(result).toEqual({ configured: true, allowed: true });
+  });
+
+  it("wildcard allows everyone", () => {
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["*"],
+      userId: "123",
+    });
+
+    expect(result).toEqual({ configured: true, allowed: true });
+  });
+
+  it("numeric ID treated as user ID", () => {
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["123"],
+      userId: "123",
+    });
+
+    expect(result).toEqual({ configured: true, allowed: true });
+  });
+
+  it("bare numeric entry does not match as role ID", () => {
+    // A bare numeric in allowFrom should only match as a user ID, never as a role ID
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["999888777666555444"],
+      userId: "different-user",
+      memberRoleIds: ["999888777666555444"],
+    });
+
+    expect(result).toEqual({ configured: true, allowed: false });
+  });
+
+  it("role: entries do not leak into name matching", () => {
+    // role: entries must not be treated as names even with allowNameMatching
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["role:111111111111111111"],
+      userId: "different-user",
+      userName: "role:111111111111111111",
+      allowNameMatching: true,
+    });
+
+    expect(result).toEqual({ configured: true, allowed: false });
   });
 });
 
@@ -945,7 +1109,9 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
     return {
       client:
         overrides?.client ??
-        ({ rest: { post: async () => ({ id: "thread" }) } } as unknown as Client),
+        ({
+          rest: { post: async () => ({ id: "thread" }) },
+        } as unknown as Client),
       message: {
         id: "m1",
         channelId: "parent",
@@ -988,7 +1154,9 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
       {
         name: "autoThread disabled",
         params: {
-          channelConfig: { autoThread: false } as unknown as DiscordChannelConfigResolved,
+          channelConfig: {
+            autoThread: false,
+          } as unknown as DiscordChannelConfigResolved,
         },
         expectedDeliverTarget: "channel:parent",
         expectedReplyReference: "m1",

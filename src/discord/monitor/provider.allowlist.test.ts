@@ -35,7 +35,12 @@ import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 
 describe("resolveDiscordAllowlistConfig", () => {
   it("canonicalizes resolved user names to ids in runtime config", async () => {
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv;
+    resolveDiscordUserAllowlistMock.mockClear();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } as unknown as RuntimeEnv;
     const result = await resolveDiscordAllowlistConfig({
       token: "token",
       allowFrom: ["Alice", "111", "*"],
@@ -92,5 +97,58 @@ describe("resolveDiscordAllowlistConfig", () => {
       "discord channels unresolved: 145/c404 (guild:Ops; channel:missing-room)",
     );
     expect(logs).toContain("discord users resolved: 387→Peter (id:387)");
+  });
+
+  it("keeps role allowlist entries untouched in allowFrom", async () => {
+    resolveDiscordUserAllowlistMock.mockClear();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } as unknown as RuntimeEnv;
+    const result = await resolveDiscordAllowlistConfig({
+      token: "token",
+      allowFrom: ["role:456", "Alice", "user:123"],
+      guildEntries: {},
+      fetcher: vi.fn() as unknown as typeof fetch,
+      runtime,
+    });
+
+    expect(result.allowFrom).toEqual(["role:456", "111", "user:123"]);
+    expect(resolveDiscordUserAllowlistMock).toHaveBeenCalledTimes(1);
+    const callEntries = resolveDiscordUserAllowlistMock.mock.calls[0]?.[0]?.entries ?? [];
+    expect(callEntries).toEqual(["role:456", "Alice", "user:123"]);
+  });
+
+  it("preserves role allowlists in guild/channel entries while resolving users", async () => {
+    resolveDiscordUserAllowlistMock.mockClear();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } as unknown as RuntimeEnv;
+    const result = await resolveDiscordAllowlistConfig({
+      token: "token",
+      allowFrom: undefined,
+      guildEntries: {
+        "*": {
+          users: ["Alice"],
+          roles: ["role:999"],
+          channels: {
+            "*": {
+              users: ["Bob"],
+              roles: ["role:456"],
+            },
+          },
+        },
+      },
+      fetcher: vi.fn() as unknown as typeof fetch,
+      runtime,
+    });
+
+    expect(result.guildEntries?.["*"]?.users).toEqual(["111"]);
+    expect(result.guildEntries?.["*"]?.roles).toEqual(["role:999"]);
+    expect(result.guildEntries?.["*"]?.channels?.["*"]?.users).toEqual(["222"]);
+    expect(result.guildEntries?.["*"]?.channels?.["*"]?.roles).toEqual(["role:456"]);
   });
 });
