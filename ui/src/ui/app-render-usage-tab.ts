@@ -72,7 +72,7 @@ export function renderUsageTab(state: AppViewState) {
       state.usageSelectedSessions = [];
       debouncedLoadUsage(state);
     },
-    onRefresh: () => loadUsage(state),
+    onRefresh: () => loadUsage(state, { refreshProviderQuota: true }),
     onTimeZoneChange: (zone) => {
       state.usageTimeZone = zone;
       state.usageSelectedDays = [];

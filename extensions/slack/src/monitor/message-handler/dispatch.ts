@@ -12,6 +12,7 @@ import { danger, logVerbose, shouldLogVerbose } from "../../../../../src/globals
 import { resolveAgentOutboundIdentity } from "../../../../../src/infra/outbound/identity.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../../../src/security/dm-policy-shared.js";
 import { editSlackMessage, reactSlackMessage, removeSlackReaction } from "../../actions.js";
+import { buildSlackBlocksFallbackText } from "../../blocks-fallback.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
@@ -250,17 +251,34 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
 
   const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
-    if (
-      streamFailed ||
-      hasMedia(payload) ||
-      readSlackReplyBlocks(payload)?.length ||
-      !payload.text?.trim()
-    ) {
+    const slackBlocks = readSlackReplyBlocks(payload);
+    const trimmedText = payload.text?.trim() ?? "";
+    if (streamSession && !streamFailed && !hasMedia(payload) && slackBlocks?.length) {
+      try {
+        await stopSlackStream({
+          session: streamSession,
+          text: normalizeSlackOutboundText(
+            trimmedText || buildSlackBlocksFallbackText(slackBlocks),
+          ),
+          blocks: slackBlocks,
+        });
+        return;
+      } catch (err) {
+        runtime.error?.(
+          danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
+        );
+        streamFailed = true;
+        await deliverNormally(payload, streamSession.threadTs);
+        return;
+      }
+    }
+
+    if (streamFailed || hasMedia(payload) || slackBlocks?.length || !trimmedText) {
       await deliverNormally(payload, streamSession?.threadTs);
       return;
     }
 
-    const text = payload.text.trim();
+    const text = trimmedText;
     let plannedThreadTs: string | undefined;
     try {
       if (!streamSession) {

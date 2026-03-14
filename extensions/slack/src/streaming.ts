@@ -11,7 +11,7 @@
  * @see https://docs.slack.dev/reference/methods/chat.stopStream
  */
 
-import type { WebClient } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { logVerbose } from "../../../src/globals.js";
 
@@ -59,6 +59,8 @@ export type StopSlackStreamParams = {
   session: SlackStreamSession;
   /** Optional final markdown text to append before stopping. */
   text?: string;
+  /** Optional Block Kit payload to finalize into the streamed message. */
+  blocks?: (Block | KnownBlock)[];
 };
 
 // ---------------------------------------------------------------------------
@@ -132,7 +134,7 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
  * Optionally include final text to append before stopping.
  */
 export async function stopSlackStream(params: StopSlackStreamParams): Promise<void> {
-  const { session, text } = params;
+  const { session, text, blocks } = params;
 
   if (session.stopped) {
     logVerbose("slack-stream: stream already stopped, ignoring duplicate stop");
@@ -147,7 +149,10 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
     }`,
   );
 
-  await session.streamer.stop(text ? { markdown_text: text } : undefined);
+  await session.streamer.stop({
+    ...(text ? { markdown_text: text } : {}),
+    ...(blocks?.length ? { blocks } : {}),
+  });
 
   logVerbose("slack-stream: stream stopped");
 }
