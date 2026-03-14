@@ -3,6 +3,7 @@ import { updateSessionStore, type SessionEntry } from "../../config/sessions.js"
 import {
   ensureAuthProfileStore,
   isProfileInCooldown,
+  recordAuthProfileSelected,
   resolveAuthProfileOrder,
 } from "../auth-profiles.js";
 import { normalizeProviderId } from "../model-selection.js";
@@ -145,6 +146,15 @@ export async function resolveSessionAuthProfileOverride(params: {
         store[sessionKey] = sessionEntry;
       });
     }
+  }
+
+  // Bump lastUsed immediately when a profile is selected for a new session so
+  // rapid /new sequences can rotate correctly. markAuthProfileUsed (which also
+  // resets error counts) still runs after run completion as before, but this
+  // early stamp ensures orderProfilesByMode sees an up-to-date lastUsed even
+  // when the previous session's run has not yet finished.
+  if (isNewSession && next) {
+    await recordAuthProfileSelected({ store, profileId: next, agentDir });
   }
 
   return next;
