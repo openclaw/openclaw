@@ -76,6 +76,7 @@ const CronCommonOptionalFields = {
   description: Type.Optional(Type.String()),
   enabled: Type.Optional(Type.Boolean()),
   deleteAfterRun: Type.Optional(Type.Boolean()),
+  metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 };
 
 function cronIdOrJobIdParams(extraFields: Record<string, TSchema>) {
@@ -261,6 +262,7 @@ export const CronJobSchema = Type.Object(
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+    metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     state: CronJobStateSchema,
   },
   { additionalProperties: false },
