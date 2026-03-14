@@ -8,6 +8,9 @@ export function normalizePackageTagInput(
   }
 
   for (const packageName of packageNames) {
+    if (trimmed === packageName) {
+      return null;
+    }
     const prefix = `${packageName}@`;
     if (trimmed.startsWith(prefix)) {
       const tag = trimmed.slice(prefix.length).trim();
