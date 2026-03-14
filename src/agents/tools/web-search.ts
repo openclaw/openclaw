@@ -2226,7 +2226,9 @@ export function createWebSearchTool(options?: {
                   ? resolveTavilyApiKey(tavilyConfig)
                   : resolveSearchApiKey(search);
 
-      if (!apiKey && !(search?.fallbacks && search.fallbacks.length > 0)) {
+      const hasFallbackCandidates =
+        (search?.fallbacks?.filter((p) => p !== provider) ?? []).length > 0;
+      if (!apiKey && !hasFallbackCandidates) {
         return jsonResult(missingSearchKeyPayload(provider));
       }
 
@@ -2481,6 +2483,14 @@ export function createWebSearchTool(options?: {
       const resolvedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
 
       for (const candidate of chain) {
+        // Skip fallback providers that cannot honor domain_filter constraints
+        if (domainFilter && domainFilter.length > 0 && candidate !== "perplexity") {
+          logVerbose(
+            `web_search: skipping ${candidate} (does not support domain_filter), trying next`,
+          );
+          continue;
+        }
+
         const runParams = resolveProviderRunParams(candidate, search);
         if (!runParams) {
           logVerbose(`web_search: skipping ${candidate} (no API key), trying next`);
