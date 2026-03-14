@@ -17,12 +17,36 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
     return false;
   }
 
+  let success = false;
   try {
-    await navigator.clipboard.writeText(text);
-    return true;
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      success = true;
+    }
   } catch {
-    return false;
+    // Clipboard API failed (e.g. HTTP context), try fallback
   }
+
+  // Fallback for HTTP or when Clipboard API is unavailable (secure context required)
+  if (!success) {
+    const textarea = document.createElement("textarea");
+    try {
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      success = document.execCommand("copy");
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    } finally {
+      if (textarea.parentNode) {
+        document.body.removeChild(textarea);
+      }
+    }
+  }
+
+  return success;
 }
 
 function setButtonLabel(button: HTMLButtonElement, label: string) {
