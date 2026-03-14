@@ -155,7 +155,10 @@ export function renderAgents(props: AgentsProps) {
                         <option value="">No agents</option>
                       `
                     : agents.map((agent) => {
-                        const emoji = resolveAgentEmoji(agent);
+                        const emoji = resolveAgentEmoji(
+                          agent,
+                          props.agentIdentityById[agent.id] ?? null,
+                        );
                         const label = normalizeAgentLabel(agent);
                         const badge = agentBadgeText(agent.id, defaultId);
                         return html`
