@@ -4,11 +4,11 @@ vi.mock("../send-reactions.js", () => ({
   sendReactionSignal: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
-vi.mock("../../auto-reply/dispatch.js", () => ({
+vi.mock("../../../../src/auto-reply/dispatch.js", () => ({
   dispatchInboundMessage: vi.fn().mockResolvedValue({ queuedFinal: false }),
 }));
 
-import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { dispatchInboundMessage } from "../../../../src/auto-reply/dispatch.js";
 import { sendReactionSignal } from "../send-reactions.js";
 import { createSignalEventHandler } from "./event-handler.js";
 import {
