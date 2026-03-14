@@ -286,6 +286,18 @@ function restoreStreamChunk(
   ctx: PrivacyFilterContext,
   bufferedRestore: ReturnType<typeof createBufferedRestore>,
 ): Record<string, unknown> {
+  // Handle common text_delta shape emitted by providers.
+  if (chunk.type === "text_delta" && typeof chunk.delta === "string") {
+    const laneKey = `text_delta:${getChunkContentIndex(chunk)}`;
+    const restored = bufferedRestore.delta(laneKey, chunk.delta, (text) => ({
+      ...chunk,
+      delta: text,
+    }));
+    if (restored !== chunk.delta) {
+      return { ...chunk, delta: restored };
+    }
+  }
+
   // Handle text deltas.
   if (typeof chunk.text === "string") {
     const restored = bufferedRestore.delta("root:text", chunk.text, (text) => ({ ...chunk, text }));
@@ -379,15 +391,8 @@ function filterAssistantMessage(
 ): AssistantMessage {
   const rawContent = (msg as { content?: unknown }).content;
   if (!Array.isArray(rawContent)) {
-    if (typeof rawContent === "string") {
-      const replaced = filterText(rawContent, ctx);
-      if (replaced !== rawContent) {
-        return {
-          ...(msg as unknown as Record<string, unknown>),
-          content: replaced,
-        } as AssistantMessage;
-      }
-    }
+    // Legacy sessions may carry non-array assistant content at runtime.
+    // Keep behavior fail-open here to avoid crashing the request path.
     return msg;
   }
 
