@@ -217,13 +217,6 @@ describe("tui session actions", () => {
     const loadHistory = vi.fn().mockResolvedValue({
       sessionId: "session-2",
       messages: [],
-      sideResults: [
-        {
-          kind: "btw",
-          question: "what changed?",
-          text: "nothing important",
-        },
-      ],
     });
     const btw = createBtwPresenter();
 
@@ -287,6 +280,5 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.modelProvider).toBe("openai");
     expect(state.sessionInfo.updatedAt).toBe(50);
     expect(btw.clear).toHaveBeenCalled();
-    expect(btw.showResult).not.toHaveBeenCalled();
   });
 });

@@ -5,7 +5,6 @@ import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { isPrimarySessionTranscriptFileName } from "../config/sessions.js";
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
@@ -319,7 +318,7 @@ export async function loadCostUsageSummary(params?: {
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -394,7 +393,7 @@ export async function discoverAllSessions(params?: {
   const discovered: DiscoveredSession[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !isPrimarySessionTranscriptFileName(entry.name)) {
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
       continue;
     }
 

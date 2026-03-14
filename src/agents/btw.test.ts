@@ -19,7 +19,6 @@ const getActiveEmbeddedRunSnapshotMock = vi.fn();
 const waitForEmbeddedPiRunEndMock = vi.fn();
 const diagWarnMock = vi.fn();
 const diagDebugMock = vi.fn();
-const appendSessionSideResultMock = vi.fn();
 
 vi.mock("@mariozechner/pi-ai", () => ({
   streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
@@ -76,10 +75,6 @@ vi.mock("../logging/diagnostic.js", () => ({
   },
 }));
 
-vi.mock("../sessions/side-results.js", () => ({
-  appendSessionSideResult: (...args: unknown[]) => appendSessionSideResultMock(...args),
-}));
-
 const { BTW_CUSTOM_TYPE, runBtwSideQuestion } = await import("./btw.js");
 
 function makeAsyncEvents(events: unknown[]) {
@@ -121,7 +116,6 @@ describe("runBtwSideQuestion", () => {
     waitForEmbeddedPiRunEndMock.mockReset();
     diagWarnMock.mockReset();
     diagDebugMock.mockReset();
-    appendSessionSideResultMock.mockReset();
 
     buildSessionContextMock.mockReturnValue({
       messages: [{ role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 }],
@@ -217,14 +211,6 @@ describe("runBtwSideQuestion", () => {
     expect(onBlockReply).toHaveBeenCalledWith({
       text: "Side answer.",
       btw: { question: "What changed?" },
-    });
-    expect(appendSessionSideResultMock).toHaveBeenCalledWith({
-      transcriptPath: expect.stringContaining("session-1.jsonl"),
-      result: expect.objectContaining({
-        kind: "btw",
-        question: "What changed?",
-        text: "Side answer.",
-      }),
     });
     expect(appendCustomEntryMock).toHaveBeenCalledWith(
       BTW_CUSTOM_TYPE,

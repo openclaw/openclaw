@@ -4,7 +4,6 @@ import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
-import { resolveSessionSideResultsPathFromTranscript } from "../sessions/side-results.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -551,116 +550,6 @@ describe("gateway server chat", () => {
       });
       expect(historyRes.ok).toBe(true);
       expect(historyRes.payload?.messages ?? []).toEqual([]);
-    });
-  });
-
-  test("chat.history returns BTW side results separately from normal messages", async () => {
-    await withMainSessionStore(async (dir) => {
-      const transcriptPath = path.join(dir, "sess-main.jsonl");
-      await fs.writeFile(
-        transcriptPath,
-        [
-          JSON.stringify({
-            type: "custom",
-            customType: "openclaw:btw",
-            data: {
-              timestamp: 123,
-              question: "what changed?",
-              answer: "nothing important",
-            },
-          }),
-        ].join("\n"),
-        "utf-8",
-      );
-
-      const historyRes = await rpcReq<{ messages?: unknown[]; sideResults?: unknown[] }>(
-        ws,
-        "chat.history",
-        {
-          sessionKey: "main",
-        },
-      );
-      expect(historyRes.ok).toBe(true);
-      expect(historyRes.payload?.messages ?? []).toEqual([]);
-      expect(historyRes.payload?.sideResults ?? []).toEqual([
-        {
-          kind: "btw",
-          question: "what changed?",
-          text: "nothing important",
-          ts: 123,
-        },
-      ]);
-    });
-  });
-
-  test("chat.history applies limit to BTW side results", async () => {
-    await withMainSessionStore(async (dir) => {
-      const transcriptPath = path.join(dir, "sess-main.jsonl");
-      await fs.writeFile(
-        transcriptPath,
-        [
-          JSON.stringify({
-            type: "custom",
-            customType: "openclaw:btw",
-            data: { timestamp: 123, question: "older", answer: "one" },
-          }),
-          JSON.stringify({
-            type: "custom",
-            customType: "openclaw:btw",
-            data: { timestamp: 456, question: "newer", answer: "two" },
-          }),
-        ].join("\n"),
-        "utf-8",
-      );
-
-      const historyRes = await rpcReq<{ sideResults?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-        limit: 1,
-      });
-      expect(historyRes.ok).toBe(true);
-      expect(historyRes.payload?.sideResults ?? []).toEqual([
-        {
-          kind: "btw",
-          question: "newer",
-          text: "two",
-          ts: 456,
-        },
-      ]);
-    });
-  });
-
-  test("chat.history replays BTW side results from the sidecar file after transcript compaction", async () => {
-    await withMainSessionStore(async (dir) => {
-      const transcriptPath = path.join(dir, "sess-main.jsonl");
-      await fs.writeFile(transcriptPath, JSON.stringify({ type: "session", version: 1 }) + "\n");
-      await fs.writeFile(
-        resolveSessionSideResultsPathFromTranscript(transcriptPath),
-        JSON.stringify({
-          kind: "btw",
-          question: "what changed?",
-          text: "still working",
-          ts: 456,
-        }) + "\n",
-        "utf-8",
-      );
-
-      const historyRes = await rpcReq<{ messages?: unknown[]; sideResults?: unknown[] }>(
-        ws,
-        "chat.history",
-        {
-          sessionKey: "main",
-        },
-      );
-      expect(historyRes.ok).toBe(true);
-      expect(historyRes.payload?.messages ?? []).toEqual([]);
-      expect(historyRes.payload?.sideResults ?? []).toEqual([
-        {
-          kind: "btw",
-          question: "what changed?",
-          text: "still working",
-          ts: 456,
-        },
-      ]);
     });
   });
 

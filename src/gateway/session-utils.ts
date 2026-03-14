@@ -57,7 +57,6 @@ export {
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   readSessionMessages,
-  readSessionSideResults,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
 export type {

@@ -56,7 +56,6 @@ import {
   capArrayByJsonBytes,
   loadSessionEntry,
   readSessionMessages,
-  readSessionSideResults,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -979,10 +978,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     const sessionId = entry?.sessionId;
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
-    const sideResults =
-      sessionId && storePath
-        ? readSessionSideResults(sessionId, storePath, entry?.sessionFile)
-        : [];
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
@@ -998,15 +993,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
-    const slicedSideResults = sideResults.length > max ? sideResults.slice(-max) : sideResults;
-    const remainingSideResultsBudget = Math.max(
-      0,
-      maxHistoryBytes - jsonUtf8Bytes(bounded.messages),
-    );
-    const boundedSideResults =
-      remainingSideResultsBudget > 0
-        ? capArrayByJsonBytes(slicedSideResults, remainingSideResultsBudget).items
-        : [];
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {
       chatHistoryPlaceholderEmitCount += placeholderCount;
@@ -1031,7 +1017,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionId,
       messages: bounded.messages,
-      sideResults: boundedSideResults,
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,

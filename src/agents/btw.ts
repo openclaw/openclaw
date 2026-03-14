@@ -16,7 +16,6 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
-import { appendSessionSideResult } from "../sessions/side-results.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -62,8 +61,6 @@ type BtwCustomEntryData = {
   usage?: unknown;
 };
 
-type BtwSideResultData = BtwCustomEntryData;
-
 async function appendBtwCustomEntry(params: {
   sessionFile: string;
   timeoutMs: number;
@@ -80,26 +77,6 @@ async function appendBtwCustomEntry(params: {
   } finally {
     await lock.release();
   }
-}
-
-function appendBtwSideResult(params: { sessionFile: string; entry: BtwSideResultData }) {
-  appendSessionSideResult({
-    transcriptPath: params.sessionFile,
-    result: {
-      kind: "btw",
-      question: params.entry.question,
-      text: params.entry.answer,
-      ts: params.entry.timestamp,
-      provider: params.entry.provider,
-      model: params.entry.model,
-      thinkingLevel: params.entry.thinkingLevel,
-      reasoningLevel: params.entry.reasoningLevel,
-      sessionKey: params.entry.sessionKey,
-      authProfileId: params.entry.authProfileId,
-      authProfileIdSource: params.entry.authProfileIdSource,
-      usage: params.entry.usage,
-    },
-  });
 }
 
 function isSessionLockError(error: unknown): boolean {
@@ -127,21 +104,11 @@ function deferBtwCustomEntryPersist(params: {
   })();
 }
 
-async function persistBtwArtifacts(params: {
+async function persistBtwCustomEntry(params: {
   sessionId: string;
   sessionFile: string;
   entry: BtwCustomEntryData;
 }) {
-  try {
-    appendBtwSideResult({
-      sessionFile: params.sessionFile,
-      entry: params.entry,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    diag.warn(`btw side-result persistence skipped: sessionId=${params.sessionId} err=${message}`);
-  }
-
   try {
     await appendBtwCustomEntry({
       sessionFile: params.sessionFile,
@@ -512,7 +479,7 @@ export async function runBtwSideQuestion(
     usage: finalMessage?.usage,
   } satisfies BtwCustomEntryData;
 
-  await persistBtwArtifacts({
+  await persistBtwCustomEntry({
     sessionId,
     sessionFile,
     entry: customEntry,

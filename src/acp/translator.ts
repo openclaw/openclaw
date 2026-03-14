@@ -389,10 +389,6 @@ export class AcpGatewayAgent implements Agent {
       await this.handleChatEvent(evt);
       return;
     }
-    if (evt.event === "chat.side_result") {
-      await this.handleSideResultEvent(evt);
-      return;
-    }
     if (evt.event === "agent") {
       await this.handleAgentEvent(evt);
     }
@@ -831,35 +827,6 @@ export class AcpGatewayAgent implements Agent {
       // refusals.  TODO: when ChatEventSchema gains a structured errorKind field
       // (e.g. "refusal" | "timeout" | "rate_limit"), use it to distinguish here.
       void this.finishPrompt(pending.sessionId, pending, "end_turn");
-    }
-  }
-
-  private async handleSideResultEvent(evt: EventFrame): Promise<void> {
-    const payload = (evt.payload ?? {}) as Record<string, unknown>;
-    const sessionKey = payload.sessionKey as string | undefined;
-    const runId = payload.runId as string | undefined;
-    const text = payload.text as string | undefined;
-    if (!sessionKey) {
-      return;
-    }
-
-    const pending = this.findPendingBySessionKey(sessionKey, runId);
-    if (!pending) {
-      return;
-    }
-
-    const trimmed = text?.trim() ?? "";
-    if (trimmed.length > 0) {
-      await this.connection.sessionUpdate({
-        sessionId: pending.sessionId,
-        update: {
-          // BTW replies are side answers, not main assistant turns, so stream them
-          // through ACP's thought channel instead of normal assistant history.
-          sessionUpdate: "agent_thought_chunk",
-          content: { type: "text", text: trimmed },
-        },
-      });
-      await this.finishPrompt(pending.sessionId, pending, "end_turn");
     }
   }
 

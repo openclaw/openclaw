@@ -24,18 +24,11 @@ export function isSessionArchiveArtifactName(fileName: string): boolean {
   );
 }
 
-export function isSessionSideResultsArtifactName(fileName: string): boolean {
-  return fileName.endsWith(".side-results.jsonl") || fileName.includes(".side-results.jsonl.");
-}
-
 export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   if (fileName === "sessions.json") {
     return false;
   }
   if (!fileName.endsWith(".jsonl")) {
-    return false;
-  }
-  if (isSessionSideResultsArtifactName(fileName)) {
     return false;
   }
   return !isSessionArchiveArtifactName(fileName);
