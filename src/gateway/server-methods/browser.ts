@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { resolveBrowserConfig } from "../../browser/config.js";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
@@ -61,13 +62,14 @@ function resolveRequestedProfileDriver(params: {
   query?: Record<string, unknown>;
   body?: unknown;
 }): string | undefined {
+  const resolvedBrowser = resolveBrowserConfig(params.cfg.browser, params.cfg);
   const profileName =
     resolveRequestedProfile({ query: params.query, body: params.body }) ??
-    params.cfg.browser?.defaultProfile;
+    resolvedBrowser.defaultProfile;
   if (!profileName) {
     return undefined;
   }
-  const profile = params.cfg.browser?.profiles?.[profileName];
+  const profile = resolvedBrowser.profiles[profileName];
   return typeof profile?.driver === "string" ? profile.driver : undefined;
 }
 
