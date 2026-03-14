@@ -43,24 +43,6 @@ async function getRestoredPageForTarget(opts: TargetOpts) {
   return page;
 }
 
-function resolveLocatorForInteraction(
-  page: Awaited<ReturnType<typeof getRestoredPageForTarget>>,
-  params: { ref?: string; selector?: string },
-) {
-  const resolved = requireRefOrSelector(params.ref, params.selector);
-  if (resolved.ref) {
-    return {
-      locator: refLocator(page, resolved.ref),
-      label: resolved.ref,
-    };
-  }
-  const selector = resolved.selector!;
-  return {
-    locator: page.locator(selector),
-    label: selector,
-  };
-}
-
 function resolveInteractionTimeoutMs(timeoutMs?: number): number {
   return Math.max(500, Math.min(60_000, Math.floor(timeoutMs ?? 8000)));
 }
@@ -106,8 +88,12 @@ export async function clickViaPlaywright(opts: {
   delayMs?: number;
   timeoutMs?: number;
 }): Promise<void> {
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const page = await getRestoredPageForTarget(opts);
-  const { locator, label } = resolveLocatorForInteraction(page, opts);
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   try {
     const delayMs = resolveBoundedDelayMs(opts.delayMs, "click delayMs", MAX_CLICK_DELAY_MS);
@@ -120,14 +106,12 @@ export async function clickViaPlaywright(opts: {
         timeout,
         button: opts.button,
         modifiers: opts.modifiers,
-        delay: opts.delayMs,
       });
     } else {
       await locator.click({
         timeout,
         button: opts.button,
         modifiers: opts.modifiers,
-        delay: opts.delayMs,
       });
     }
   } catch (err) {
@@ -142,8 +126,12 @@ export async function hoverViaPlaywright(opts: {
   selector?: string;
   timeoutMs?: number;
 }): Promise<void> {
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const page = await getRestoredPageForTarget(opts);
-  const { locator, label } = resolveLocatorForInteraction(page, opts);
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
   try {
     await locator.hover({
       timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
@@ -162,21 +150,23 @@ export async function dragViaPlaywright(opts: {
   endSelector?: string;
   timeoutMs?: number;
 }): Promise<void> {
+  const resolvedStart = requireRefOrSelector(opts.startRef, opts.startSelector);
+  const resolvedEnd = requireRefOrSelector(opts.endRef, opts.endSelector);
   const page = await getRestoredPageForTarget(opts);
-  const from = resolveLocatorForInteraction(page, {
-    ref: opts.startRef,
-    selector: opts.startSelector,
-  });
-  const to = resolveLocatorForInteraction(page, {
-    ref: opts.endRef,
-    selector: opts.endSelector,
-  });
+  const startLocator = resolvedStart.ref
+    ? refLocator(page, requireRef(resolvedStart.ref))
+    : page.locator(resolvedStart.selector!);
+  const endLocator = resolvedEnd.ref
+    ? refLocator(page, requireRef(resolvedEnd.ref))
+    : page.locator(resolvedEnd.selector!);
+  const startLabel = resolvedStart.ref ?? resolvedStart.selector!;
+  const endLabel = resolvedEnd.ref ?? resolvedEnd.selector!;
   try {
-    await from.locator.dragTo(to.locator, {
+    await startLocator.dragTo(endLocator, {
       timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
     });
   } catch (err) {
-    throw toAIFriendlyError(err, `${from.label} -> ${to.label}`);
+    throw toAIFriendlyError(err, `${startLabel} -> ${endLabel}`);
   }
 }
 
@@ -188,11 +178,15 @@ export async function selectOptionViaPlaywright(opts: {
   values: string[];
   timeoutMs?: number;
 }): Promise<void> {
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
   if (!opts.values?.length) {
     throw new Error("values are required");
   }
   const page = await getRestoredPageForTarget(opts);
-  const { locator, label } = resolveLocatorForInteraction(page, opts);
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
   try {
     await locator.selectOption(opts.values, {
       timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
@@ -229,9 +223,13 @@ export async function typeViaPlaywright(opts: {
   slowly?: boolean;
   timeoutMs?: number;
 }): Promise<void> {
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const text = String(opts.text ?? "");
   const page = await getRestoredPageForTarget(opts);
-  const { locator, label } = resolveLocatorForInteraction(page, opts);
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   try {
     if (opts.slowly) {
@@ -425,9 +423,14 @@ export async function scrollIntoViewViaPlaywright(opts: {
   selector?: string;
   timeoutMs?: number;
 }): Promise<void> {
+  const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const page = await getRestoredPageForTarget(opts);
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
-  const { locator, label } = resolveLocatorForInteraction(page, opts);
+
+  const label = resolved.ref ?? resolved.selector!;
+  const locator = resolved.ref
+    ? refLocator(page, requireRef(resolved.ref))
+    : page.locator(resolved.selector!);
   try {
     await locator.scrollIntoViewIfNeeded({ timeout });
   } catch (err) {
