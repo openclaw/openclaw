@@ -946,6 +946,7 @@ class WebControlUiApp extends LitElement {
                 </div>
                 <div class="memory-actions" style="margin-top: 12px;">
                   <button type="button" @click=${() => this.triggerCheckpoint()} ?disabled=${this.chatSending}>${this.chatSending ? "执行中..." : "创建 checkpoint"}</button>
+                  <button class="secondary" type="button" @click=${() => this.triggerListCheckpoints()} ?disabled=${this.chatSending}>${this.chatSending ? "执行中..." : "查看最近 checkpoint"}</button>
                 </div>
                 <div class="memory-item" style="margin-top: 12px;">
                   <span class="label">恢复的 checkpoint ref</span>
