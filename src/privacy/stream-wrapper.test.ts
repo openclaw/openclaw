@@ -1,4 +1,11 @@
-import type { Message } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type {
+  AssistantMessage,
+  Message,
+  ToolResultMessage,
+  Usage,
+  UserMessage,
+} from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { PrivacyDetector } from "./detector.js";
 import { PrivacyReplacer } from "./replacer.js";
@@ -7,9 +14,48 @@ import {
   restoreText,
   createPrivacyFilterContext,
   filterMessages,
+  wrapStreamFnPrivacyFilter,
 } from "./stream-wrapper.js";
 
 describe("stream-wrapper integration", () => {
+  const now = Date.now();
+  const usage: Usage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+
+  function userMessage(content: UserMessage["content"]): UserMessage {
+    return { role: "user", content, timestamp: now };
+  }
+
+  function assistantMessage(content: AssistantMessage["content"]): AssistantMessage {
+    return {
+      role: "assistant",
+      content,
+      api: "openai-completions",
+      provider: "openai",
+      model: "gpt-test",
+      usage,
+      stopReason: "stop",
+      timestamp: now,
+    };
+  }
+
+  function toolResultMessage(content: ToolResultMessage["content"]): ToolResultMessage {
+    return {
+      role: "toolResult",
+      toolCallId: "tool_1",
+      toolName: "lookup",
+      content,
+      isError: false,
+      timestamp: now,
+    };
+  }
+
   describe("filterText + restoreText round-trip", () => {
     it("filters and restores email addresses", () => {
       const ctx = createPrivacyFilterContext("test-session");
@@ -50,7 +96,7 @@ describe("stream-wrapper integration", () => {
   describe("filterMessages", () => {
     it("filters user message text content", () => {
       const ctx = createPrivacyFilterContext("test-session");
-      const messages: Message[] = [{ role: "user", content: "My password=SecretPass123" }];
+      const messages: Message[] = [userMessage("My password=SecretPass123")];
 
       const filtered = filterMessages(messages, ctx);
       expect(filtered).not.toBe(messages);
@@ -62,10 +108,7 @@ describe("stream-wrapper integration", () => {
     it("filters user message array content blocks", () => {
       const ctx = createPrivacyFilterContext("test-session");
       const messages: Message[] = [
-        {
-          role: "user",
-          content: [{ type: "text", text: "key: sk-abcdefghijklmnopqrstuvwxyz1234567890" }],
-        },
+        userMessage([{ type: "text", text: "key: sk-abcdefghijklmnopqrstuvwxyz1234567890" }]),
       ];
 
       const filtered = filterMessages(messages, ctx);
@@ -73,20 +116,46 @@ describe("stream-wrapper integration", () => {
       expect(msg.content[0].text).not.toContain("sk-abcdefghijklmnopqrstuvwxyz1234567890");
     });
 
-    it("does not modify system messages", () => {
+    it("filters assistant toolCall arguments before replay", () => {
       const ctx = createPrivacyFilterContext("test-session");
-      const messages: Message[] = [{ role: "system", content: "password=admin123456" }];
+      const messages: Message[] = [
+        assistantMessage([
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "search",
+            arguments: {
+              query: "contact admin@company.com",
+              nested: { token: "Bearer secret-token-123456" },
+            },
+          },
+        ]),
+      ];
+
+      const filtered = filterMessages(messages, ctx);
+      expect(filtered).not.toBe(messages);
+      const msg = filtered[0] as AssistantMessage;
+      const block = msg.content[0];
+      if (block.type !== "toolCall") {
+        throw new Error("expected toolCall block");
+      }
+      expect(String(block.arguments.query)).not.toContain("admin@company.com");
+      expect(JSON.stringify(block.arguments)).not.toContain("secret-token-123456");
+    });
+
+    it("returns same array if no changes needed", () => {
+      const ctx = createPrivacyFilterContext("test-session");
+      const messages: Message[] = [userMessage("Hello there!")];
 
       const filtered = filterMessages(messages, ctx);
       expect(filtered).toBe(messages);
     });
 
-    it("returns same array if no changes needed", () => {
+    it("filters toolResult messages", () => {
       const ctx = createPrivacyFilterContext("test-session");
-      const messages: Message[] = [{ role: "user", content: "Hello there!" }];
-
+      const messages: Message[] = [toolResultMessage([{ type: "text", text: "email a@b.com" }])];
       const filtered = filterMessages(messages, ctx);
-      expect(filtered).toBe(messages);
+      expect(filtered).not.toBe(messages);
     });
   });
 
@@ -135,6 +204,51 @@ describe("stream-wrapper integration", () => {
         const restored = replacer.restore(replaced);
         expect(restored).toBe(input.text);
       }
+    });
+  });
+
+  describe("stream restore buffering", () => {
+    it("restores placeholders when toolcall deltas split replacements across chunks", async () => {
+      const ctx = createPrivacyFilterContext("test-session");
+      const original = "admin@company.com";
+      filterText(`contact ${original}`, ctx);
+      const replacement = ctx.replacer.getMappings()[0]?.replacement;
+      if (!replacement) {
+        throw new Error("expected replacement mapping");
+      }
+
+      const splitAt = Math.max(1, Math.floor(replacement.length / 2));
+      const baseEvents = [
+        { type: "toolcall_delta", contentIndex: 0, delta: replacement.slice(0, splitAt) },
+        { type: "toolcall_delta", contentIndex: 0, delta: replacement.slice(splitAt) },
+      ];
+
+      const baseFn: StreamFn = () =>
+        ({
+          async *[Symbol.asyncIterator]() {
+            for (const event of baseEvents) {
+              yield event;
+            }
+          },
+        }) as unknown as ReturnType<StreamFn>;
+
+      const wrapped = wrapStreamFnPrivacyFilter(baseFn, ctx);
+      const stream = wrapped(
+        {
+          api: "openai-completions",
+          provider: "openai",
+          id: "gpt-test",
+        } as Parameters<StreamFn>[0],
+        { messages: [] },
+      );
+
+      const deltas: string[] = [];
+      for await (const event of stream as AsyncIterable<{ type?: string; delta?: unknown }>) {
+        if (event.type === "toolcall_delta" && typeof event.delta === "string") {
+          deltas.push(event.delta);
+        }
+      }
+      expect(deltas.join("")).toBe(original);
     });
   });
 });

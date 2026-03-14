@@ -9,6 +9,7 @@ import type {
   Context as PiContext,
   Message,
   TextContent,
+  ToolCall,
   ToolResultMessage,
   UserMessage,
 } from "@mariozechner/pi-ai";
@@ -214,20 +215,34 @@ function wrapResponseStream<T>(stream: T, ctx: PrivacyFilterContext): T {
   }
 
   const inner = iterable[Symbol.asyncIterator]();
+  const bufferedRestore = createBufferedRestore(ctx);
+  const queued: unknown[] = [];
 
   const wrapped: AsyncIterable<unknown> & AsyncIterator<unknown> = {
     [Symbol.asyncIterator]() {
       return this;
     },
     async next() {
+      if (queued.length > 0) {
+        return { done: false as const, value: queued.shift() };
+      }
+
       const result = await inner.next();
       if (result.done) {
+        const flushed = bufferedRestore.flush();
+        if (flushed.length > 0) {
+          queued.push(...flushed);
+          return { done: false as const, value: queued.shift() };
+        }
         return result;
       }
 
       const value = result.value;
       if (value && typeof value === "object") {
-        return { done: false, value: restoreStreamChunk(value as Record<string, unknown>, ctx) };
+        return {
+          done: false,
+          value: restoreStreamChunk(value as Record<string, unknown>, ctx, bufferedRestore),
+        };
       }
       return result;
     },
@@ -246,10 +261,11 @@ function wrapResponseStream<T>(stream: T, ctx: PrivacyFilterContext): T {
 function restoreStreamChunk(
   chunk: Record<string, unknown>,
   ctx: PrivacyFilterContext,
+  bufferedRestore: ReturnType<typeof createBufferedRestore>,
 ): Record<string, unknown> {
   // Handle text deltas.
   if (typeof chunk.text === "string") {
-    const restored = restoreText(chunk.text, ctx);
+    const restored = bufferedRestore.delta("root:text", chunk.text, (text) => ({ ...chunk, text }));
     if (restored !== chunk.text) {
       return { ...chunk, text: restored };
     }
@@ -259,7 +275,11 @@ function restoreStreamChunk(
   if (chunk.type === "content_block_delta" && chunk.delta && typeof chunk.delta === "object") {
     const delta = chunk.delta as Record<string, unknown>;
     if (typeof delta.text === "string") {
-      const restored = restoreText(delta.text, ctx);
+      const laneKey = `content_block_delta:text:${getChunkContentIndex(chunk)}`;
+      const restored = bufferedRestore.delta(laneKey, delta.text, (text) => ({
+        ...chunk,
+        delta: { ...delta, text },
+      }));
       if (restored !== delta.text) {
         return { ...chunk, delta: { ...delta, text: restored } };
       }
@@ -272,14 +292,22 @@ function restoreStreamChunk(
   // Runtime emits two delta shapes: object { arguments: string } and plain string.
   if (chunk.type === "toolcall_delta") {
     if (typeof chunk.delta === "string") {
-      const restored = restoreText(chunk.delta, ctx);
+      const laneKey = `toolcall_delta:string:${getChunkContentIndex(chunk)}`;
+      const restored = bufferedRestore.delta(laneKey, chunk.delta, (text) => ({
+        ...chunk,
+        delta: text,
+      }));
       if (restored !== chunk.delta) {
         return { ...chunk, delta: restored };
       }
     } else if (chunk.delta && typeof chunk.delta === "object") {
       const delta = chunk.delta as Record<string, unknown>;
       if (typeof delta.arguments === "string") {
-        const restored = restoreText(delta.arguments, ctx);
+        const laneKey = `toolcall_delta:arguments:${getChunkContentIndex(chunk)}`;
+        const restored = bufferedRestore.delta(laneKey, delta.arguments, (text) => ({
+          ...chunk,
+          delta: { ...delta, arguments: text },
+        }));
         if (restored !== delta.arguments) {
           return { ...chunk, delta: { ...delta, arguments: restored } };
         }
@@ -328,15 +356,23 @@ function filterAssistantMessage(
 ): AssistantMessage {
   let changed = false;
   const nextContent = msg.content.map((block) => {
-    if (block.type !== "text") {
+    if (block.type === "text") {
+      const replaced = filterText(block.text, ctx);
+      if (replaced === block.text) {
+        return block;
+      }
+      changed = true;
+      return { ...block, text: replaced } satisfies TextContent;
+    }
+    if (block.type === "toolCall") {
+      const filteredArguments = filterUnknownStrings(block.arguments, ctx) as ToolCall["arguments"];
+      if (filteredArguments !== block.arguments) {
+        changed = true;
+        return { ...block, arguments: filteredArguments } satisfies ToolCall;
+      }
       return block;
     }
-    const replaced = filterText(block.text, ctx);
-    if (replaced === block.text) {
-      return block;
-    }
-    changed = true;
-    return { ...block, text: replaced } satisfies TextContent;
+    return block;
   });
 
   return changed ? { ...msg, content: nextContent } : msg;
@@ -365,3 +401,107 @@ function filterToolResultMessage(
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
 };
+
+type BufferedLane = {
+  pendingRaw: string;
+  makeChunk: (text: string) => Record<string, unknown>;
+};
+
+function createBufferedRestore(ctx: PrivacyFilterContext) {
+  const lanes = new Map<string, BufferedLane>();
+  const replacements = ctx.replacer.getMappings().map((m) => m.replacement);
+  const replacementSet = new Set(replacements);
+
+  return {
+    delta(
+      laneKey: string,
+      text: string,
+      makeChunk: (text: string) => Record<string, unknown>,
+    ): string {
+      if (!text || replacements.length === 0) {
+        return restoreText(text, ctx);
+      }
+
+      const lane = lanes.get(laneKey) ?? { pendingRaw: "", makeChunk };
+      lane.makeChunk = makeChunk;
+
+      const combined = lane.pendingRaw + text;
+      const holdback = findLongestReplacementPrefixSuffix(combined, replacements, replacementSet);
+      const committed = holdback.length > 0 ? combined.slice(0, -holdback.length) : combined;
+      lane.pendingRaw = holdback;
+      lanes.set(laneKey, lane);
+      return restoreText(committed, ctx);
+    },
+    flush(): Record<string, unknown>[] {
+      const flushed: Record<string, unknown>[] = [];
+      for (const lane of lanes.values()) {
+        if (!lane.pendingRaw) {
+          continue;
+        }
+        const restored = restoreText(lane.pendingRaw, ctx);
+        if (restored) {
+          flushed.push(lane.makeChunk(restored));
+        }
+      }
+      lanes.clear();
+      return flushed;
+    },
+  };
+}
+
+function findLongestReplacementPrefixSuffix(
+  text: string,
+  replacements: string[],
+  replacementSet: ReadonlySet<string>,
+): string {
+  let best = "";
+  for (const replacement of replacements) {
+    const maxPrefixLength = Math.min(text.length, replacement.length - 1);
+    for (let length = maxPrefixLength; length > best.length; length -= 1) {
+      const suffix = text.slice(-length);
+      if (text.endsWith(replacement.slice(0, length))) {
+        if (replacementSet.has(suffix)) {
+          continue;
+        }
+        best = suffix;
+        break;
+      }
+    }
+  }
+  return best;
+}
+
+function filterUnknownStrings(value: unknown, ctx: PrivacyFilterContext): unknown {
+  if (typeof value === "string") {
+    return filterText(value, ctx);
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item) => {
+      const filtered = filterUnknownStrings(item, ctx);
+      if (filtered !== item) {
+        changed = true;
+      }
+      return filtered;
+    });
+    return changed ? next : value;
+  }
+  if (value && typeof value === "object") {
+    let changed = false;
+    const input = value as Record<string, unknown>;
+    const next: Record<string, unknown> = {};
+    for (const [key, raw] of Object.entries(input)) {
+      const filtered = filterUnknownStrings(raw, ctx);
+      if (filtered !== raw) {
+        changed = true;
+      }
+      next[key] = filtered;
+    }
+    return changed ? next : value;
+  }
+  return value;
+}
+
+function getChunkContentIndex(chunk: Record<string, unknown>): string {
+  return typeof chunk.contentIndex === "number" ? String(chunk.contentIndex) : "na";
+}
