@@ -91,6 +91,9 @@ async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
   if (!requestedPath) {
     await download.saveAs?.(resolvedOutPath);
   } else {
+    // Use the target's parent directory as root so explicit user-specified
+    // download paths are not constrained to DEFAULT_DOWNLOAD_DIR. The atomic
+    // write (temp sibling → rename) still protects against hardlink overwrites.
     await writeViaSiblingTempPath({
       rootDir: path.dirname(resolvedOutPath),
       targetPath: resolvedOutPath,

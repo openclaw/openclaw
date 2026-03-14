@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
 import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 function buildSiblingTempPath(targetPath: string): string {
@@ -36,12 +35,11 @@ export async function writeViaSiblingTempPath(params: {
   let renameSucceeded = false;
   try {
     await params.writeTemp(tempPath);
-    await writeFileFromPathWithinRoot({
-      rootDir,
-      relativePath: relativeTargetPath,
-      sourcePath: tempPath,
-      mkdir: false,
-    });
+    // Atomic rename: replaces the directory entry so any existing hardlink
+    // at targetPath is broken (the original inode keeps its data, but the
+    // name now points to the temp file's inode).  The root-boundary check
+    // above already guarantees targetPath is inside rootDir.
+    await fs.rename(tempPath, targetPath);
     renameSucceeded = true;
   } finally {
     if (!renameSucceeded) {
