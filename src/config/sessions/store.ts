@@ -553,6 +553,12 @@ type SessionStoreLockQueue = {
 
 const LOCK_QUEUES = new Map<string, SessionStoreLockQueue>();
 
+/**
+ * Maximum number of pending tasks per lock queue.
+ * Prevents memory exhaustion under high concurrency (#C1-fix).
+ */
+const MAX_LOCK_QUEUE_SIZE = 1000;
+
 function getErrorCode(error: unknown): string | null {
   if (!error || typeof error !== "object" || !("code" in error)) {
     return null;
@@ -709,6 +715,14 @@ async function withSessionStoreLock<T>(
 
   const hasTimeout = timeoutMs > 0 && Number.isFinite(timeoutMs);
   const queue = getOrCreateLockQueue(storePath);
+
+  // Check queue size limit to prevent memory exhaustion
+  if (queue.pending.length >= MAX_LOCK_QUEUE_SIZE) {
+    throw new Error(
+      `Session store lock queue exceeded maximum size (${MAX_LOCK_QUEUE_SIZE}) for ${storePath}. ` +
+        `This may indicate a lock leak or excessive concurrency.`,
+    );
+  }
 
   const promise = new Promise<T>((resolve, reject) => {
     const task: SessionStoreLockTask = {
