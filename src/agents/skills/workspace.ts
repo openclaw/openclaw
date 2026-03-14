@@ -203,12 +203,17 @@ function resolveContainedSkillPath(params: {
   rootDir: string;
   rootRealPath: string;
   candidatePath: string;
+  allowedRootRealPaths?: string[];
 }): string | null {
   const candidateRealPath = tryRealpath(params.candidatePath);
   if (!candidateRealPath) {
     return null;
   }
   if (isPathInside(params.rootRealPath, candidateRealPath)) {
+    return candidateRealPath;
+  }
+  const allowedRoots = params.allowedRootRealPaths ?? [];
+  if (allowedRoots.some((rootRealPath) => isPathInside(rootRealPath, candidateRealPath))) {
     return candidateRealPath;
   }
   warnEscapedSkillPath({
@@ -225,6 +230,7 @@ function filterLoadedSkillsInsideRoot(params: {
   source: string;
   rootDir: string;
   rootRealPath: string;
+  allowedRootRealPaths?: string[];
 }): Skill[] {
   return params.skills.filter((skill) => {
     const baseDirRealPath = resolveContainedSkillPath({
@@ -232,6 +238,7 @@ function filterLoadedSkillsInsideRoot(params: {
       rootDir: params.rootDir,
       rootRealPath: params.rootRealPath,
       candidatePath: skill.baseDir,
+      allowedRootRealPaths: params.allowedRootRealPaths,
     });
     if (!baseDirRealPath) {
       return false;
@@ -241,6 +248,7 @@ function filterLoadedSkillsInsideRoot(params: {
       rootDir: params.rootDir,
       rootRealPath: params.rootRealPath,
       candidatePath: skill.filePath,
+      allowedRootRealPaths: params.allowedRootRealPaths,
     });
     return Boolean(skillFileRealPath);
   });
@@ -311,6 +319,7 @@ function loadSkillEntries(
       rootDir,
       rootRealPath,
       candidatePath: baseDir,
+      allowedRootRealPaths: allowedSkillRootRealPaths,
     });
     if (!baseDirRealPath) {
       return [];
@@ -324,6 +333,7 @@ function loadSkillEntries(
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: rootSkillMd,
+        allowedRootRealPaths: allowedSkillRootRealPaths,
       });
       if (!rootSkillRealPath) {
         return [];
@@ -349,6 +359,7 @@ function loadSkillEntries(
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
+        allowedRootRealPaths: allowedSkillRootRealPaths,
       });
     }
 
@@ -385,6 +396,7 @@ function loadSkillEntries(
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: skillDir,
+        allowedRootRealPaths: allowedSkillRootRealPaths,
       });
       if (!skillDirRealPath) {
         continue;
@@ -398,6 +410,7 @@ function loadSkillEntries(
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: skillMd,
+        allowedRootRealPaths: allowedSkillRootRealPaths,
       });
       if (!skillMdRealPath) {
         continue;
@@ -424,6 +437,7 @@ function loadSkillEntries(
           source: params.source,
           rootDir,
           rootRealPath: baseDirRealPath,
+          allowedRootRealPaths: allowedSkillRootRealPaths,
         }),
       );
 
@@ -454,6 +468,18 @@ function loadSkillEntries(
     config: opts?.config,
   });
   const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
+  const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
+  const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
+  const allowedSkillRootRealPaths = [
+    managedSkillsDir,
+    workspaceSkillsDir,
+    bundledSkillsDir,
+    personalAgentsSkillsDir,
+    projectAgentsSkillsDir,
+    ...mergedExtraDirs.map((dir) => resolveUserPath(dir)),
+  ]
+    .filter((dir): dir is string => Boolean(dir))
+    .map((dir) => tryRealpath(path.resolve(dir)) ?? path.resolve(dir));
 
   const bundledSkills = bundledSkillsDir
     ? loadSkills({
@@ -472,12 +498,10 @@ function loadSkillEntries(
     dir: managedSkillsDir,
     source: "openclaw-managed",
   });
-  const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
   const personalAgentsSkills = loadSkills({
     dir: personalAgentsSkillsDir,
     source: "agents-skills-personal",
   });
-  const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
   const projectAgentsSkills = loadSkills({
     dir: projectAgentsSkillsDir,
     source: "agents-skills-project",
