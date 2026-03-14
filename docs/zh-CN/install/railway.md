@@ -5,7 +5,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: 6d5c2ec2f779bb240e778b5e18ffb8138ce175c4bbdf58b2064a6ad200bf4d1b
-  source_path: railway.mdx
+  source_path: railway.md
   workflow: 15
 ---
 
