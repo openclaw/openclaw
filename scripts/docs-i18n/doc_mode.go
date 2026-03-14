@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -75,6 +76,7 @@ func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, fil
 		return false, err
 	}
 
+	translatedBody = rewriteInternalLinks(translatedBody, tgtLang)
 	output := updatedFront + translatedBody
 	return false, os.WriteFile(outputPath, []byte(output), 0o644)
 }
@@ -269,4 +271,100 @@ func resolveDocsPath(docsRoot, filePath string) (string, string, error) {
 		return "", "", fmt.Errorf("file %s not under docs root %s", absPath, docsRoot)
 	}
 	return absPath, relPath, nil
+}
+
+func rewriteInternalLinks(body string, tgtLang string) string {
+	if tgtLang == "en" || tgtLang == "" {
+		return body
+	}
+
+	localePrefix := "/" + tgtLang
+
+	// Rewrite Markdown links: [text](/path) -> [text](/zh-CN/path)
+	body = linkURLRe.ReplaceAllStringFunc(body, func(match string) string {
+		// Extract the URL part from [text](url)
+		idx := strings.Index(match, "](")
+		if idx == -1 {
+			return match
+		}
+		prefix := match[:idx+2] // [text](
+		url := match[idx+2:]
+
+		// Skip if already has locale prefix or is external
+		if strings.HasPrefix(url, localePrefix) ||
+			strings.HasPrefix(url, "http://") ||
+			strings.HasPrefix(url, "https://") ||
+			strings.HasPrefix(url, "#") ||
+			strings.HasPrefix(url, "mailto:") {
+			return match
+		}
+
+		// Rewrite internal absolute links
+		if strings.HasPrefix(url, "/") {
+			return prefix + localePrefix + url
+		}
+
+		return match
+	})
+
+	// Rewrite HTML href attributes
+	body = rewriteHTMLHref(body, localePrefix)
+
+	return body
+}
+
+func rewriteHTMLHref(body string, localePrefix string) string {
+	// Pattern to match href="/path" in HTML tags
+	// This handles both href="/path" and href = "/path"
+	hrefPattern := `href\s*=\s*["'](/[^"']*)["']`
+	re := regexp.MustCompile(hrefPattern)
+
+	return re.ReplaceAllStringFunc(body, func(match string) string {
+		// Extract the URL from href="/url"
+		idx := strings.Index(match, "href=")
+		if idx == -1 {
+			return match
+		}
+
+		// Find the quote character
+		quoteStart := idx + 5
+		for quoteStart < len(match) && (match[quoteStart] == ' ' || match[quoteStart] == '=') {
+			quoteStart++
+		}
+		if quoteStart >= len(match) {
+			return match
+		}
+
+		quoteChar := match[quoteStart]
+		if quoteChar != '"' && quoteChar != '\'' {
+			return match
+		}
+
+		urlStart := quoteStart + 1
+		urlEnd := strings.Index(match[urlStart:], string(quoteChar))
+		if urlEnd == -1 {
+			return match
+		}
+		urlEnd += urlStart
+
+		url := match[urlStart:urlEnd]
+
+		// Skip if already has locale prefix or is external
+		if strings.HasPrefix(url, localePrefix) ||
+			strings.HasPrefix(url, "http://") ||
+			strings.HasPrefix(url, "https://") ||
+			strings.HasPrefix(url, "#") ||
+			strings.HasPrefix(url, "mailto:") {
+			return match
+		}
+
+		// Rewrite internal absolute links
+		if strings.HasPrefix(url, "/") {
+			prefix := match[:urlStart]
+			suffix := match[urlEnd:]
+			return prefix + localePrefix + url + suffix
+		}
+
+		return match
+	})
 }
