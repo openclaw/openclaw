@@ -153,6 +153,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       left: acc?.appendSystemContext,
       right: next.appendSystemContext,
     }),
+    truncateBefore: Math.max(acc?.truncateBefore ?? 0, next.truncateBefore ?? 0) || undefined,
   });
 
   const mergeSubagentSpawningResult = (
