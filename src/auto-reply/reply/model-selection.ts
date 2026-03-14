@@ -403,22 +403,28 @@ export async function createModelSelectionState(params: {
     return defaultThinkingLevel;
   };
 
-  const resolveDefaultReasoningLevel = async (): Promise<"on" | "off"> => {
+  let reasoningLevelPromise: Promise<"on" | "off"> | undefined;
+  const resolveDefaultReasoningLevel = (): Promise<"on" | "off"> => {
     if (defaultReasoningLevel) {
-      return defaultReasoningLevel;
+      return Promise.resolve(defaultReasoningLevel);
     }
-    let catalogForReasoning = modelCatalog ?? allowedModelCatalog;
-    if (!catalogForReasoning || catalogForReasoning.length === 0) {
-      modelCatalog = await loadModelCatalog({ config: cfg });
-      catalogForReasoning = modelCatalog;
+    if (!reasoningLevelPromise) {
+      reasoningLevelPromise = (async () => {
+        let catalogForReasoning = modelCatalog ?? allowedModelCatalog;
+        if (!catalogForReasoning || catalogForReasoning.length === 0) {
+          modelCatalog = await loadModelCatalog({ config: cfg });
+          catalogForReasoning = modelCatalog;
+        }
+        defaultReasoningLevel = resolveReasoningDefault({
+          cfg,
+          provider,
+          model,
+          catalog: catalogForReasoning,
+        });
+        return defaultReasoningLevel;
+      })();
     }
-    defaultReasoningLevel = resolveReasoningDefault({
-      cfg,
-      provider,
-      model,
-      catalog: catalogForReasoning,
-    });
-    return defaultReasoningLevel;
+    return reasoningLevelPromise;
   };
 
   return {

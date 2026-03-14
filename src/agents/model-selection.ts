@@ -671,7 +671,6 @@ export function resolveReasoningDefault(params: {
   model: string;
   catalog?: ModelCatalogEntry[];
 }): "on" | "off" {
-  const key = modelKey(params.provider, params.model);
   const configured = params.cfg?.models?.providers?.[params.provider]?.models?.find(
     (entry) => entry.id === params.model,
   );
@@ -679,9 +678,7 @@ export function resolveReasoningDefault(params: {
     return configured.reasoning ? "on" : "off";
   }
   const candidate = params.catalog?.find(
-    (entry) =>
-      (entry.provider === params.provider && entry.id === params.model) ||
-      (entry.provider === key && entry.id === params.model),
+    (entry) => entry.provider === params.provider && entry.id === params.model,
   );
   return candidate?.reasoning === true ? "on" : "off";
 }
