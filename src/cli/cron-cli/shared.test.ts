@@ -152,6 +152,29 @@ describe("printCronList", () => {
     expect(dataLine).toContain("opus");
   });
 
+  it("handles payload.model as {primary, fallbacks} object without crashing (#44084)", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "object-model-job",
+      name: "Object Model",
+      agentId: "ops",
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: "hello",
+        model: {
+          primary: "openai-codex/gpt-5.1-codex-mini",
+          fallbacks: ["anthropic/claude-haiku-4-5"],
+        } as unknown as string,
+      },
+    });
+
+    expect(() => printCronList([job], runtime)).not.toThrow();
+    const dataLine = logs[1] ?? "";
+    // Model column is truncated to 20 chars, so we check for the prefix
+    expect(dataLine).toContain("openai-codex/gpt-");
+  });
+
   it("shows exact label for cron schedules with stagger disabled", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
