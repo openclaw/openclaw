@@ -87,12 +87,6 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): 
   expect(supportsDeveloperRole(normalized)).toBe(false);
 }
 
-function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
-  const model = { ...baseModel(), ...overrides };
-  delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model<Api>);
-  expect(supportsUsageInStreaming(normalized)).toBe(false);
-}
 
 function expectResolvedForwardCompat(
   model: Model<Api> | undefined,
