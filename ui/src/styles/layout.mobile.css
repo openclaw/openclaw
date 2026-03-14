@@ -219,6 +219,27 @@
 
 /* Mobile-specific styles */
 @media (max-width: 768px) {
+  html,
+  body,
+  openclaw-app {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .shell,
+  .shell--chat,
+  .shell--nav-collapsed,
+  .shell--chat-focus {
+    height: 100svh;
+    min-height: 100svh;
+  }
+
+  .shell,
+  .shell--nav-collapsed,
+  .shell--chat-focus {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
   .shell {
     --shell-pad: 8px;
     --shell-gap: 8px;
@@ -317,9 +338,9 @@
   }
 
   .content--chat .content-header {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
     gap: 8px;
   }
 
@@ -327,10 +348,76 @@
     gap: 2px;
   }
 
-  .content--chat .content-header > div:first-child,
-  .content--chat .page-meta,
+  .content--chat .content-header > div:first-child {
+    min-width: 0;
+  }
+
+  .content--chat .page-meta {
+    width: auto;
+    justify-self: end;
+  }
+
+  .content--chat .chat-controls__session-row {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr);
+    gap: 6px;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .content--chat .chat-controls__session,
+  .content--chat .chat-controls__model {
+    min-width: 0;
+    max-width: none;
+  }
+
   .content--chat .chat-controls {
+    display: grid;
+    grid-template-columns: repeat(4, auto);
+    align-items: center;
+    justify-content: end;
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .content--chat .chat-controls__session select,
+  .content--chat .chat-controls__model select {
     width: 100%;
+    font-size: 12px;
+    padding: 6px 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .content--chat .btn--icon {
+    min-width: 30px;
+    height: 30px;
+    padding: 5px !important;
+  }
+
+  .content--chat .btn--icon svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .content--chat .chat-controls__separator {
+    display: none;
+  }
+
+  .content--chat .content-header,
+  .content--chat .chat,
+  .content--chat .chat-split-container,
+  .content--chat .chat-main {
+    min-height: 0;
+  }
+
+  .content--chat .chat-thread {
+    padding-bottom: 8px;
+  }
+
+  .content--chat .agent-chat__input {
+    margin: 0 8px calc(10px + env(safe-area-inset-bottom, 0px));
   }
 
   .content {
