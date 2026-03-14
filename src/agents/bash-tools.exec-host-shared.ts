@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { loadConfig } from "../config/config.js";
+import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
   hasConfiguredExecApprovalDmRoute,
   type ExecApprovalInitiatingSurfaceState,
@@ -12,11 +14,14 @@ import {
   type ExecAsk,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
+import { buildApprovalPendingMessage } from "./bash-tools.exec-runtime.js";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
 
@@ -51,6 +56,23 @@ export type RegisteredExecApprovalRequestContext = {
   initiatingSurface: ExecApprovalInitiatingSurfaceState;
   sentApproverDms: boolean;
   unavailableReason: ExecApprovalUnavailableReason | null;
+};
+
+export type ExecApprovalFollowupTarget = {
+  approvalId: string;
+  sessionKey?: string;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
+};
+
+export type DefaultExecApprovalRequestArgs = {
+  warnings: string[];
+  approvalRunningNoticeMs: number;
+  createApprovalSlug: (approvalId: string) => string;
+  turnSourceChannel?: string;
+  turnSourceAccountId?: string;
 };
 
 export function createExecApprovalPendingState(params: {
@@ -255,5 +277,125 @@ export async function createAndRegisterDefaultExecApprovalRequest(params: {
     initiatingSurface,
     sentApproverDms,
     unavailableReason,
+  };
+}
+
+export function buildDefaultExecApprovalRequestArgs(
+  params: DefaultExecApprovalRequestArgs,
+): DefaultExecApprovalRequestArgs {
+  return {
+    warnings: params.warnings,
+    approvalRunningNoticeMs: params.approvalRunningNoticeMs,
+    createApprovalSlug: params.createApprovalSlug,
+    turnSourceChannel: params.turnSourceChannel,
+    turnSourceAccountId: params.turnSourceAccountId,
+  };
+}
+
+export function buildExecApprovalFollowupTarget(
+  params: ExecApprovalFollowupTarget,
+): ExecApprovalFollowupTarget {
+  return {
+    approvalId: params.approvalId,
+    sessionKey: params.sessionKey,
+    turnSourceChannel: params.turnSourceChannel,
+    turnSourceTo: params.turnSourceTo,
+    turnSourceAccountId: params.turnSourceAccountId,
+    turnSourceThreadId: params.turnSourceThreadId,
+  };
+}
+
+export function createExecApprovalDecisionState(params: {
+  decision: string | null | undefined;
+  askFallback: ResolvedExecApprovals["agent"]["askFallback"];
+  obfuscationDetected: boolean;
+}) {
+  const baseDecision = resolveBaseExecApprovalDecision({
+    decision: params.decision ?? null,
+    askFallback: params.askFallback,
+    obfuscationDetected: params.obfuscationDetected,
+  });
+  return {
+    baseDecision,
+    approvedByAsk: baseDecision.approvedByAsk,
+    deniedReason: baseDecision.deniedReason,
+  };
+}
+
+export async function sendExecApprovalFollowupResult(
+  target: ExecApprovalFollowupTarget,
+  resultText: string,
+): Promise<void> {
+  await sendExecApprovalFollowup({
+    approvalId: target.approvalId,
+    sessionKey: target.sessionKey,
+    turnSourceChannel: target.turnSourceChannel,
+    turnSourceTo: target.turnSourceTo,
+    turnSourceAccountId: target.turnSourceAccountId,
+    turnSourceThreadId: target.turnSourceThreadId,
+    resultText,
+  }).catch(() => {});
+}
+
+export function buildExecApprovalPendingToolResult(params: {
+  host: "gateway" | "node";
+  command: string;
+  cwd: string;
+  warningText: string;
+  approvalId: string;
+  approvalSlug: string;
+  expiresAtMs: number;
+  initiatingSurface: ExecApprovalInitiatingSurfaceState;
+  sentApproverDms: boolean;
+  unavailableReason: ExecApprovalUnavailableReason | null;
+  nodeId?: string;
+}): AgentToolResult<ExecToolDetails> {
+  return {
+    content: [
+      {
+        type: "text",
+        text:
+          params.unavailableReason !== null
+            ? (buildExecApprovalUnavailableReplyPayload({
+                warningText: params.warningText,
+                reason: params.unavailableReason,
+                channelLabel: params.initiatingSurface.channelLabel,
+                sentApproverDms: params.sentApproverDms,
+              }).text ?? "")
+            : buildApprovalPendingMessage({
+                warningText: params.warningText,
+                approvalSlug: params.approvalSlug,
+                approvalId: params.approvalId,
+                command: params.command,
+                cwd: params.cwd,
+                host: params.host,
+                nodeId: params.nodeId,
+              }),
+      },
+    ],
+    details:
+      params.unavailableReason !== null
+        ? ({
+            status: "approval-unavailable",
+            reason: params.unavailableReason,
+            channelLabel: params.initiatingSurface.channelLabel,
+            sentApproverDms: params.sentApproverDms,
+            host: params.host,
+            command: params.command,
+            cwd: params.cwd,
+            nodeId: params.nodeId,
+            warningText: params.warningText,
+          } satisfies ExecToolDetails)
+        : ({
+            status: "approval-pending",
+            approvalId: params.approvalId,
+            approvalSlug: params.approvalSlug,
+            expiresAtMs: params.expiresAtMs,
+            host: params.host,
+            command: params.command,
+            cwd: params.cwd,
+            nodeId: params.nodeId,
+            warningText: params.warningText,
+          } satisfies ExecToolDetails),
   };
 }
