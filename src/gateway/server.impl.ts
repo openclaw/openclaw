@@ -24,6 +24,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import {
   registerInternalHook,
   unregisterInternalHook,
+  isMessageReceivedEvent,
   type InternalHookHandler,
 } from "../hooks/internal-hooks.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
@@ -653,9 +654,12 @@ export async function startGatewayServer(
 
   // Broadcast inbound channel messages to Control UI (chat.inbound) — refs #chat-inbound-polling
   const chatInboundHookHandler: InternalHookHandler = async (event) => {
-    const channelId = event.context?.channelId as string | undefined;
+    if (!isMessageReceivedEvent(event)) {
+      return;
+    }
+    const { channelId } = event.context;
     // Skip webchat-originated messages — the UI already knows about those
-    if (!channelId || channelId === "webchat") {
+    if (channelId === "webchat") {
       return;
     }
     broadcast(
@@ -663,7 +667,7 @@ export async function startGatewayServer(
       {
         sessionKey: event.sessionKey,
         channelId,
-        timestamp: event.timestamp?.toISOString?.() ?? new Date().toISOString(),
+        timestamp: event.timestamp.toISOString(),
       },
       { dropIfSlow: true },
     );

@@ -48,6 +48,7 @@ import type {
 // Debounced chat history reload for chat.inbound events.
 // Collapses rapid-fire inbound messages (e.g. user sending multiple Telegram
 // messages quickly) into a single loadChatHistory call.
+// Note: module-level timer is fine — Control UI maintains a single gateway connection.
 let _chatInboundTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedLoadChatHistory(host: GatewayHost): void {
   if (_chatInboundTimer) {
