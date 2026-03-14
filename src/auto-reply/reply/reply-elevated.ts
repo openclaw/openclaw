@@ -24,8 +24,16 @@ function resolveElevatedAllowList(
   if (!allowFrom) {
     return fallbackAllowFrom;
   }
-  const value = allowFrom[provider];
-  return Array.isArray(value) ? value : fallbackAllowFrom;
+  const direct = allowFrom[provider];
+  if (Array.isArray(direct)) {
+    return direct;
+  }
+  const normalizedProvider = normalizeChannelId(provider);
+  if (!normalizedProvider || normalizedProvider === provider) {
+    return fallbackAllowFrom;
+  }
+  const normalized = allowFrom[normalizedProvider];
+  return Array.isArray(normalized) ? normalized : fallbackAllowFrom;
 }
 
 function resolveAllowFromFormatter(params: {
