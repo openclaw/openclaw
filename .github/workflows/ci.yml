@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -38,9 +38,8 @@ jobs:
         id: check
         uses: ./.github/actions/detect-docs-changes
 
-  # Detect which heavy areas are touched so PRs can skip unrelated expensive jobs.
-  # Push to main keeps broad coverage, but this job still needs to run so
-  # downstream jobs that list it in `needs` are not skipped.
+  # Detect which heavy areas are touched so CI can skip unrelated expensive jobs.
+  # Fail-safe: if detection fails, downstream jobs run.
   changed-scope:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_only != 'true'
@@ -82,7 +81,7 @@ jobs:
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -141,7 +140,7 @@ jobs:
 
   checks:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     strategy:
       fail-fast: false
@@ -149,6 +148,13 @@ jobs:
         include:
           - runtime: node
             task: test
+            shard_index: 1
+            shard_count: 2
+            command: pnpm canvas:a2ui:bundle && pnpm test
+          - runtime: node
+            task: test
+            shard_index: 2
+            shard_count: 2
             command: pnpm canvas:a2ui:bundle && pnpm test
           - runtime: node
             task: extensions
@@ -160,40 +166,47 @@ jobs:
             task: test
             command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
     steps:
-      - name: Skip bun lane on push
-        if: github.event_name == 'push' && matrix.runtime == 'bun'
-        run: echo "Skipping bun test lane on push events."
+      - name: Skip bun lane on pull requests
+        if: github.event_name == 'pull_request' && matrix.runtime == 'bun'
+        run: echo "Skipping Bun compatibility lane on pull requests."
 
       - name: Checkout
-        if: github.event_name != 'push' || matrix.runtime != 'bun'
+        if: github.event_name != 'pull_request' || matrix.runtime != 'bun'
         uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Node environment
-        if: matrix.runtime != 'bun' || github.event_name != 'push'
+        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "${{ matrix.runtime == 'bun' }}"
           use-sticky-disk: "false"
 
       - name: Configure Node test resources
-        if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
+        if: (github.event_name != 'pull_request' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
+        env:
+          SHARD_COUNT: ${{ matrix.shard_count || '' }}
+          SHARD_INDEX: ${{ matrix.shard_index || '' }}
         run: |
           # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
           # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
           echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+          if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
+            echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
+            echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
+          fi
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: matrix.runtime != 'bun' || github.event_name != 'push'
+        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
         run: ${{ matrix.command }}
 
   # Types, lint, and format check.
   check:
     name: "check"
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -239,7 +252,7 @@ jobs:
   compat-node22:
     name: "compat-node22"
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -272,7 +285,7 @@ jobs:
 
   skills-python:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true' || needs.changed-scope.outputs.run_skills_python == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_skills_python == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -365,7 +378,7 @@ jobs:
 
   checks-windows:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_windows == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true'
     runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 45
     env:
@@ -727,7 +740,7 @@ jobs:
 
   android:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_android == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_android == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     strategy:
       fail-fast: false
