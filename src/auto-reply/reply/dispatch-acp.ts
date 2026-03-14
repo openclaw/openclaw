@@ -13,6 +13,7 @@ import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
@@ -189,6 +190,7 @@ export async function tryDispatchAcpReply(params: {
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   sessionKey?: string;
+  runId?: string;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
@@ -365,6 +367,17 @@ export async function tryDispatchAcpReply(params: {
       `acp-dispatch: session=${sessionKey} outcome=ok latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
     );
     params.recordProcessed("completed", { reason: "acp_dispatch" });
+    if (params.runId) {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: acpDispatchStartedAt,
+          endedAt: Date.now(),
+        },
+      });
+    }
     params.markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {
@@ -388,6 +401,18 @@ export async function tryDispatchAcpReply(params: {
     params.recordProcessed("completed", {
       reason: `acp_error:${acpError.code.toLowerCase()}`,
     });
+    if (params.runId) {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt: acpDispatchStartedAt,
+          endedAt: Date.now(),
+          error: acpError.code,
+        },
+      });
+    }
     params.markIdle("message_completed");
     return { queuedFinal, counts };
   }

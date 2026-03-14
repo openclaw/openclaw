@@ -1345,6 +1345,17 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
   };
 }
 
+export function resolveActiveRunIdForChildSession(childSessionKey: string): string | undefined {
+  const runIds = findRunIdsByChildSessionKey(childSessionKey);
+  for (const runId of runIds) {
+    const entry = subagentRuns.get(runId);
+    if (entry && typeof entry.endedAt !== "number") {
+      return runId;
+    }
+  }
+  return undefined;
+}
+
 export function isSubagentSessionRunActive(childSessionKey: string): boolean {
   const runIds = findRunIdsByChildSessionKey(childSessionKey);
   for (const runId of runIds) {
