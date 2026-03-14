@@ -6,11 +6,14 @@ describe("Matrix proxy support", () => {
     const originalEnv = { ...process.env };
 
     beforeEach(() => {
-      // Clear proxy vars
+      // Clear proxy vars (both uppercase and lowercase)
       delete process.env.MATRIX_PROXY;
       delete process.env.HTTPS_PROXY;
+      delete process.env.https_proxy;
       delete process.env.HTTP_PROXY;
+      delete process.env.http_proxy;
       delete process.env.ALL_PROXY;
+      delete process.env.all_proxy;
     });
 
     afterEach(() => {
@@ -70,6 +73,31 @@ describe("Matrix proxy support", () => {
       process.env.ALL_PROXY = "  ";
 
       expect(resolveMatrixProxyUrl(process.env)).toBeUndefined();
+    });
+
+    it("uses lowercase https_proxy when uppercase not set", () => {
+      process.env.https_proxy = "http://https-proxy:8080";
+
+      expect(resolveMatrixProxyUrl(process.env)).toBe("http://https-proxy:8080");
+    });
+
+    it("uses lowercase http_proxy when uppercase not set", () => {
+      process.env.http_proxy = "http://http-proxy:8080";
+
+      expect(resolveMatrixProxyUrl(process.env)).toBe("http://http-proxy:8080");
+    });
+
+    it("uses lowercase all_proxy as fallback", () => {
+      process.env.all_proxy = "http://all-proxy:8080";
+
+      expect(resolveMatrixProxyUrl(process.env)).toBe("http://all-proxy:8080");
+    });
+
+    it("prefers uppercase over lowercase variants", () => {
+      process.env.HTTPS_PROXY = "http://uppercase:8080";
+      process.env.https_proxy = "http://lowercase:8080";
+
+      expect(resolveMatrixProxyUrl(process.env)).toBe("http://uppercase:8080");
     });
   });
 });

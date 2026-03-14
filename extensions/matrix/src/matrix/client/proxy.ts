@@ -29,8 +29,11 @@ export function resolveMatrixProxyUrl(env: NodeJS.ProcessEnv = process.env): str
   return (
     env.MATRIX_PROXY?.trim() ||
     env.HTTPS_PROXY?.trim() ||
+    env.https_proxy?.trim() ||
     env.HTTP_PROXY?.trim() ||
+    env.http_proxy?.trim() ||
     env.ALL_PROXY?.trim() ||
+    env.all_proxy?.trim() ||
     undefined
   );
 }
