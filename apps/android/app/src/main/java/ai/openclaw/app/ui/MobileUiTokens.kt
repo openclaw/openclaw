@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Brush
@@ -16,7 +15,7 @@ import ai.openclaw.app.R
 // MobileColors – semantic color tokens with light + dark variants
 // ---------------------------------------------------------------------------
 
-data class MobileColors(
+internal data class MobileColors(
   val surface: Color,
   val surfaceStrong: Color,
   val cardSurface: Color,
@@ -44,7 +43,7 @@ data class MobileColors(
   val chipBorderError: Color,
 )
 
-fun lightMobileColors() =
+internal fun lightMobileColors() =
   MobileColors(
     surface = Color(0xFFF6F7FA),
     surfaceStrong = Color(0xFFECEEF3),
@@ -73,7 +72,7 @@ fun lightMobileColors() =
     chipBorderError = Color(0xFFF3C8C8),
   )
 
-fun darkMobileColors() =
+internal fun darkMobileColors() =
   MobileColors(
     surface = Color(0xFF1A1C20),
     surfaceStrong = Color(0xFF24262B),
@@ -104,7 +103,7 @@ fun darkMobileColors() =
 
 internal val LocalMobileColors = staticCompositionLocalOf { lightMobileColors() }
 
-object MobileColorsAccessor {
+internal object MobileColorsAccessor {
   val current: MobileColors
     @Composable get() = LocalMobileColors.current
 }
@@ -140,24 +139,14 @@ internal val mobileCodeAccent: Color @Composable get() = LocalMobileColors.curre
 // Background gradient – light fades white→gray, dark fades near-black→dark-gray
 internal val mobileBackgroundGradient: Brush
   @Composable get() {
-    val isDark = isSystemInDarkTheme()
-    return if (isDark) {
-      Brush.verticalGradient(
-        listOf(
-          Color(0xFF121416),
-          Color(0xFF16181C),
-          Color(0xFF1A1C20),
-        ),
-      )
-    } else {
-      Brush.verticalGradient(
-        listOf(
-          Color(0xFFFFFFFF),
-          Color(0xFFF7F8FA),
-          Color(0xFFEFF1F5),
-        ),
-      )
-    }
+    val colors = LocalMobileColors.current
+    return Brush.verticalGradient(
+      listOf(
+        colors.surface,
+        colors.surfaceStrong,
+        colors.surfaceStrong,
+      ),
+    )
   }
 
 // ---------------------------------------------------------------------------

@@ -58,7 +58,6 @@ import ai.openclaw.app.ui.mobileSurface
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileTextTertiary
-import ai.openclaw.app.ui.mobileWarning
 
 @Composable
 fun ChatComposer(
