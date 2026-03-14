@@ -279,6 +279,38 @@ async function retryTransientDirectCronDelivery<T>(params: {
   }
 }
 
+/**
+ * Patterns that identify raw error output from model providers or runtime
+ * exceptions.  When any of these match the synthesized text of a cron run,
+ * announce delivery is suppressed to avoid posting error JSON dumps to
+ * user-facing channels.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/42243
+ */
+const RAW_ERROR_OUTPUT_PATTERNS: readonly RegExp[] = [
+  /^\s*\{[\s\S]*"(?:type|error|code)":\s*"(?:error|server_error|invalid_request)/,
+  /^\s*(?:Error|TypeError|RangeError|SyntaxError|ReferenceError):/,
+  /\b(?:error|Error)\b.*\b(?:status|code)\b.*\b(?:5\d{2}|4\d{2})\b/,
+  /^\s*\{[\s\S]*"(?:message|error)":\s*"An error occurred/,
+  /\berror"?:\s*\{[\s\S]*"(?:type|code)":\s*"(?:server_error|invalid_request|rate_limit)/,
+];
+
+/**
+ * Returns `true` when `text` looks like a raw error response rather than
+ * useful agent output.  Used to prevent error JSON dumps from being
+ * delivered to user-facing channels via announce mode.
+ *
+ * Only inspects short texts (<=5000 chars) -- large outputs are assumed to
+ * be real content that happens to mention an error keyword.
+ */
+export function isLikelyRawErrorOutput(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > 5000) {
+    return false;
+  }
+  return RAW_ERROR_OUTPUT_PATTERNS.some((re) => re.test(trimmed));
+}
+
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
 ): Promise<DispatchCronDeliveryState> {
@@ -287,6 +319,24 @@ export async function dispatchCronDelivery(
   let outputText = params.outputText;
   let synthesizedText = params.synthesizedText;
   let deliveryPayloads = params.deliveryPayloads;
+
+  // Guard: never deliver raw error output (provider JSON errors, runtime
+  // exceptions) to user-facing channels. The error is still logged internally
+  // and visible via `cron runs`, but should not be posted to channels.
+  // See: https://github.com/openclaw/openclaw/issues/42243
+  if (synthesizedText && isLikelyRawErrorOutput(synthesizedText)) {
+    logWarn(
+      `[cron:${params.job.id}] suppressed announce delivery of raw error output (${synthesizedText.length} chars)`,
+    );
+    return {
+      delivered: false,
+      deliveryAttempted: false,
+      summary,
+      outputText,
+      synthesizedText,
+      deliveryPayloads,
+    };
+  }
 
   // Shared callers can treat a matching message-tool send as the completed
   // delivery path. Cron-owned callers keep this false so direct cron delivery
