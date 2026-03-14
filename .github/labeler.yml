@@ -17,7 +17,6 @@
 "channel: feishu":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/feishu/**"
           - "extensions/feishu/**"
           - "docs/channels/feishu.md"
 "channel: googlechat":
@@ -73,6 +72,11 @@
           - "src/slack/**"
           - "extensions/slack/**"
           - "docs/channels/slack.md"
+"channel: synology-chat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/synology-chat/**"
+          - "docs/channels/synology-chat.md"
 "channel: telegram":
   - changed-files:
       - any-glob-to-any-file:
@@ -93,6 +97,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/voice-call/**"
+          - "docs/plugins/voice-call.md"
+          - "docs/cli/voicecall.md"
 "channel: whatsapp-web":
   - changed-files:
       - any-glob-to-any-file:
@@ -256,3 +262,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/talk-voice/**"
+"extensions: thread-ownership":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/thread-ownership/**"
