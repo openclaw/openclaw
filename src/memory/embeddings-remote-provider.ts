@@ -30,7 +30,7 @@ export function createRemoteEmbeddingProvider(params: {
       url,
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
-      body: { model: client.model, input },
+      body: { model: client.model, input, encoding_format: "float" },
       errorPrefix: params.errorPrefix,
     });
   };
