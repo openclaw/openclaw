@@ -407,6 +407,7 @@ export const FIELD_LABELS: Record<string, string> = {
   acp: "ACP",
   "acp.enabled": "ACP Enabled",
   "acp.dispatch.enabled": "ACP Dispatch Enabled",
+  "acp.dispatch.nonThreadedCompletionToParent": "ACP Run Completion To Parent (Opt-In)",
   "acp.backend": "ACP Backend",
   "acp.defaultAgent": "ACP Default Agent",
   "acp.allowedAgents": "ACP Allowed Agents",

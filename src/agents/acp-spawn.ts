@@ -42,6 +42,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { deliveryContextFromSession, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import {
   type AcpSpawnParentRelayHandle,
   resolveAcpSpawnStreamLogPath,
@@ -95,6 +96,10 @@ export const ACP_SPAWN_ACCEPTED_NOTE =
   "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";
 export const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
+
+function isNonThreadedAcpCompletionDeliveryEnabled(cfg: OpenClawConfig): boolean {
+  return cfg.acp?.dispatch?.nonThreadedCompletionToParent === true;
+}
 
 export function resolveAcpSpawnRuntimePolicyError(params: {
   cfg: OpenClawConfig;
@@ -669,11 +674,24 @@ export async function spawnAcpDirect(
   const inferredDeliveryTo = boundThreadId
     ? `channel:${boundThreadId}`
     : requesterOrigin?.to?.trim() || (deliveryThreadId ? `channel:${deliveryThreadId}` : undefined);
-  const hasDeliveryTarget = Boolean(requesterOrigin?.channel && inferredDeliveryTo);
-  // Fresh one-shot ACP runs should bootstrap the worker first, then let higher layers
-  // decide how to relay status. Inline delivery is reserved for thread-bound sessions.
+  // Inline delivery is only valid when the requester originated from a real outbound
+  // channel route. Internal/non-deliverable channels (for example webchat or tui)
+  // must not be forwarded through the outbound delivery path here.
+  const hasExternalDeliveryTarget = Boolean(
+    requesterOrigin?.channel &&
+    isDeliverableMessageChannel(requesterOrigin.channel) &&
+    inferredDeliveryTo,
+  );
+  const isNonThreadedRun = spawnMode === "run" && !requestThreadBinding;
+  // Non-threaded ACP runs still need an explicit return route so the final completion
+  // can deliver back to the originating chat. Parent stream relay remains separate.
+  // Thread-bound sessions can use inline delivery whenever we have a real deliverable
+  // outbound target and we are not already relaying via the parent stream.
   const useInlineDelivery =
-    hasDeliveryTarget && spawnMode === "session" && !effectiveStreamToParent;
+    hasExternalDeliveryTarget &&
+    !effectiveStreamToParent &&
+    (spawnMode === "session" ||
+      (isNonThreadedRun && isNonThreadedAcpCompletionDeliveryEnabled(cfg)));
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   const streamLogPath =

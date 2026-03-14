@@ -170,6 +170,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Global ACP feature gate. Keep disabled unless ACP runtime + policy are configured.",
   "acp.dispatch.enabled":
     "Independent dispatch gate for ACP session turns (default: true). Set false to keep ACP commands available while blocking ACP turn execution.",
+  "acp.dispatch.nonThreadedCompletionToParent":
+    'Opt-in relay for non-threaded ACP mode="run" completions. Set true to send progress/final status back to the parent chat when the requester has a valid external delivery route; leave unset/false to keep the child run isolated unless streamTo="parent" is used.',
   "acp.backend":
     "Default ACP runtime backend id (for example: acpx). Must match a registered ACP runtime plugin backend.",
   "acp.defaultAgent":

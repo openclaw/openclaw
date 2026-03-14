@@ -230,6 +230,7 @@ Notes:
 - `runtime` defaults to `subagent`, so set `runtime: "acp"` explicitly for ACP sessions.
 - If `agentId` is omitted, OpenClaw uses `acp.defaultAgent` when configured.
 - `mode: "session"` requires `thread: true` to keep a persistent bound conversation.
+- `mode: "run"` stays isolated by default. Set `acp.dispatch.nonThreadedCompletionToParent=true` to opt in to relaying progress/final status back to the parent chat when the requester has a valid external delivery route.
 
 Interface details:
 
@@ -461,7 +462,13 @@ Core ACP baseline:
   acp: {
     enabled: true,
     // Optional. Default is true; set false to pause ACP dispatch while keeping /acp controls.
-    dispatch: { enabled: true },
+    dispatch: {
+      enabled: true,
+      // Optional opt-in. Default is false; set true to relay non-threaded
+      // mode="run" completions back to the parent chat when the requester has
+      // a valid external delivery route.
+      nonThreadedCompletionToParent: true,
+    },
     backend: "acpx",
     defaultAgent: "codex",
     allowedAgents: ["pi", "claude", "codex", "opencode", "gemini", "kimi"],

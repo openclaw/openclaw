@@ -193,6 +193,33 @@ describe("deliverAgentCommandResult", () => {
     );
   });
 
+  it("delivers with explicit route even when the child session has no persisted delivery context", async () => {
+    await runDelivery({
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "telegram",
+        to: "telegram:6098642967",
+        threadId: "1",
+      },
+      sessionEntry: {} as SessionEntry,
+    });
+
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:6098642967",
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "+15551234567",
+        threadId: "1",
+      }),
+    );
+  });
+
   it("uses runContext turn source over stale session last route", async () => {
     await runDelivery({
       opts: {
@@ -234,6 +261,21 @@ describe("deliverAgentCommandResult", () => {
     expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "whatsapp", to: undefined }),
     );
+  });
+
+  it("rejects internal delivery channels instead of attempting outbound inline delivery", async () => {
+    await expect(
+      runDelivery({
+        opts: {
+          message: "hello",
+          deliver: true,
+          channel: "webchat",
+          to: "webchat:turn-1",
+        },
+      }),
+    ).rejects.toThrow("delivery channel is required");
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
   it("uses caller-provided outbound session context when opts.sessionKey is absent", async () => {
