@@ -1,5 +1,5 @@
 /**
- * spawn-interceptor v2.5.1 — OpenClaw plugin for automatic ACP task tracking.
+ * spawn-interceptor v2.5.2 — OpenClaw plugin for automatic ACP task tracking.
  *
  * Completion detection (layered, in priority order):
  *   1. subagent_ended hook — works for runtime=subagent only
@@ -20,11 +20,15 @@
  *
  * v2.5.1 fixes:
  *   - consumedAcpSessionIds persisted across poll iterations (previously recreated each tick)
+ *
+ * v2.5.2 fixes:
+ *   - ACP matcher requires session creation time >= spawn time (minus 2s clock skew tolerance)
+ *     to prevent pre-existing closed sessions from matching newly spawned tasks
  */
 
 import fs from "fs";
-import path from "path";
 import os from "os";
+import path from "path";
 
 const SHARED_CTX = path.join(os.homedir(), ".openclaw", "shared-context");
 const TASK_LOG = path.join(SHARED_CTX, "monitor-tasks", "task-log.jsonl");
@@ -57,7 +61,9 @@ function loadPending() {
 function savePending() {
   try {
     const dir = path.dirname(PENDING_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
     const tmp = PENDING_FILE + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(pendingTasks), null, 2));
     fs.renameSync(tmp, PENDING_FILE);
@@ -74,7 +80,9 @@ function genId() {
 
 function appendLog(entry) {
   const dir = path.dirname(TASK_LOG);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
   fs.appendFileSync(TASK_LOG, JSON.stringify(entry) + "\n");
 }
 
@@ -86,7 +94,7 @@ function reapStaleTasks() {
   const now = Date.now();
   let reaped = 0;
 
-  for (const [taskId, task] of [...pendingTasks.entries()]) {
+  for (const [taskId, task] of pendingTasks.entries()) {
     const spawnedAt = new Date(task.spawnedAt).getTime();
     if (now - spawnedAt > STALE_TIMEOUT_MS) {
       pendingTasks.delete(taskId);
@@ -108,27 +116,34 @@ function reapStaleTasks() {
 
   if (reaped > 0) {
     savePending();
-    if (pluginLogger)
+    if (pluginLogger) {
       pluginLogger.info(
         `spawn-interceptor: reaped ${reaped} stale task(s), ${pendingTasks.size} still pending`,
       );
+    }
   }
 }
 
 function pollAcpSessions() {
   const acpPending = [...pendingTasks.entries()].filter(([, t]) => t.runtime === "acp");
-  if (acpPending.length === 0) return;
+  if (acpPending.length === 0) {
+    return;
+  }
 
   let index;
   try {
-    if (!fs.existsSync(ACPX_INDEX)) return;
+    if (!fs.existsSync(ACPX_INDEX)) {
+      return;
+    }
     index = JSON.parse(fs.readFileSync(ACPX_INDEX, "utf-8"));
   } catch {
     return;
   }
 
   const entries = index.entries || [];
-  if (entries.length === 0) return;
+  if (entries.length === 0) {
+    return;
+  }
 
   const TIME_MATCH_WINDOW_MS = 60 * 1000;
   const BATCH_CLEANUP_AGE_MS = 2 * 60 * 1000;
@@ -145,13 +160,14 @@ function pollAcpSessions() {
     }
   }
 
-
   for (const [taskId, task] of acpPending) {
     const spawnTs = new Date(task.spawnedAt).getTime();
 
     let matched = false;
     for (const session of closedSessions) {
-      if (consumedAcpSessionIds.has(session.acpxRecordId)) continue;
+      if (consumedAcpSessionIds.has(session.acpxRecordId)) {
+        continue;
+      }
 
       let sessionDetail = null;
       try {
@@ -167,9 +183,9 @@ function pollAcpSessions() {
         ? new Date(sessionDetail.created_at).getTime()
         : new Date(session.lastUsedAt).getTime();
 
-      const timeDiff = Math.abs(sessionCreatedAt - spawnTs);
+      const timeDiff = sessionCreatedAt - spawnTs;
 
-      if (timeDiff < TIME_MATCH_WINDOW_MS) {
+      if (timeDiff >= -2000 && timeDiff < TIME_MATCH_WINDOW_MS) {
         const closedAt = sessionDetail?.closed_at || session.lastUsedAt || new Date().toISOString();
         const sessionName = sessionDetail?.name || session.name || "?";
 
@@ -244,19 +260,17 @@ const spawnInterceptorPlugin = {
   id: "spawn-interceptor",
   name: "Spawn Interceptor",
   description: "Auto-tracks sessions_spawn and detects ACP completion via session polling",
-  version: "2.5.1",
+  version: "2.5.2",
 
   register(api) {
     pluginLogger = api.logger;
     api.logger.info(
-      "spawn-interceptor v2.5.1: registering (subagent_ended + ACP session poller + stale reaper)",
+      "spawn-interceptor v2.5.2: registering (subagent_ended + ACP session poller + stale reaper)",
     );
 
     loadPending();
     if (pendingTasks.size > 0) {
-      api.logger.info(
-        `spawn-interceptor: restored ${pendingTasks.size} pending task(s) from disk`,
-      );
+      api.logger.info(`spawn-interceptor: restored ${pendingTasks.size} pending task(s) from disk`);
       reapStaleTasks();
       pollAcpSessions();
     }
@@ -275,7 +289,9 @@ const spawnInterceptorPlugin = {
     acpPollerTimer = setInterval(pollAcpSessions, ACP_POLL_INTERVAL_MS);
 
     api.on("before_tool_call", (event, ctx) => {
-      if (event.toolName !== "sessions_spawn") return;
+      if (event.toolName !== "sessions_spawn") {
+        return;
+      }
 
       const p = event.params || {};
       const id = genId();
@@ -316,7 +332,9 @@ const spawnInterceptorPlugin = {
       // Match by targetSessionKey for precise identification.
       // Falls back to first subagent task only when no session key is available.
       for (const [taskId, task] of pendingTasks.entries()) {
-        if (task.runtime !== "subagent") continue;
+        if (task.runtime !== "subagent") {
+          continue;
+        }
         if (targetKey && task.spawnedSessionKey === targetKey) {
           matchedTaskId = taskId;
           matchedTask = task;
@@ -376,7 +394,7 @@ const spawnInterceptorPlugin = {
       }
     });
 
-    api.logger.info("spawn-interceptor v2.5.1: all hooks registered, ACP poller interval=15s");
+    api.logger.info("spawn-interceptor v2.5.2: all hooks registered, ACP poller interval=15s");
   },
 
   unregister() {
