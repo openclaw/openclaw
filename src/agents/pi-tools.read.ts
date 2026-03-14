@@ -747,6 +747,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         relativePath: relative,
         data: content,
         mkdir: true,
+        mode: 0o644,
       });
     },
   } as const;
@@ -787,6 +788,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         relativePath: relative,
         data: content,
         mkdir: true,
+        mode: 0o644,
       });
     },
     access: async (absolutePath: string) => {
