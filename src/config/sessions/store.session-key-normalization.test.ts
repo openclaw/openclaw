@@ -10,7 +10,8 @@ import {
   updateLastRoute,
 } from "../sessions.js";
 
-const CANONICAL_KEY = "agent:main:webchat:dm:mixed-user";
+// After store migration, :dm: keys are renamed to :direct:
+const CANONICAL_KEY = "agent:main:webchat:direct:mixed-user";
 const MIXED_CASE_KEY = "Agent:Main:WebChat:DM:MiXeD-User";
 
 function createInboundContext(): MsgContext {
