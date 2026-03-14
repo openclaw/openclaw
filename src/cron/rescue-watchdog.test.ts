@@ -26,6 +26,14 @@ const loadConfig = vi.hoisted(() =>
   })),
 );
 const restartService = vi.hoisted(() => vi.fn(async () => {}));
+const readServiceCommand = vi.hoisted(() =>
+  vi.fn<
+    () => Promise<{
+      programArguments: string[];
+      environment?: Record<string, string>;
+    } | null>
+  >(async () => null),
+);
 const probeGateway = vi.hoisted(() => vi.fn());
 const resolveGatewayProbeAuthSafe = vi.hoisted(() =>
   vi.fn(() => ({
@@ -64,6 +72,7 @@ vi.mock("../config/io.js", () => ({
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: vi.fn(() => ({
     restart: restartService,
+    readCommand: readServiceCommand,
   })),
 }));
 
@@ -90,6 +99,8 @@ describe("runRescueWatchdogJob", () => {
     vi.setSystemTime(new Date("2026-03-10T00:00:00.000Z"));
     loadConfig.mockClear();
     restartService.mockClear();
+    readServiceCommand.mockReset();
+    readServiceCommand.mockResolvedValue(null);
     probeGateway.mockReset();
     resolveGatewayProbeAuthSafe.mockClear();
     resolveGatewayBindHost.mockClear();
@@ -124,6 +135,56 @@ describe("runRescueWatchdogJob", () => {
     expect(result.summary).toContain("found it healthy");
     expect(restartService).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("probes the monitored service port override from the installed daemon env", async () => {
+    const originalEnv = process.env;
+    process.env = {
+      ...originalEnv,
+      OPENCLAW_PROFILE: "rescue",
+      OPENCLAW_GATEWAY_PORT: "29998",
+    };
+    readServiceCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_PORT: "19001",
+      },
+    });
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      error: null,
+    });
+
+    try {
+      const result = await runRescueWatchdogJob({
+        job: {
+          id: "job-managed-port-override",
+          name: "rescue",
+          payload: {
+            kind: "rescueWatchdog",
+            monitoredProfile: "work",
+            timeoutSeconds: 120,
+          },
+        } as never,
+        monitoredProfile: "work",
+      });
+
+      expect(result.status).toBe("ok");
+      expect(readServiceCommand).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          OPENCLAW_GATEWAY_PORT: "29998",
+        }),
+      );
+      expect(probeGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "ws://127.0.0.1:19001",
+        }),
+      );
+      expect(restartService).not.toHaveBeenCalled();
+    } finally {
+      process.env = originalEnv;
+    }
   });
 
   it("probes with the configured scheme and custom bind host", async () => {
