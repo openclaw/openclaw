@@ -27,10 +27,13 @@ type LastToolError = {
   error?: string;
   mutatingAction?: boolean;
   actionFingerprint?: string;
+  recovered?: boolean;
 };
 type ToolErrorWarningPolicy = {
   showWarning: boolean;
   includeDetails: boolean;
+  /** True when the agent successfully recovered by retrying the same tool with different parameters. */
+  recovered?: boolean;
 };
 
 const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
@@ -76,7 +79,7 @@ function resolveToolErrorWarningPolicy(params: {
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
-    return { showWarning: true, includeDetails };
+    return { showWarning: true, includeDetails, recovered: params.lastToolError.recovered };
   }
   if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
@@ -303,7 +306,8 @@ export function buildEmbeddedRunPayloads(params: {
         warningPolicy.includeDetails && params.lastToolError.error
           ? `: ${params.lastToolError.error}`
           : "";
-      const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
+      const recoveredSuffix = warningPolicy.recovered ? " (recovered — retried successfully)" : "";
+      const warningText = `⚠️ ${toolSummary} failed${errorSuffix}${recoveredSuffix}`;
       const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning
         ? replyItems.some((item) => {

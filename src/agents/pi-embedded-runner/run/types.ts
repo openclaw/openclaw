@@ -52,6 +52,7 @@ export type EmbeddedRunAttemptResult = {
     error?: string;
     mutatingAction?: boolean;
     actionFingerprint?: string;
+    recovered?: boolean;
   };
   didSendViaMessagingTool: boolean;
   didSendDeterministicApprovalPrompt?: boolean;

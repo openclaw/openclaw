@@ -488,3 +488,105 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
   });
 });
+
+describe("handleToolExecutionEnd mutating tool recovery tracking", () => {
+  async function simulateToolError(
+    ctx: ToolHandlerContext,
+    toolName: string,
+    toolCallId: string,
+    actionFingerprint?: string,
+  ) {
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName,
+      toolCallId,
+      args: { path: "/tmp/foo.ts" },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+    if (actionFingerprint) {
+      const summary = ctx.state.toolMetaById.get(toolCallId);
+      if (summary) {
+        ctx.state.toolMetaById.set(toolCallId, {
+          ...summary,
+          mutatingAction: true,
+          actionFingerprint,
+        });
+      }
+    }
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName,
+      toolCallId,
+      isError: true,
+      result: "Error: something went wrong",
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+  }
+
+  async function simulateToolSuccess(
+    ctx: ToolHandlerContext,
+    toolName: string,
+    toolCallId: string,
+    actionFingerprint?: string,
+  ) {
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName,
+      toolCallId,
+      args: { path: "/tmp/bar.ts" },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+    if (actionFingerprint) {
+      const summary = ctx.state.toolMetaById.get(toolCallId);
+      if (summary) {
+        ctx.state.toolMetaById.set(toolCallId, {
+          ...summary,
+          mutatingAction: true,
+          actionFingerprint,
+        });
+      }
+    }
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName,
+      toolCallId,
+      isError: false,
+      result: { ok: true },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+  }
+
+  it("marks lastToolError as recovered when same tool name succeeds with a different action fingerprint", async () => {
+    const { ctx } = createTestContext();
+
+    // Mutating error with fingerprint fp1
+    await simulateToolError(ctx, "edit", "call-1", "tool=edit|path=/tmp/foo.ts");
+    expect(ctx.state.lastToolError?.toolName).toBe("edit");
+    expect(ctx.state.lastToolError?.recovered).toBeUndefined();
+
+    // Same tool name succeeds with different fingerprint fp2
+    await simulateToolSuccess(ctx, "edit", "call-2", "tool=edit|path=/tmp/bar.ts");
+    expect(ctx.state.lastToolError).toBeDefined();
+    expect(ctx.state.lastToolError?.recovered).toBe(true);
+  });
+
+  it("clears lastToolError entirely when the exact same action fingerprint succeeds", async () => {
+    const { ctx } = createTestContext();
+
+    await simulateToolError(ctx, "edit", "call-1", "tool=edit|path=/tmp/foo.ts");
+    await simulateToolSuccess(ctx, "edit", "call-2", "tool=edit|path=/tmp/foo.ts");
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+  });
+
+  it("does not mark recovered when a different tool name succeeds after a mutating error", async () => {
+    const { ctx } = createTestContext();
+
+    await simulateToolError(ctx, "edit", "call-1", "tool=edit|path=/tmp/foo.ts");
+    // 'read' succeeds — unrelated tool
+    await simulateToolSuccess(ctx, "read", "call-2", undefined);
+
+    expect(ctx.state.lastToolError).toBeDefined();
+    expect(ctx.state.lastToolError?.recovered).toBeUndefined();
+  });
+});

@@ -463,6 +463,12 @@ export async function handleToolExecutionEnd(
         })
       ) {
         ctx.state.lastToolError = undefined;
+      } else if (toolName === ctx.state.lastToolError.toolName) {
+        // Same tool name but different action succeeded — the agent recovered by
+        // retrying with different parameters. Mark as recovered so the warning
+        // can include recovery context rather than presenting a bare failure
+        // (#37907).
+        ctx.state.lastToolError = { ...ctx.state.lastToolError, recovered: true };
       }
     } else {
       ctx.state.lastToolError = undefined;

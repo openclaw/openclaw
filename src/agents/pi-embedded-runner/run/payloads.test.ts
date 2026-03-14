@@ -61,6 +61,54 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("appends recovery context when a mutating tool failure was recovered in the same turn", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "edit",
+        error: "Found 2 occurrences, must be unique",
+        mutatingAction: true,
+        recovered: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Edit");
+    expect(payloads[0]?.text).toContain("failed");
+    expect(payloads[0]?.text).toContain("recovered — retried successfully");
+  });
+
+  it("does not append recovery context when the mutating tool failure was not recovered", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "edit",
+        error: "File not found",
+        mutatingAction: true,
+        recovered: false,
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("Edit");
+    expect(payloads[0]?.text).not.toContain("recovered");
+  });
+
+  it("includes error detail and recovery context together when verbose is on", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "edit",
+        error: "Found 2 occurrences, must be unique",
+        mutatingAction: true,
+        recovered: true,
+      },
+      verboseLevel: "on",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("Found 2 occurrences, must be unique");
+    expect(payloads[0]?.text).toContain("recovered — retried successfully");
+  });
+
   it("suppresses sessions_send errors to avoid leaking transient relay failures", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "sessions_send", error: "delivery timeout" },

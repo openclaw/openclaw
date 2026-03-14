@@ -22,6 +22,13 @@ export type ToolErrorSummary = {
   error?: string;
   mutatingAction?: boolean;
   actionFingerprint?: string;
+  /**
+   * True when the agent failed a mutating tool call but then succeeded with
+   * the same tool (different parameters) later in the same turn. The error
+   * is preserved so a warning can still be surfaced, but the warning text is
+   * softened to indicate recovery (#37907).
+   */
+  recovered?: boolean;
 };
 
 export type ToolCallSummary = {
