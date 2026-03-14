@@ -156,6 +156,43 @@ describe("updateNpmInstalledPlugins", () => {
       },
     ]);
   });
+
+  it("uses specOverrides for the install call but preserves original spec in config", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "timbot",
+      targetDir: "/tmp/timbot",
+      version: "2026.3.6-beta.5",
+      extensions: ["index.ts"],
+    });
+
+    const { updateNpmInstalledPlugins } = await import("./update.js");
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            timbot: {
+              source: "npm",
+              spec: "timbot",
+              installPath: "/tmp/timbot",
+            },
+          },
+        },
+      },
+      pluginIds: ["timbot"],
+      specOverrides: { timbot: "timbot@2026.3.6-beta.5" },
+    });
+
+    // Install call should use the override spec
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "timbot@2026.3.6-beta.5",
+      }),
+    );
+
+    // Config should preserve the original spec, not the override
+    expect(result.config.plugins?.installs?.timbot?.spec).toBe("timbot");
+  });
 });
 
 describe("syncPluginsForUpdateChannel", () => {
