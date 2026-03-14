@@ -44,25 +44,33 @@ vi.mock("../../../extensions/slack/src/send.js", () => ({
 vi.mock("../../../extensions/telegram/src/send.js", () => ({
   sendMessageTelegram: mocks.sendMessageTelegram,
 }));
+vi.mock("../../../extensions/telegram/src/send.js", () => ({
+  sendMessageTelegram: mocks.sendMessageTelegram,
+}));
 vi.mock("../../../extensions/whatsapp/src/send.js", () => ({
   sendMessageWhatsApp: mocks.sendMessageWhatsApp,
   sendPollWhatsApp: mocks.sendMessageWhatsApp,
 }));
+vi.mock("../../../extensions/discord/src/send.js", () => ({
+  sendMessageDiscord: mocks.sendMessageDiscord,
+  sendPollDiscord: mocks.sendMessageDiscord,
+  sendWebhookMessageDiscord: vi.fn(),
+}));
 vi.mock("../../../extensions/mattermost/src/mattermost/send.js", () => ({
   sendMessageMattermost: mocks.sendMessageMattermost,
 }));
-vi.mock("../../infra/outbound/deliver.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
-    "../../infra/outbound/deliver.js",
+vi.mock("../../infra/outbound/deliver-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/outbound/deliver-runtime.js")>(
+    "../../infra/outbound/deliver-runtime.js",
   );
   return {
     ...actual,
     deliverOutboundPayloads: mocks.deliverOutboundPayloads,
   };
 });
-const actualDeliver = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
-  "../../infra/outbound/deliver.js",
-);
+const actualDeliver = await vi.importActual<
+  typeof import("../../infra/outbound/deliver-runtime.js")
+>("../../infra/outbound/deliver-runtime.js");
 
 const { routeReply } = await import("./route-reply.js");
 
