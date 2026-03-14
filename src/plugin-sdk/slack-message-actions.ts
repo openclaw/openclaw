@@ -98,6 +98,10 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "read") {
+    if (actionParams.messageId != null) {
+      readStringParam(actionParams, "messageId");
+      throw new Error("Slack read does not support messageId.");
+    }
     const limit = readNumberParam(actionParams, "limit", { integer: true });
     const readAction: Record<string, unknown> = {
       action: "readMessages",

@@ -64,4 +64,25 @@ describe("handleSlackMessageAction", () => {
       expect.any(Object),
     );
   });
+
+  it("rejects messageId for read", async () => {
+    const invoke = createInvokeSpy();
+
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "read",
+          cfg: {},
+          params: {
+            channelId: "C1",
+            messageId: "123.456",
+          },
+        } as never,
+        invoke: invoke as never,
+      }),
+    ).rejects.toThrow("Slack read does not support messageId.");
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });
