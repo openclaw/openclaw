@@ -25,8 +25,6 @@ export async function runInteractiveOnboarding(
       return;
     }
     throw err;
-  }
-    throw err;
   } finally {
     // Keep stdin paused so non-daemon runs can exit cleanly (e.g. Docker setup).
     restoreTerminalState("onboarding finish", { resumeStdinIfPaused: false });
