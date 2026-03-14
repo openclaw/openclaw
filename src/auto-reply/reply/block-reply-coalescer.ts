@@ -114,7 +114,9 @@ export function createBlockReplyCoalescer(params: {
       bufferAudioAsVoice = payload.audioAsVoice;
     }
 
-    const nextText = bufferText ? `${bufferText}${joiner}${text}` : text;
+    const nextText = bufferText
+      ? `${bufferText}${joiner}${joiner ? text.trimStart() : text}`
+      : text.trimStart();
     if (nextText.length > maxChars) {
       if (bufferText) {
         void flush({ force: true });
