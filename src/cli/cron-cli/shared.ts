@@ -224,7 +224,7 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
     const modelLabel = pad(
       truncate(
-        (job.payload.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
+        (job.payload?.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
         CRON_MODEL_PAD,
       ),
       CRON_MODEL_PAD,
@@ -263,7 +263,7 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
       coloredStatus,
       coloredTarget,
       coloredAgent,
-      job.payload.kind === "agentTurn" && job.payload.model
+      job.payload?.kind === "agentTurn" && job.payload.model
         ? colorize(rich, theme.info, modelLabel)
         : colorize(rich, theme.muted, modelLabel),
     ].join(" ");
