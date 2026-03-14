@@ -114,7 +114,7 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports the device-pair gateway bind result type", () => {
-    expectTypeOf<GatewayBindUrlResult>().toMatchTypeOf<
+    expectTypeOf<GatewayBindUrlResult>().toEqualTypeOf<
       | {
           url: string;
           source: "gateway.bind=custom" | "gateway.bind=tailnet" | "gateway.bind=lan";
