@@ -8,7 +8,6 @@ import {
 } from "../../../ui/src/ui/gateway.ts";
 import type { HealthSummary, StatusSummary } from "../../../ui/src/ui/types.ts";
 import {
-  buildFrontendAgentBrief,
   fromDraft,
   toDraft,
   type FeatureRecommendation,
@@ -18,10 +17,10 @@ import {
 import {
   defaultPreferenceMemory,
   defaultRecommendations,
-  frontendAgentProtocol,
   upstreamWatchItems,
   workflowStages,
 } from "./product/defaults";
+import { buildFrontendPrompt, defaultFrontendPrompt } from "./product/prompt";
 import { loadPreferenceMemory, savePreferenceMemory } from "./product/storage";
 
 type ConnectionState = "idle" | "connecting" | "connected" | "disconnected" | "error";
@@ -134,8 +133,7 @@ class WebControlUiApp extends LitElement {
 
     .hero-grid,
     .product-grid,
-    .grid,
-    .protocol-grid {
+    .grid {
       display: grid;
       gap: 16px;
     }
@@ -148,10 +146,6 @@ class WebControlUiApp extends LitElement {
 
     .product-grid {
       grid-template-columns: 1.3fr 1fr;
-    }
-
-    .protocol-grid {
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     }
 
     .controls {
@@ -215,7 +209,8 @@ class WebControlUiApp extends LitElement {
     .mini-panel,
     .memory-item,
     .recommendation,
-    .workflow-step {
+    .workflow-step,
+    .prompt-block {
       border-radius: 16px;
       padding: 16px;
       background: rgba(30, 41, 59, 0.72);
@@ -398,6 +393,7 @@ class WebControlUiApp extends LitElement {
   @state() preferenceDraft: PreferenceMemoryDraft = toDraft(defaultPreferenceMemory());
   @state() preferenceSavedAt: string | null = null;
   @state() recommendations: FeatureRecommendation[] = defaultRecommendations;
+  @state() promptDraft = defaultFrontendPrompt;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -569,8 +565,7 @@ class WebControlUiApp extends LitElement {
     }
     const runId = crypto.randomUUID();
     this.chatMessages = [...this.chatMessages, { role: "user", text, timestamp: Date.now() }];
-    this.chatInput = `${buildFrontendAgentBrief(this.preferenceMemory)}\n\n用户新需求：${text}`;
-    const outbound = this.chatInput;
+    const outbound = buildFrontendPrompt(this.preferenceMemory, text).replace(defaultFrontendPrompt.trim(), this.promptDraft.trim());
     this.chatInput = "";
     this.chatRunId = runId;
     this.chatStream = "";
@@ -643,27 +638,26 @@ class WebControlUiApp extends LitElement {
           <section class="hero">
             <h1>Frontend Co-Creation Agent</h1>
             <p>
-              这不是普通控制台，而是“通过对话共创自定义前端页面”的产品骨架。目标是让每个用户都拥有一个专属前端 agent：
-              记住偏好、持续改代码、跟踪上游能力，并主动给出适合自己的前端推荐。
+              现在主线已经收束成 4 件事：一份可持续迭代的前端提示词、一套用户偏好记忆、一条由 OpenClaw 原生执行代码修改的链路、一个最小但可靠的版本回退机制。
             </p>
 
             <div class="hero-grid">
               <div class="mini-panel">
-                <div class="subtitle">这个产品现在真正要做的事</div>
+                <div class="subtitle">当前工作方式</div>
                 <ul class="checklist">
-                  <li>让用户用自然语言描述想要的页面</li>
-                  <li>让专属 agent 记住布局、风格、组件和交互偏好</li>
-                  <li>把需求直接转成 apps/web-control-ui 里的代码改动</li>
-                  <li>持续关注 OpenClaw 新能力并转成推荐</li>
+                  <li>尽量纯提示词开发，不额外设计复杂协议</li>
+                  <li>用偏好记忆延续布局、视觉和模块习惯</li>
+                  <li>代码修改依赖 OpenClaw 原生能力</li>
+                  <li>每次迭代前后优先确保可回退</li>
                 </ul>
               </div>
               <div class="mini-panel">
                 <div class="subtitle">当前开发焦点</div>
                 <ul class="checklist">
-                  <li>专属 agent 入口</li>
-                  <li>偏好记忆结构</li>
-                  <li>对话驱动改代码闭环</li>
-                  <li>上游功能 watch & 推荐</li>
+                  <li>前端提示词工作台</li>
+                  <li>偏好记忆编辑与沉淀</li>
+                  <li>原生改代码链路说明</li>
+                  <li>checkpoint / restore 回退机制</li>
                 </ul>
               </div>
             </div>
@@ -704,32 +698,27 @@ class WebControlUiApp extends LitElement {
           </section>
 
           <section class="panel">
-            <h2>Agent Protocol</h2>
-            <p class="subtitle">先把“专属前端 agent”要接什么输入、吐什么输出、遵守什么约束说清楚，后面接真实改代码闭环时就不用重搭结构。</p>
-            <div class="protocol-grid">
-              <article class="mini-panel">
-                <span class="label">角色</span>
-                <div class="value">${frontendAgentProtocol.role}</div>
-                <p style="margin-top: 12px;">${frontendAgentProtocol.mission}</p>
-              </article>
-              <article class="mini-panel">
-                <span class="label">输入</span>
-                <ul class="checklist">${frontendAgentProtocol.inputs.map((item) => html`<li>${item}</li>`)}</ul>
-              </article>
-              <article class="mini-panel">
-                <span class="label">输出</span>
-                <ul class="checklist">${frontendAgentProtocol.outputs.map((item) => html`<li>${item}</li>`)}</ul>
-              </article>
-              <article class="mini-panel">
-                <span class="label">约束</span>
-                <ul class="checklist">${frontendAgentProtocol.constraints.map((item) => html`<li>${item}</li>`)}</ul>
-              </article>
+            <h2>Frontend Prompt Workspace</h2>
+            <p class="subtitle">核心不是协议，而是一份能持续迭代的前端提示词。这里就是提示词工作台。</p>
+            <div class="prompt-block">
+              <span class="label">当前前端提示词</span>
+              <textarea
+                .value=${this.promptDraft}
+                @input=${(event: InputEvent) => {
+                  this.promptDraft = (event.target as HTMLTextAreaElement).value;
+                }}
+                style="min-height: 260px;"
+              ></textarea>
+            </div>
+            <div class="prompt-block" style="margin-top: 12px;">
+              <span class="label">带入偏好记忆后的本轮最终提示词预览</span>
+              <pre>${buildFrontendPrompt(this.preferenceMemory, this.chatInput || "（等待用户输入本轮页面需求）").replace(defaultFrontendPrompt.trim(), this.promptDraft.trim())}</pre>
             </div>
           </section>
 
           <section class="panel">
             <h2>Workflow Backbone</h2>
-            <p class="subtitle">这条链路就是后面真正接进 coding agent / build 验证的工作流骨架。</p>
+            <p class="subtitle">保留最小工作流，不搞协议化，只保留对实际开发最有用的几步。</p>
             <div class="grid">
               ${workflowStages.map(
                 (stage, index) => html`
@@ -779,7 +768,7 @@ class WebControlUiApp extends LitElement {
           <section class="product-grid">
             <section class="panel">
               <h2>Designer Chat</h2>
-              <p class="subtitle">现在的发送已经会自动带上“专属前端 agent brief”，下一步再把回复结构升级成真正的计划/改动/验证卡片。</p>
+              <p class="subtitle">发送时会自动把“提示词 + 偏好记忆 + 本轮需求”拼成最终上下文，再交给 OpenClaw 原生能力去推动代码改动。</p>
               <div class="chat-log">
                 ${this.chatMessages.map(
                   (message) => html`<div class="bubble ${message.role}">${message.text}</div>`,
@@ -795,10 +784,6 @@ class WebControlUiApp extends LitElement {
                   }}
                   placeholder="例如：把首页做成左侧导航 + 主聊天区 + 右侧推荐面板，整体更像 Notion，但保留深色玻璃感。"
                 ></textarea>
-                <div class="mini-panel">
-                  <span class="label">本次会注入的 Agent Brief</span>
-                  <pre>${buildFrontendAgentBrief(this.preferenceMemory)}</pre>
-                </div>
                 <div class="chat-actions">
                   <button class="secondary" type="button" @click=${() => this.loadChatHistory()}>刷新历史</button>
                   <button type="button" @click=${() => this.sendChat()} ?disabled=${this.chatSending}>${this.chatSending ? "发送中..." : "发送"}</button>
@@ -809,7 +794,7 @@ class WebControlUiApp extends LitElement {
             <div class="section-stack">
               <section class="panel">
                 <h2>Preference Memory</h2>
-                <p class="subtitle">现在已经从静态展示升级为：可编辑 + localStorage 本地持久化。下一步会再接真正的用户级 profile 存档。</p>
+                <p class="subtitle">这层保留。因为纯提示词要真正连续，偏好记忆不能丢。</p>
                 <div class="memory-item">
                   <span class="label">视觉风格（用 、 或逗号分隔）</span>
                   <input
@@ -883,25 +868,53 @@ class WebControlUiApp extends LitElement {
               </section>
 
               <section class="panel">
-                <h2>Feature Recommendations</h2>
-                <p class="subtitle">以后这里要根据 OpenClaw 最新版本和用户偏好，主动推荐值得接入的新能力。</p>
-                ${this.recommendations.map(
-                  (item) => html`
-                    <article class="recommendation" style="margin-top: 12px;">
-                      <h3>${item.title}</h3>
-                      <p><strong>为什么：</strong>${item.reason}</p>
-                      <p style="margin-top: 8px;"><strong>建议动作：</strong>${item.action}</p>
-                    </article>
-                  `,
-                )}
+                <h2>Rollback First</h2>
+                <p class="subtitle">最小但可靠的回退机制，不复杂，但够用。</p>
+                <div class="recommendation">
+                  <p><strong>做 checkpoint：</strong><code>pwsh ./scripts/web-control-ui-checkpoint.ps1 -Name before-change</code></p>
+                  <p style="margin-top: 8px;"><strong>恢复版本：</strong><code>pwsh ./scripts/web-control-ui-restore.ps1 -Ref checkpoint/web-control-ui-时间戳-before-change</code></p>
+                  <p style="margin-top: 8px;"><strong>原则：</strong>每次较大 UI 改动前先 checkpoint，改坏了就只恢复 <code>apps/web-control-ui</code>，不波及整个仓库。</p>
+                </div>
               </section>
             </div>
           </section>
 
           <section class="panel">
-            <h2>Upstream Watch</h2>
-            <p class="subtitle">先把“为什么要跟踪上游、跟踪什么、怎么转成用户价值”落成可见结构。</p>
+            <h2>OpenClaw Native Change Path</h2>
+            <p class="subtitle">代码修改不额外造轮子，直接依赖 OpenClaw 原生能力。</p>
             <div class="grid">
+              <article class="recommendation">
+                <h3>提示词驱动</h3>
+                <p>用户给页面需求，系统把“前端提示词 + 偏好记忆 + 本轮需求”拼成最终上下文。</p>
+              </article>
+              <article class="recommendation">
+                <h3>原生执行改代码</h3>
+                <p>实际文件修改由 OpenClaw 原生能力完成，而不是 UI 自己实现一套补丁协议。</p>
+              </article>
+              <article class="recommendation">
+                <h3>改前先回退保险</h3>
+                <p>大改之前先 checkpoint，避免连续迭代把页面改坏后无处回撤。</p>
+              </article>
+              <article class="recommendation">
+                <h3>改后立即验证</h3>
+                <p>至少过一遍 build/dev 检查，保证提示词驱动不是只生成看起来合理的空方案。</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Feature Recommendations</h2>
+            <p class="subtitle">继续保留推荐层，但不再包装成协议能力，而是直接服务于前端迭代。</p>
+            <div class="grid">
+              ${this.recommendations.map(
+                (item) => html`
+                  <article class="recommendation">
+                    <h3>${item.title}</h3>
+                    <p><strong>为什么：</strong>${item.reason}</p>
+                    <p style="margin-top: 8px;"><strong>建议动作：</strong>${item.action}</p>
+                  </article>
+                `,
+              )}
               ${upstreamWatchItems.map(
                 (item) => html`
                   <article class="recommendation">
