@@ -83,20 +83,15 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
         const issues: ChannelStatusIssue[] = [];
         for (const account of accounts) {
           const accountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-          if (!account.channelAccessToken?.trim()) {
+          if (account.configured === false) {
+            const hasToken = account.tokenSource != null && account.tokenSource !== "none";
             issues.push({
               channel: "line",
               accountId,
               kind: "config",
-              message: "LINE channel access token not configured",
-            });
-          }
-          if (!account.channelSecret?.trim()) {
-            issues.push({
-              channel: "line",
-              accountId,
-              kind: "config",
-              message: "LINE channel secret not configured",
+              message: hasToken
+                ? "LINE channel secret not configured"
+                : "LINE channel access token not configured",
             });
           }
         }
@@ -520,5 +515,4 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
           accountId: accountId ?? undefined,
         }),
     }),
-  },
 });
