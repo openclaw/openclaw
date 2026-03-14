@@ -203,6 +203,8 @@
 
 - Vocabulary: "makeup" = "mac app".
 - Parallels macOS retests: use the snapshot most closely named like `macOS 26.3.1 fresh` when the user asks for a clean/fresh macOS rerun; avoid older Tahoe snapshots unless explicitly requested.
+- Parallels beta smoke: use `--target-package-spec openclaw@<beta-version>` for the beta artifact, and pin the stable side with both `--install-version <stable-version>` and `--latest-version <stable-version>` for upgrade runs. npm dist-tags can move mid-run.
+- Parallels beta smoke, Windows nuance: old stable `2026.3.12` still prints the Unicode Windows onboarding banner, so mojibake during the stable precheck log is expected there. Judge the beta package by the post-upgrade lane.
 - Parallels macOS smoke playbook:
   - `prlctl exec` is fine for deterministic repo commands, but it can misrepresent interactive shell behavior (`PATH`, `HOME`, `curl | bash`, shebang resolution). For installer parity or shell-sensitive repros, prefer the guest Terminal or `prlctl enter`.
   - Fresh Tahoe snapshot current reality: `brew` exists, `node` may not be on `PATH` in noninteractive guest exec. Use absolute `/opt/homebrew/bin/node` for repo/CLI runs when needed.
