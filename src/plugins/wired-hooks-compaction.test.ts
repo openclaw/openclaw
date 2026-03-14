@@ -138,7 +138,7 @@ describe("compaction hook wiring", () => {
     expect(emitAgentEvent).toHaveBeenCalledWith({
       runId: "r2",
       stream: "compaction",
-      data: { phase: "end", willRetry: false },
+      data: { phase: "end", willRetry: false, completed: true },
     });
   });
 
@@ -169,7 +169,7 @@ describe("compaction hook wiring", () => {
     expect(emitAgentEvent).toHaveBeenCalledWith({
       runId: "r3",
       stream: "compaction",
-      data: { phase: "end", willRetry: true },
+      data: { phase: "end", willRetry: true, completed: true },
     });
   });
 
