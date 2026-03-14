@@ -28,8 +28,14 @@ import {
   resolveContextWindowInfo,
 } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import {
+  coerceToFailoverError,
+  describeFailoverError,
+  FailoverError,
+  resolveFailoverStatus,
+} from "../failover-error.js";
+import {
+  applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
   getApiKeyForModel,
   resolveAuthProfileOrder,
@@ -40,6 +46,7 @@ import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   formatBillingErrorMessage,
   classifyFailoverReason,
+  extractObservedOverflowTokenCount,
   formatAssistantErrorText,
   isAuthAssistantError,
   isBillingAssistantError,
@@ -883,7 +890,7 @@ export async function runEmbeddedPiAgent(
             disableTools: params.disableTools,
             provider,
             modelId,
-            model: effectiveModel,
+            model: applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             authStorage,
@@ -891,6 +898,7 @@ export async function runEmbeddedPiAgent(
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
             thinkLevel,
+            fastMode: params.fastMode,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
@@ -988,11 +996,13 @@ export async function runEmbeddedPiAgent(
             const overflowDiagId = createCompactionDiagId();
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
+            const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
                 `messages=${msgCount} sessionFile=${params.sessionFile} ` +
                 `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
+                `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
                 `error=${errorText.slice(0, 200)}`,
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
@@ -1050,8 +1060,12 @@ export async function runEmbeddedPiAgent(
               try {
                 compactResult = await contextEngine.compact({
                   sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
                   sessionFile: params.sessionFile,
                   tokenBudget: ctxInfo.tokens,
+                  ...(observedOverflowTokens !== undefined
+                    ? { currentTokenCount: observedOverflowTokens }
+                    : {}),
                   force: true,
                   compactionTarget: "budget",
                   runtimeContext: {
@@ -1074,6 +1088,9 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     ownerNumbers: params.ownerNumbers,
                     trigger: "overflow",
+                    ...(observedOverflowTokens !== undefined
+                      ? { currentTokenCount: observedOverflowTokens }
+                      : {}),
                     diagId: overflowDiagId,
                     attempt: overflowCompactionAttempts,
                     maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
@@ -1205,7 +1222,17 @@ export async function runEmbeddedPiAgent(
           }
 
           if (promptError && !aborted) {
-            const errorText = describeUnknownError(promptError);
+            // Normalize wrapped errors (e.g. abort-wrapped RESOURCE_EXHAUSTED) into
+            // FailoverError so rate-limit classification works even for nested shapes.
+            const normalizedPromptFailover = coerceToFailoverError(promptError, {
+              provider: activeErrorContext.provider,
+              model: activeErrorContext.model,
+              profileId: lastProfileId,
+            });
+            const promptErrorDetails = normalizedPromptFailover
+              ? describeFailoverError(normalizedPromptFailover)
+              : describeFailoverError(promptError);
+            const errorText = promptErrorDetails.message || describeUnknownError(promptError);
             if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
               authRetryPending = true;
               continue;
@@ -1269,14 +1296,16 @@ export async function runEmbeddedPiAgent(
                 },
               };
             }
-            const promptFailoverReason = classifyFailoverReason(errorText);
+            const promptFailoverReason =
+              promptErrorDetails.reason ?? classifyFailoverReason(errorText);
             const promptProfileFailureReason =
               resolveAuthProfileFailureReason(promptFailoverReason);
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
               reason: promptProfileFailureReason,
             });
-            const promptFailoverFailure = isFailoverErrorMessage(errorText);
+            const promptFailoverFailure =
+              promptFailoverReason !== null || isFailoverErrorMessage(errorText);
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
             const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
@@ -1318,13 +1347,16 @@ export async function runEmbeddedPiAgent(
               const status = resolveFailoverStatus(promptFailoverReason ?? "unknown");
               logPromptFailoverDecision("fallback_model", { status });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
-              throw new FailoverError(errorText, {
-                reason: promptFailoverReason ?? "unknown",
-                provider,
-                model: modelId,
-                profileId: lastProfileId,
-                status,
-              });
+              throw (
+                normalizedPromptFailover ??
+                new FailoverError(errorText, {
+                  reason: promptFailoverReason ?? "unknown",
+                  provider,
+                  model: modelId,
+                  profileId: lastProfileId,
+                  status: resolveFailoverStatus(promptFailoverReason ?? "unknown"),
+                })
+              );
             }
             if (promptFailoverFailure || promptFailoverReason) {
               logPromptFailoverDecision("surface_error");
@@ -1565,7 +1597,9 @@ export async function runEmbeddedPiAgent(
               // ACP bridge) can distinguish end_turn from max_tokens.
               stopReason: attempt.clientToolCall
                 ? "tool_calls"
-                : (lastAssistant?.stopReason as string | undefined),
+                : attempt.yieldDetected
+                  ? "end_turn"
+                  : (lastAssistant?.stopReason as string | undefined),
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {

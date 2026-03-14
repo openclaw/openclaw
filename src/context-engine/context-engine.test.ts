@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { compactEmbeddedPiSessionDirect } from "../agents/pi-embedded-runner/compact.runtime.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
@@ -18,6 +19,23 @@ import type {
   CompactResult,
   IngestResult,
 } from "./types.js";
+
+vi.mock("../agents/pi-embedded-runner/compact.runtime.js", () => ({
+  compactEmbeddedPiSessionDirect: vi.fn(async () => ({
+    ok: true,
+    compacted: false,
+    reason: "mock compaction",
+    result: {
+      summary: "",
+      firstKeptEntryId: "",
+      tokensBefore: 0,
+      tokensAfter: 0,
+      details: undefined,
+    },
+  })),
+}));
+
+const mockedCompactEmbeddedPiSessionDirect = vi.mocked(compactEmbeddedPiSessionDirect);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -43,6 +61,7 @@ class MockContextEngine implements ContextEngine {
 
   async ingest(_params: {
     sessionId: string;
+    sessionKey?: string;
     message: AgentMessage;
     isHeartbeat?: boolean;
   }): Promise<IngestResult> {
@@ -51,6 +70,7 @@ class MockContextEngine implements ContextEngine {
 
   async assemble(params: {
     sessionId: string;
+    sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
   }): Promise<AssembleResult> {
@@ -63,6 +83,7 @@ class MockContextEngine implements ContextEngine {
 
   async compact(_params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
@@ -91,6 +112,10 @@ class MockContextEngine implements ContextEngine {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Engine contract tests", () => {
+  beforeEach(() => {
+    mockedCompactEmbeddedPiSessionDirect.mockClear();
+  });
+
   it("a mock engine implementing ContextEngine can be registered and resolved", async () => {
     const factory = () => new MockContextEngine();
     registerContextEngine("mock", factory);
@@ -152,6 +177,25 @@ describe("Engine contract tests", () => {
     const engine = new MockContextEngine();
     // Should complete without error
     await expect(engine.dispose()).resolves.toBeUndefined();
+  });
+
+  it("legacy compact preserves runtimeContext currentTokenCount when top-level value is absent", async () => {
+    const engine = new LegacyContextEngine();
+
+    await engine.compact({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.json",
+      runtimeContext: {
+        workspaceDir: "/tmp/workspace",
+        currentTokenCount: 277403,
+      },
+    });
+
+    expect(mockedCompactEmbeddedPiSessionDirect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentTokenCount: 277403,
+      }),
+    );
   });
 });
 

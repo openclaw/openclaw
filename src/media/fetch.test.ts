@@ -25,13 +25,21 @@ function makeStallingFetch(firstChunk: Uint8Array) {
   });
 }
 
+function makeLookupFn() {
+  return vi.fn(async () => [{ address: "149.154.167.220", family: 4 }]) as unknown as NonNullable<
+    Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]
+  >;
+}
+
 describe("fetchRemoteMedia", () => {
-  type LookupFn = NonNullable<Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]>;
+  const telegramToken = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
+  const redactedTelegramToken = `${telegramToken.slice(0, 6)}…${telegramToken.slice(-4)}`;
+  const telegramFileUrl = `https://api.telegram.org/file/bot${telegramToken}/photos/1.jpg`;
 
   it("rejects when content-length exceeds maxBytes", async () => {
     const lookupFn = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },
-    ]) as unknown as LookupFn;
+    ]) as unknown as NonNullable<Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]>;
     const fetchImpl = async () =>
       new Response(makeStream([new Uint8Array([1, 2, 3, 4, 5])]), {
         status: 200,
@@ -51,7 +59,7 @@ describe("fetchRemoteMedia", () => {
   it("rejects when streamed payload exceeds maxBytes", async () => {
     const lookupFn = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },
-    ]) as unknown as LookupFn;
+    ]) as unknown as NonNullable<Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]>;
     const fetchImpl = async () =>
       new Response(makeStream([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])]), {
         status: 200,
@@ -70,7 +78,7 @@ describe("fetchRemoteMedia", () => {
   it("aborts stalled body reads when idle timeout expires", async () => {
     const lookupFn = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },
-    ]) as unknown as LookupFn;
+    ]) as unknown as NonNullable<Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]>;
     const fetchImpl = makeStallingFetch(new Uint8Array([1, 2]));
 
     await expect(
@@ -86,6 +94,48 @@ describe("fetchRemoteMedia", () => {
       name: "MediaFetchError",
     });
   }, 5_000);
+
+  it("redacts Telegram bot tokens from fetch failure messages", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error(`dial failed for ${telegramFileUrl}`);
+    });
+
+    const error = await fetchRemoteMedia({
+      url: telegramFileUrl,
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 1024,
+      ssrfPolicy: {
+        allowedHostnames: ["api.telegram.org"],
+        allowRfc2544BenchmarkRange: true,
+      },
+    }).catch((err: unknown) => err as Error);
+
+    expect(error).toBeInstanceOf(Error);
+    const errorText = error instanceof Error ? String(error) : "";
+    expect(errorText).not.toContain(telegramToken);
+    expect(errorText).toContain(`bot${redactedTelegramToken}`);
+  });
+
+  it("redacts Telegram bot tokens from HTTP error messages", async () => {
+    const fetchImpl = vi.fn(async () => new Response("unauthorized", { status: 401 }));
+
+    const error = await fetchRemoteMedia({
+      url: telegramFileUrl,
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 1024,
+      ssrfPolicy: {
+        allowedHostnames: ["api.telegram.org"],
+        allowRfc2544BenchmarkRange: true,
+      },
+    }).catch((err: unknown) => err as Error);
+
+    expect(error).toBeInstanceOf(Error);
+    const errorText = error instanceof Error ? String(error) : "";
+    expect(errorText).not.toContain(telegramToken);
+    expect(errorText).toContain(`bot${redactedTelegramToken}`);
+  });
 
   it("blocks private IP literals before fetching", async () => {
     const fetchImpl = vi.fn();
