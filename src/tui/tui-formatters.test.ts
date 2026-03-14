@@ -163,6 +163,26 @@ example
 
     expect(text).toBe("Hello world");
   });
+
+  it("strips relevant-memories tags from user messages", () => {
+    const text = extractTextFromMessage({
+      role: "user",
+      content:
+        "<relevant-memories>\n1. [personal] likes coffee\n</relevant-memories>\nWhat is 2+2?",
+    });
+
+    expect(text).toBe("What is 2+2?");
+  });
+
+  it("strips both relevant-memories and timestamp envelope injected by prependContext", () => {
+    const text = extractTextFromMessage({
+      role: "user",
+      content:
+        "<relevant-memories>\n1. [personal] likes coffee\n</relevant-memories>\n\n[Sun 2026-03-15 10:30 CST] Hello world",
+    });
+
+    expect(text).toBe("Hello world");
+  });
 });
 
 describe("extractThinkingFromMessage", () => {

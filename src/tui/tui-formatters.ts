@@ -1,5 +1,7 @@
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripEnvelope } from "../shared/chat-envelope.js";
+import { stripRelevantMemoriesTags } from "../shared/text/assistant-visible-text.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
@@ -326,7 +328,13 @@ export function extractTextFromMessage(
   const text = extractTextBlocks(record.content, opts);
   if (text) {
     if (record.role === "user") {
-      return stripLeadingInboundMetadata(text);
+      // After stripping memories, re-run stripEnvelope: prependContext injection
+      // may have pushed the timestamp envelope behind the <relevant-memories> block.
+      // trimStart() between steps so the leading newlines left by the memory block
+      // don't prevent stripEnvelope from matching the `[…]` prefix.
+      return stripEnvelope(
+        stripRelevantMemoriesTags(stripLeadingInboundMetadata(text)).trimStart(),
+      ).trimStart();
     }
     return text;
   }

@@ -15,6 +15,7 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { stripRelevantMemoriesTags } from "../../shared/text/assistant-visible-text.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -304,9 +305,10 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
   let changed = false;
   if (typeof entry.text === "string") {
     const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    const res = truncateChatHistoryText(stripped.text);
+    const memStripped = stripRelevantMemoriesTags(stripped.text);
+    const res = truncateChatHistoryText(memStripped);
     entry.text = res.text;
-    changed ||= stripped.changed || res.truncated;
+    changed ||= stripped.changed || memStripped !== stripped.text || res.truncated;
   }
   if (typeof entry.partialJson === "string") {
     const res = truncateChatHistoryText(entry.partialJson);
@@ -447,9 +449,10 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
 
   if (typeof entry.content === "string") {
     const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
-    const res = truncateChatHistoryText(stripped.text);
+    const memStripped = stripRelevantMemoriesTags(stripped.text);
+    const res = truncateChatHistoryText(memStripped);
     entry.content = res.text;
-    changed ||= stripped.changed || res.truncated;
+    changed ||= stripped.changed || memStripped !== stripped.text || res.truncated;
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block));
     if (updated.some((item) => item.changed)) {
@@ -460,9 +463,10 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
 
   if (typeof entry.text === "string") {
     const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    const res = truncateChatHistoryText(stripped.text);
+    const memStripped = stripRelevantMemoriesTags(stripped.text);
+    const res = truncateChatHistoryText(memStripped);
     entry.text = res.text;
-    changed ||= stripped.changed || res.truncated;
+    changed ||= stripped.changed || memStripped !== stripped.text || res.truncated;
   }
 
   return { message: changed ? entry : message, changed };

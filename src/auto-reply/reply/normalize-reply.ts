@@ -1,5 +1,6 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { hasReplyChannelData, hasReplyContent } from "../../interactive/payload.js";
+import { stripRelevantMemoriesTags } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
@@ -110,6 +111,12 @@ export function normalizeReplyPayload(
 
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+  }
+  // Strip <relevant-memories> scaffolding that the LLM may echo back.
+  // This is a safety net covering all channel outbound paths (Telegram, Discord,
+  // Slack, Signal, etc.) so internal context never leaks to end users.
+  if (text) {
+    text = stripRelevantMemoriesTags(text);
   }
   if (
     !hasReplyContent({

@@ -1,18 +1,65 @@
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
+import { stripRelevantMemoriesTags } from "../../../../src/shared/text/assistant-visible-text.js";
 import { stripThinkingTags } from "../format.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
-function processMessageText(text: string, role: string): string {
-  const shouldStripInboundMetadata = role.toLowerCase() === "user";
+interface DisplayStripPattern {
+  regex: string;
+  flags?: string;
+}
+
+/**
+ * Apply plugin-declared display-strip patterns from messageMeta.
+ * Falls back to hardcoded stripRelevantMemoriesTags as a safety net.
+ */
+function stripDisplayPatterns(text: string, message: unknown): string {
+  const m = message as Record<string, unknown>;
+  const meta = m.messageMeta as Record<string, unknown> | undefined;
+  const patterns = meta?.displayStripPatterns as DisplayStripPattern[] | undefined;
+
+  let result = text;
+  if (Array.isArray(patterns) && patterns.length > 0) {
+    for (const p of patterns) {
+      if (typeof p?.regex !== "string") {
+        continue;
+      }
+      try {
+        result = result.replace(new RegExp(p.regex, p.flags ?? "gi"), "");
+      } catch {
+        // skip invalid regex from plugins
+      }
+    }
+    return result.trimStart();
+  }
+
+  // Hardcoded fallback: strip <relevant-memories> tags even when messageMeta
+  // is absent (e.g. sessions created before this feature, or chat.history API
+  // that doesn't pass messageMeta through).
+  return stripRelevantMemoriesTags(result);
+}
+
+function processMessageText(text: string, role: string, message?: unknown): string {
   if (role === "assistant") {
     return stripThinkingTags(text);
   }
-  return shouldStripInboundMetadata
+  const shouldStripInboundMetadata = role.toLowerCase() === "user";
+  const stripped = shouldStripInboundMetadata
     ? stripInboundMetadata(stripEnvelope(text))
     : stripEnvelope(text);
+
+  // For user messages, also strip plugin-injected context (e.g. <relevant-memories>)
+  // After stripping, re-run stripEnvelope: the prependContext injection may have
+  // pushed the envelope timestamp (e.g. "[Sun 2026-03-15 10:30 CST] …") behind
+  // the <relevant-memories> block, so the first stripEnvelope pass couldn't see it.
+  if (shouldStripInboundMetadata && message) {
+    // trimStart() so any leading whitespace left by the memory block removal
+    // doesn't prevent stripEnvelope from matching the `[…]` prefix.
+    return stripEnvelope(stripDisplayPatterns(stripped, message).trimStart());
+  }
+  return stripped;
 }
 
 export function extractText(message: unknown): string | null {
@@ -22,7 +69,7 @@ export function extractText(message: unknown): string | null {
   if (!raw) {
     return null;
   }
-  return processMessageText(raw, role);
+  return processMessageText(raw, role, message);
 }
 
 export function extractTextCached(message: unknown): string | null {

@@ -154,6 +154,34 @@ function getHooksForNameAndPlugin<K extends PluginHookName>(
 }
 
 /**
+ * Deep-merge two messageMeta bags. Array-valued keys (e.g. displayStripPatterns)
+ * are concatenated so multiple plugins / hook phases can each contribute entries
+ * without overwriting each other. Scalar keys use last-wins semantics.
+ */
+function mergeMessageMeta(
+  acc: Record<string, unknown> | undefined,
+  next: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!acc) {
+    return next;
+  }
+  if (!next) {
+    return acc;
+  }
+  const merged: Record<string, unknown> = { ...acc };
+  for (const key of Object.keys(next)) {
+    const accVal = acc[key];
+    const nextVal = next[key];
+    if (Array.isArray(accVal) && Array.isArray(nextVal)) {
+      merged[key] = [...accVal, ...nextVal];
+    } else {
+      merged[key] = nextVal;
+    }
+  }
+  return merged;
+}
+
+/**
  * Create a hook runner for a specific registry.
  */
 export function createHookRunner(registry: PluginRegistry, options: HookRunnerOptions = {}) {
@@ -186,6 +214,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       left: acc?.appendSystemContext,
       right: next.appendSystemContext,
     }),
+    messageMeta: mergeMessageMeta(acc?.messageMeta, next.messageMeta),
   });
 
   const mergeSubagentSpawningResult = (
