@@ -66,6 +66,17 @@ describe("collectReleaseTagErrors", () => {
     ).toContainEqual(expect.stringContaining("must be within 2 days"));
   });
 
+  it("allows manual publish validation to skip the CalVer freshness window", () => {
+    expect(
+      collectReleaseTagErrors({
+        packageVersion: "2026.3.10",
+        releaseTag: "v2026.3.10",
+        now: new Date("2026-03-20T00:00:00Z"),
+        enforceCalverWindow: false,
+      }),
+    ).toEqual([]);
+  });
+
   it("rejects tags that do not match the current release format", () => {
     expect(
       collectReleaseTagErrors({
