@@ -1,5 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { findExtraGatewayServices } from "./inspect.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+let findExtraGatewayServices: typeof import("./inspect.js").findExtraGatewayServices;
+let inspectTestUtils: typeof import("./inspect.js").__test__;
 
 const { execSchtasksMock } = vi.hoisted(() => ({
   execSchtasksMock: vi.fn(),
@@ -8,6 +10,49 @@ const { execSchtasksMock } = vi.hoisted(() => ({
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: (...args: unknown[]) => execSchtasksMock(...args),
 }));
+
+beforeAll(async () => {
+  ({ findExtraGatewayServices, __test__: inspectTestUtils } = await import("./inspect.js"));
+});
+
+describe("detectMarker", () => {
+  it("ignores markers that only appear in a POSIX HOME path", () => {
+    const marker = inspectTestUtils.detectMarker("ExecStart=/home/moltbot/.local/bin/helper", {
+      HOME: "/home/moltbot",
+    });
+    expect(marker).toBeNull();
+  });
+
+  it("ignores markers that only appear in a Windows HOME path", () => {
+    const marker = inspectTestUtils.detectMarker(
+      "ExecStart=C:\\Users\\MoltBot\\tools\\helper.exe",
+      { HOME: "C:\\Users\\MoltBot" },
+    );
+    expect(marker).toBeNull();
+  });
+
+  it("does not scrub markers when Windows HOME separators do not match", () => {
+    const marker = inspectTestUtils.detectMarker("ExecStart=C:/Users/MoltBot/tools/helper.exe", {
+      HOME: "C:\\Users\\MoltBot",
+    });
+    expect(marker).toBe("moltbot");
+  });
+
+  it("still detects markers that appear outside HOME", () => {
+    const marker = inspectTestUtils.detectMarker("ExecStart=/opt/moltbot/bin/moltbot run", {
+      HOME: "/home/openclaw",
+    });
+    expect(marker).toBe("moltbot");
+  });
+
+  it("does not scrub HOME when it appears mid-path", () => {
+    const marker = inspectTestUtils.detectMarker(
+      "ExecStart=/home/useropenclaw/bin/openclaw gateway run",
+      { HOME: "/home/user" },
+    );
+    expect(marker).toBe("openclaw");
+  });
+});
 
 describe("findExtraGatewayServices (win32)", () => {
   const originalPlatform = process.platform;

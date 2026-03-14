@@ -52,10 +52,57 @@ export function renderGatewayServiceCleanupHints(
 
 type Marker = (typeof EXTRA_MARKERS)[number];
 
-function detectMarker(content: string): Marker | null {
+type PathChar = string;
+
+const PATH_BOUNDARY_CHARS = new Set<PathChar>(["", "/", "\\", "\n", "\t", " ", '"', "'", ":", "="]);
+
+function isBoundaryChar(char: PathChar | undefined): boolean {
+  return PATH_BOUNDARY_CHARS.has(char ?? "");
+}
+
+function scrubHomePath(lower: string, home: string): string {
+  if (!home) {
+    return lower;
+  }
+  const homeLower = home.toLowerCase();
+  let out = "";
+  let idx = 0;
+  while (idx < lower.length) {
+    const hit = lower.indexOf(homeLower, idx);
+    if (hit === -1) {
+      out += lower.slice(idx);
+      break;
+    }
+    const before = hit === 0 ? "" : lower[hit - 1];
+    const after = lower[hit + homeLower.length] ?? "";
+    const isStartBoundary = hit === 0 || isBoundaryChar(before);
+    const isEndBoundary = isBoundaryChar(after);
+    if (isStartBoundary && isEndBoundary) {
+      out += lower.slice(idx, hit);
+      idx = hit + homeLower.length;
+      continue;
+    }
+    out += lower.slice(idx, hit + homeLower.length);
+    idx = hit + homeLower.length;
+  }
+  return out;
+}
+
+function detectMarker(content: string, env: Record<string, string | undefined>): Marker | null {
   const lower = content.toLowerCase();
+  let scrubbed = lower;
+  try {
+    const home = resolveHomeDir(env).toLowerCase();
+    if (home) {
+      scrubbed = scrubHomePath(scrubbed, home);
+      const windowsHome = home.replaceAll("/", "\\");
+      if (windowsHome !== home) {
+        scrubbed = scrubHomePath(scrubbed, windowsHome);
+      }
+    }
+  } catch {}
   for (const marker of EXTRA_MARKERS) {
-    if (lower.includes(marker)) {
+    if (scrubbed.includes(marker)) {
       return marker;
     }
   }
@@ -180,6 +227,7 @@ async function collectServiceFiles(params: {
 async function scanLaunchdDir(params: {
   dir: string;
   scope: "user" | "system";
+  env: Record<string, string | undefined>;
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
   const candidates = await collectServiceFiles({
@@ -189,7 +237,7 @@ async function scanLaunchdDir(params: {
   });
 
   for (const { name: labelFromName, fullPath, contents } of candidates) {
-    const marker = detectMarker(contents);
+    const marker = detectMarker(contents, params.env);
     const label = tryExtractPlistLabel(contents) ?? labelFromName;
     if (!marker) {
       const legacyLabel = isLegacyLabel(labelFromName) || isLegacyLabel(label);
@@ -228,6 +276,7 @@ async function scanLaunchdDir(params: {
 async function scanSystemdDir(params: {
   dir: string;
   scope: "user" | "system";
+  env: Record<string, string | undefined>;
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
   const candidates = await collectServiceFiles({
@@ -237,7 +286,7 @@ async function scanSystemdDir(params: {
   });
 
   for (const { entry, name, fullPath, contents } of candidates) {
-    const marker = detectMarker(contents);
+    const marker = detectMarker(contents, params.env);
     if (!marker) {
       continue;
     }
@@ -305,6 +354,11 @@ function parseSchtasksList(output: string): ScheduledTaskInfo[] {
   return tasks;
 }
 
+export const __test__ = {
+  detectMarker,
+  scrubHomePath,
+};
+
 export async function findExtraGatewayServices(
   env: Record<string, string | undefined>,
   opts: FindExtraGatewayServicesOptions = {},
@@ -327,6 +381,7 @@ export async function findExtraGatewayServices(
       for (const svc of await scanLaunchdDir({
         dir: userDir,
         scope: "user",
+        env,
       })) {
         push(svc);
       }
@@ -334,12 +389,14 @@ export async function findExtraGatewayServices(
         for (const svc of await scanLaunchdDir({
           dir: path.join(path.sep, "Library", "LaunchAgents"),
           scope: "system",
+          env,
         })) {
           push(svc);
         }
         for (const svc of await scanLaunchdDir({
           dir: path.join(path.sep, "Library", "LaunchDaemons"),
           scope: "system",
+          env,
         })) {
           push(svc);
         }
@@ -357,6 +414,7 @@ export async function findExtraGatewayServices(
       for (const svc of await scanSystemdDir({
         dir: userDir,
         scope: "user",
+        env,
       })) {
         push(svc);
       }
@@ -369,6 +427,7 @@ export async function findExtraGatewayServices(
           for (const svc of await scanSystemdDir({
             dir,
             scope: "system",
+            env,
           })) {
             push(svc);
           }
@@ -397,15 +456,7 @@ export async function findExtraGatewayServices(
       if (isOpenClawGatewayTaskName(name)) {
         continue;
       }
-      const lowerName = name.toLowerCase();
-      const lowerCommand = task.taskToRun?.toLowerCase() ?? "";
-      let marker: Marker | null = null;
-      for (const candidate of EXTRA_MARKERS) {
-        if (lowerName.includes(candidate) || lowerCommand.includes(candidate)) {
-          marker = candidate;
-          break;
-        }
-      }
+      const marker = detectMarker(`${name}\n${task.taskToRun ?? ""}`, env);
       if (!marker) {
         continue;
       }
