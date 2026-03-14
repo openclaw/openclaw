@@ -195,6 +195,26 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Detects Playwright assertion errors triggered by CDP worker targets (shared_worker,
+ * service_worker). Browsers like Brave emit Target.attachedToTarget events for these
+ * target types, but Playwright's CRBrowser._onAttachedToTarget only expects page targets
+ * and throws an assertion. Suppressing this avoids crashing the gateway (#45791).
+ */
+export function isPlaywrightWorkerTargetAssertion(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const message = "message" in err && typeof err.message === "string" ? err.message : "";
+  const stack = "stack" in err && typeof err.stack === "string" ? err.stack : "";
+
+  // The assertion message includes the stringified targetInfo object with the "type" field.
+  const hasWorkerType = /\b(shared_worker|service_worker)\b/.test(message);
+  const hasPlaywrightStack = stack.includes("_onAttachedToTarget") || stack.includes("crBrowser");
+
+  return hasWorkerType && hasPlaywrightStack;
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
@@ -246,6 +266,14 @@ export function installUnhandledRejectionHandler(): void {
     if (isTransientNetworkError(reason)) {
       console.warn(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
+        formatUncaughtError(reason),
+      );
+      return;
+    }
+
+    if (isPlaywrightWorkerTargetAssertion(reason)) {
+      console.warn(
+        "[openclaw] Suppressed Playwright worker target assertion (continuing):",
         formatUncaughtError(reason),
       );
       return;

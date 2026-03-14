@@ -157,5 +157,20 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         expect.stringContaining("This operation was aborted"),
       );
     });
+
+    it("does not exit on Playwright worker target assertion (#45791)", () => {
+      const err = new Error(
+        'targetInfo: {"type":"shared_worker","url":"https://www.facebook.com/sw.js"}',
+      );
+      err.stack = `Error: targetInfo: {"type":"shared_worker"}
+    at assert (playwright-core/lib/utils/isomorphic/assert.js:1:1)
+    at CRBrowser._onAttachedToTarget (playwright-core/lib/server/chromium/crBrowser.js:147:5)`;
+
+      expectExitCodeFromUnhandled(err, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Suppressed Playwright worker target assertion (continuing):",
+        expect.stringContaining("_onAttachedToTarget"),
+      );
+    });
   });
 });
