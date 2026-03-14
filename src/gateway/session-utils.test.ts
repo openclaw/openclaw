@@ -755,6 +755,41 @@ describe("listSessionsFromStore search", () => {
     expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:cron:job-1"]);
   });
 
+  test("keeps top-level agent sessions visible when activeMinutes filters stale sessions", () => {
+    const now = Date.now();
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }, { id: "heartbeat" }] },
+    } as OpenClawConfig;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now - 3 * 60 * 60_000,
+      } as SessionEntry,
+      "agent:heartbeat:main": {
+        sessionId: "sess-heartbeat",
+        updatedAt: now - 5 * 60_000,
+        label: "heartbeat",
+      } as SessionEntry,
+      "agent:main:stale-chat": {
+        sessionId: "sess-stale-chat",
+        updatedAt: now - 3 * 60 * 60_000,
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { activeMinutes: 120 },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([
+      "agent:heartbeat:main",
+      "agent:main:main",
+    ]);
+  });
+
   test.each([
     {
       name: "does not guess provider for legacy runtime model without modelProvider",
