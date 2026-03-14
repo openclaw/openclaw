@@ -221,7 +221,14 @@ async function persistState() {
       const tabEntries = []
       for (const [tabId, tab] of tabs.entries()) {
         if ((tab.state === 'connected' || tab.state === 'disabled') && tab.sessionId && tab.targetId) {
-          tabEntries.push({ tabId, sessionId: tab.sessionId, targetId: tab.targetId, attachOrder: tab.attachOrder, state: tab.state })
+          tabEntries.push({
+            tabId,
+            sessionId: tab.sessionId,
+            targetId: tab.targetId,
+            attachOrder: tab.attachOrder,
+            state: tab.state,
+            identityEpoch: tab.identityEpoch,
+          })
         }
       }
       const reattachingEntries = Array.from(reattachingTabs.entries())
@@ -398,6 +405,7 @@ async function rehydrateState() {
         sessionId: entry.sessionId,
         targetId: entry.targetId,
         attachOrder: entry.attachOrder,
+        identityEpoch: entry.identityEpoch,
       })
       tabBySession.set(entry.sessionId, tabId)
       if (entry.targetId) targetToTab.set(entry.targetId, tabId)
@@ -523,8 +531,18 @@ async function setLockOnRelay(locked, tabId = null, tabMode = null, epoch = null
   // to prevent them from stealing the lock back if they finish re-attaching later.
   if (locked && tabId) {
     const numericId = (typeof tabId === 'string') ? tabBySession.get(tabId) : tabId
-    for (const tid of reattachingTabs.keys()) {
-      if (tid !== numericId) reattachingTabs.delete(tid)
+    for (const [tid, info] of reattachingTabs.entries()) {
+      if (tid !== numericId) {
+        const abandonedBuffer = commandBuffers.get(tid) || []
+        commandBuffers.delete(tid)
+        reattachingTabs.delete(tid)
+        if (info?.sessionId) tabBySession.delete(info.sessionId)
+        if (info?.targetId) targetToTab.delete(info.targetId)
+        for (const cmd of abandonedBuffer) {
+          if (cmd.timerId) clearTimeout(cmd.timerId)
+          if (typeof cmd.reject === 'function') cmd.reject(new Error('Target recovery cancelled by lock transition'))
+        }
+      }
     }
   }
 
@@ -998,6 +1016,10 @@ async function drainCommandBuffers(tabId) {
 
     while (true) {
       if (!isCurrentDrain()) return
+      if (!tabs.has(tabId) && reattachingTabs.has(tabId)) {
+        drainRerunRequested.add(tabId)
+        return
+      }
       const buffer = commandBuffers.get(tabId) || []
       if (buffer.length === 0) {
         if (drainRerunRequested.has(tabId)) {
@@ -1732,7 +1754,7 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
 
   } finally {
     pendingSwaps.delete(addedTabId)
-    if (tabs.has(addedTabId) || reattachingTabs.has(addedTabId)) {
+    if (tabs.has(addedTabId)) {
       void drainCommandBuffers(addedTabId)
     }
     updateAllBadges()
