@@ -94,7 +94,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("keeps the message tool enabled for shared callers with a fully resolved delivery target", async () => {
-    mockFallbackPassthrough();
+    mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
       mode: "announce",
@@ -120,7 +120,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("disables the message tool for shared callers when delivery target lacks accountId", async () => {
-    mockFallbackPassthrough();
+    mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
       mode: "announce",
@@ -149,7 +149,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     // history fallback, not from explicit user input) should not enable the
     // message tool — the agent shouldn't send to a target the user didn't
     // explicitly specify in the hook payload.
-    mockFallbackPassthrough();
+    mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
       mode: "announce",
