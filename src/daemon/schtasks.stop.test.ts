@@ -152,16 +152,18 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       expectGatewayTermination(4242, 1);
       if (process.platform === "win32") {
-        expect(spawnSync).toHaveBeenNthCalledWith(
-          2,
-          path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
-          ["/T", "/PID", expect.any(String)],
-          expect.objectContaining({ stdio: "ignore", timeout: 5_000, windowsHide: true }),
-        );
-      } else {
-        expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), {
-          graceMs: 300,
+        const terminatedPids = spawnSync.mock.calls.flatMap((call) => {
+          const argv = (call as unknown[])[1];
+          if (!Array.isArray(argv)) {
+            return [];
+          }
+          const lastArg = argv.at(-1);
+          return typeof lastArg === "string" ? [lastArg] : [];
         });
+        expect(terminatedPids).toContain("4242");
+        expect(terminatedPids).toContain("5252");
+      } else {
+        expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), { graceMs: 300 });
       }
       expect(inspectPortUsage.mock.calls.length).toBeGreaterThanOrEqual(22);
     });

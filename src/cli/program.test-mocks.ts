@@ -27,52 +27,55 @@ export const runtime: {
   }),
 };
 
+vi.mock("../commands/message.js", () => ({ messageCommand }));
+vi.mock("../commands/status.js", () => ({ statusCommand }));
+vi.mock("../commands/configure.js", () => ({
+  CONFIGURE_WIZARD_SECTIONS: [
+    "workspace",
+    "model",
+    "web",
+    "gateway",
+    "daemon",
+    "channels",
+    "skills",
+    "health",
+  ],
+  configureCommand,
+  configureCommandWithSections,
+  configureCommandFromSectionsArg: (sections: unknown, runtime: unknown) => {
+    const resolved = Array.isArray(sections) ? sections : [];
+    if (resolved.length > 0) {
+      return configureCommandWithSections(resolved, runtime);
+    }
+    return configureCommand({}, runtime);
+  },
+}));
+vi.mock("../commands/setup.js", () => ({ setupCommand }));
+vi.mock("../commands/onboard.js", () => ({ onboardCommand }));
+vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
+vi.mock("./channel-auth.js", () => ({ runChannelLogin, runChannelLogout }));
+vi.mock("../tui/tui.js", () => ({ runTui }));
+vi.mock("../gateway/call.js", () => ({
+  callGateway,
+  randomIdempotencyKey: () => "idem-test",
+  buildGatewayConnectionDetails: () => ({
+    url: "ws://127.0.0.1:1234",
+    urlSource: "test",
+    message: "Gateway target: ws://127.0.0.1:1234",
+  }),
+}));
+vi.mock("./deps.js", () => ({ createDefaultDeps: () => ({}) }));
+vi.mock("./plugin-registry.js", () => ({ ensurePluginRegistryLoaded }));
+vi.mock("../commands/doctor-config-flow.js", () => ({
+  loadAndMaybeMigrateDoctorConfig,
+}));
+vi.mock("./program/config-guard.js", () => ({ ensureConfigReady }));
+vi.mock("./preaction.js", () => ({ registerPreActionHooks: () => {} }));
+
 export function installBaseProgramMocks() {
-  vi.mock("../commands/message.js", () => ({ messageCommand }));
-  vi.mock("../commands/status.js", () => ({ statusCommand }));
-  vi.mock("../commands/configure.js", () => ({
-    CONFIGURE_WIZARD_SECTIONS: [
-      "workspace",
-      "model",
-      "web",
-      "gateway",
-      "daemon",
-      "channels",
-      "skills",
-      "health",
-    ],
-    configureCommand,
-    configureCommandWithSections,
-    configureCommandFromSectionsArg: (sections: unknown, runtime: unknown) => {
-      const resolved = Array.isArray(sections) ? sections : [];
-      if (resolved.length > 0) {
-        return configureCommandWithSections(resolved, runtime);
-      }
-      return configureCommand({}, runtime);
-    },
-  }));
-  vi.mock("../commands/setup.js", () => ({ setupCommand }));
-  vi.mock("../commands/onboard.js", () => ({ onboardCommand }));
-  vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
-  vi.mock("./channel-auth.js", () => ({ runChannelLogin, runChannelLogout }));
-  vi.mock("../tui/tui.js", () => ({ runTui }));
-  vi.mock("../gateway/call.js", () => ({
-    callGateway,
-    randomIdempotencyKey: () => "idem-test",
-    buildGatewayConnectionDetails: () => ({
-      url: "ws://127.0.0.1:1234",
-      urlSource: "test",
-      message: "Gateway target: ws://127.0.0.1:1234",
-    }),
-  }));
-  vi.mock("./deps.js", () => ({ createDefaultDeps: () => ({}) }));
+  return undefined;
 }
 
 export function installSmokeProgramMocks() {
-  vi.mock("./plugin-registry.js", () => ({ ensurePluginRegistryLoaded }));
-  vi.mock("../commands/doctor-config-flow.js", () => ({
-    loadAndMaybeMigrateDoctorConfig,
-  }));
-  vi.mock("./program/config-guard.js", () => ({ ensureConfigReady }));
-  vi.mock("./preaction.js", () => ({ registerPreActionHooks: () => {} }));
+  return undefined;
 }

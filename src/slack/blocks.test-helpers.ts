@@ -16,19 +16,21 @@ export type SlackSendTestClient = WebClient & {
   };
 };
 
-export function installSlackBlockTestMocks() {
-  vi.mock("../config/config.js", () => ({
-    loadConfig: () => ({}),
-  }));
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => ({}),
+}));
 
-  vi.mock("./accounts.js", () => ({
-    resolveSlackAccount: () => ({
-      accountId: "default",
-      botToken: "xoxb-test",
-      botTokenSource: "config",
-      config: {},
-    }),
-  }));
+vi.mock("./accounts.js", () => ({
+  resolveSlackAccount: () => ({
+    accountId: "default",
+    botToken: "xoxb-test",
+    botTokenSource: "config",
+    config: {},
+  }),
+}));
+
+export function installSlackBlockTestMocks() {
+  return undefined;
 }
 
 export function createSlackEditTestClient(): SlackEditTestClient {

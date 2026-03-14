@@ -12,10 +12,6 @@ function resetWarningFilterInstallState(): void {
   process.emitWarning = baseEmitWarning;
 }
 
-async function flushWarnings(): Promise<void> {
-  await new Promise((resolve) => setImmediate(resolve));
-}
-
 describe("warning filter", () => {
   beforeEach(() => {
     resetWarningFilterInstallState();
@@ -72,50 +68,40 @@ describe("warning filter", () => {
     }
   });
 
-  it("installs once and suppresses known warnings at emit time", async () => {
-    const seenWarnings: Array<{ code?: string; name: string; message: string }> = [];
-    const onWarning = (warning: Error & { code?: string }) => {
-      seenWarnings.push({
-        code: warning.code,
-        name: warning.name,
-        message: warning.message,
-      });
-    };
+  it("installs once and suppresses known warnings at emit time", () => {
+    const emitWarningBase = vi.fn();
+    process.emitWarning = emitWarningBase as typeof process.emitWarning;
 
-    process.on("warning", onWarning);
-    try {
-      installProcessWarningFilter();
-      installProcessWarningFilter();
-      installProcessWarningFilter();
-      const emitWarning = (...args: unknown[]) =>
-        (process.emitWarning as unknown as (...warningArgs: unknown[]) => void)(...args);
+    installProcessWarningFilter();
+    installProcessWarningFilter();
+    installProcessWarningFilter();
+    const emitWarning = (...args: unknown[]) =>
+      (process.emitWarning as unknown as (...warningArgs: unknown[]) => void)(...args);
 
-      emitWarning(
-        "The `util._extend` API is deprecated. Please use Object.assign() instead.",
-        "DeprecationWarning",
-        "DEP0060",
-      );
-      emitWarning("The `util._extend` API is deprecated. Please use Object.assign() instead.", {
-        type: "DeprecationWarning",
-        code: "DEP0060",
-      });
-      emitWarning(
-        Object.assign(new Error("The punycode module is deprecated."), {
-          name: "DeprecationWarning",
-          code: "DEP0040",
-        }),
-      );
-      await flushWarnings();
-      expect(seenWarnings.find((warning) => warning.code === "DEP0060")).toBeUndefined();
-      expect(seenWarnings.find((warning) => warning.code === "DEP0040")).toBeUndefined();
+    emitWarning(
+      "The `util._extend` API is deprecated. Please use Object.assign() instead.",
+      "DeprecationWarning",
+      "DEP0060",
+    );
+    emitWarning("The `util._extend` API is deprecated. Please use Object.assign() instead.", {
+      type: "DeprecationWarning",
+      code: "DEP0060",
+    });
+    emitWarning(
+      Object.assign(new Error("The punycode module is deprecated."), {
+        name: "DeprecationWarning",
+        code: "DEP0040",
+      }),
+    );
 
-      emitWarning("Visible warning", { type: "Warning", code: "OPENCLAW_TEST_WARNING" });
-      await flushWarnings();
-      expect(
-        seenWarnings.find((warning) => warning.code === "OPENCLAW_TEST_WARNING"),
-      ).toBeDefined();
-    } finally {
-      process.off("warning", onWarning);
-    }
+    expect(emitWarningBase).not.toHaveBeenCalled();
+
+    emitWarning("Visible warning", { type: "Warning", code: "OPENCLAW_TEST_WARNING" });
+
+    expect(emitWarningBase).toHaveBeenCalledOnce();
+    expect(emitWarningBase).toHaveBeenCalledWith("Visible warning", {
+      type: "Warning",
+      code: "OPENCLAW_TEST_WARNING",
+    });
   });
 });
