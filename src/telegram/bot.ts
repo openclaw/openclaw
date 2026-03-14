@@ -501,6 +501,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     telegramCfg,
     allowFrom,
     groupAllowFrom,
+    nativeEnabled,
+    nativeSkillsEnabled,
     resolveGroupPolicy,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
