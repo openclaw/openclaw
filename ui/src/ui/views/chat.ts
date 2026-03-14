@@ -255,10 +255,17 @@ function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ) {
-  // totalTokens = context tokens used in the most recent turn (comparable to contextTokens window).
-  // inputTokens is cumulative across all turns and can exceed the context window size — do not use it.
-  const used = session?.totalTokens ?? 0;
+  // Prefer totalTokens (per-turn context snapshot) when fresh.
+  // Fall back to inputTokens (cumulative) capped at the context window when
+  // totalTokensFresh===false, meaning no lastCallUsage/promptTokens snapshot
+  // was available for this run — totalTokens is undefined in that case.
+  // Capping prevents inputTokens (which accumulates across all turns) from
+  // producing a ratio > 1 and showing an incorrect percentage.
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
+  const used =
+    session?.totalTokensFresh !== false
+      ? (session?.totalTokens ?? 0)
+      : Math.min(session?.inputTokens ?? 0, limit);
   if (!used || !limit) {
     return nothing;
   }
