@@ -81,6 +81,7 @@ dependencies {
   implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
   implementation("androidx.concurrent:concurrent-futures:1.3.0")
   implementation("androidx.security:security-crypto:1.1.0")
+  implementation(project(":gatewayshared"))
 
   // Networking + serialization
   implementation("com.squareup.okhttp3:okhttp:5.3.2")
