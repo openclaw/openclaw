@@ -1378,6 +1378,7 @@ export function renderApp(state: AppViewState) {
                   });
                 },
                 onChatScroll: (event) => state.handleChatScroll(event),
+                onChatWheelIntent: (event) => state.handleChatWheelIntent(event),
                 getDraft: () => state.chatMessage,
                 onDraftChange: (next) => (state.chatMessage = next),
                 onRequestUpdate: requestHostUpdate,

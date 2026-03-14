@@ -32,6 +32,7 @@ import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
   handleChatScroll as handleChatScrollInternal,
+  handleChatWheelIntent as handleChatWheelIntentInternal,
   handleLogsScroll as handleLogsScrollInternal,
   resetChatScroll as resetChatScrollInternal,
   scheduleChatScroll as scheduleChatScrollInternal,
@@ -436,6 +437,7 @@ export class OpenClawApp extends LitElement {
   private chatScrollTimeout: number | null = null;
   private chatHasAutoScrolled = false;
   private chatUserNearBottom = true;
+  private chatLastScrollTop = 0;
   @state() chatNewMessagesBelow = false;
   private nodesPollInterval: number | null = null;
   private logsPollInterval: number | null = null;
@@ -503,6 +505,13 @@ export class OpenClawApp extends LitElement {
   handleChatScroll(event: Event) {
     handleChatScrollInternal(
       this as unknown as Parameters<typeof handleChatScrollInternal>[0],
+      event,
+    );
+  }
+
+  handleChatWheelIntent(event: WheelEvent) {
+    handleChatWheelIntentInternal(
+      this as unknown as Parameters<typeof handleChatWheelIntentInternal>[0],
       event,
     );
   }
