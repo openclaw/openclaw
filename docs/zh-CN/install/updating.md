@@ -73,6 +73,32 @@ openclaw update --channel stable
 
 注意：在 npm 安装上，Gateway 网关在启动时会记录更新提示（检查当前渠道标签）。通过 `update.checkOnStart: false` 禁用。
 
+### 核心自动更新（可选）
+
+自动更新**默认关闭**，是 Gateway 网关的核心功能（非插件）。
+
+```json
+{
+  "update": {
+    "channel": "stable",
+    "auto": {
+      "enabled": true,
+      "stableDelayHours": 6,
+      "stableJitterHours": 12,
+      "betaCheckIntervalHours": 1
+    }
+  }
+}
+```
+
+行为说明：
+
+- `stable`：当发现新版本时，OpenClaw 等待 `stableDelayHours`，然后在 `stableJitterHours` 内按每安装确定性抖动应用（分批发布）。
+- `beta`：按 `betaCheckIntervalHours` 间隔（默认每小时）检查，有更新时应用。
+- `dev`：不自动应用；需手动执行 `openclaw update`。
+
+在启用自动更新前，可使用 `openclaw update --dry-run` 预览将要执行的操作。
+
 然后：
 
 ```bash
