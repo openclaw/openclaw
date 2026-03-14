@@ -20,6 +20,12 @@ export type ContextPruningConfig = {
     headChars?: number;
     tailChars?: number;
   };
+  fileBlocks?: {
+    enabled?: boolean;
+    maxChars?: number;
+    headChars?: number;
+    tailChars?: number;
+  };
   hardClear?: {
     enabled?: boolean;
     placeholder?: string;
@@ -35,6 +41,12 @@ export type EffectiveContextPruningSettings = {
   minPrunableToolChars: number;
   tools: ContextPruningToolMatch;
   softTrim: {
+    maxChars: number;
+    headChars: number;
+    tailChars: number;
+  };
+  fileBlocks: {
+    enabled: boolean;
     maxChars: number;
     headChars: number;
     tailChars: number;
@@ -57,6 +69,12 @@ export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings =
     maxChars: 4_000,
     headChars: 1_500,
     tailChars: 1_500,
+  },
+  fileBlocks: {
+    enabled: true,
+    maxChars: 2_000,
+    headChars: 800,
+    tailChars: 800,
   },
   hardClear: {
     enabled: true,
@@ -108,6 +126,20 @@ export function computeEffectiveSettings(raw: unknown): EffectiveContextPruningS
     }
     if (typeof cfg.softTrim.tailChars === "number" && Number.isFinite(cfg.softTrim.tailChars)) {
       s.softTrim.tailChars = Math.max(0, Math.floor(cfg.softTrim.tailChars));
+    }
+  }
+  if (cfg.fileBlocks) {
+    if (typeof cfg.fileBlocks.enabled === "boolean") {
+      s.fileBlocks.enabled = cfg.fileBlocks.enabled;
+    }
+    if (typeof cfg.fileBlocks.maxChars === "number" && Number.isFinite(cfg.fileBlocks.maxChars)) {
+      s.fileBlocks.maxChars = Math.max(0, Math.floor(cfg.fileBlocks.maxChars));
+    }
+    if (typeof cfg.fileBlocks.headChars === "number" && Number.isFinite(cfg.fileBlocks.headChars)) {
+      s.fileBlocks.headChars = Math.max(0, Math.floor(cfg.fileBlocks.headChars));
+    }
+    if (typeof cfg.fileBlocks.tailChars === "number" && Number.isFinite(cfg.fileBlocks.tailChars)) {
+      s.fileBlocks.tailChars = Math.max(0, Math.floor(cfg.fileBlocks.tailChars));
     }
   }
   if (cfg.hardClear) {
