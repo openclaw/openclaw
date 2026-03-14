@@ -60,6 +60,30 @@ async function setSecureFileMode(filePath: string): Promise<void> {
   await fs.promises.chmod(filePath, 0o600).catch(() => undefined);
 }
 
+async function fsyncPathBestEffort(filePath: string): Promise<void> {
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    handle = await fs.promises.open(filePath, "r");
+    await handle.sync();
+  } catch {
+    // best-effort
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function fsyncDirBestEffort(dirPath: string): Promise<void> {
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    handle = await fs.promises.open(dirPath, "r");
+    await handle.sync();
+  } catch {
+    // best-effort (some platforms/filesystems disallow directory fsync)
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
 export async function saveCronStore(
   storePath: string,
   store: CronStoreFile,
@@ -91,6 +115,9 @@ export async function saveCronStore(
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
   await setSecureFileMode(tmp);
+  // Durability guard: flush tmp file before rename so a restart after write/rename
+  // doesn't lose a just-added job on filesystems with delayed write-back.
+  await fsyncPathBestEffort(tmp);
   if (previous !== null && !opts?.skipBackup) {
     try {
       const backupPath = `${storePath}.bak`;
@@ -101,6 +128,10 @@ export async function saveCronStore(
     }
   }
   await renameWithRetry(tmp, storePath);
+  // Keep this even though tmp was fsynced above: on Windows EPERM/EEXIST fallback,
+  // renameWithRetry copies tmp -> dest, creating a fresh dest inode that needs sync.
+  await fsyncPathBestEffort(storePath);
+  await fsyncDirBestEffort(storeDir);
   await setSecureFileMode(storePath);
   serializedStoreCache.set(storePath, json);
 }
