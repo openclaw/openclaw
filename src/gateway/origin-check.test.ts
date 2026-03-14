@@ -92,6 +92,36 @@ describe("checkBrowserOrigin", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts custom URL schemes (tauri://) in allowedOrigins", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.local:18789",
+      origin: "tauri://localhost",
+      allowedOrigins: ["tauri://localhost", "https://example.com"],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.matchedBy).toBe("allowlist");
+    }
+  });
+
+  it("accepts custom URL schemes (electron://) in allowedOrigins", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.local:18789",
+      origin: "electron://app",
+      allowedOrigins: ["electron://app"],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects custom URL schemes not in allowedOrigins", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.local:18789",
+      origin: "tauri://localhost",
+      allowedOrigins: ["https://example.com"],
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("accepts wildcard entries with surrounding whitespace", () => {
     const result = checkBrowserOrigin({
       requestHost: "100.86.79.37:18789",
