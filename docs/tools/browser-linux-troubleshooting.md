@@ -110,6 +110,48 @@ curl -s -X POST http://127.0.0.1:18791/start
 curl -s http://127.0.0.1:18791/tabs
 ```
 
+## Existing-session MCP on Linux / VPS
+
+If you want Chrome DevTools MCP instead of the managed `openclaw` CDP profile,
+you now have two Linux-safe options:
+
+1. Let MCP launch headless Chrome for an `existing-session` profile:
+
+```json
+{
+  "browser": {
+    "headless": true,
+    "noSandbox": true,
+    "executablePath": "/usr/bin/google-chrome-stable",
+    "defaultProfile": "user"
+  }
+}
+```
+
+2. Attach MCP to a running debuggable Chrome instance:
+
+```json
+{
+  "browser": {
+    "headless": true,
+    "defaultProfile": "user",
+    "profiles": {
+      "user": {
+        "driver": "existing-session",
+        "cdpUrl": "http://127.0.0.1:9222",
+        "color": "#00AA00"
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- `driver: "existing-session"` still uses Chrome MCP transport, not the extension relay.
+- `cdpUrl` on an `existing-session` profile is interpreted as the MCP browser target (`browserUrl` or `wsEndpoint`), not the normal OpenClaw CDP driver.
+- If you omit `cdpUrl`, headless MCP launches Chrome itself.
+
 ### Config Reference
 
 | Option                   | Description                                                          | Default                                                     |
