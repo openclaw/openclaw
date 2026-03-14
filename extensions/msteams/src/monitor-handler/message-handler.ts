@@ -676,10 +676,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
       : [];
     const wasMentioned = wasMSTeamsBotMentioned(activity);
-    const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
+    const rawConversationId = activity.conversation?.id ?? "";
+    const conversationId = normalizeMSTeamsConversationId(rawConversationId);
     const replyToId = activity.replyToId ?? undefined;
+    const threadRootId = extractMSTeamsConversationMessageId(rawConversationId);
     const implicitMention = Boolean(
-      conversationId && replyToId && wasMSTeamsMessageSent(conversationId, replyToId),
+      conversationId &&
+      ((replyToId && wasMSTeamsMessageSent(conversationId, replyToId)) ||
+        (threadRootId && wasMSTeamsMessageSent(conversationId, threadRootId))),
     );
 
     await inboundDebouncer.enqueue({
