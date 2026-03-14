@@ -192,3 +192,23 @@ For issues that don't fit a specific repo, or if you're unsure, email **security
 8. **Remediation Advice**
 
 Reports without reproduction steps, demonstrated impact, and remediation advice will be deprioritized. Given the volume of AI-generated scanner findings, we must ensure we're receiving vetted reports from researchers who understand the issues.
+
+## How to Develop the UI in OpenClaw
+
+To develop and debug the UI, follow these steps:
+
+1.  Ensure you have **Node.js >= 22.12.0** and **pnpm >= 10.23** installed.
+2.  Install dependencies:
+    ```bash
+    pnpm install
+    ```
+3.  Start the UI development server (You can edit the UI source code in `ui/src`):
+    ```bash
+    pnpm ui:dev
+    ```
+4.  In a separate terminal, start the gateway in watch mode:
+    ```bash
+    pnpm gateway:watch
+    ```
+5.  Open your browser and navigate to:
+    [http://127.0.0.1:18789/](http://127.0.0.1:18789/)
