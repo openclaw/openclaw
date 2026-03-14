@@ -244,6 +244,9 @@ export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  /** When true (exec completion / cron event), preserve threadId so the reply
+   *  routes back to the originating forum topic or thread. */
+  isEventDriven?: boolean;
 }): OutboundTarget {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
@@ -271,7 +274,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     entry,
     requestedChannel: target === "last" ? "last" : target,
     explicitTo: heartbeat?.to,
-    mode: "heartbeat",
+    mode: params.isEventDriven ? "implicit" : "heartbeat",
   });
 
   const heartbeatAccountId = heartbeat?.accountId?.trim();
