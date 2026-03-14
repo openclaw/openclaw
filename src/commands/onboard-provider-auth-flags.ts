@@ -28,6 +28,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "modelstudioApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
+  | "nexosApiKey"
 >;
 
 export type OnboardProviderAuthFlag = {
@@ -221,5 +222,12 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--byteplus-api-key",
     cliOption: "--byteplus-api-key <key>",
     description: "BytePlus API key",
+  },
+  {
+    optionKey: "nexosApiKey",
+    authChoice: "nexos-api-key",
+    cliFlag: "--nexos-api-key",
+    cliOption: "--nexos-api-key <key>",
+    description: "Nexos AI API key",
   },
 ];

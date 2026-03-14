@@ -1,4 +1,5 @@
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
+import { NEXOS_DEFAULT_MODEL_REF } from "../agents/nexos-models.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import { ensureApiKeyFromOptionEnvOrPrompt } from "./auth-choice.apply-helpers.js";
@@ -18,6 +19,8 @@ import {
   applyModelStudioConfigCn,
   applyModelStudioProviderConfig,
   applyModelStudioProviderConfigCn,
+  applyNexosConfig,
+  applyNexosProviderConfig,
   applyMoonshotConfig,
   applyMoonshotConfigCn,
   applyMoonshotProviderConfig,
@@ -50,6 +53,7 @@ import {
   setLitellmApiKey,
   setMistralApiKey,
   setModelStudioApiKey,
+  setNexosApiKey,
   setMoonshotApiKey,
   setOpencodeGoApiKey,
   setOpencodeZenApiKey,
@@ -331,6 +335,23 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
     noteTitle: "Alibaba Cloud Model Studio Coding Plan (Global/Intl)",
     normalize: (value) => String(value ?? "").trim(),
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+  },
+  "nexos-api-key": {
+    provider: "nexos",
+    profileId: "nexos:default",
+    expectedProviders: ["nexos"],
+    envLabel: "NEXOS_API_KEY",
+    promptMessage: "Enter Nexos AI API key",
+    setCredential: setNexosApiKey,
+    defaultModel: NEXOS_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyNexosConfig,
+    applyProviderConfig: applyNexosProviderConfig,
+    noteDefault: NEXOS_DEFAULT_MODEL_REF,
+    noteMessage: [
+      "Nexos AI provides an OpenAI-compatible gateway to multiple model providers.",
+      "Get your API key at: https://nexos.ai",
+    ].join("\n"),
+    noteTitle: "Nexos AI",
   },
   "synthetic-api-key": {
     provider: "synthetic",

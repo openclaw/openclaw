@@ -12,6 +12,12 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
 import {
+  buildNexosModelDefinition,
+  NEXOS_BASE_URL,
+  NEXOS_DEFAULT_MODEL_REF,
+  NEXOS_MODEL_CATALOG,
+} from "../agents/nexos-models.js";
+import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_DEFAULT_MODEL_REF,
@@ -342,6 +348,36 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyVeniceProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, VENICE_DEFAULT_MODEL_REF);
+}
+
+/**
+ * Apply Nexos AI provider configuration without changing the default model.
+ * Registers Nexos models and sets up the provider, but preserves existing model selection.
+ */
+export function applyNexosProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[NEXOS_DEFAULT_MODEL_REF] = {
+    ...models[NEXOS_DEFAULT_MODEL_REF],
+    alias: models[NEXOS_DEFAULT_MODEL_REF]?.alias ?? "Nexos",
+  };
+
+  const nexosModels = NEXOS_MODEL_CATALOG.map(buildNexosModelDefinition);
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "nexos",
+    api: "openai-completions",
+    baseUrl: NEXOS_BASE_URL,
+    catalogModels: nexosModels,
+  });
+}
+
+/**
+ * Apply Nexos AI provider configuration AND set Nexos as the default model.
+ * Use this when Nexos is the primary provider choice during onboarding.
+ */
+export function applyNexosConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyNexosProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, NEXOS_DEFAULT_MODEL_REF);
 }
 
 /**

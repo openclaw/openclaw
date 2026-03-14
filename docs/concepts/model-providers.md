@@ -164,6 +164,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - Example model: `mistral/mistral-large-latest`
 - CLI: `openclaw onboard --auth-choice mistral-api-key`
+- Nexos AI: `nexos` (`NEXOS_API_KEY`) — multi-provider gateway (Anthropic, OpenAI, Google, xAI); example model: `nexos/Claude Opus 4.6`; CLI: `openclaw onboard --auth-choice nexos-api-key`. See [Nexos AI](/providers/nexos).
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
   - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.

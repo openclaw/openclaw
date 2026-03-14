@@ -38,6 +38,7 @@ export const PROVIDER_ENV_API_KEY_CANDIDATES: Record<string, string[]> = {
   sglang: ["SGLANG_API_KEY"],
   vllm: ["VLLM_API_KEY"],
   kilocode: ["KILOCODE_API_KEY"],
+  nexos: ["NEXOS_API_KEY"],
 };
 
 export function listKnownProviderEnvApiKeyNames(): string[] {

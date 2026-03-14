@@ -14,6 +14,7 @@ import {
   applyModelStudioConfigCn,
   applyMoonshotConfig,
   applyMoonshotConfigCn,
+  applyNexosConfig,
   applyOpencodeGoConfig,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
@@ -33,6 +34,7 @@ import {
   setMistralApiKey,
   setModelStudioApiKey,
   setMoonshotApiKey,
+  setNexosApiKey,
   setOpenaiApiKey,
   setOpencodeGoApiKey,
   setOpencodeZenApiKey,
@@ -487,6 +489,23 @@ function buildSimpleApiKeyAuthChoices(params: { opts: OnboardOptions }): SimpleA
           applyAuthProfileConfig(cfg, {
             profileId: "huggingface:default",
             provider: "huggingface",
+            mode: "api_key",
+          }),
+        ),
+    },
+    {
+      authChoices: ["nexos-api-key"],
+      provider: "nexos",
+      flagValue: params.opts.nexosApiKey,
+      flagName: "--nexos-api-key",
+      envVar: "NEXOS_API_KEY",
+      profileId: "nexos:default",
+      setCredential: withStorage(setNexosApiKey),
+      applyConfig: (cfg) =>
+        applyNexosConfig(
+          applyAuthProfileConfig(cfg, {
+            profileId: "nexos:default",
+            provider: "nexos",
             mode: "api_key",
           }),
         ),

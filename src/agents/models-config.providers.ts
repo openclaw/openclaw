@@ -15,6 +15,7 @@ import {
 import {
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,
+  buildNexosProvider,
   buildVeniceProvider,
   buildVercelAiGatewayProvider,
   resolveOllamaApiBase,
@@ -706,6 +707,10 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("qianfan", async ({ apiKey }) => ({ ...buildQianfanProvider(), apiKey })),
   withApiKey("modelstudio", async ({ apiKey }) => ({ ...buildModelStudioProvider(), apiKey })),
   withApiKey("openrouter", async ({ apiKey }) => ({ ...buildOpenrouterProvider(), apiKey })),
+  withApiKey("nexos", async ({ apiKey, discoveryApiKey }) => ({
+    ...(await buildNexosProvider(discoveryApiKey)),
+    apiKey,
+  })),
   withApiKey("nvidia", async ({ apiKey }) => ({ ...buildNvidiaProvider(), apiKey })),
   withApiKey("kilocode", async ({ apiKey }) => ({
     ...(await buildKilocodeProviderWithDiscovery()),

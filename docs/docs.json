@@ -1114,6 +1114,7 @@
                   "providers/minimax",
                   "providers/moonshot",
                   "providers/mistral",
+                  "providers/nexos",
                   "providers/nvidia",
                   "providers/ollama",
                   "providers/openai",
