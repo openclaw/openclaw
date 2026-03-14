@@ -316,7 +316,6 @@ class WearChatController(
           }
         } catch (e: Throwable) {
           if (e.isCancelledRequest() && isPendingRun(runId)) {
-            cancelPendingRunTimeout(runId)
             synchronized(queuedOutboundMessages) {
               queuedOutboundMessages[runId] = QueuedOutboundMessage(sessionKey = sessionKey, text = text)
             }
@@ -324,10 +323,12 @@ class WearChatController(
           }
           val shouldRetry = e.message?.contains("not connected", ignoreCase = true) == true
           if (shouldRetry && isPendingRun(runId)) {
-            cancelPendingRunTimeout(runId)
             synchronized(queuedOutboundMessages) {
               queuedOutboundMessages[runId] = QueuedOutboundMessage(sessionKey = sessionKey, text = text)
             }
+            return@launch
+          }
+          if (!isPendingRun(runId)) {
             return@launch
           }
           clearPendingRun(runId)
