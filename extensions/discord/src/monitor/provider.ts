@@ -48,10 +48,7 @@ import { resolveDiscordAccount } from "../accounts.js";
 import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
-import {
-  buildDiscordVoiceCommandDeploymentDefinition,
-  createDiscordVoiceCommand,
-} from "../voice/command.js";
+import { createDiscordVoiceCommand } from "../voice/command.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
@@ -83,7 +80,6 @@ import {
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
   createDiscordNativeCommand,
-  type DiscordNativeCommandDeploymentDefinition,
 } from "./native-command.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
@@ -442,11 +438,8 @@ async function deployDiscordCommandsWithOptionalReconcile(params: {
   runtime: RuntimeEnv;
   enabled: boolean;
   reconcileOnStartup: boolean;
-  cfg: OpenClawConfig;
   accountId: string;
   applicationId: string;
-  commandSpecs: NativeCommandSpec[];
-  extraDefinitions?: DiscordNativeCommandDeploymentDefinition[];
   startupStartedAt?: number;
 }) {
   if (!params.enabled) {
@@ -491,12 +484,10 @@ async function deployDiscordCommandsWithOptionalReconcile(params: {
     operation: async () => {
       await reconcileDiscordNativeCommands({
         client: params.client,
-        cfg: params.cfg,
         runtime: params.runtime,
         accountId: params.accountId,
         applicationId: params.applicationId,
-        commandSpecs: params.commandSpecs,
-        extraDefinitions: params.extraDefinitions,
+        commands: params.commands,
       });
     },
   });
@@ -935,11 +926,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       runtime,
       enabled: nativeEnabled,
       reconcileOnStartup: reconcileNativeCommandsOnStartup,
-      cfg,
       accountId: account.accountId,
       applicationId,
-      commandSpecs,
-      extraDefinitions: voiceEnabled ? [buildDiscordVoiceCommandDeploymentDefinition()] : [],
       startupStartedAt,
     });
     logDiscordStartupPhase({
