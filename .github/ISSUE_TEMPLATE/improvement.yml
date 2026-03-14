@@ -1,0 +1,62 @@
+# Authored by: cc (Claude Code) | 2026-03-14
+name: Improvement
+description: Plan and track a fork improvement (matches CC token strategy Section 3).
+title: "[Improvement]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One-line description of the improvement.
+      placeholder: Add per-channel response prefix support.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What pain this solves (2-3 sentences).
+      placeholder: Agents cannot distinguish persona context in mixed channels, causing misrouted follow-ups.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: Bullet checklist — each item is a testable condition.
+      placeholder: |
+        - [ ] 100 req/min per API key
+        - [ ] 429 response with Retry-After header
+        - [ ] Configurable limits per tier in config
+    validations:
+      required: true
+  - type: textarea
+    id: implementation_plan
+    attributes:
+      label: Implementation plan
+      description: Numbered steps. Each step maps to one file change.
+      placeholder: |
+        1. Create src/middleware/rate-limiter.ts
+        2. Register middleware in src/server.ts
+        3. Add rateLimits section to config schema
+        4. Add test in src/middleware/rate-limiter.test.ts
+    validations:
+      required: true
+  - type: textarea
+    id: files_affected
+    attributes:
+      label: Files affected
+      description: List files to create or modify (no content, just paths).
+      placeholder: |
+        - src/middleware/rate-limiter.ts (new)
+        - src/server.ts (modify)
+        - config/schema.ts (modify)
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes
+      description: Extra context, constraints, or references.
