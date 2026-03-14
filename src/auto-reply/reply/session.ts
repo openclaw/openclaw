@@ -367,8 +367,18 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
+      // Model/provider overrides are only carried over when the reset trigger
+      // includes a model argument (e.g. "/new sonnet46").  A bare "/new" or
+      // "/reset" clears the override so the session falls back to the agent's
+      // configured default model chain.  Without this, a previous "/new <model>"
+      // pins the provider across session resets, which can cause prolonged
+      // unavailability when the pinned provider is rate-limited.  See #2d.
+      // When bodyStripped has content, applyResetModelOverride() (called after
+      // initSessionState) will set the correct overrides from the model argument.
+      if (bodyStripped) {
+        persistedModelOverride = entry.modelOverride;
+        persistedProviderOverride = entry.providerOverride;
+      }
       persistedLabel = entry.label;
     }
   }
