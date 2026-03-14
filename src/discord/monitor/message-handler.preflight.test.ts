@@ -138,6 +138,7 @@ async function runGuildPreflight(params: {
   discordConfig: DiscordConfig;
   cfg?: import("../../config/config.js").OpenClawConfig;
   guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
+  includeGuildObject?: boolean;
 }) {
   return preflightDiscordMessage({
     ...createPreflightArgs({
@@ -148,6 +149,7 @@ async function runGuildPreflight(params: {
         guildId: params.guildId,
         author: params.message.author,
         message: params.message,
+        includeGuildObject: params.includeGuildObject,
       }),
       client: createGuildTextClient(params.channelId),
     }),
@@ -372,6 +374,91 @@ describe("preflightDiscordMessage", () => {
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
     expect(result).not.toBeNull();
+  });
+
+  it("accepts allowlisted guild messages when guild object is missing", async () => {
+    const message = createDiscordMessage({
+      id: "m-guild-id-only",
+      channelId: "ch-1",
+      content: "hello from maintainers",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Peter",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId: "ch-1",
+      guildId: "guild-1",
+      message,
+      discordConfig: {} as DiscordConfig,
+      guildEntries: {
+        "guild-1": {
+          channels: {
+            "ch-1": {
+              allow: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+      includeGuildObject: false,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.guildInfo?.id).toBe("guild-1");
+    expect(result?.channelConfig?.allowed).toBe(true);
+    expect(result?.shouldRequireMention).toBe(false);
+  });
+
+  it("inherits parent thread allowlist when guild object is missing", async () => {
+    const threadId = "thread-1";
+    const parentId = "parent-1";
+    const message = createDiscordMessage({
+      id: "m-thread-id-only",
+      channelId: threadId,
+      content: "thread hello",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Peter",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId: threadId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+          includeGuildObject: false,
+        }),
+        client: createThreadClient({
+          threadId,
+          parentId,
+        }),
+      }),
+      guildEntries: {
+        "guild-1": {
+          channels: {
+            [parentId]: {
+              allow: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.guildInfo?.id).toBe("guild-1");
+    expect(result?.threadParentId).toBe(parentId);
+    expect(result?.channelConfig?.allowed).toBe(true);
+    expect(result?.shouldRequireMention).toBe(false);
   });
 
   it("drops guild messages that mention another user when ignoreOtherMentions=true", async () => {
