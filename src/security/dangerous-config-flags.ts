@@ -14,6 +14,9 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
   if (cfg.hooks?.gmail?.allowUnsafeExternalContent === true) {
     enabledFlags.push("hooks.gmail.allowUnsafeExternalContent=true");
   }
+  if (cfg.hooks?.imap?.allowUnsafeExternalContent === true) {
+    enabledFlags.push("hooks.imap.allowUnsafeExternalContent=true");
+  }
   if (Array.isArray(cfg.hooks?.mappings)) {
     for (const [index, mapping] of cfg.hooks.mappings.entries()) {
       if (mapping?.allowUnsafeExternalContent === true) {

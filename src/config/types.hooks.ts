@@ -41,6 +41,35 @@ export type HookMappingConfig = {
   transform?: HookMappingTransform;
 };
 
+export type HooksImapConfig = {
+  /** Himalaya account name (from himalaya config.toml) */
+  account?: string;
+  /** IMAP folder to watch (default: "INBOX") */
+  folder?: string;
+  /** Poll interval in seconds (default: 30) */
+  pollIntervalSeconds?: number;
+  /** Include message body in hook payload (default: true) */
+  includeBody?: boolean;
+  /** Max body bytes to include (default: 20000) */
+  maxBytes?: number;
+  /** Mark messages as seen after processing (default: true) */
+  markSeen?: boolean;
+  /** Callback URL for hook delivery (default: http://127.0.0.1:<port>/hooks/imap) */
+  hookUrl?: string;
+  /** Optional model override for IMAP hook processing (provider/model or alias). */
+  model?: string;
+  /** Optional thinking level override for IMAP hook processing. */
+  thinking?: "off" | "minimal" | "low" | "medium" | "high";
+  /** DANGEROUS: Disable external content safety wrapping for IMAP hooks. */
+  allowUnsafeExternalContent?: boolean;
+  /** Path to himalaya config file (optional, uses default if omitted) */
+  himalayaConfig?: string;
+  /** Filter query for envelopes (default: "not flag Seen") */
+  query?: string;
+  /** Allowlist of sender email addresses permitted to reach agent hooks. */
+  allowedSenders?: string[];
+};
+
 export type HooksGmailTailscaleMode = "off" | "serve" | "funnel";
 
 export type HooksGmailConfig = {
@@ -136,6 +165,7 @@ export type HooksConfig = {
   transformsDir?: string;
   mappings?: HookMappingConfig[];
   gmail?: HooksGmailConfig;
+  imap?: HooksImapConfig;
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
 };

@@ -2,18 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SkillSnapshot } from "../skills.js";
 
+type LoadWorkspaceSkillEntries = (typeof import("../skills.js"))["loadWorkspaceSkillEntries"];
+
 const hoisted = vi.hoisted(() => ({
-  loadWorkspaceSkillEntries: vi.fn(
-    (_workspaceDir: string, _options?: { config?: OpenClawConfig }) => [],
-  ),
+  loadWorkspaceSkillEntries: vi.fn<LoadWorkspaceSkillEntries>(() => []),
 }));
 
 vi.mock("../skills.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../skills.js")>();
   return {
     ...actual,
-    loadWorkspaceSkillEntries: (workspaceDir: string, options?: { config?: OpenClawConfig }) =>
-      hoisted.loadWorkspaceSkillEntries(workspaceDir, options),
+    loadWorkspaceSkillEntries: hoisted.loadWorkspaceSkillEntries,
   };
 });
 

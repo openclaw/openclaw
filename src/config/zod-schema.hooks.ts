@@ -118,6 +118,33 @@ export const InternalHooksSchema = z
   .strict()
   .optional();
 
+export const HooksImapSchema = z
+  .object({
+    account: z.string().optional(),
+    folder: z.string().optional(),
+    pollIntervalSeconds: z.number().int().positive().optional(),
+    includeBody: z.boolean().optional(),
+    maxBytes: z.number().int().positive().optional(),
+    markSeen: z.boolean().optional(),
+    hookUrl: z.string().optional(),
+    model: z.string().optional(),
+    thinking: z
+      .union([
+        z.literal("off"),
+        z.literal("minimal"),
+        z.literal("low"),
+        z.literal("medium"),
+        z.literal("high"),
+      ])
+      .optional(),
+    allowUnsafeExternalContent: z.boolean().optional(),
+    himalayaConfig: z.string().optional(),
+    query: z.string().optional(),
+    allowedSenders: z.array(z.string().email()).min(1),
+  })
+  .strict()
+  .optional();
+
 export const HooksGmailSchema = z
   .object({
     account: z.string().optional(),

@@ -256,3 +256,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/talk-voice/**"
+"hooks: imap":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/hooks/imap*"
+          - "docs/automation/imap-watcher.md"

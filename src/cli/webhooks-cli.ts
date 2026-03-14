@@ -16,6 +16,18 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
 } from "../hooks/gmail.js";
+import {
+  type ImapRunOptions,
+  type ImapSetupOptions,
+  runImapService,
+  runImapSetup,
+} from "../hooks/imap-ops.js";
+import {
+  DEFAULT_IMAP_FOLDER,
+  DEFAULT_IMAP_MAX_BYTES,
+  DEFAULT_IMAP_POLL_INTERVAL_SECONDS,
+  DEFAULT_IMAP_QUERY,
+} from "../hooks/imap.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -97,6 +109,65 @@ export function registerWebhooksCli(program: Command) {
       try {
         const parsed = parseGmailRunOptions(opts);
         await runGmailService(parsed);
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  const imap = webhooks.command("imap").description("IMAP email hooks (via himalaya)");
+
+  imap
+    .command("setup")
+    .description("Configure IMAP watcher + OpenClaw hooks")
+    .requiredOption("--account <name>", "Himalaya account name")
+    .requiredOption(
+      "--allowed-senders <emails>",
+      "Comma-separated list of allowlisted sender emails",
+    )
+    .option("--folder <name>", "IMAP folder to watch", DEFAULT_IMAP_FOLDER)
+    .option(
+      "--poll-interval <seconds>",
+      "Poll interval in seconds",
+      String(DEFAULT_IMAP_POLL_INTERVAL_SECONDS),
+    )
+    .option("--include-body", "Include email body content", true)
+    .option("--max-bytes <n>", "Max body bytes per message", String(DEFAULT_IMAP_MAX_BYTES))
+    .option("--mark-seen", "Mark messages as seen after processing", true)
+    .option("--hook-url <url>", "OpenClaw hook URL")
+    .option("--hook-token <token>", "OpenClaw hook token")
+    .option("--himalaya-config <path>", "Path to himalaya config file")
+    .option("--query <query>", "Envelope filter query", DEFAULT_IMAP_QUERY)
+    .option("--json", "Output JSON summary", false)
+    .action(async (opts) => {
+      try {
+        const parsed = parseImapSetupOptions(opts);
+        await runImapSetup(parsed);
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  imap
+    .command("run")
+    .description("Run IMAP poll watcher loop")
+    .option("--account <name>", "Himalaya account name")
+    .option("--allowed-senders <emails>", "Comma-separated list of allowlisted sender emails")
+    .option("--folder <name>", "IMAP folder to watch")
+    .option("--poll-interval <seconds>", "Poll interval in seconds")
+    .option("--include-body", "Include email body content")
+    .option("--max-bytes <n>", "Max body bytes per message")
+    .option("--mark-seen", "Mark messages as seen after processing")
+    .option("--no-mark-seen", "Do not mark messages as seen after processing")
+    .option("--hook-url <url>", "OpenClaw hook URL")
+    .option("--hook-token <token>", "OpenClaw hook token")
+    .option("--himalaya-config <path>", "Path to himalaya config file")
+    .option("--query <query>", "Envelope filter query")
+    .action(async (opts) => {
+      try {
+        const parsed = parseImapRunOptions(opts);
+        await runImapService(parsed);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -193,5 +264,68 @@ function booleanOption(value: unknown): boolean | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const lower = value.toLowerCase().trim();
+    if (lower === "false" || lower === "0" || lower === "no" || lower === "off") {
+      return false;
+    }
+    if (lower === "true" || lower === "1" || lower === "yes" || lower === "on") {
+      return true;
+    }
+    // Non-empty string defaults to true
+    return true;
+  }
   return Boolean(value);
+}
+
+function parseImapSetupOptions(raw: Record<string, unknown>): ImapSetupOptions {
+  const accountRaw = raw.account;
+  const account = typeof accountRaw === "string" ? accountRaw.trim() : "";
+  if (!account) {
+    throw new Error("--account is required");
+  }
+  return {
+    account,
+    folder: stringOption(raw.folder),
+    pollInterval: numberOption(raw.pollInterval),
+    includeBody: booleanOption(raw.includeBody),
+    maxBytes: numberOption(raw.maxBytes),
+    markSeen: booleanOption(raw.markSeen),
+    hookUrl: stringOption(raw.hookUrl),
+    hookToken: stringOption(raw.hookToken),
+    himalayaConfig: stringOption(raw.himalayaConfig),
+    query: stringOption(raw.query),
+    allowedSenders: parseAllowedSenders(raw.allowedSenders),
+    json: Boolean(raw.json),
+  };
+}
+
+function parseImapRunOptions(raw: Record<string, unknown>): ImapRunOptions {
+  return {
+    account: stringOption(raw.account),
+    folder: stringOption(raw.folder),
+    pollInterval: numberOption(raw.pollInterval),
+    includeBody: booleanOption(raw.includeBody),
+    maxBytes: numberOption(raw.maxBytes),
+    markSeen: booleanOption(raw.markSeen),
+    hookUrl: stringOption(raw.hookUrl),
+    hookToken: stringOption(raw.hookToken),
+    himalayaConfig: stringOption(raw.himalayaConfig),
+    query: stringOption(raw.query),
+    allowedSenders: parseAllowedSenders(raw.allowedSenders),
+  };
+}
+
+function parseAllowedSenders(value: unknown): string[] | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const parts = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts : undefined;
 }

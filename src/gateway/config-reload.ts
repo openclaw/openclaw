@@ -1,9 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
+import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { isPlainObject } from "../utils.js";
-import { buildGatewayReloadPlan, type GatewayReloadPlan } from "./config-reload-plan.js";
+import { type ChannelKind, type GatewayReloadPlan } from "./config-reload-plan.js";
 
 export { buildGatewayReloadPlan };
 export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
@@ -13,12 +15,152 @@ export type GatewayReloadSettings = {
   debounceMs: number;
 };
 
+type ReloadRule = {
+  prefix: string;
+  kind: "restart" | "hot" | "none";
+  actions?: ReloadAction[];
+};
+
+type ReloadAction =
+  | "reload-hooks"
+  | "restart-gmail-watcher"
+  | "restart-imap-watcher"
+  | "restart-browser-control"
+  | "restart-cron"
+  | "restart-heartbeat"
+  | "restart-health-monitor"
+  | `restart-channel:${ChannelId}`;
+
 const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
   mode: "hybrid",
   debounceMs: 300,
 };
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
+
+const BASE_RELOAD_RULES: ReloadRule[] = [
+  { prefix: "gateway.remote", kind: "none" },
+  { prefix: "gateway.reload", kind: "none" },
+  {
+    prefix: "gateway.channelHealthCheckMinutes",
+    kind: "hot",
+    actions: ["restart-health-monitor"],
+  },
+  // Stuck-session warning threshold is read by the diagnostics heartbeat loop.
+  { prefix: "diagnostics.stuckSessionWarnMs", kind: "none" },
+  { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
+  { prefix: "hooks.imap", kind: "hot", actions: ["restart-imap-watcher"] },
+  // Shared hooks config changes require restarting watchers that cache these values
+  {
+    prefix: "hooks.token",
+    kind: "hot",
+    actions: ["restart-gmail-watcher", "restart-imap-watcher"],
+  },
+  { prefix: "hooks.path", kind: "hot", actions: ["restart-gmail-watcher", "restart-imap-watcher"] },
+  {
+    prefix: "hooks.enabled",
+    kind: "hot",
+    actions: ["restart-gmail-watcher", "restart-imap-watcher"],
+  },
+  {
+    prefix: "hooks",
+    kind: "hot",
+    actions: ["reload-hooks", "restart-gmail-watcher", "restart-imap-watcher"],
+  },
+  {
+    prefix: "agents.defaults.heartbeat",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
+  },
+  {
+    prefix: "agents.defaults.model",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
+  },
+  {
+    prefix: "agents.defaults.models",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
+  },
+  {
+    prefix: "models",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
+  },
+  { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
+  { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
+  {
+    prefix: "browser",
+    kind: "hot",
+    actions: ["restart-browser-control"],
+  },
+];
+
+const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
+  { prefix: "meta", kind: "none" },
+  { prefix: "identity", kind: "none" },
+  { prefix: "wizard", kind: "none" },
+  { prefix: "logging", kind: "none" },
+  { prefix: "models", kind: "none" },
+  { prefix: "agents", kind: "none" },
+  { prefix: "tools", kind: "none" },
+  { prefix: "bindings", kind: "none" },
+  { prefix: "audio", kind: "none" },
+  { prefix: "agent", kind: "none" },
+  { prefix: "routing", kind: "none" },
+  { prefix: "messages", kind: "none" },
+  { prefix: "session", kind: "none" },
+  { prefix: "talk", kind: "none" },
+  { prefix: "skills", kind: "none" },
+  { prefix: "secrets", kind: "none" },
+  { prefix: "plugins", kind: "restart" },
+  { prefix: "ui", kind: "none" },
+  { prefix: "gateway", kind: "restart" },
+  { prefix: "discovery", kind: "restart" },
+  { prefix: "canvasHost", kind: "restart" },
+];
+
+let cachedReloadRules: ReloadRule[] | null = null;
+let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
+
+function listReloadRules(): ReloadRule[] {
+  const registry = getActivePluginRegistry();
+  if (registry !== cachedRegistry) {
+    cachedReloadRules = null;
+    cachedRegistry = registry;
+  }
+  if (cachedReloadRules) {
+    return cachedReloadRules;
+  }
+  // Channel docking: plugins contribute hot reload/no-op prefixes here.
+  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
+    ...(plugin.reload?.configPrefixes ?? []).map(
+      (prefix): ReloadRule => ({
+        prefix,
+        kind: "hot",
+        actions: [`restart-channel:${plugin.id}` as ReloadAction],
+      }),
+    ),
+    ...(plugin.reload?.noopPrefixes ?? []).map(
+      (prefix): ReloadRule => ({
+        prefix,
+        kind: "none",
+      }),
+    ),
+  ]);
+  const rules = [...BASE_RELOAD_RULES, ...channelReloadRules, ...BASE_RELOAD_RULES_TAIL];
+  cachedReloadRules = rules;
+  return rules;
+}
+
+function matchRule(path: string): ReloadRule | null {
+  for (const rule of listReloadRules()) {
+    if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
+      return rule;
+    }
+  }
+  return null;
+}
 
 export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
   if (prev === next) {
@@ -63,6 +205,88 @@ export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReload
       ? Math.max(0, Math.floor(debounceRaw))
       : DEFAULT_RELOAD_SETTINGS.debounceMs;
   return { mode, debounceMs };
+}
+
+export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPlan {
+  const plan: GatewayReloadPlan = {
+    changedPaths,
+    restartGateway: false,
+    restartReasons: [],
+    hotReasons: [],
+    reloadHooks: false,
+    restartGmailWatcher: false,
+    restartImapWatcher: false,
+    restartBrowserControl: false,
+    restartCron: false,
+    restartHeartbeat: false,
+    restartHealthMonitor: false,
+    restartChannels: new Set(),
+    noopPaths: [],
+  };
+
+  const applyAction = (action: ReloadAction) => {
+    if (action.startsWith("restart-channel:")) {
+      const channel = action.slice("restart-channel:".length) as ChannelId;
+      plan.restartChannels.add(channel);
+      return;
+    }
+    switch (action) {
+      case "reload-hooks":
+        plan.reloadHooks = true;
+        break;
+      case "restart-gmail-watcher":
+        plan.restartGmailWatcher = true;
+        break;
+      case "restart-imap-watcher":
+        plan.restartImapWatcher = true;
+        break;
+      case "restart-browser-control":
+        plan.restartBrowserControl = true;
+        break;
+      case "restart-cron":
+        plan.restartCron = true;
+        break;
+      case "restart-heartbeat":
+        plan.restartHeartbeat = true;
+        break;
+      case "restart-health-monitor":
+        plan.restartHealthMonitor = true;
+        break;
+      default:
+        break;
+    }
+  };
+
+  for (const path of changedPaths) {
+    const rule = matchRule(path);
+    if (!rule) {
+      plan.restartGateway = true;
+      plan.restartReasons.push(path);
+      continue;
+    }
+    if (rule.kind === "restart") {
+      plan.restartGateway = true;
+      plan.restartReasons.push(path);
+      continue;
+    }
+    if (rule.kind === "none") {
+      plan.noopPaths.push(path);
+      continue;
+    }
+    plan.hotReasons.push(path);
+    for (const action of rule.actions ?? []) {
+      applyAction(action);
+    }
+  }
+
+  if (plan.restartGmailWatcher) {
+    plan.reloadHooks = true;
+  }
+  if (plan.restartImapWatcher) {
+    plan.reloadHooks = true;
+  }
+
+  return plan;
 }
 
 export type GatewayConfigReloader = {
