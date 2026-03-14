@@ -373,6 +373,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     onMessageSent: () => replyPlan.markSent(),
     log: logVerbose,
     warn: logVerbose,
+    ...(slackIdentity ? { identity: slackIdentity } : {}),
   });
   let hasStreamedMessage = false;
   const streamMode = slackStreaming.draftMode;

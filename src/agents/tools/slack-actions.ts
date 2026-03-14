@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
+import type { SlackSendIdentity } from "../../slack/send.js";
 import {
   deleteSlackMessage,
   downloadSlackFile,
@@ -52,6 +53,8 @@ export type SlackActionContext = {
   hasRepliedRef?: { value: boolean };
   /** Allowed local media directories for file uploads. */
   mediaLocalRoots?: readonly string[];
+  /** Agent identity for chat:write.customize (custom display name/emoji). */
+  identity?: SlackSendIdentity;
 };
 
 /**
@@ -214,6 +217,7 @@ export async function handleSlackAction(
           mediaLocalRoots: context?.mediaLocalRoots,
           threadTs: threadTs ?? undefined,
           blocks,
+          ...(context?.identity ? { identity: context.identity } : {}),
         });
 
         if (threadTs && result.channelId && account.accountId) {
