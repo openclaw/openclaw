@@ -7,14 +7,22 @@ import type { SecretInput } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
+import {
+  DEFAULT_ANTHROPIC_AZURE_MODEL_ID,
+  normalizeAnthropicAzureBaseUrl,
+  resolveAnthropicAzureBaseUrlFromEnv,
+  resolveAnthropicAzureResourceName,
+} from "../../anthropic-azure-utils.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
 import {
+  applyAnthropicAzureConfig,
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiConfigCn,
   applyZaiConfig,
+  setAnthropicAzureApiKey,
   setCloudflareAiGatewayConfig,
   setMinimaxApiKey,
   setZaiApiKey,
@@ -246,6 +254,59 @@ export async function applyNonInteractiveAuthChoice(params: {
   });
   if (simpleApiKeyChoice !== undefined) {
     return simpleApiKeyChoice;
+  }
+
+  if (authChoice === "anthropic-azure-api-key") {
+    const baseUrlCandidate = opts.anthropicAzureBaseUrl?.trim();
+    const envBaseUrl = resolveAnthropicAzureBaseUrlFromEnv(process.env);
+    const baseUrlInput = baseUrlCandidate || envBaseUrl;
+    if (!baseUrlInput) {
+      runtime.error(
+        "--anthropic-azure-base-url (resource name or URL) is required for Azure Claude onboarding.",
+      );
+      runtime.exit(1);
+      return null;
+    }
+    let normalizedBaseUrl: string;
+    try {
+      normalizedBaseUrl = normalizeAnthropicAzureBaseUrl(baseUrlInput);
+    } catch (error) {
+      runtime.error(`Invalid Azure Claude base URL: ${String(error)}`);
+      runtime.exit(1);
+      return null;
+    }
+    const resolved = await resolveApiKey({
+      provider: "anthropic-azure",
+      cfg: baseConfig,
+      flagValue: opts.anthropicAzureApiKey,
+      flagName: "--anthropic-azure-api-key",
+      envVar: "ANTHROPIC_FOUNDRY_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    const metadata = {
+      baseUrl: normalizedBaseUrl,
+      modelId: opts.anthropicAzureModelId?.trim() || DEFAULT_ANTHROPIC_AZURE_MODEL_ID,
+      resource: resolveAnthropicAzureResourceName(normalizedBaseUrl),
+    };
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setAnthropicAzureApiKey(value, undefined, metadata, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "anthropic-azure:default",
+      provider: "anthropic-azure",
+      mode: "api_key",
+    });
+    return applyAnthropicAzureConfig(nextConfig, {
+      baseUrl: normalizedBaseUrl,
+      modelId: metadata.modelId,
+    });
   }
 
   if (

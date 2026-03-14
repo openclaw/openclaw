@@ -5,6 +5,8 @@ export {
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
 export {
   applyAuthProfileConfig,
+  applyAnthropicAzureConfig,
+  applyAnthropicAzureProviderConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyHuggingfaceConfig,
@@ -67,6 +69,7 @@ export {
   OPENROUTER_DEFAULT_MODEL_REF,
   setOpenaiApiKey,
   setAnthropicApiKey,
+  setAnthropicAzureApiKey,
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
   setQianfanApiKey,

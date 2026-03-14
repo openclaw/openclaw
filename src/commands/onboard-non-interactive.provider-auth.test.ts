@@ -388,6 +388,33 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("configures Azure Claude via non-interactive flags", async () => {
+    await withOnboardEnv("openclaw-onboard-azure-claude-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "anthropic-azure-api-key",
+        anthropicAzureBaseUrl: "fabric-hub",
+        anthropicAzureApiKey: "azk-test", // pragma: allowlist secret
+        anthropicAzureModelId: "claude-sonnet-4-6",
+      });
+
+      expect(cfg.auth?.profiles?.["anthropic-azure:default"]?.provider).toBe("anthropic-azure");
+      expect(cfg.models?.providers?.["anthropic-azure"]?.baseUrl).toBe(
+        "https://fabric-hub.services.ai.azure.com/anthropic",
+      );
+      expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic-azure/claude-sonnet-4-6");
+      await expectApiKeyProfile({
+        profileId: "anthropic-azure:default",
+        provider: "anthropic-azure",
+        key: "azk-test",
+        metadata: {
+          baseUrl: "https://fabric-hub.services.ai.azure.com/anthropic",
+          modelId: "claude-sonnet-4-6",
+          resource: "fabric-hub",
+        },
+      });
+    });
+  });
+
   it("stores OpenAI API key and sets OpenAI default model", async () => {
     await withOnboardEnv("openclaw-onboard-openai-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {

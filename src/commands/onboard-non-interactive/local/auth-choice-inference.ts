@@ -10,6 +10,9 @@ type AuthChoiceFlag = {
 type AuthChoiceFlagOptions = Pick<
   OnboardOptions,
   | "anthropicApiKey"
+  | "anthropicAzureApiKey"
+  | "anthropicAzureBaseUrl"
+  | "anthropicAzureModelId"
   | "geminiApiKey"
   | "openaiApiKey"
   | "mistralApiKey"
@@ -68,6 +71,18 @@ export function inferAuthChoiceFromFlags(opts: OnboardOptions): AuthChoiceInfere
       optionKey: "customBaseUrl",
       authChoice: "custom-api-key",
       label: "--custom-base-url/--custom-model-id/--custom-api-key",
+    });
+  }
+
+  if (
+    hasStringValue(opts.anthropicAzureApiKey) ||
+    hasStringValue(opts.anthropicAzureBaseUrl) ||
+    hasStringValue(opts.anthropicAzureModelId)
+  ) {
+    matches.push({
+      optionKey: "anthropicAzureApiKey",
+      authChoice: "anthropic-azure-api-key",
+      label: "--anthropic-azure-...",
     });
   }
 

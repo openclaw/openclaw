@@ -92,6 +92,15 @@ export function registerOnboardCommand(program: Command) {
   }
 
   command
+    .option("--anthropic-azure-api-key <key>", "Azure Claude API key (AI Foundry)")
+    .option(
+      "--anthropic-azure-base-url <resource-or-url>",
+      "Azure AI Foundry resource name or full base URL (https://<resource>.services.ai.azure.com/anthropic)",
+    )
+    .option(
+      "--anthropic-azure-model-id <deployment>",
+      "Azure Claude deployment/model ID (default: claude-sonnet-4-6)",
+    )
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
@@ -146,6 +155,9 @@ export function registerOnboardCommand(program: Command) {
           tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
           secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
           anthropicApiKey: opts.anthropicApiKey as string | undefined,
+          anthropicAzureApiKey: opts.anthropicAzureApiKey as string | undefined,
+          anthropicAzureBaseUrl: opts.anthropicAzureBaseUrl as string | undefined,
+          anthropicAzureModelId: opts.anthropicAzureModelId as string | undefined,
           openaiApiKey: opts.openaiApiKey as string | undefined,
           mistralApiKey: opts.mistralApiKey as string | undefined,
           openrouterApiKey: opts.openrouterApiKey as string | undefined,
