@@ -9,9 +9,18 @@ import {
 } from "./subagents-format.js";
 
 describe("shared/subagents-format", () => {
+  it("returns seconds-level granularity via canonical implementation", () => {
+    // Regression: the old local copy jumped straight to minutes,
+    // showing "1m" for anything under 60 seconds.
+    expect(formatDurationCompact(5_000)).toBe("5s");
+    expect(formatDurationCompact(45_000)).toBe("45s");
+    expect(formatDurationCompact(125_000)).toBe("2m5s");
+  });
+
   it("formats compact durations across minute, hour, and day buckets", () => {
-    expect(formatDurationCompact()).toBe("n/a");
-    expect(formatDurationCompact(30_000)).toBe("1m");
+    expect(formatDurationCompact()).toBeUndefined();
+    expect(formatDurationCompact(60_000)).toBe("1m");
+    expect(formatDurationCompact(600_000)).toBe("10m");
     expect(formatDurationCompact(60 * 60_000)).toBe("1h");
     expect(formatDurationCompact(61 * 60_000)).toBe("1h1m");
     expect(formatDurationCompact(24 * 60 * 60_000)).toBe("1d");
