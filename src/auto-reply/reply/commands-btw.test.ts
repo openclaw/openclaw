@@ -77,6 +77,8 @@ describe("handleBtwCommand", () => {
       expect.objectContaining({
         question: "what changed?",
         sessionEntry: params.sessionEntry,
+        resolvedThinkLevel: "off",
+        resolvedReasoningLevel: "off",
       }),
     );
     expect(result).toEqual({
@@ -117,6 +119,8 @@ describe("handleBtwCommand", () => {
         question: "what changed?",
         agentDir: "/tmp/agent",
         sessionEntry: params.sessionEntry,
+        resolvedThinkLevel: "off",
+        resolvedReasoningLevel: "off",
       }),
     );
     expect(result).toEqual({

@@ -53,8 +53,10 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
-      resolvedThinkLevel: params.resolvedThinkLevel,
-      resolvedReasoningLevel: params.resolvedReasoningLevel,
+      // BTW is intentionally a quick side question, so do not inherit slower
+      // session-level think/reasoning settings from the main run.
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: "off",
       blockReplyChunking: params.blockReplyChunking,
       resolvedBlockStreamingBreak: params.resolvedBlockStreamingBreak,
       opts: params.opts,
