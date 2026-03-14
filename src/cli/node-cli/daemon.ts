@@ -18,6 +18,7 @@ import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize } from "../../terminal/theme.js";
+import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   runServiceRestart,
@@ -243,10 +244,14 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
     defaultRuntime.log(`${label("Command:")} ${infoText(command.programArguments.join(" "))}`);
   }
   if (command?.sourcePath) {
-    defaultRuntime.log(`${label("Service file:")} ${infoText(command.sourcePath)}`);
+    defaultRuntime.log(
+      `${label("Service file:")} ${infoText(shortenHomePath(command.sourcePath))}`,
+    );
   }
   if (command?.workingDirectory) {
-    defaultRuntime.log(`${label("Working dir:")} ${infoText(command.workingDirectory)}`);
+    defaultRuntime.log(
+      `${label("Working dir:")} ${infoText(shortenHomePath(command.workingDirectory))}`,
+    );
   }
 
   const runtimeLine = formatRuntimeStatus(runtime);
