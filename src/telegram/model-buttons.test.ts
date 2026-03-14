@@ -18,6 +18,16 @@ describe("parseModelCallbackData", () => {
       ["mdl_back", { type: "back" }],
       ["mdl_list_anthropic_2", { type: "list", provider: "anthropic", page: 2 }],
       ["mdl_list_open-ai_1", { type: "list", provider: "open-ai", page: 1 }],
+      // Unicode provider IDs (issue #41118)
+      ["mdl_list_新加坡_1", { type: "list", provider: "新加坡", page: 1 }],
+      ["mdl_list_阿里云CodingPlan_2", { type: "list", provider: "阿里云CodingPlan", page: 2 }],
+      ["mdl_list_東京_3", { type: "list", provider: "東京", page: 3 }],
+      // Provider IDs with underscores
+      ["mdl_list_my_provider_1", { type: "list", provider: "my_provider", page: 1 }],
+      [
+        "mdl_list_some_long_provider_name_10",
+        { type: "list", provider: "some_long_provider_name", page: 10 },
+      ],
       [
         "mdl_sel_anthropic/claude-sonnet-4-5",
         { type: "select", provider: "anthropic", model: "claude-sonnet-4-5" },
