@@ -1,5 +1,5 @@
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/googlechat";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const uploadGoogleChatAttachmentMock = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessageMock = vi.hoisted(() => vi.fn());
@@ -28,6 +28,11 @@ function createGoogleChatCfg(): OpenClawConfig {
   };
 }
 
+beforeEach(() => {
+  uploadGoogleChatAttachmentMock.mockReset();
+  sendGoogleChatMessageMock.mockReset();
+});
+
 function setupRuntimeMediaMocks(params: { loadFileName: string; loadBytes: string }) {
   const loadWebMedia = vi.fn(async () => ({
     buffer: Buffer.from(params.loadBytes),
@@ -50,6 +55,91 @@ function setupRuntimeMediaMocks(params: { loadFileName: string; loadBytes: strin
 
   return { loadWebMedia, fetchRemoteMedia };
 }
+
+describe("googlechatPlugin outbound threading", () => {
+  it("suppresses thread replies when replyToMode is off", async () => {
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-off",
+    });
+
+    const cfg = createGoogleChatCfg();
+    cfg.channels!.googlechat!.replyToMode = "off";
+
+    await googlechatPlugin.outbound?.sendText?.({
+      cfg,
+      to: "spaces/AAA",
+      text: "hello",
+      accountId: "default",
+      replyToId: "spaces/AAA/threads/reply",
+      threadId: "spaces/AAA/threads/thread",
+    });
+
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        space: "spaces/AAA",
+        text: "hello",
+        thread: undefined,
+      }),
+    );
+  });
+
+  it("keeps thread replies when replyToMode is enabled", async () => {
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-all",
+    });
+
+    const cfg = createGoogleChatCfg();
+    cfg.channels!.googlechat!.replyToMode = "all";
+
+    await googlechatPlugin.outbound?.sendText?.({
+      cfg,
+      to: "spaces/AAA",
+      text: "hello",
+      accountId: "default",
+      replyToId: "spaces/AAA/threads/reply",
+      threadId: "spaces/AAA/threads/thread",
+    });
+
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        space: "spaces/AAA",
+        text: "hello",
+        thread: "spaces/AAA/threads/thread",
+      }),
+    );
+  });
+
+  it("suppresses thread replies when a resolved account override sets replyToMode off", async () => {
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-account-off",
+    });
+
+    const cfg = createGoogleChatCfg();
+    cfg.channels!.googlechat!.replyToMode = "all";
+    cfg.channels!.googlechat!.accounts = {
+      bota: {
+        replyToMode: "off",
+      },
+    };
+
+    await googlechatPlugin.outbound?.sendText?.({
+      cfg,
+      to: "spaces/AAA",
+      text: "hello",
+      accountId: "botA",
+      replyToId: "spaces/AAA/threads/reply",
+      threadId: "spaces/AAA/threads/thread",
+    });
+
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        space: "spaces/AAA",
+        text: "hello",
+        thread: undefined,
+      }),
+    );
+  });
+});
 
 describe("googlechatPlugin outbound sendMedia", () => {
   it("loads local media with mediaLocalRoots via runtime media loader", async () => {
