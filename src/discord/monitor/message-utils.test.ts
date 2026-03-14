@@ -173,30 +173,13 @@ describe("resolveForwardedMediaList", () => {
       512,
     );
 
-    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
-    const call = fetchRemoteMedia.mock.calls[0]?.[0] as {
-      url?: string;
-      filePathHint?: string;
-      maxBytes?: number;
-      fetchImpl?: unknown;
-      ssrfPolicy?: unknown;
-    };
-    expect(call).toMatchObject({
-      url: attachment.url,
+    expectSinglePngDownload({
+      result,
+      expectedUrl: attachment.url,
       filePathHint: attachment.filename,
-      maxBytes: 512,
-      fetchImpl: undefined,
+      expectedPath: "/tmp/image.png",
+      placeholder: "<media:image>",
     });
-    expectDiscordCdnSsrFPolicy(call.ssrfPolicy);
-    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
-    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
-    expect(result).toEqual([
-      {
-        path: "/tmp/image.png",
-        contentType: "image/png",
-        placeholder: "<media:image>",
-      },
-    ]);
   });
 
   it("forwards fetchImpl to forwarded attachment downloads", async () => {

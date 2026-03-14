@@ -135,6 +135,7 @@ const NODE_OPTIONS_WITH_FILE_VALUE = new Set([
 ]);
 
 const RUBY_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-r", "--require"]);
+const PERL_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-M", "-m"]);
 
 const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "--init-file",
@@ -668,6 +669,33 @@ function hasRubyUnsafeApprovalFlag(argv: string[]): boolean {
   return false;
 }
 
+function hasPerlUnsafeApprovalFlag(argv: string[]): boolean {
+  let afterDoubleDash = false;
+  for (let i = 1; i < argv.length; i += 1) {
+    const token = argv[i]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (afterDoubleDash) {
+      return false;
+    }
+    if (token === "--") {
+      afterDoubleDash = true;
+      continue;
+    }
+    if (token === "-I" || token === "-M" || token === "-m") {
+      return true;
+    }
+    if (token.startsWith("-I") || token.startsWith("-M") || token.startsWith("-m")) {
+      return true;
+    }
+    if (PERL_UNSAFE_APPROVAL_FLAGS.has(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isMutableScriptRunner(executable: string): boolean {
   return GENERIC_MUTABLE_SCRIPT_RUNNERS.has(executable) || isInterpreterLikeSafeBin(executable);
 }
@@ -707,6 +735,9 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
     }
   }
   if (executable === "ruby" && hasRubyUnsafeApprovalFlag(unwrapped.argv)) {
+    return null;
+  }
+  if (executable === "perl" && hasPerlUnsafeApprovalFlag(unwrapped.argv)) {
     return null;
   }
   if (!isMutableScriptRunner(executable)) {
