@@ -73,6 +73,7 @@ export const TelegramTopicSchema = z
     requireMention: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
+    ingest: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -86,6 +87,7 @@ export const TelegramGroupSchema = z
     requireMention: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
+    ingest: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
@@ -984,11 +986,11 @@ const SignalGroupEntrySchema = z
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
+    ingest: z.boolean().optional(),
   })
   .strict();
 
 const SignalGroupsSchema = z.record(z.string(), SignalGroupEntrySchema.optional()).optional();
-
 export const SignalAccountSchemaBase = z
   .object({
     name: z.string().optional(),

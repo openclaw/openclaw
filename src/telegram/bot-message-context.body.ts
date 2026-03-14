@@ -15,7 +15,9 @@ import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { formatLocationText, type NormalizedLocation } from "../channels/location.js";
 import { logInboundDrop } from "../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
+import { runSilentMessageIngest } from "../channels/silent-ingest.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveChannelGroupIngest } from "../config/group-policy.js";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -31,6 +33,8 @@ import type {
 } from "./bot-message-context.types.js";
 import {
   buildSenderLabel,
+  buildSenderName,
+  buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
   expandTextLinks,
   extractTelegramLocation,
@@ -83,6 +87,7 @@ export async function resolveTelegramInboundBody(params: {
   senderId: string;
   senderUsername: string;
   resolvedThreadId?: number;
+  accountId?: string;
   routeAgentId?: string;
   effectiveGroupAllow: NormalizedAllowFrom;
   effectiveDmAllow: NormalizedAllowFrom;
@@ -104,6 +109,7 @@ export async function resolveTelegramInboundBody(params: {
     senderId,
     senderUsername,
     resolvedThreadId,
+    accountId,
     routeAgentId,
     effectiveGroupAllow,
     effectiveDmAllow,
@@ -267,6 +273,46 @@ export async function resolveTelegramInboundBody(params: {
           }
         : null,
     });
+
+    const ingestEnabled = resolveChannelGroupIngest({
+      cfg,
+      channel: "telegram",
+      groupId: String(chatId),
+      accountId,
+    });
+    const messageIdForHook =
+      typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
+    const ingestConversationId = buildTelegramGroupPeerId(chatId, resolvedThreadId);
+    const ingestFrom = buildTelegramGroupFrom(chatId, resolvedThreadId);
+
+    void runSilentMessageIngest({
+      enabled: ingestEnabled,
+      event: {
+        from: ingestFrom,
+        content: bodyText,
+        timestamp: msg.date ? msg.date * 1000 : undefined,
+        metadata: {
+          to: `telegram:${chatId}`,
+          provider: "telegram",
+          surface: "telegram",
+          threadId: resolvedThreadId,
+          originatingChannel: "telegram",
+          originatingTo: `telegram:${chatId}`,
+          messageId: messageIdForHook,
+          senderId: senderId || undefined,
+          senderName: buildSenderName(msg),
+          senderUsername,
+        },
+      },
+      ctx: {
+        channelId: "telegram",
+        accountId,
+        conversationId: ingestConversationId,
+      },
+      log: logVerbose,
+      logPrefix: "telegram",
+    });
+
     return null;
   }
 
