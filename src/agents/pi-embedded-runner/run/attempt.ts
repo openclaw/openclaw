@@ -22,6 +22,11 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
+import {
+  createPrivacyFilterContext,
+  wrapStreamFnPrivacyFilter,
+  type PrivacyFilterContext,
+} from "../../../privacy/stream-wrapper.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
@@ -2051,6 +2056,18 @@ export async function runEmbeddedAttempt(
       if (isXaiProvider(params.provider, params.modelId)) {
         activeSession.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(
           activeSession.agent.streamFn,
+        );
+      }
+
+      // Privacy filter: replace sensitive content before sending to LLM API.
+      // Inserted before payload logger so logged payloads also have privacy content filtered.
+      const privacyEnabled = params.config?.privacy?.enabled !== false;
+      let privacyCtx: PrivacyFilterContext | undefined;
+      if (privacyEnabled) {
+        privacyCtx = createPrivacyFilterContext(params.sessionId, params.config?.privacy);
+        activeSession.agent.streamFn = wrapStreamFnPrivacyFilter(
+          activeSession.agent.streamFn,
+          privacyCtx,
         );
       }
 
