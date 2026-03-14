@@ -46,12 +46,17 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          RELEASE_SHA=$(git rev-parse HEAD)
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
           echo "Release plan for ${RELEASE_TAG}:"
-          echo "git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"
-          echo "pnpm release:openclaw:npm:check"
-          echo "pnpm check"
-          echo "pnpm build"
-          echo "pnpm release:check"
+          echo "Resolved release SHA: ${RELEASE_SHA}"
+          echo "Resolved package version: ${PACKAGE_VERSION}"
+          echo "Would run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"
+          echo "Would run with env: RELEASE_SHA=${RELEASE_SHA} RELEASE_TAG=${RELEASE_TAG} RELEASE_MAIN_REF=origin/main pnpm release:openclaw:npm:check"
+          echo "Would run: npm view openclaw@${PACKAGE_VERSION} version"
+          echo "Would run: pnpm check"
+          echo "Would run: pnpm build"
+          echo "Would run: pnpm release:check"
           bash scripts/openclaw-npm-publish.sh --dry-run
 
       - name: Validate release tag and package metadata
@@ -59,7 +64,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_MAIN_REF: origin/main
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           RELEASE_SHA=$(git rev-parse HEAD)
           export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
           # Fetch the full main ref so merge-base ancestry checks keep working
@@ -69,7 +74,7 @@ jobs:
 
       - name: Ensure version is not already published
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
 
           if npm view "openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
@@ -80,13 +85,19 @@ jobs:
           echo "Previewing openclaw@${PACKAGE_VERSION}"
 
       - name: Check
-        run: pnpm check
+        run: |
+          set -euxo pipefail
+          pnpm check
 
       - name: Build
-        run: pnpm build
+        run: |
+          set -euxo pipefail
+          pnpm build
 
       - name: Verify release contents
-        run: pnpm release:check
+        run: |
+          set -euxo pipefail
+          pnpm release:check
 
       - name: Preview publish command
         run: bash scripts/openclaw-npm-publish.sh --dry-run
