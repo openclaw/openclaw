@@ -1,17 +1,23 @@
 # Telegram Thread Model Inheritance E2E
 
-This folder gives you a fast bot+user end-to-end loop:
+Goal: run live Telegram end-to-end checks for thread model inheritance without re-discovering setup every time.
 
-- `tg` (Bot API) for observing bot updates and thread metadata.
-- Telethon (MTProto user session) for sending messages as your user account.
+This validates:
 
-## 0) Fork + build `tg`
+1. Group forum topics: `/model` in topic A becomes default for newly created topic B in the same group.
+2. DM threaded mode: `/model` in thread X becomes default for newly created thread Y in the same DM chat.
+3. Existing threads stay unchanged.
+4. `/models` catalog is lean allowlisted and disallowed models are rejected.
 
-Fork already created for this workflow:
+## One-time setup
+
+### 1) Build `tg` (bot-side poll/inspect)
+
+Fork used in this workflow:
 
 - <https://github.com/artemgetmann/tg>
 
-Build it locally:
+Build:
 
 ```bash
 git clone https://github.com/artemgetmann/tg.git
@@ -19,7 +25,7 @@ cd tg
 go build -o tg .
 ```
 
-## 1) Prepare Telethon user session
+### 2) Prepare Telethon (user-side sends)
 
 ```bash
 cd scripts/telegram-e2e
@@ -28,60 +34,119 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-First run will ask for Telegram login code:
+First login will ask for Telegram code in your app:
 
 ```bash
 python3 userbot_send.py \
   --api-id "$TELEGRAM_API_ID" \
   --api-hash "$TELEGRAM_API_HASH" \
   --chat "<chat-id-or-username>" \
-  --reply-to <message-id-in-target-thread> \
+  --reply-to <thread-anchor-message-id> \
   --text "hello from userbot"
 ```
 
-## 2) Apply lean model allowlist
-
-Apply the preset directly to your active OpenClaw config:
+### 3) Create local env file
 
 ```bash
+cp scripts/telegram-e2e/.env.example scripts/telegram-e2e/.env.local
+```
+
+Fill `scripts/telegram-e2e/.env.local` with your real values.
+
+## Required values and anchors
+
+`scripts/telegram-e2e/.env.local` keys:
+
+- `TELEGRAM_API_ID`
+- `TELEGRAM_API_HASH`
+- `TG_BOT_TOKEN` (`<botId>:<token>`)
+- `TG_BIN` (absolute path to built `tg`)
+- `TG_FORUM_CHAT_ID` (group chat id, usually `-100...`)
+- `TG_DM_CHAT_ID` (bot DM chat id)
+
+Anchors are the message ids used as `reply_to` targets:
+
+- Group: `TG_TOPIC_A_ID`, `TG_TOPIC_B_ID`, `TG_TOPIC_C_ID`
+- DM: `TG_DM_THREAD_X_ID`, `TG_DM_THREAD_Y_ID`, `TG_DM_THREAD_Z_ID`
+
+Keep these as stable thread roots and reuse them between runs.
+
+## Apply allowlist preset
+
+```bash
+cd scripts/telegram-e2e
 ./apply-lean-model-allowlist.sh
 ```
 
 Reference payload:
 
-- `lean-model-allowlist.jsonc`
+- `scripts/telegram-e2e/lean-model-allowlist.jsonc`
 
-This keeps default model at `openai-codex/gpt-5.3-codex` and trims `/models` to the agreed Lean+Gemini set.
+Default remains `openai-codex/gpt-5.3-codex`.
 
-## 3) Run inheritance smoke
+## Critical runtime rule (prevents false negatives)
+
+Run the gateway from the same branch/worktree you are validating:
 
 ```bash
-export TELEGRAM_API_ID=...
-export TELEGRAM_API_HASH=...
-export TG_BIN=/absolute/path/to/tg
-# optional if needed:
-# export TG_BOT=Jarvis
-# or provide token directly (no tg alias setup required):
-# export TG_BOT_TOKEN=<bot-id:token>
-
-./run-model-inheritance-e2e.sh \
-  --chat "<chat-id-or-username>" \
-  --set-model "openai-codex/gpt-5.3-codex" \
-  --thread-a-reply-to <thread-a-anchor-message-id> \
-  --thread-b-reply-to <thread-b-anchor-message-id> \
-  --thread-b-id <thread-b-topic-or-thread-id>
+node dist/index.js gateway run --bind loopback --port 18789 --force
 ```
 
-Pass criteria:
+If another checkout/global runtime is serving Telegram, your E2E result is invalid for this branch.
 
-- Step A sets model in thread A.
-- Step B queries model in thread B.
-- Runner sees bot response in thread B containing `Current: <expected-model>`.
+## Run E2E checks
+
+### Group forum inheritance (A -> new B, C unchanged)
+
+```bash
+set -a
+source scripts/telegram-e2e/.env.local
+set +a
+
+scripts/telegram-e2e/run-model-inheritance-e2e.sh \
+  --chat "$TG_FORUM_CHAT_ID" \
+  --set-model "anthropic/claude-sonnet-4-6" \
+  --expect-model "anthropic/claude-sonnet-4-6" \
+  --thread-a-reply-to "$TG_TOPIC_A_ID" \
+  --thread-b-reply-to "$TG_TOPIC_B_ID" \
+  --thread-b-id "$TG_TOPIC_B_ID"
+```
+
+### DM threaded inheritance (X -> new Y, Z unchanged)
+
+```bash
+set -a
+source scripts/telegram-e2e/.env.local
+set +a
+
+scripts/telegram-e2e/run-model-inheritance-e2e.sh \
+  --chat "$TG_DM_CHAT_ID" \
+  --set-model "openai-codex/gpt-5.3-codex" \
+  --expect-model "openai-codex/gpt-5.3-codex" \
+  --thread-a-reply-to "$TG_DM_THREAD_X_ID" \
+  --thread-b-reply-to "$TG_DM_THREAD_Y_ID" \
+  --thread-b-id "$TG_DM_THREAD_Y_ID"
+```
+
+Pass signal is `PASS: thread B reports expected model (...)`.
+
+## Known behavior and failure recovery
+
+- `409 Conflict` from `tg poll` is expected when gateway owns `getUpdates`.
+  - Runner auto-falls back to MTProto assertion (`userbot_wait.py`), no action needed.
+- `tg poll returned non-JSON output` means `tg` is not configured for polling in that shell.
+  - Set `TG_BOT_TOKEN` in `.env.local` (recommended) or configure `tg bot add`.
+- `userbot_send failed: EOF when reading a line` means Telethon session is not authenticated.
+  - Re-run `userbot_send.py` once interactively to refresh login.
+- HTTP `503` or no bot replies usually means gateway is not fully started yet.
+  - Wait for provider-start logs and retry.
+- If inherited model fails while unchanged-existing-thread passes, verify gateway runtime path and branch first.
 
 ## Notes
 
-- Thread targeting in userbot send uses `reply_to` anchoring.
-- For private chat topics, `tg` output may expose either `message_thread_id` or `direct_messages_topic.topic_id`; the runner checks both.
-- Runner session selection order is `USERBOT_SESSION` env var -> `scripts/telegram-e2e/userbot.session` (if present) -> `scripts/telegram-e2e/tmp/userbot.session`.
-- If `tg poll` hits `409 Conflict` because the gateway already owns Bot API polling, `run-model-inheritance-e2e.sh` automatically falls back to `userbot_wait.py` (MTProto assertion path) so live E2E still completes without stopping the gateway.
-- Optional: set `TG_BOT_TOKEN` in your env to avoid local `tg bot add` setup and to improve fallback sender filtering (`<botId>:<token>`).
+- Thread targeting uses `reply_to` anchoring.
+- For private topics, thread id can appear as `message_thread_id` or `direct_messages_topic.topic_id`.
+- Runner session selection order:
+  - `USERBOT_SESSION` env var
+  - `scripts/telegram-e2e/userbot.session` (if present)
+  - `scripts/telegram-e2e/tmp/userbot.session`
