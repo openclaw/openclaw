@@ -321,25 +321,30 @@ export function resolveDiscordCommandAuthorized(params: {
 
 export function resolveDiscordGuildEntry(params: {
   guild?: Guild<true> | Guild | null;
+  guildId?: string | null;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }): DiscordGuildEntryResolved | null {
   const guild = params.guild;
   const entries = params.guildEntries;
-  if (!guild || !entries) {
+  const guildId = params.guildId?.trim() || guild?.id;
+  if (!entries) {
     return null;
   }
-  const byId = entries[guild.id];
+  const byId = guildId ? entries[guildId] : undefined;
   if (byId) {
-    return { ...byId, id: guild.id };
+    return { ...byId, id: guildId };
+  }
+  if (!guild) {
+    return null;
   }
   const slug = normalizeDiscordSlug(guild.name ?? "");
   const bySlug = entries[slug];
   if (bySlug) {
-    return { ...bySlug, id: guild.id, slug: slug || bySlug.slug };
+    return { ...bySlug, id: guildId ?? guild.id, slug: slug || bySlug.slug };
   }
   const wildcard = entries["*"];
   if (wildcard) {
-    return { ...wildcard, id: guild.id, slug: slug || wildcard.slug };
+    return { ...wildcard, id: guildId ?? guild.id, slug: slug || wildcard.slug };
   }
   return null;
 }
