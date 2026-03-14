@@ -26,20 +26,42 @@ openclaw doctor
 cat ~/.openclaw/openclaw.json | jq '.plugins.slots.contextEngine'
 ```
 
-Switch engines:
+### Installing a context engine plugin
+
+Context engine plugins are installed like any other OpenClaw plugin. Install
+first, then select the engine in the slot:
+
+```bash
+# Install from npm
+openclaw plugins install @martian-engineering/lossless-claw
+
+# Or install from a local path (for development)
+openclaw plugins install -l ./my-context-engine
+```
+
+Then enable the plugin and select it as the active engine in your config:
 
 ```json5
 // openclaw.json
 {
   plugins: {
     slots: {
-      contextEngine: "lossless-claw", // or "legacy" (default)
+      contextEngine: "lossless-claw", // must match the plugin's registered engine id
+    },
+    entries: {
+      "lossless-claw": {
+        enabled: true,
+        // Plugin-specific config goes here (see the plugin's docs)
+      },
     },
   },
 }
 ```
 
-Restart the gateway after changing the slot.
+Restart the gateway after installing and configuring.
+
+To switch back to the built-in engine, set `contextEngine` to `"legacy"` (or
+remove the key entirely — `"legacy"` is the default).
 
 ## How it works
 
