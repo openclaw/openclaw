@@ -31,6 +31,11 @@ const SCOPES = [
 const TIER_FREE = "free-tier";
 const TIER_LEGACY = "legacy-tier";
 const TIER_STANDARD = "standard-tier";
+const CODE_ASSIST_METADATA = {
+  ideType: "IDE_UNSPECIFIED",
+  platform: "PLATFORM_UNSPECIFIED",
+  pluginType: "GEMINI",
+} as const;
 
 export type GeminiCliOAuthCredentials = {
   access: string;
@@ -222,18 +227,6 @@ function generatePkce(): { verifier: string; challenge: string } {
   const verifier = randomBytes(32).toString("hex");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge };
-}
-
-function resolvePlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
-  if (process.platform === "win32") {
-    return "WINDOWS";
-  }
-  if (process.platform === "darwin") {
-    return "MACOS";
-  }
-  // Google's loadCodeAssist API rejects "LINUX" as an invalid Platform enum value.
-  // Use "PLATFORM_UNSPECIFIED" for Linux and other platforms to match the pi-ai runtime.
-  return "PLATFORM_UNSPECIFIED";
 }
 
 async function fetchWithTimeout(
@@ -474,12 +467,7 @@ async function getUserEmail(accessToken: string): Promise<string | undefined> {
 
 async function discoverProject(accessToken: string): Promise<string> {
   const envProject = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
-  const platform = resolvePlatform();
-  const metadata = {
-    ideType: "ANTIGRAVITY",
-    platform,
-    pluginType: "GEMINI",
-  };
+  const metadata = { ...CODE_ASSIST_METADATA };
   const headers = {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",

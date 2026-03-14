@@ -171,6 +171,61 @@ function mapThinkLevelToGoogleThinkingLevel(
   }
 }
 
+function buildGeminiCliUserAgent(modelId: string): string {
+  return `GeminiCLI/openclaw/${modelId} (${process.platform}; ${process.arch})`;
+}
+
+function normalizeGoogleGeminiCliPayload(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+
+  const payloadRecord = payload as Record<string, unknown>;
+  const request = payloadRecord.request;
+  if (request && typeof request === "object" && !Array.isArray(request)) {
+    const requestRecord = request as Record<string, unknown>;
+    if (
+      typeof requestRecord.sessionId === "string" &&
+      requestRecord.sessionId.length > 0 &&
+      requestRecord.session_id === undefined
+    ) {
+      requestRecord.session_id = requestRecord.sessionId;
+    }
+    delete requestRecord.sessionId;
+  }
+
+  const existingPromptId = payloadRecord.user_prompt_id;
+  if (typeof existingPromptId !== "string" || existingPromptId.length === 0) {
+    const requestId = payloadRecord.requestId;
+    if (typeof requestId === "string" && requestId.length > 0) {
+      payloadRecord.user_prompt_id = requestId;
+    }
+  }
+
+  delete payloadRecord.requestId;
+  delete payloadRecord.userAgent;
+}
+
+function createGoogleGeminiCliCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        "User-Agent": buildGeminiCliUserAgent(model.id),
+      },
+      onPayload: (payload) => {
+        if (model.api === "google-gemini-cli") {
+          normalizeGoogleGeminiCliPayload(payload);
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
 function sanitizeGoogleThinkingPayload(params: {
   payload: unknown;
   modelId?: string;
@@ -435,6 +490,11 @@ export function applyExtraParamsToAgent(
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+  if (provider === "google-gemini-cli") {
+    log.debug(`aligning google-gemini-cli request shape for ${provider}/${modelId}`);
+    agent.streamFn = createGoogleGeminiCliCompatibilityWrapper(agent.streamFn);
+  }
 
   const openAIServiceTier = resolveOpenAIServiceTier(merged);
   if (openAIServiceTier) {
