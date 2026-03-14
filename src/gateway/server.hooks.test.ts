@@ -336,6 +336,44 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("returns hook agent runId without waiting for isolated execution completion", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    let resolveRun: (() => void) | null = null;
+    cronIsolatedRun.mockClear();
+    cronIsolatedRun.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRun = () => {
+            resolve({
+              status: "ok",
+              summary: "done",
+            });
+          };
+        }),
+    );
+
+    await withGatewayServer(async ({ port }) => {
+      const response = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { runId?: string };
+      expect(body.runId).toBeTruthy();
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
+
+      if (!resolveRun) {
+        throw new Error("expected isolated run resolver");
+      }
+      resolveRun();
+
+      const events = await waitForSystemEvent();
+      expect(events.some((event) => event.includes("Hook Email: done"))).toBe(true);
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("dedupes hook retries even when trusted-proxy client IP changes", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
