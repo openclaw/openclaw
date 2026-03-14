@@ -627,7 +627,7 @@ async function deliverOutboundPayloadsCore(
     }
   };
 
-  const sendSignalText = async (text: string, styles: SignalTextStyleRange[]) => {
+  const sendSignalText = async (text: string, styles: SignalTextStyleRange[], replyTo?: string) => {
     throwIfAborted(abortSignal);
     return {
       channel: "signal" as const,
@@ -637,11 +637,12 @@ async function deliverOutboundPayloadsCore(
         accountId: accountId ?? undefined,
         textMode: "plain",
         textStyles: styles,
+        replyTo,
       })),
     };
   };
 
-  const sendSignalTextChunks = async (text: string) => {
+  const sendSignalTextChunks = async (text: string, overrides?: { replyToId?: string }) => {
     throwIfAborted(abortSignal);
     let signalChunks =
       textLimit === undefined
@@ -654,11 +655,11 @@ async function deliverOutboundPayloadsCore(
     }
     for (const chunk of signalChunks) {
       throwIfAborted(abortSignal);
-      results.push(await sendSignalText(chunk.text, chunk.styles));
+      results.push(await sendSignalText(chunk.text, chunk.styles, overrides?.replyToId));
     }
   };
 
-  const sendSignalMedia = async (caption: string, mediaUrl: string) => {
+  const sendSignalMedia = async (caption: string, mediaUrl: string, replyTo?: string) => {
     throwIfAborted(abortSignal);
     const formatted = markdownToSignalTextChunks(caption, Number.POSITIVE_INFINITY, {
       tableMode: signalTableMode,
@@ -676,6 +677,7 @@ async function deliverOutboundPayloadsCore(
         textMode: "plain",
         textStyles: formatted.styles,
         mediaLocalRoots,
+        replyTo,
       })),
     };
   };
@@ -749,7 +751,7 @@ async function deliverOutboundPayloadsCore(
       if (payloadSummary.mediaUrls.length === 0) {
         const beforeCount = results.length;
         if (isSignalChannel) {
-          await sendSignalTextChunks(payloadSummary.text);
+          await sendSignalTextChunks(payloadSummary.text, sendOverrides);
         } else {
           await sendTextChunks(payloadSummary.text, sendOverrides);
         }
@@ -795,7 +797,7 @@ async function deliverOutboundPayloadsCore(
         const caption = first ? payloadSummary.text : "";
         first = false;
         if (isSignalChannel) {
-          const delivery = await sendSignalMedia(caption, url);
+          const delivery = await sendSignalMedia(caption, url, sendOverrides.replyToId);
           results.push(delivery);
           lastMessageId = delivery.messageId;
         } else {
