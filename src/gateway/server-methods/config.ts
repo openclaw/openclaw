@@ -431,8 +431,40 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     await writeConfigFile(validated.config, writeOptions);
 
+    // Clear the session's runtime model so it picks up the new config defaults.
+    // This fixes the issue where model changes via Control UI don't take effect
+    // until a full restart because the session entry's stored model takes
+    // precedence over config defaults.
     const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
       resolveConfigRestartRequest(params);
+    if (sessionKey) {
+      try {
+        // Use loadSessionEntry to resolve the store path and get the entry
+        const { storePath, store, entry } = loadSessionEntry(sessionKey);
+        if (storePath && entry) {
+          // Only clear runtime model fields, preserve explicit overrides
+          if (entry.model !== undefined) {
+            delete entry.model;
+          }
+          if (entry.modelProvider !== undefined) {
+            delete entry.modelProvider;
+          }
+          // Also clear context tokens as they're model-specific
+          if (entry.contextTokens !== undefined) {
+            delete entry.contextTokens;
+          }
+          await saveSessionStore(storePath, store);
+          context?.logGateway?.debug(
+            `config.patch cleared runtime model for session ${sessionKey}`,
+          );
+        }
+      } catch (err) {
+        // Non-fatal: don't fail the config.patch if session clearing fails
+        context?.logGateway?.warn(
+          `config.patch failed to clear session runtime model: ${String(err)}`,
+        );
+      }
+    }
     const payload = buildConfigRestartSentinelPayload({
       kind: "config-patch",
       mode: "config.patch",
