@@ -9,7 +9,7 @@ import type {
   SessionThreadBindingsConfig,
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
-import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { AckReactionTiming, DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type TelegramActionConfig = {
@@ -194,6 +194,8 @@ export type TelegramAccountConfig = {
    * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
    */
   ackReaction?: string;
+  /** Per-channel ack reaction timing override. */
+  ackReactionTiming?: AckReactionTiming;
 };
 
 export type TelegramTopicConfig = {

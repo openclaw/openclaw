@@ -95,6 +95,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       sendTyping: vi.fn(),
       sendRecordVoice: vi.fn(),
       ackReactionPromise: null,
+      ackReactionTiming: "received",
+      ackReactionValue: "👀",
+      ackReactionAllowed: true,
       reactionApi: null,
       removeAckAfterReply: false,
     } as unknown as TelegramMessageContext;
@@ -2183,6 +2186,71 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(finalTextSentViaDeliverReplies).toBe(true);
   });
 
+  it("defers Telegram ack reactions until agent run start when configured", async () => {
+    const reactionApi = vi.fn(async () => {});
+    let startRun!: () => void;
+    const runStarted = new Promise<void>((resolve) => {
+      startRun = resolve;
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await runStarted;
+      replyOptions?.onAgentRunStart?.("run-1");
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const runPromise = dispatchWithContext({
+      context: createContext({
+        ackReactionTiming: "run-start",
+        ackReactionValue: "👀",
+        ackReactionAllowed: true,
+        reactionApi: reactionApi as never,
+      }),
+      streamMode: "off",
+    });
+
+    expect(reactionApi).not.toHaveBeenCalled();
+
+    startRun();
+    await runPromise;
+
+    expect(reactionApi).toHaveBeenCalledWith(123, 456, [{ type: "emoji", emoji: "👀" }]);
+  });
+
+  it("does not emit Telegram status reactions before run-start in deferred mode", async () => {
+    const statusReactionController = {
+      setThinking: vi.fn(async () => {}),
+      setCompacting: vi.fn(async () => {}),
+      setTool: vi.fn(async () => {}),
+      setDone: vi.fn(async () => {}),
+      setError: vi.fn(async () => {}),
+      setQueued: vi.fn(async () => {}),
+      cancelPending: vi.fn(() => {}),
+      clear: vi.fn(async () => {}),
+      restoreInitial: vi.fn(async () => {}),
+    };
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onCompactionStart?.();
+      await replyOptions?.onCompactionEnd?.();
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ackReactionTiming: "run-start",
+        ackReactionAllowed: true,
+        statusReactionController: statusReactionController as never,
+      }),
+      streamMode: "off",
+    });
+
+    expect(statusReactionController.setQueued).not.toHaveBeenCalled();
+    expect(statusReactionController.setCompacting).not.toHaveBeenCalled();
+    expect(statusReactionController.setThinking).not.toHaveBeenCalled();
+    expect(statusReactionController.setDone).not.toHaveBeenCalled();
+  });
+
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
     const statusReactionController = {
       setThinking: vi.fn(async () => {}),
@@ -2212,6 +2280,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(statusReactionController.setCompacting).toHaveBeenCalledTimes(1);
     expect(statusReactionController.cancelPending).toHaveBeenCalledTimes(1);
     expect(statusReactionController.setThinking).toHaveBeenCalledTimes(2);
+    expect(statusReactionController.setQueued).toHaveBeenCalledTimes(1);
     expect(statusReactionController.setCompacting.mock.invocationCallOrder[0]).toBeLessThan(
       statusReactionController.cancelPending.mock.invocationCallOrder[0],
     );

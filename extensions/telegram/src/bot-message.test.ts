@@ -81,6 +81,21 @@ describe("telegram bot message processor", () => {
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("passes resolved ackReactionTiming into message context", async () => {
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      cfg: { messages: { ackReactionTiming: "received" } },
+      telegramCfg: { ackReactionTiming: "run-start" },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await processSampleMessage(processMessage);
+
+    expect(buildTelegramMessageContext).toHaveBeenCalledWith(
+      expect.objectContaining({ ackReactionTiming: "run-start" }),
+    );
+  });
+
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);

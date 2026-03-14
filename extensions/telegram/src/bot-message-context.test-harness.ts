@@ -53,6 +53,7 @@ export async function buildTelegramMessageContextForTest(
     allowFrom: [],
     groupAllowFrom: [],
     ackReactionScope: "off",
+    ackReactionTiming: "received",
     logger: { info: vi.fn() },
     resolveGroupActivation: params.resolveGroupActivation ?? (() => undefined),
     resolveGroupRequireMention: params.resolveGroupRequireMention ?? (() => false),
