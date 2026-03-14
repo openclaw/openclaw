@@ -21,6 +21,7 @@ function createHarness(params?: {
   const addSystem = vi.fn();
   const requestRender = vi.fn();
   const noteLocalRunId = vi.fn();
+  const noteLocalBtwRunId = vi.fn();
   const loadHistory =
     params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
@@ -49,7 +50,9 @@ function createHarness(params?: {
     formatSessionKey: vi.fn(),
     applySessionInfoFromPatch: vi.fn(),
     noteLocalRunId,
+    noteLocalBtwRunId,
     forgetLocalRunId: vi.fn(),
+    forgetLocalBtwRunId: vi.fn(),
     requestExit: vi.fn(),
   });
 
@@ -64,6 +67,7 @@ function createHarness(params?: {
     loadHistory,
     setActivityStatus,
     noteLocalRunId,
+    noteLocalBtwRunId,
     state,
   };
 }
@@ -115,15 +119,17 @@ describe("tui command handlers", () => {
 
   it("sends /btw without hijacking the active main run", async () => {
     const setActivityStatus = vi.fn();
-    const { handleCommand, sendChat, addUser, noteLocalRunId, state } = createHarness({
-      activeChatRunId: "run-main",
-      setActivityStatus,
-    });
+    const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
+      createHarness({
+        activeChatRunId: "run-main",
+        setActivityStatus,
+      });
 
     await handleCommand("/btw what changed?");
 
     expect(addUser).not.toHaveBeenCalled();
     expect(noteLocalRunId).not.toHaveBeenCalled();
+    expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
     expect(state.activeChatRunId).toBe("run-main");
     expect(setActivityStatus).not.toHaveBeenCalledWith("sending");
     expect(setActivityStatus).not.toHaveBeenCalledWith("waiting");

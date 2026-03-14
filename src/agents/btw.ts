@@ -305,7 +305,14 @@ export async function runBtwSideQuestion(
   } else if (activeRunSnapshot) {
     inFlightPrompt = activeRunSnapshot.inFlightPrompt;
     if (activeRunSnapshot.transcriptLeafId && sessionManager.branch) {
-      sessionManager.branch(activeRunSnapshot.transcriptLeafId);
+      try {
+        sessionManager.branch(activeRunSnapshot.transcriptLeafId);
+      } catch (error) {
+        diag.debug(
+          `btw snapshot leaf unavailable: sessionId=${sessionId} leaf=${activeRunSnapshot.transcriptLeafId} err=${String(error)}`,
+        );
+        sessionManager.resetLeaf?.();
+      }
     } else {
       sessionManager.resetLeaf?.();
     }

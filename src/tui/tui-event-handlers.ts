@@ -36,6 +36,9 @@ type EventHandlerContext = {
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
+  isLocalBtwRunId?: (runId: string) => boolean;
+  forgetLocalBtwRunId?: (runId: string) => void;
+  clearLocalBtwRunIds?: () => void;
 };
 
 export function createEventHandlers(context: EventHandlerContext) {
@@ -50,6 +53,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
+    isLocalBtwRunId,
+    forgetLocalBtwRunId,
+    clearLocalBtwRunIds,
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
@@ -88,6 +94,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     clearLocalRunIds?.();
+    clearLocalBtwRunIds?.();
     btw.clear();
   };
 
@@ -202,7 +209,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     }
     noteSessionRun(evt.runId);
-    if (!state.activeChatRunId) {
+    if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
       state.activeChatRunId = evt.runId;
     }
     if (evt.state === "delta") {
@@ -214,7 +221,14 @@ export function createEventHandlers(context: EventHandlerContext) {
       setActivityStatus("streaming");
     }
     if (evt.state === "final") {
+      const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
       const wasActiveRun = state.activeChatRunId === evt.runId;
+      if (!evt.message && isLocalBtwRun) {
+        forgetLocalBtwRunId?.(evt.runId);
+        noteFinalizedRun(evt.runId);
+        tui.requestRender();
+        return;
+      }
       if (!evt.message) {
         maybeRefreshHistoryForRun(evt.runId, {
           allowLocalWithoutDisplayableFinal: true,
@@ -262,12 +276,14 @@ export function createEventHandlers(context: EventHandlerContext) {
       });
     }
     if (evt.state === "aborted") {
+      forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem("run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId);
     }
     if (evt.state === "error") {
+      forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
       terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });

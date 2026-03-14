@@ -79,12 +79,19 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const setActivityStatus = vi.fn();
     const loadHistory = vi.fn();
     const localRunIds = new Set<string>();
+    const localBtwRunIds = new Set<string>();
     const noteLocalRunId = (runId: string) => {
       localRunIds.add(runId);
     };
     const forgetLocalRunId = localRunIds.delete.bind(localRunIds);
     const isLocalRunId = localRunIds.has.bind(localRunIds);
     const clearLocalRunIds = localRunIds.clear.bind(localRunIds);
+    const noteLocalBtwRunId = (runId: string) => {
+      localBtwRunIds.add(runId);
+    };
+    const forgetLocalBtwRunId = localBtwRunIds.delete.bind(localBtwRunIds);
+    const isLocalBtwRunId = localBtwRunIds.has.bind(localBtwRunIds);
+    const clearLocalBtwRunIds = localBtwRunIds.clear.bind(localBtwRunIds);
 
     return {
       chatLog,
@@ -94,9 +101,13 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       setActivityStatus,
       loadHistory,
       noteLocalRunId,
+      noteLocalBtwRunId,
       forgetLocalRunId,
       isLocalRunId,
       clearLocalRunIds,
+      forgetLocalBtwRunId,
+      isLocalBtwRunId,
+      clearLocalBtwRunIds,
     };
   };
 
@@ -117,6 +128,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       loadHistory: context.loadHistory,
       isLocalRunId: context.isLocalRunId,
       forgetLocalRunId: context.forgetLocalRunId,
+      isLocalBtwRunId: context.isLocalBtwRunId,
+      forgetLocalBtwRunId: context.forgetLocalBtwRunId,
+      clearLocalBtwRunIds: context.clearLocalBtwRunIds,
     });
     return {
       ...context,
@@ -257,6 +271,35 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).not.toHaveBeenCalled();
     expect(loadHistory).not.toHaveBeenCalled();
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a local BTW result visible when its empty final chat event arrives", () => {
+    const { state, btw, loadHistory, noteLocalBtwRunId, handleBtwEvent, handleChatEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    noteLocalBtwRunId("run-btw");
+    handleBtwEvent({
+      kind: "btw",
+      runId: "run-btw",
+      sessionKey: state.currentSessionKey,
+      question: "what changed?",
+      text: "nothing important",
+    } satisfies BtwEvent);
+
+    handleChatEvent({
+      runId: "run-btw",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    } satisfies ChatEvent);
+
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(btw.showResult).toHaveBeenCalledWith({
+      question: "what changed?",
+      text: "nothing important",
+      isError: undefined,
+    });
   });
 
   it("does not cross-match canonical session keys from different agents", () => {

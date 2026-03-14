@@ -43,7 +43,9 @@ type CommandHandlerContext = {
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
   noteLocalRunId: (runId: string) => void;
+  noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
+  forgetLocalBtwRunId?: (runId: string) => void;
   requestExit: () => void;
 };
 
@@ -70,7 +72,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     formatSessionKey,
     applySessionInfoFromPatch,
     noteLocalRunId,
+    noteLocalBtwRunId,
     forgetLocalRunId,
+    forgetLocalBtwRunId,
     requestExit,
   } = context;
 
@@ -513,6 +517,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         noteLocalRunId(runId);
         state.activeChatRunId = runId;
         setActivityStatus("sending");
+      } else {
+        noteLocalBtwRunId?.(runId);
       }
       tui.requestRender();
       await client.sendChat({
@@ -528,6 +534,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         tui.requestRender();
       }
     } catch (err) {
+      if (isBtw) {
+        forgetLocalBtwRunId?.(runId);
+      }
       if (!isBtw && state.activeChatRunId) {
         forgetLocalRunId?.(state.activeChatRunId);
       }

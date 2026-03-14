@@ -586,6 +586,59 @@ describe("runBtwSideQuestion", () => {
     expect(result).toEqual({ text: "323" });
   });
 
+  it("falls back when the active run snapshot leaf no longer exists", async () => {
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: "assistant-gone",
+    });
+    branchMock.mockImplementationOnce(() => {
+      throw new Error("Entry 3235c7c4 not found");
+    });
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "323" }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
+
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What is 17 * 19?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
+
+    expect(branchMock).toHaveBeenCalledWith("assistant-gone");
+    expect(resetLeafMock).toHaveBeenCalled();
+    expect(result).toEqual({ text: "323" });
+    expect(diagDebugMock).toHaveBeenCalledWith(
+      expect.stringContaining("btw snapshot leaf unavailable: sessionId=session-1"),
+    );
+  });
+
   it("returns the BTW answer and retries transcript persistence after a session lock", async () => {
     acquireSessionWriteLockMock
       .mockRejectedValueOnce(
