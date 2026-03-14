@@ -447,3 +447,105 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(connectedTrue).toBeUndefined();
   });
 });
+
+describe("circuit breaker — consecutive drop escalation", () => {
+  it("forces fresh IDENTIFY and logs after MAX_CONSECUTIVE_DROPS close events", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const emitter = new EventEmitter();
+      const gateway = {
+        isConnected: false,
+        options: { reconnect: { maxAttempts: 50 } },
+        state: { sessionId: "test-session", resumeGatewayUrl: "wss://resume.discord.gg", sequence: 42 },
+        sequence: 42,
+        disconnect: vi.fn(),
+        connect: vi.fn(),
+        emitter,
+      };
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+      let resolveWait: (() => void) | undefined;
+      waitForDiscordGatewayStopMock.mockImplementationOnce(
+        (waitParams: WaitForDiscordGatewayStopParams) =>
+          new Promise<void>((resolve, reject) => {
+            resolveWait = resolve;
+            waitParams.registerForceStop?.((err) => reject(err));
+          }),
+      );
+
+      const { lifecycleParams, runtimeLog } = createLifecycleHarness({ gateway });
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+
+      // Fire 5 consecutive close events within the reset window
+      for (let i = 0; i < 5; i++) {
+        emitter.emit("debug", "WebSocket connection closed with code 1006");
+        await vi.advanceTimersByTimeAsync(100);
+      }
+
+      // Circuit breaker should have tripped and cleared resume state
+      expect(runtimeLog).toHaveBeenCalledWith(
+        expect.stringContaining("circuit breaker tripped"),
+      );
+      expect(gateway.state.sessionId).toBeNull();
+      expect(gateway.state.resumeGatewayUrl).toBeNull();
+
+      resolveWait?.();
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets drop counter after DROP_RESET_WINDOW_MS", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const emitter = new EventEmitter();
+      const gateway = {
+        isConnected: false,
+        options: { reconnect: { maxAttempts: 50 } },
+        state: { sessionId: "test-session", resumeGatewayUrl: "wss://resume.discord.gg", sequence: 1 },
+        sequence: 1,
+        disconnect: vi.fn(),
+        connect: vi.fn(),
+        emitter,
+      };
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+      let resolveWait: (() => void) | undefined;
+      waitForDiscordGatewayStopMock.mockImplementationOnce(
+        (waitParams: WaitForDiscordGatewayStopParams) =>
+          new Promise<void>((resolve, reject) => {
+            resolveWait = resolve;
+            waitParams.registerForceStop?.((err) => reject(err));
+          }),
+      );
+
+      const { lifecycleParams, runtimeLog } = createLifecycleHarness({ gateway });
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+
+      // Fire 4 drops, then wait past the reset window, then fire 4 more
+      for (let i = 0; i < 4; i++) {
+        emitter.emit("debug", "WebSocket connection closed with code 1006");
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      // Advance past DROP_RESET_WINDOW_MS (10 min)
+      await vi.advanceTimersByTimeAsync(11 * 60_000);
+      for (let i = 0; i < 4; i++) {
+        emitter.emit("debug", "WebSocket connection closed with code 1006");
+        await vi.advanceTimersByTimeAsync(100);
+      }
+
+      // Circuit breaker should NOT have tripped (counter reset after 10 min)
+      expect(runtimeLog).not.toHaveBeenCalledWith(
+        expect.stringContaining("circuit breaker tripped"),
+      );
+
+      resolveWait?.();
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
