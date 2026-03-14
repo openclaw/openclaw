@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { expectOpenDmPolicyConfigIssue } from "../../test-utils/status-issues.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 
 describe("collectZaloStatusIssues", () => {
   it("warns when dmPolicy is open", () => {
-    const issues = collectZaloStatusIssues([
-      {
+    expectOpenDmPolicyConfigIssue({
+      collectIssues: collectZaloStatusIssues,
+      account: {
         accountId: "default",
         enabled: true,
         configured: true,
         dmPolicy: "open",
       },
-    ]);
-    expect(issues).toHaveLength(1);
-    expect(issues[0]?.kind).toBe("config");
+    });
   });
 
   it("skips unconfigured accounts", () => {
