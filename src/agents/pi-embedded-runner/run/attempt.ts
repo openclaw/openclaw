@@ -2226,6 +2226,9 @@ export async function runEmbeddedAttempt(
           }
           return params.onToolResult?.(payload);
         },
+        onCompactionRetryReset: () => {
+          toolResultPayloads.length = 0;
+        },
         onReasoningStream: params.onReasoningStream,
         onReasoningEnd: params.onReasoningEnd,
         onBlockReply: params.onBlockReply,
