@@ -29,9 +29,7 @@ export function resolveGroupPolicyFor(
       }
     | undefined;
   const accountCfg = accountId ? resolveAccountEntry(whatsappCfg?.accounts, accountId) : undefined;
-  // If the account explicitly defines groupAllowFrom or allowFrom (even as []),
-  // use only the account-level values — do not fall back to root, since the
-  // account may be intentionally clearing inherited root lists.
+  // Account-level overrides take precedence over root (even empty [] clears inherited lists).
   const hasAccountOverride =
     accountCfg && ("groupAllowFrom" in accountCfg || "allowFrom" in accountCfg);
   const hasGroupAllowFrom = hasAccountOverride
