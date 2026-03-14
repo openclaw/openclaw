@@ -13,6 +13,7 @@ import {
   type SessionMaintenanceApplyReport,
 } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveSessionSideResultsPathFromTranscript } from "../sessions/side-results.js";
 import { isRich, theme } from "../terminal/theme.js";
 import {
   resolveSessionStoreTargetsOrExit,
@@ -147,6 +148,11 @@ function pruneMissingTranscriptEntries(params: {
     }
     const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
     if (!fs.existsSync(transcriptPath)) {
+      try {
+        fs.rmSync(resolveSessionSideResultsPathFromTranscript(transcriptPath), { force: true });
+      } catch {
+        // Best-effort cleanup for orphan BTW sidecars when the primary transcript is gone.
+      }
       delete params.store[key];
       removed += 1;
       params.onPruned?.(key);

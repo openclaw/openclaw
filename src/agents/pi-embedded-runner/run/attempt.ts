@@ -2377,10 +2377,8 @@ export async function runEmbeddedAttempt(
               `runId=${params.runId} sessionId=${params.sessionId}`,
           );
         }
-        updateActiveEmbeddedRunSnapshot(params.sessionId, {
-          transcriptLeafId:
-            (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null,
-        });
+        const transcriptLeafId =
+          (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
 
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
@@ -2458,6 +2456,19 @@ export async function runEmbeddedAttempt(
                 log.warn(`llm_input hook failed: ${String(err)}`);
               });
           }
+
+          const btwSnapshotMessages = [
+            ...activeSession.messages,
+            {
+              role: "user",
+              content: [{ type: "text", text: effectivePrompt }],
+              timestamp: Date.now(),
+            },
+          ];
+          updateActiveEmbeddedRunSnapshot(params.sessionId, {
+            transcriptLeafId,
+            messages: btwSnapshotMessages,
+          });
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter

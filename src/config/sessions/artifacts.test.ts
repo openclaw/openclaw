@@ -3,6 +3,7 @@ import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
+  isSessionSideResultsArtifactName,
   parseSessionArchiveTimestamp,
 } from "./artifacts.js";
 
@@ -19,10 +20,19 @@ describe("session artifact helpers", () => {
   it("classifies primary transcript files", () => {
     expect(isPrimarySessionTranscriptFileName("abc.jsonl")).toBe(true);
     expect(isPrimarySessionTranscriptFileName("keep.deleted.keep.jsonl")).toBe(true);
+    expect(isPrimarySessionTranscriptFileName("abc.side-results.jsonl")).toBe(false);
     expect(isPrimarySessionTranscriptFileName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z")).toBe(
       false,
     );
     expect(isPrimarySessionTranscriptFileName("sessions.json")).toBe(false);
+  });
+
+  it("classifies BTW side-result artifacts separately from transcripts", () => {
+    expect(isSessionSideResultsArtifactName("abc.side-results.jsonl")).toBe(true);
+    expect(
+      isSessionSideResultsArtifactName("abc.side-results.jsonl.deleted.2026-01-01T00-00-00.000Z"),
+    ).toBe(true);
+    expect(isSessionSideResultsArtifactName("abc.jsonl")).toBe(false);
   });
 
   it("formats and parses archive timestamps", () => {

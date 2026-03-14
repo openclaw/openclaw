@@ -61,7 +61,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     });
     return {
       shouldContinue: false,
-      reply,
+      reply: reply ? { ...reply, btw: { question } } : reply,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message.trim() : "";
@@ -69,6 +69,8 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
       shouldContinue: false,
       reply: {
         text: `⚠️ /btw failed${message ? `: ${message}` : "."}`,
+        btw: { question },
+        isError: true,
       },
     };
   }

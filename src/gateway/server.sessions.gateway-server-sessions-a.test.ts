@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveSessionSideResultsPathFromTranscript } from "../sessions/side-results.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -751,6 +752,66 @@ describe("gateway server sessions", () => {
     expect(reset.payload?.key).toBe("agent:ops:work");
     store = await readStore();
     expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
+
+    ws.close();
+  });
+
+  test("sessions.compact keeps BTW side results available via the sidecar file", async () => {
+    const { dir } = await createSessionStoreDir();
+    const sessionId = "sess-compact-btw";
+    const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: "hello" } }),
+        JSON.stringify({ message: { role: "assistant", content: "hi" } }),
+        JSON.stringify({
+          type: "custom",
+          customType: "openclaw:btw",
+          data: { timestamp: 123, question: "what changed?", answer: "nothing important" },
+        }),
+        JSON.stringify({ message: { role: "user", content: "later" } }),
+        JSON.stringify({ message: { role: "assistant", content: "done" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      resolveSessionSideResultsPathFromTranscript(transcriptPath),
+      JSON.stringify({
+        kind: "btw",
+        question: "what changed?",
+        text: "nothing important",
+        ts: 123,
+      }) + "\n",
+      "utf-8",
+    );
+    await writeSessionStore({
+      entries: {
+        main: { sessionId, updatedAt: Date.now() },
+      },
+    });
+
+    const { ws } = await openClient();
+    const compacted = await rpcReq<{ ok: true; compacted: boolean }>(ws, "sessions.compact", {
+      key: "main",
+      maxLines: 2,
+    });
+    expect(compacted.ok).toBe(true);
+    expect(compacted.payload?.compacted).toBe(true);
+
+    const history = await rpcReq<{ sideResults?: unknown[] }>(ws, "chat.history", {
+      sessionKey: "main",
+    });
+    expect(history.ok).toBe(true);
+    expect(history.payload?.sideResults ?? []).toEqual([
+      {
+        kind: "btw",
+        question: "what changed?",
+        text: "nothing important",
+        ts: 123,
+      },
+    ]);
 
     ws.close();
   });

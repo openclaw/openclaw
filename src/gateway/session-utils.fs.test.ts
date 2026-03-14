@@ -2,12 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { resolveSessionSideResultsPathFromTranscript } from "../sessions/side-results.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readSessionMessages,
+  readSessionSideResults,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   resolveSessionTranscriptCandidates,
@@ -760,6 +762,32 @@ describe("archiveSessionTranscripts", () => {
     }
   });
 
+  test("archives BTW side-result sidecars alongside transcripts", () => {
+    const sessionId = "sess-archive-side-results";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const sidecarPath = resolveSessionSideResultsPathFromTranscript(transcriptPath);
+    fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
+    fs.writeFileSync(
+      sidecarPath,
+      `${JSON.stringify({ kind: "btw", question: "q", text: "a", ts: 123 })}\n`,
+      "utf-8",
+    );
+
+    const archived = archiveSessionTranscripts({
+      sessionId,
+      storePath,
+      reason: "reset",
+    });
+
+    expect(archived).toHaveLength(2);
+    expect(archived.some((entry) => entry.includes(`${sessionId}.jsonl.reset.`))).toBe(true);
+    expect(archived.some((entry) => entry.includes(`${sessionId}.side-results.jsonl.reset.`))).toBe(
+      true,
+    );
+    expect(fs.existsSync(transcriptPath)).toBe(false);
+    expect(fs.existsSync(sidecarPath)).toBe(false);
+  });
+
   test("returns empty array when no transcript files exist", () => {
     const archived = archiveSessionTranscripts({
       sessionId: "nonexistent-session",
@@ -785,5 +813,79 @@ describe("archiveSessionTranscripts", () => {
     expect(archived).toHaveLength(1);
     expect(archived[0]).toContain(".deleted.");
     expect(fs.existsSync(transcriptPath)).toBe(false);
+  });
+});
+
+describe("readSessionSideResults", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-side-results-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("reads BTW results from transcript custom entries", () => {
+    const sessionId = "sess-btw-transcript";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        type: "custom",
+        customType: "openclaw:btw",
+        data: {
+          timestamp: 10,
+          question: "what changed?",
+          answer: "nothing",
+        },
+      },
+    ]);
+
+    expect(readSessionSideResults(sessionId, storePath)).toEqual([
+      {
+        kind: "btw",
+        question: "what changed?",
+        text: "nothing",
+        ts: 10,
+      },
+    ]);
+  });
+
+  test("merges BTW sidecar records and dedupes transcript duplicates", () => {
+    const sessionId = "sess-btw-sidecar";
+    const transcriptPath = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        type: "custom",
+        customType: "openclaw:btw",
+        data: {
+          timestamp: 10,
+          question: "what changed?",
+          answer: "nothing",
+        },
+      },
+    ]);
+    fs.writeFileSync(
+      resolveSessionSideResultsPathFromTranscript(transcriptPath),
+      [
+        JSON.stringify({ kind: "btw", question: "what changed?", text: "nothing", ts: 10 }),
+        JSON.stringify({ kind: "btw", question: "what now?", text: "keep going", ts: 20 }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    expect(readSessionSideResults(sessionId, storePath)).toEqual([
+      {
+        kind: "btw",
+        question: "what changed?",
+        text: "nothing",
+        ts: 10,
+      },
+      {
+        kind: "btw",
+        question: "what now?",
+        text: "keep going",
+        ts: 20,
+      },
+    ]);
   });
 });

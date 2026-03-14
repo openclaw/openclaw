@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import { resolveSessionSideResultsPathFromTranscript } from "../sessions/side-results.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -494,6 +495,121 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       await eventPromise;
       expect(spy.mock.calls.length).toBe(callsBefore);
+    });
+  });
+
+  test("routes /btw replies through side-result events without transcript injection", async () => {
+    await withMainSessionStore(async () => {
+      const replyMock = vi.mocked(getReplyFromConfig);
+      replyMock.mockResolvedValueOnce({
+        text: "323",
+        btw: { question: "what is 17 * 19?" },
+      });
+      const sideResultPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat.side_result" &&
+          o.payload?.kind === "btw" &&
+          o.payload?.runId === "idem-btw-1",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/btw what is 17 * 19?",
+        idempotencyKey: "idem-btw-1",
+      });
+
+      expect(res.ok).toBe(true);
+      const sideResult = await sideResultPromise;
+      expect(sideResult.payload).toMatchObject({
+        kind: "btw",
+        runId: "idem-btw-1",
+        sessionKey: "main",
+        question: "what is 17 * 19?",
+        text: "323",
+      });
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      expect(historyRes.payload?.messages ?? []).toEqual([]);
+    });
+  });
+
+  test("chat.history returns BTW side results separately from normal messages", async () => {
+    await withMainSessionStore(async (dir) => {
+      const transcriptPath = path.join(dir, "sess-main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          JSON.stringify({
+            type: "custom",
+            customType: "openclaw:btw",
+            data: {
+              timestamp: 123,
+              question: "what changed?",
+              answer: "nothing important",
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const historyRes = await rpcReq<{ messages?: unknown[]; sideResults?: unknown[] }>(
+        ws,
+        "chat.history",
+        {
+          sessionKey: "main",
+        },
+      );
+      expect(historyRes.ok).toBe(true);
+      expect(historyRes.payload?.messages ?? []).toEqual([]);
+      expect(historyRes.payload?.sideResults ?? []).toEqual([
+        {
+          kind: "btw",
+          question: "what changed?",
+          text: "nothing important",
+          ts: 123,
+        },
+      ]);
+    });
+  });
+
+  test("chat.history replays BTW side results from the sidecar file after transcript compaction", async () => {
+    await withMainSessionStore(async (dir) => {
+      const transcriptPath = path.join(dir, "sess-main.jsonl");
+      await fs.writeFile(transcriptPath, JSON.stringify({ type: "session", version: 1 }) + "\n");
+      await fs.writeFile(
+        resolveSessionSideResultsPathFromTranscript(transcriptPath),
+        JSON.stringify({
+          kind: "btw",
+          question: "what changed?",
+          text: "still working",
+          ts: 456,
+        }) + "\n",
+        "utf-8",
+      );
+
+      const historyRes = await rpcReq<{ messages?: unknown[]; sideResults?: unknown[] }>(
+        ws,
+        "chat.history",
+        {
+          sessionKey: "main",
+        },
+      );
+      expect(historyRes.ok).toBe(true);
+      expect(historyRes.payload?.messages ?? []).toEqual([]);
+      expect(historyRes.payload?.sideResults ?? []).toEqual([
+        {
+          kind: "btw",
+          question: "what changed?",
+          text: "still working",
+          ts: 456,
+        },
+      ]);
     });
   });
 

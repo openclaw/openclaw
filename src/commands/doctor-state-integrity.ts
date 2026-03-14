@@ -8,6 +8,7 @@ import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
+  isSessionSideResultsArtifactName,
   loadSessionStore,
   resolveMainSessionKey,
   resolveSessionFilePath,
@@ -17,6 +18,7 @@ import {
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { resolveSessionSideResultsPathFromTranscript } from "../sessions/side-results.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -757,8 +759,12 @@ export async function noteStateIntegrity(
         continue;
       }
       try {
+        const transcriptPath = path.resolve(
+          resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+        );
+        referencedTranscriptPaths.add(transcriptPath);
         referencedTranscriptPaths.add(
-          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
+          path.resolve(resolveSessionSideResultsPathFromTranscript(transcriptPath)),
         );
       } catch {
         // ignore invalid legacy paths
@@ -766,7 +772,12 @@ export async function noteStateIntegrity(
     }
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
-      .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
+      .filter(
+        (entry) =>
+          entry.isFile() &&
+          (isPrimarySessionTranscriptFileName(entry.name) ||
+            isSessionSideResultsArtifactName(entry.name)),
+      )
       .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
       .filter((filePath) => !referencedTranscriptPaths.has(filePath));
     if (orphanTranscriptPaths.length > 0) {

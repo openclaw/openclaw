@@ -151,9 +151,11 @@ describe("pi-embedded runner run registry", () => {
     setActiveEmbeddedRun("session-snapshot", handle);
     updateActiveEmbeddedRunSnapshot("session-snapshot", {
       transcriptLeafId: "assistant-1",
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
     });
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toEqual({
       transcriptLeafId: "assistant-1",
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
     });
 
     clearActiveEmbeddedRun("session-snapshot", handle);

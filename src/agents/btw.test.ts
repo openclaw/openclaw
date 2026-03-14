@@ -18,6 +18,8 @@ const resolveSessionAuthProfileOverrideMock = vi.fn();
 const getActiveEmbeddedRunSnapshotMock = vi.fn();
 const waitForEmbeddedPiRunEndMock = vi.fn();
 const diagWarnMock = vi.fn();
+const diagDebugMock = vi.fn();
+const appendSessionSideResultMock = vi.fn();
 
 vi.mock("@mariozechner/pi-ai", () => ({
   streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
@@ -70,7 +72,12 @@ vi.mock("./auth-profiles/session-override.js", () => ({
 vi.mock("../logging/diagnostic.js", () => ({
   diagnosticLogger: {
     warn: (...args: unknown[]) => diagWarnMock(...args),
+    debug: (...args: unknown[]) => diagDebugMock(...args),
   },
+}));
+
+vi.mock("../sessions/side-results.js", () => ({
+  appendSessionSideResult: (...args: unknown[]) => appendSessionSideResultMock(...args),
 }));
 
 const { BTW_CUSTOM_TYPE, runBtwSideQuestion } = await import("./btw.js");
@@ -113,6 +120,8 @@ describe("runBtwSideQuestion", () => {
     getActiveEmbeddedRunSnapshotMock.mockReset();
     waitForEmbeddedPiRunEndMock.mockReset();
     diagWarnMock.mockReset();
+    diagDebugMock.mockReset();
+    appendSessionSideResultMock.mockReset();
 
     buildSessionContextMock.mockReturnValue({
       messages: [{ role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 }],
@@ -206,6 +215,14 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toBeUndefined();
     expect(onBlockReply).toHaveBeenCalledWith({ text: "Side answer." });
+    expect(appendSessionSideResultMock).toHaveBeenCalledWith({
+      transcriptPath: expect.stringContaining("session-1.jsonl"),
+      result: expect.objectContaining({
+        kind: "btw",
+        question: "What changed?",
+        text: "Side answer.",
+      }),
+    });
     expect(appendCustomEntryMock).toHaveBeenCalledWith(
       BTW_CUSTOM_TYPE,
       expect.objectContaining({
@@ -276,6 +293,144 @@ describe("runBtwSideQuestion", () => {
         isNewSession: false,
       }),
     ).rejects.toThrow("No active session context.");
+  });
+
+  it("uses active-run snapshot messages for BTW context while the main run is in flight", async () => {
+    buildSessionContextMock.mockReturnValue({ messages: [] });
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: "assistant-1",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "write some things then wait 30 seconds and write more" },
+          ],
+          timestamp: 1,
+        },
+      ],
+    });
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "323" }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
+
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What is 17 * 19?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
+
+    expect(result).toEqual({ text: "323" });
+    expect(streamSimpleMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining("ephemeral /btw side question"),
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: "user" }),
+          expect.objectContaining({
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: expect.stringContaining(
+                  "<btw_side_question>\nWhat is 17 * 19?\n</btw_side_question>",
+                ),
+              },
+            ],
+          }),
+        ]),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("wraps the side question so the model does not treat it as a main-task continuation", async () => {
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "About 93 million miles." }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
+
+    await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "what is the distance to the sun?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
+
+    const [, context] = streamSimpleMock.mock.calls[0] ?? [];
+    expect(context).toMatchObject({
+      systemPrompt: expect.stringContaining(
+        "Do not continue, resume, or complete any unfinished task",
+      ),
+    });
+    expect(context).toMatchObject({
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: expect.stringContaining(
+                "Ignore any unfinished task in the conversation while answering it.",
+              ),
+            },
+          ],
+        }),
+      ]),
+    });
   });
 
   it("branches away from an unresolved trailing user turn before building BTW context", async () => {
@@ -486,5 +641,78 @@ describe("runBtwSideQuestion", () => {
         expect.stringContaining("btw transcript persistence skipped: sessionId=session-1"),
       );
     });
+  });
+
+  it("excludes tool results from BTW context to avoid replaying raw tool output", async () => {
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: "assistant-1",
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "seed" }],
+          timestamp: 1,
+        },
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: "sensitive tool output" }],
+          details: { raw: "secret" },
+          timestamp: 2,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          timestamp: 3,
+        },
+      ],
+    });
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "323" }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
+
+    await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What is 17 * 19?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
+
+    const [, context] = streamSimpleMock.mock.calls[0] ?? [];
+    expect(context).toMatchObject({
+      messages: [
+        expect.objectContaining({ role: "user" }),
+        expect.objectContaining({ role: "assistant" }),
+        expect.objectContaining({ role: "user" }),
+      ],
+    });
+    expect((context as { messages?: Array<{ role?: string }> }).messages).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ role: "toolResult" })]),
+    );
   });
 });

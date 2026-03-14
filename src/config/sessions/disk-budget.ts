@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isPrimarySessionTranscriptFileName, isSessionArchiveArtifactName } from "./artifacts.js";
+import { resolveSessionSideResultsPathFromTranscript } from "../../sessions/side-results.js";
+import {
+  isPrimarySessionTranscriptFileName,
+  isSessionArchiveArtifactName,
+  isSessionSideResultsArtifactName,
+} from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
 import type { SessionEntry } from "./types.js";
 
@@ -123,6 +128,9 @@ function resolveReferencedSessionTranscriptPaths(params: {
     });
     if (resolved) {
       referenced.add(canonicalizePathForComparison(resolved));
+      referenced.add(
+        canonicalizePathForComparison(resolveSessionSideResultsPathFromTranscript(resolved)),
+      );
     }
   }
   return referenced;
@@ -255,7 +263,9 @@ export async function enforceSessionDiskBudget(params: {
     .filter(
       (file) =>
         isSessionArchiveArtifactName(file.name) ||
-        (isPrimarySessionTranscriptFileName(file.name) && !referencedPaths.has(file.canonicalPath)),
+        ((isPrimarySessionTranscriptFileName(file.name) ||
+          isSessionSideResultsArtifactName(file.name)) &&
+          !referencedPaths.has(file.canonicalPath)),
     )
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
   for (const file of removableFileQueue) {
@@ -336,6 +346,18 @@ export async function enforceSessionDiskBudget(params: {
       total -= deletedBytes;
       freedBytes += deletedBytes;
       removedFiles += 1;
+      const sideResultsPath = resolveSessionSideResultsPathFromTranscript(transcriptPath);
+      const deletedSideResultsBytes = await removeFileForBudget({
+        filePath: sideResultsPath,
+        dryRun,
+        fileSizesByPath,
+        simulatedRemovedPaths,
+      });
+      if (deletedSideResultsBytes > 0) {
+        total -= deletedSideResultsBytes;
+        freedBytes += deletedSideResultsBytes;
+        removedFiles += 1;
+      }
     }
   }
 

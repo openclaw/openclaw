@@ -294,6 +294,36 @@ describe("routeReply", () => {
     );
   });
 
+  it("prefixes BTW replies on routed sends", async () => {
+    mocks.sendMessageSlack.mockClear();
+    await routeReply({
+      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      "BTW: 323",
+      expect.any(Object),
+    );
+  });
+
+  it("prefixes BTW replies on routed discord sends", async () => {
+    mocks.sendMessageDiscord.mockClear();
+    await routeReply({
+      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
+      channel: "discord",
+      to: "channel:123456",
+      cfg: {} as never,
+    });
+    expect(mocks.sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123456",
+      "BTW: 323",
+      expect.any(Object),
+    );
+  });
+
   it("passes replyToId to Telegram sends", async () => {
     mocks.sendMessageTelegram.mockClear();
     await routeReply({

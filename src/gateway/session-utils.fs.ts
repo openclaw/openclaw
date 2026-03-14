@@ -12,6 +12,10 @@ import {
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import {
+  resolveSessionSideResultsPathFromTranscript,
+  type PersistedSessionSideResult,
+} from "../sessions/side-results.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
@@ -20,6 +24,16 @@ import type { SessionPreviewItem } from "./session-utils.types.js";
 type SessionTitleFields = {
   firstUserMessage: string | null;
   lastMessagePreview: string | null;
+};
+
+const BTW_CUSTOM_TYPE = "openclaw:btw";
+
+export type SessionSideResult = {
+  kind: "btw";
+  question: string;
+  text: string;
+  isError?: boolean;
+  ts?: number;
 };
 
 type SessionTitleFieldsCacheEntry = SessionTitleFields & {
@@ -118,6 +132,126 @@ export function readSessionMessages(
   return messages;
 }
 
+export function readSessionSideResults(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): SessionSideResult[] {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+  const resultsByKey = new Map<string, SessionSideResult>();
+
+  const pushResult = (result: SessionSideResult | null) => {
+    if (!result) {
+      return;
+    }
+    const dedupeKey = [
+      result.kind,
+      result.ts ?? "",
+      result.question,
+      result.text,
+      result.isError ? "1" : "0",
+    ].join("\u0000");
+    if (!resultsByKey.has(dedupeKey)) {
+      resultsByKey.set(dedupeKey, result);
+    }
+  };
+
+  for (const filePath of candidates.filter((p) => fs.existsSync(p))) {
+    const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as {
+          type?: string;
+          customType?: string;
+          data?: { question?: unknown; answer?: unknown; timestamp?: unknown; isError?: unknown };
+        };
+        pushResult(parseTranscriptSideResult(parsed));
+      } catch {
+        // ignore bad lines
+      }
+    }
+  }
+
+  const sideResultPaths = new Set(
+    candidates.map((candidate) => resolveSessionSideResultsPathFromTranscript(candidate)),
+  );
+  for (const filePath of sideResultPaths) {
+    if (!fs.existsSync(filePath)) {
+      continue;
+    }
+    const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as PersistedSessionSideResult;
+        pushResult(parsePersistedSideResult(parsed));
+      } catch {
+        // ignore bad lines
+      }
+    }
+  }
+
+  return [...resultsByKey.values()].toSorted((left, right) => {
+    const leftTs = left.ts ?? Number.MAX_SAFE_INTEGER;
+    const rightTs = right.ts ?? Number.MAX_SAFE_INTEGER;
+    if (leftTs !== rightTs) {
+      return leftTs - rightTs;
+    }
+    return left.question.localeCompare(right.question);
+  });
+}
+
+function parseTranscriptSideResult(parsed: {
+  type?: string;
+  customType?: string;
+  data?: { question?: unknown; answer?: unknown; timestamp?: unknown; isError?: unknown };
+}): SessionSideResult | null {
+  if (parsed.type !== "custom" || parsed.customType !== BTW_CUSTOM_TYPE) {
+    return null;
+  }
+  const question = typeof parsed.data?.question === "string" ? parsed.data.question.trim() : "";
+  const text = typeof parsed.data?.answer === "string" ? parsed.data.answer.trim() : "";
+  if (!question || !text) {
+    return null;
+  }
+  const timestamp =
+    typeof parsed.data?.timestamp === "number" && Number.isFinite(parsed.data.timestamp)
+      ? parsed.data.timestamp
+      : undefined;
+  const isError = parsed.data?.isError === true ? true : undefined;
+  return {
+    kind: "btw",
+    question,
+    text,
+    isError,
+    ts: timestamp,
+  };
+}
+
+function parsePersistedSideResult(parsed: PersistedSessionSideResult): SessionSideResult | null {
+  if (parsed.kind !== "btw") {
+    return null;
+  }
+  const question = typeof parsed.question === "string" ? parsed.question.trim() : "";
+  const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
+  if (!question || !text) {
+    return null;
+  }
+  const timestamp = Number.isFinite(parsed.ts) ? parsed.ts : undefined;
+  return {
+    kind: "btw",
+    question,
+    text,
+    isError: parsed.isError === true ? true : undefined,
+    ts: timestamp,
+  };
+}
+
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
@@ -202,12 +336,17 @@ export function archiveSessionTranscripts(opts: {
     opts.restrictToStoreDir && opts.storePath
       ? canonicalizePathForComparison(path.dirname(opts.storePath))
       : null;
-  for (const candidate of resolveSessionTranscriptCandidates(
+  const transcriptCandidates = resolveSessionTranscriptCandidates(
     opts.sessionId,
     opts.storePath,
     opts.sessionFile,
     opts.agentId,
-  )) {
+  );
+  const archiveCandidates = new Set<string>(transcriptCandidates);
+  for (const candidate of transcriptCandidates) {
+    archiveCandidates.add(resolveSessionSideResultsPathFromTranscript(candidate));
+  }
+  for (const candidate of archiveCandidates) {
     const candidatePath = canonicalizePathForComparison(candidate);
     if (storeDir) {
       const relative = path.relative(storeDir, candidatePath);

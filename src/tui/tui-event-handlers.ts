@@ -1,7 +1,7 @@
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
-import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
 type EventHandlerChatLog = {
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
@@ -20,8 +20,14 @@ type EventHandlerTui = {
   requestRender: () => void;
 };
 
+type EventHandlerBtwPresenter = {
+  showResult: (params: { question: string; text: string; isError?: boolean }) => void;
+  clear: () => void;
+};
+
 type EventHandlerContext = {
   chatLog: EventHandlerChatLog;
+  btw: EventHandlerBtwPresenter;
   tui: EventHandlerTui;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
@@ -35,6 +41,7 @@ type EventHandlerContext = {
 export function createEventHandlers(context: EventHandlerContext) {
   const {
     chatLog,
+    btw,
     tui,
     state,
     setActivityStatus,
@@ -81,6 +88,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     clearLocalRunIds?.();
+    btw.clear();
   };
 
   const noteSessionRun = (runId: string) => {
@@ -335,5 +343,30 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
-  return { handleChatEvent, handleAgentEvent };
+  const handleBtwEvent = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const evt = payload as BtwEvent;
+    syncSessionKey();
+    if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    if (evt.kind !== "btw") {
+      return;
+    }
+    const question = evt.question.trim();
+    const text = evt.text.trim();
+    if (!question || !text) {
+      return;
+    }
+    btw.showResult({
+      question,
+      text,
+      isError: evt.isError,
+    });
+    tui.requestRender();
+  };
+
+  return { handleChatEvent, handleAgentEvent, handleBtwEvent };
 }

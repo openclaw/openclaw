@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
 type MockFn = ReturnType<typeof vi.fn>;
 type HandlerChatLog = {
@@ -11,6 +11,10 @@ type HandlerChatLog = {
   finalizeAssistant: (...args: unknown[]) => void;
   dropAssistant: (...args: unknown[]) => void;
 };
+type HandlerBtwPresenter = {
+  showResult: (...args: unknown[]) => void;
+  clear: (...args: unknown[]) => void;
+};
 type HandlerTui = { requestRender: (...args: unknown[]) => void };
 type MockChatLog = {
   startTool: MockFn;
@@ -19,6 +23,10 @@ type MockChatLog = {
   updateAssistant: MockFn;
   finalizeAssistant: MockFn;
   dropAssistant: MockFn;
+};
+type MockBtwPresenter = {
+  showResult: MockFn;
+  clear: MockFn;
 };
 type MockTui = { requestRender: MockFn };
 
@@ -31,6 +39,13 @@ function createMockChatLog(): MockChatLog & HandlerChatLog {
     finalizeAssistant: vi.fn(),
     dropAssistant: vi.fn(),
   } as unknown as MockChatLog & HandlerChatLog;
+}
+
+function createMockBtwPresenter(): MockBtwPresenter & HandlerBtwPresenter {
+  return {
+    showResult: vi.fn(),
+    clear: vi.fn(),
+  } as unknown as MockBtwPresenter & HandlerBtwPresenter;
 }
 
 describe("tui-event-handlers: handleAgentEvent", () => {
@@ -59,6 +74,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
   const makeContext = (state: TuiStateAccess) => {
     const chatLog = createMockChatLog();
+    const btw = createMockBtwPresenter();
     const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
     const setActivityStatus = vi.fn();
     const loadHistory = vi.fn();
@@ -72,6 +88,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     return {
       chatLog,
+      btw,
       tui,
       state,
       setActivityStatus,
@@ -86,12 +103,14 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   const createHandlersHarness = (params?: {
     state?: Partial<TuiStateAccess>;
     chatLog?: HandlerChatLog;
+    btw?: HandlerBtwPresenter;
   }) => {
     const state = makeState(params?.state);
     const context = makeContext(state);
     const chatLog = (params?.chatLog ?? context.chatLog) as MockChatLog & HandlerChatLog;
     const handlers = createEventHandlers({
       chatLog,
+      btw: (params?.btw ?? context.btw) as MockBtwPresenter & HandlerBtwPresenter,
       tui: context.tui,
       state,
       setActivityStatus: context.setActivityStatus,
@@ -103,6 +122,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       ...context,
       state,
       chatLog,
+      btw: (params?.btw ?? context.btw) as MockBtwPresenter & HandlerBtwPresenter,
       ...handlers,
     };
   };
@@ -210,6 +230,33 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(state.activeChatRunId).toBe("run-alias");
     expect(chatLog.updateAssistant).toHaveBeenCalledWith("hello", "run-alias");
+  });
+
+  it("renders BTW results separately without disturbing the active run", () => {
+    const { state, btw, setActivityStatus, loadHistory, tui, handleBtwEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: "run-main" },
+      });
+
+    const evt: BtwEvent = {
+      kind: "btw",
+      runId: "run-btw",
+      sessionKey: state.currentSessionKey,
+      question: "what changed?",
+      text: "nothing important",
+    };
+
+    handleBtwEvent(evt);
+
+    expect(state.activeChatRunId).toBe("run-main");
+    expect(btw.showResult).toHaveBeenCalledWith({
+      question: "what changed?",
+      text: "nothing important",
+      isError: undefined,
+    });
+    expect(setActivityStatus).not.toHaveBeenCalled();
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
   it("does not cross-match canonical session keys from different agents", () => {

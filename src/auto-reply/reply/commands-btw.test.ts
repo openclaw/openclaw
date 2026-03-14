@@ -80,7 +80,7 @@ describe("handleBtwCommand", () => {
     );
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "snapshot answer" },
+      reply: { text: "snapshot answer", btw: { question: "what changed?" } },
     });
   });
 
@@ -104,7 +104,7 @@ describe("handleBtwCommand", () => {
     );
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "nothing important" },
+      reply: { text: "nothing important", btw: { question: "what changed?" } },
     });
   });
 });

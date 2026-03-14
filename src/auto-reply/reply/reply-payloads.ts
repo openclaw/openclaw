@@ -10,6 +10,17 @@ import type { ReplyPayload } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
+export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
+  const text = payload.text?.trim();
+  if (!text) {
+    return payload.text;
+  }
+  if (!payload.btw?.question?.trim()) {
+    return payload.text;
+  }
+  return text.startsWith("BTW:") ? text : `BTW: ${text}`;
+}
+
 function resolveReplyThreadingForPayload(params: {
   payload: ReplyPayload;
   implicitReplyToId?: string;

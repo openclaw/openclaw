@@ -16,6 +16,8 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
+import { appendSessionSideResult } from "../sessions/side-results.js";
+import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -60,6 +62,20 @@ type BtwCustomEntryData = {
   usage?: unknown;
 };
 
+type BtwSideResultData = {
+  timestamp: number;
+  question: string;
+  answer: string;
+  provider: string;
+  model: string;
+  thinkingLevel: ThinkLevel | "off";
+  reasoningLevel: ReasoningLevel;
+  sessionKey?: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  usage?: unknown;
+};
+
 async function appendBtwCustomEntry(params: {
   sessionFile: string;
   timeoutMs: number;
@@ -76,6 +92,26 @@ async function appendBtwCustomEntry(params: {
   } finally {
     await lock.release();
   }
+}
+
+function appendBtwSideResult(params: { sessionFile: string; entry: BtwSideResultData }) {
+  appendSessionSideResult({
+    transcriptPath: params.sessionFile,
+    result: {
+      kind: "btw",
+      question: params.entry.question,
+      text: params.entry.answer,
+      ts: params.entry.timestamp,
+      provider: params.entry.provider,
+      model: params.entry.model,
+      thinkingLevel: params.entry.thinkingLevel,
+      reasoningLevel: params.entry.reasoningLevel,
+      sessionKey: params.entry.sessionKey,
+      authProfileId: params.entry.authProfileId,
+      authProfileIdSource: params.entry.authProfileIdSource,
+      usage: params.entry.usage,
+    },
+  });
 }
 
 function isSessionLockError(error: unknown): boolean {
@@ -117,14 +153,39 @@ function collectThinkingContent(content: Array<{ type?: string; thinking?: strin
     .join("");
 }
 
+function buildBtwSystemPrompt(): string {
+  return [
+    "You are answering an ephemeral /btw side question about the current conversation.",
+    "Use the conversation only as background context.",
+    "Answer only the side question in the last user message.",
+    "Do not continue, resume, or complete any unfinished task from the conversation.",
+    "Do not emit tool calls, pseudo-tool calls, shell commands, file writes, patches, or code unless the side question explicitly asks for them.",
+    "Do not say you will continue the main task after answering.",
+    "If the question can be answered briefly, answer briefly.",
+  ].join("\n");
+}
+
+function buildBtwQuestionPrompt(question: string): string {
+  return [
+    "Answer this side question only.",
+    "Ignore any unfinished task in the conversation while answering it.",
+    "",
+    "<btw_side_question>",
+    question.trim(),
+    "</btw_side_question>",
+  ].join("\n");
+}
+
 function toSimpleContextMessages(messages: unknown[]): Message[] {
-  return messages.filter((message): message is Message => {
+  const contextMessages = messages.filter((message): message is Message => {
     if (!message || typeof message !== "object") {
       return false;
     }
     const role = (message as { role?: unknown }).role;
-    return role === "user" || role === "assistant" || role === "toolResult";
+    return role === "user" || role === "assistant";
   });
+  return stripToolResultDetails(contextMessages as Parameters<typeof stripToolResultDetails>[0]) as
+    Message[];
 }
 
 function resolveSimpleThinkingLevel(level?: ThinkLevel): SimpleThinkingLevel | undefined {
@@ -147,7 +208,10 @@ function resolveSessionTranscriptPath(params: {
       storePath: params.storePath,
     });
     return resolveSessionFilePath(params.sessionId, params.sessionEntry, pathOpts);
-  } catch {
+  } catch (error) {
+    diag.debug(
+      `resolveSessionTranscriptPath failed: sessionId=${params.sessionId} err=${String(error)}`,
+    );
     return undefined;
   }
 }
@@ -235,7 +299,10 @@ export async function runBtwSideQuestion(
 
   const sessionManager = SessionManager.open(sessionFile) as SessionManagerLike;
   const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionId);
-  if (activeRunSnapshot) {
+  let messages: Message[] = [];
+  if (Array.isArray(activeRunSnapshot?.messages) && activeRunSnapshot.messages.length > 0) {
+    messages = toSimpleContextMessages(activeRunSnapshot.messages);
+  } else if (activeRunSnapshot) {
     if (activeRunSnapshot.transcriptLeafId && sessionManager.branch) {
       sessionManager.branch(activeRunSnapshot.transcriptLeafId);
     } else {
@@ -251,10 +318,12 @@ export async function runBtwSideQuestion(
       }
     }
   }
-  const sessionContext = sessionManager.buildSessionContext();
-  const messages = toSimpleContextMessages(
-    Array.isArray(sessionContext.messages) ? sessionContext.messages : [],
-  );
+  if (messages.length === 0) {
+    const sessionContext = sessionManager.buildSessionContext();
+    messages = toSimpleContextMessages(
+      Array.isArray(sessionContext.messages) ? sessionContext.messages : [],
+    );
+  }
   if (messages.length === 0) {
     throw new Error("No active session context.");
   }
@@ -304,11 +373,12 @@ export async function runBtwSideQuestion(
   const stream = streamSimple(
     model,
     {
+      systemPrompt: buildBtwSystemPrompt(),
       messages: [
         ...messages,
         {
           role: "user",
-          content: [{ type: "text", text: params.question }],
+          content: [{ type: "text", text: buildBtwQuestionPrompt(params.question) }],
           timestamp: Date.now(),
         },
       ],
@@ -399,6 +469,16 @@ export async function runBtwSideQuestion(
     authProfileIdSource,
     usage: finalMessage?.usage,
   } satisfies BtwCustomEntryData;
+
+  try {
+    appendBtwSideResult({
+      sessionFile,
+      entry: customEntry,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    diag.warn(`btw side-result persistence skipped: sessionId=${sessionId} err=${message}`);
+  }
 
   try {
     await appendBtwCustomEntry({
