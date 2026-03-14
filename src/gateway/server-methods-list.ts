@@ -192,6 +192,7 @@ const BASE_METHODS = [
   "personas.categories",
   "personas.search",
   "personas.expand",
+  "personas.apply",
   // State DB introspection
   "state.info",
   "state.tables",

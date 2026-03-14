@@ -7,7 +7,10 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { expandPersona, loadPersonaBySlug } from "../../agents/persona-expansion.js";
+import { reassignPersona, writeExpansionResult } from "../../agents/persona-reassign.js";
+import { loadConfig } from "../../config/config.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -202,6 +205,69 @@ export const personasHandlers: GatewayRequestHandlers = {
           content: f.content,
           size: f.content.length,
         })),
+      },
+      undefined,
+    );
+  },
+
+  /**
+   * Apply a different persona to an existing agent (re-assignment).
+   * Backs up workspace, re-expands, writes new files.
+   * Params: { agentId: string, slug: string, agentName?: string, overrides?: object }
+   */
+  "personas.apply": async ({ params, respond }) => {
+    const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
+    const slug = typeof params.slug === "string" ? params.slug.trim() : "";
+
+    if (!agentId || !slug) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Missing required parameters: agentId, slug"),
+      );
+      return;
+    }
+
+    const personasDir = resolvePersonasDir();
+    const cfg = loadConfig();
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const agentDir = join(resolvePersonasDir(), "..", agentId);
+    const agentName = typeof params.agentName === "string" ? params.agentName.trim() : agentId;
+
+    const overrides =
+      params.overrides && typeof params.overrides === "object"
+        ? (params.overrides as Record<string, unknown>)
+        : undefined;
+
+    const result = await reassignPersona({
+      personasDir,
+      personaSlug: slug,
+      agentName,
+      agentId,
+      workspaceDir,
+      overrides,
+    });
+
+    if ("error" in result) {
+      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, result.error));
+      return;
+    }
+
+    // Write files to disk
+    await writeExpansionResult({
+      agentDir,
+      workspaceDir,
+      expansion: result.expansion,
+    });
+
+    respond(
+      true,
+      {
+        ok: true,
+        agentId,
+        persona: slug,
+        backupDir: result.backupDir,
+        filesWritten: ["AGENT.md", ...result.expansion.workspaceFiles.map((f) => f.name)],
       },
       undefined,
     );
