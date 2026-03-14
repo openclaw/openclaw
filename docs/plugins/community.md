@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Apify** — Scrape data from any website with 20,000+ ready-made scrapers. Let your agent extract data from Instagram, Facebook, TikTok, YouTube, Google Maps, Google Search, e-commerce sites, and more — just by asking.
+  npm: `@apify/apify-openclaw-plugin`
+  repo: `https://github.com/apify/apify-openclaw-plugin`
+  install: `openclaw plugins install @apify/apify-openclaw-plugin`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
