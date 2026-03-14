@@ -191,9 +191,9 @@ the workspace is writable. See [Memory](/concepts/memory) and
 - Direct chats follow `session.dmScope` (default `main`).
   - `main`: `agent:<agentId>:<mainKey>` (continuity across devices/channels).
     - Multiple phone numbers and channels can map to the same agent main key; they act as transports into one conversation.
-  - `per-peer`: `agent:<agentId>:dm:<peerId>`.
-  - `per-channel-peer`: `agent:<agentId>:<channel>:dm:<peerId>`.
-  - `per-account-channel-peer`: `agent:<agentId>:<channel>:<accountId>:dm:<peerId>` (accountId defaults to `default`).
+  - `per-peer`: `agent:<agentId>:direct:<peerId>`.
+  - `per-channel-peer`: `agent:<agentId>:<channel>:direct:<peerId>`.
+  - `per-account-channel-peer`: `agent:<agentId>:<channel>:<accountId>:direct:<peerId>` (accountId defaults to `default`).
   - If `session.identityLinks` matches a provider-prefixed peer id (for example `telegram:123`), the canonical key replaces `<peerId>` so the same person shares a session across channels.
 - Group chats isolate state: `agent:<agentId>:<channel>:group:<id>` (rooms/channels use `agent:<agentId>:<channel>:channel:<id>`).
   - Telegram forum topics append `:topic:<threadId>` to the group id for isolation.
