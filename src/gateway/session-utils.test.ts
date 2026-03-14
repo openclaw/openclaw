@@ -1525,3 +1525,217 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
     });
   });
 });
+
+describe("listSessionsFromStore returns agent:main:main (#45754)", () => {
+  test("both agent:main:main and channel sessions in same store are returned", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      } as SessionEntry,
+      "agent:main:feishu:user123": {
+        sessionId: "sess-feishu",
+        updatedAt: Date.now() - 1000,
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions).toHaveLength(2);
+    expect(result.sessions.map((s) => s.key)).toEqual(
+      expect.arrayContaining(["agent:main:main", "agent:main:feishu:user123"]),
+    );
+  });
+
+  test("agent:main:main is returned when it is the only session", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]?.key).toBe("agent:main:main");
+  });
+
+  test("agent:main:main returned via combined store with template path", async () => {
+    await withStateDirEnv("openclaw-main-main-", async ({ stateDir }) => {
+      const agentsDir = path.join(stateDir, "agents");
+      const mainDir = path.join(agentsDir, "main", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(mainDir, "sessions.json"),
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
+          "agent:main:feishu:user123": { sessionId: "s-feishu", updatedAt: 200 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(store["agent:main:main"]).toBeDefined();
+      expect(store["agent:main:feishu:user123"]).toBeDefined();
+
+      const result = listSessionsFromStore({
+        cfg,
+        storePath: path.join(mainDir, "sessions.json"),
+        store,
+        opts: {},
+      });
+
+      expect(result.sessions).toHaveLength(2);
+      expect(result.sessions.map((s) => s.key)).toEqual(
+        expect.arrayContaining(["agent:main:main", "agent:main:feishu:user123"]),
+      );
+    });
+  });
+
+  test("agent:main:main discovered when only other agents in agents.list", async () => {
+    await withStateDirEnv("openclaw-main-discovered-", async ({ stateDir }) => {
+      const agentsDir = path.join(stateDir, "agents");
+      const mainDir = path.join(agentsDir, "main", "sessions");
+      const feishuDir = path.join(agentsDir, "feishu", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(feishuDir, { recursive: true });
+
+      // Main agent has sessions but is NOT in agents.list
+      fs.writeFileSync(
+        path.join(mainDir, "sessions.json"),
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
+          "agent:main:feishu:user123": { sessionId: "s-feishu", updatedAt: 200 },
+        }),
+        "utf8",
+      );
+
+      // Empty store for feishu agent (which IS in agents.list)
+      fs.writeFileSync(path.join(feishuDir, "sessions.json"), JSON.stringify({}), "utf8");
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: {
+          // Only feishu is configured - main should be discovered from disk
+          list: [{ id: "feishu", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+
+      // Both sessions from the main agent's store should be discovered
+      expect(store["agent:main:main"]).toBeDefined();
+      expect(store["agent:main:feishu:user123"]).toBeDefined();
+    });
+  });
+
+  test("agent:main:main discovered with no agents.list configured", async () => {
+    await withStateDirEnv("openclaw-no-agents-list-", async ({ stateDir }) => {
+      const agentsDir = path.join(stateDir, "agents");
+      const mainDir = path.join(agentsDir, "main", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(mainDir, "sessions.json"),
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
+          "agent:main:feishu:user123": { sessionId: "s-feishu", updatedAt: 200 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        // No agents.list - should use default "main" agent
+      } as OpenClawConfig;
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(store["agent:main:main"]).toBeDefined();
+      expect(store["agent:main:feishu:user123"]).toBeDefined();
+    });
+  });
+
+  test("bare 'main' key in store is canonicalized to agent:main:main", async () => {
+    await withStateDirEnv("openclaw-bare-main-", async ({ stateDir }) => {
+      const agentsDir = path.join(stateDir, "agents");
+      const mainDir = path.join(agentsDir, "main", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+
+      // Store has bare "main" key (legacy format)
+      fs.writeFileSync(
+        path.join(mainDir, "sessions.json"),
+        JSON.stringify({
+          main: { sessionId: "s-main", updatedAt: 100 },
+          "feishu:user123": { sessionId: "s-feishu", updatedAt: 200 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+
+      // Bare keys should be canonicalized to agent-prefixed form
+      expect(store["agent:main:main"]).toBeDefined();
+      expect(store["agent:main:feishu:user123"]).toBeDefined();
+
+      const result = listSessionsFromStore({
+        cfg,
+        storePath: path.join(mainDir, "sessions.json"),
+        store,
+        opts: {},
+      });
+
+      expect(result.sessions).toHaveLength(2);
+      expect(result.sessions.map((s) => s.key)).toEqual(
+        expect.arrayContaining(["agent:main:main", "agent:main:feishu:user123"]),
+      );
+    });
+  });
+});
