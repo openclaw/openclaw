@@ -277,15 +277,14 @@ export async function setupXSearch(
     initialValue: defaultModel,
   });
 
+  let finalModel = modelPick === "__custom__" ? DEFAULT_X_SEARCH_MODEL : modelPick;
   if (modelPick === "__custom__") {
     const customModel = await prompter.text({
       message: "Custom Grok model name",
       placeholder: DEFAULT_X_SEARCH_MODEL,
     });
-    resolvedModel = customModel?.trim() || DEFAULT_X_SEARCH_MODEL;
+    finalModel = customModel?.trim() || DEFAULT_X_SEARCH_MODEL;
   }
-
-  const finalModel = resolvedModel ?? DEFAULT_X_SEARCH_MODEL;
 
   // Quickstart: key already available — skip key prompt
   if (opts?.quickstartDefaults && alreadyConfigured) {
