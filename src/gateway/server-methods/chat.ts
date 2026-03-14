@@ -998,6 +998,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+    const slicedSideResults = sideResults.length > max ? sideResults.slice(-max) : sideResults;
+    const remainingSideResultsBudget = Math.max(
+      0,
+      maxHistoryBytes - jsonUtf8Bytes(bounded.messages),
+    );
+    const boundedSideResults =
+      remainingSideResultsBudget > 0
+        ? capArrayByJsonBytes(slicedSideResults, remainingSideResultsBudget).items
+        : [];
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {
       chatHistoryPlaceholderEmitCount += placeholderCount;
@@ -1022,7 +1031,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionId,
       messages: bounded.messages,
-      sideResults,
+      sideResults: boundedSideResults,
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
@@ -1328,17 +1337,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
-      const finalReplies: ReplyPayload[] = [];
+      const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       const dispatcher = createReplyDispatcher({
         ...prefixOptions,
         onError: (err) => {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
         deliver: async (payload, info) => {
-          if (info.kind !== "final") {
+          if (info.kind !== "block" && info.kind !== "final") {
             return;
           }
-          finalReplies.push(payload);
+          deliveredReplies.push({ payload, kind: info.kind });
         },
       });
 
@@ -1375,17 +1384,24 @@ export const chatHandlers: GatewayRequestHandlers = {
       })
         .then(() => {
           if (!agentRunStarted) {
-            const btwReply = finalReplies.length === 1 ? finalReplies[0] : undefined;
-            if (isBtwReplyPayload(btwReply)) {
+            const btwReplies = deliveredReplies
+              .map((entry) => entry.payload)
+              .filter(isBtwReplyPayload);
+            const btwText = btwReplies
+              .map((payload) => payload.text.trim())
+              .filter(Boolean)
+              .join("\n\n")
+              .trim();
+            if (btwReplies.length > 0 && btwText) {
               broadcastSideResult({
                 context,
                 payload: {
                   kind: "btw",
                   runId: clientRunId,
                   sessionKey: rawSessionKey,
-                  question: btwReply.btw.question.trim(),
-                  text: btwReply.text.trim(),
-                  isError: btwReply.isError,
+                  question: btwReplies[0].btw.question.trim(),
+                  text: btwText,
+                  isError: btwReplies.some((payload) => payload.isError),
                   ts: Date.now(),
                 },
               });
@@ -1395,7 +1411,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey: rawSessionKey,
               });
             } else {
-              const combinedReply = finalReplies
+              const combinedReply = deliveredReplies
+                .filter((entry) => entry.kind === "final")
+                .map((entry) => entry.payload)
                 .map((part) => part.text?.trim() ?? "")
                 .filter(Boolean)
                 .join("\n\n")

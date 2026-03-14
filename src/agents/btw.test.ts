@@ -214,7 +214,10 @@ describe("runBtwSideQuestion", () => {
     });
 
     expect(result).toBeUndefined();
-    expect(onBlockReply).toHaveBeenCalledWith({ text: "Side answer." });
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: "Side answer.",
+      btw: { question: "What changed?" },
+    });
     expect(appendSessionSideResultMock).toHaveBeenCalledWith({
       transcriptPath: expect.stringContaining("session-1.jsonl"),
       result: expect.objectContaining({

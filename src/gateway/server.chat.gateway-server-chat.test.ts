@@ -593,6 +593,42 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history applies limit to BTW side results", async () => {
+    await withMainSessionStore(async (dir) => {
+      const transcriptPath = path.join(dir, "sess-main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          JSON.stringify({
+            type: "custom",
+            customType: "openclaw:btw",
+            data: { timestamp: 123, question: "older", answer: "one" },
+          }),
+          JSON.stringify({
+            type: "custom",
+            customType: "openclaw:btw",
+            data: { timestamp: 456, question: "newer", answer: "two" },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const historyRes = await rpcReq<{ sideResults?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 1,
+      });
+      expect(historyRes.ok).toBe(true);
+      expect(historyRes.payload?.sideResults ?? []).toEqual([
+        {
+          kind: "btw",
+          question: "newer",
+          text: "two",
+          ts: 456,
+        },
+      ]);
+    });
+  });
+
   test("chat.history replays BTW side results from the sidecar file after transcript compaction", async () => {
     await withMainSessionStore(async (dir) => {
       const transcriptPath = path.join(dir, "sess-main.jsonl");
@@ -625,6 +661,47 @@ describe("gateway server chat", () => {
           ts: 456,
         },
       ]);
+    });
+  });
+
+  test("routes block-streamed /btw replies through side-result events", async () => {
+    await withMainSessionStore(async () => {
+      const replyMock = vi.mocked(getReplyFromConfig);
+      replyMock.mockImplementationOnce(async (_ctx, opts) => {
+        await opts?.onBlockReply?.({
+          text: "first chunk",
+          btw: { question: "what changed?" },
+        });
+        await opts?.onBlockReply?.({
+          text: "second chunk",
+          btw: { question: "what changed?" },
+        });
+        return undefined;
+      });
+      const sideResultPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat.side_result" &&
+          o.payload?.kind === "btw" &&
+          o.payload?.runId === "idem-btw-block-1",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/btw what changed?",
+        idempotencyKey: "idem-btw-block-1",
+      });
+
+      expect(res.ok).toBe(true);
+      const sideResult = await sideResultPromise;
+      expect(sideResult.payload).toMatchObject({
+        kind: "btw",
+        runId: "idem-btw-block-1",
+        question: "what changed?",
+        text: "first chunk\n\nsecond chunk",
+      });
     });
   });
 

@@ -17,7 +17,6 @@ import {
 } from "../config/sessions.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import { appendSessionSideResult } from "../sessions/side-results.js";
-import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -29,6 +28,7 @@ import {
 } from "./pi-embedded-runner/runs.js";
 import { mapThinkingLevel } from "./pi-embedded-runner/utils.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
+import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { acquireSessionWriteLock } from "./session-write-lock.js";
 
 const BTW_CUSTOM_TYPE = "openclaw:btw";
@@ -184,8 +184,9 @@ function toSimpleContextMessages(messages: unknown[]): Message[] {
     const role = (message as { role?: unknown }).role;
     return role === "user" || role === "assistant";
   });
-  return stripToolResultDetails(contextMessages as Parameters<typeof stripToolResultDetails>[0]) as
-    Message[];
+  return stripToolResultDetails(
+    contextMessages as Parameters<typeof stripToolResultDetails>[0],
+  ) as Message[];
 }
 
 function resolveSimpleThinkingLevel(level?: ThinkLevel): SimpleThinkingLevel | undefined {
@@ -365,7 +366,10 @@ export async function runBtwSideQuestion(
     }
     emittedBlocks += 1;
     blockEmitChain = blockEmitChain.then(async () => {
-      await params.opts?.onBlockReply?.({ text });
+      await params.opts?.onBlockReply?.({
+        text,
+        btw: { question: params.question },
+      });
     });
     await blockEmitChain;
   };
