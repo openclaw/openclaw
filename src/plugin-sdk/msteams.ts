@@ -12,7 +12,10 @@ export {
 export { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
-export { resolveControlCommandGate } from "../channels/command-gating.js";
+export {
+  resolveControlCommandGate,
+  resolveDualTextControlCommandGate,
+} from "../channels/command-gating.js";
 export { logInboundDrop, logTypingFailure } from "../channels/logging.js";
 export { resolveMentionGating } from "../channels/mention-gating.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
