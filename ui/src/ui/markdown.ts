@@ -124,8 +124,9 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
     : "";
   if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
-    // Large plain-text replies should stay readable in chat bubbles instead of
-    // inheriting the capped code-block chrome used for actual code samples.
+    // Large plain-text replies should stay readable without inheriting the
+    // capped code-block chrome, while still preserving whitespace for logs
+    // and other structured text that commonly trips the parse guard.
     const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
@@ -221,10 +222,5 @@ function escapeHtml(value: string): string {
 }
 
 function renderEscapedPlainTextHtml(value: string): string {
-  return value
-    .replace(/\r\n?/g, "\n")
-    .split(/\n{2,}/)
-    .filter((segment) => segment.trim().length > 0)
-    .map((segment) => `<p>${escapeHtml(segment).replace(/\n/g, "<br>")}</p>`)
-    .join("");
+  return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
 }

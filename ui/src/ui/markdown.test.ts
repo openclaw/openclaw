@@ -115,9 +115,35 @@ describe("toSanitizedMarkdownHtml", () => {
     const html = toSanitizedMarkdownHtml(input);
 
     expect(html).not.toContain('<pre class="code-block">');
-    expect(html).toContain("<p>");
+    expect(html).toContain('class="markdown-plain-text-fallback"');
     expect(html).toContain("Paragraph 1:");
     expect(html).toContain("Paragraph 320:");
+  });
+
+  it("preserves indentation in oversized plain-text replies", () => {
+    const input = `${"Header line\n".repeat(5000)}\n    indented log line\n        deeper indent`;
+    const html = toSanitizedMarkdownHtml(input);
+
+    expect(html).toContain('class="markdown-plain-text-fallback"');
+    expect(html).toContain("    indented log line");
+    expect(html).toContain("        deeper indent");
+  });
+
+  it("exercises the cached oversized fallback branch", () => {
+    const input =
+      Array.from(
+        { length: 240 },
+        (_, i) => `Paragraph ${i + 1}: ${"Cacheable long reply. ".repeat(8)}`,
+      ).join("\n\n") + "\n";
+
+    expect(input.length).toBeGreaterThan(40_000);
+    expect(input.length).toBeLessThan(50_000);
+
+    const first = toSanitizedMarkdownHtml(input);
+    const second = toSanitizedMarkdownHtml(input);
+
+    expect(first).toContain('class="markdown-plain-text-fallback"');
+    expect(second).toBe(first);
   });
 
   it("falls back to escaped plain text if marked.parse throws (#36213)", () => {
