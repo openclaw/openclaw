@@ -48,6 +48,13 @@ export type MsgContext = {
   /** Provider account id (multi-account). */
   AccountId?: string;
   ParentSessionKey?: string;
+  /**
+   * When true, thread sessions may fork (inherit transcript) from the parent
+   * session identified by ParentSessionKey.  When false or omitted the
+   * ParentSessionKey is still used for parent-channel discovery (e.g. ACP
+   * binding resolution) but session forking is skipped.
+   */
+  InheritParentSession?: boolean;
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;

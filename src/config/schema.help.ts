@@ -1565,6 +1565,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
   "channels.discord.threadBindings.spawnAcpSessions":
     "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
+  "channels.discord.thread.inheritParent":
+    "If true, new Discord thread sessions inherit the parent channel's conversation transcript. Default: false (threads start with a clean slate).",
   "channels.discord.ui.components.accentColor":
     "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
   "channels.discord.voice.enabled":
