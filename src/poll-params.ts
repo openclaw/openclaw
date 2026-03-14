@@ -1,4 +1,4 @@
-import { readSnakeCaseParamRaw } from "./param-key.js";
+import { readSnakeCaseParamRaw, toSnakeCaseKey } from "./param-key.js";
 
 export type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
 
@@ -33,6 +33,26 @@ export function resolveTelegramPollVisibility(params: {
     throw new Error("pollAnonymous and pollPublic are mutually exclusive");
   }
   return params.pollAnonymous ? true : params.pollPublic ? false : undefined;
+}
+
+/**
+ * Remove all poll-creation keys (camelCase and snake_case variants) from `params` in place.
+ * Returns `true` if at least one key was deleted.
+ */
+export function stripPollCreationParams(params: Record<string, unknown>): boolean {
+  let stripped = false;
+  for (const key of POLL_CREATION_PARAM_NAMES) {
+    if (Object.hasOwn(params, key)) {
+      delete params[key];
+      stripped = true;
+    }
+    const snakeKey = toSnakeCaseKey(key);
+    if (snakeKey !== key && Object.hasOwn(params, snakeKey)) {
+      delete params[snakeKey];
+      stripped = true;
+    }
+  }
+  return stripped;
 }
 
 export function hasPollCreationParams(params: Record<string, unknown>): boolean {
