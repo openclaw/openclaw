@@ -27,7 +27,7 @@ import { loadPreferenceMemory, savePreferenceMemory } from "./product/storage";
 type ConnectionState = "idle" | "connecting" | "connected" | "disconnected" | "error";
 
 type ChatMessageKind = "reply" | "status" | "build" | "command";
-type ChatFilter = "all" | "reply" | "ops";
+type ChatFilter = "all" | "reply" | "status" | "build" | "command";
 
 type ChatMessage = {
   role: "user" | "assistant" | "system";
@@ -800,10 +800,7 @@ class WebControlUiApp extends LitElement {
     if (this.chatFilter === "all") {
       return true;
     }
-    if (this.chatFilter === "reply") {
-      return kind === "reply";
-    }
-    return kind === "status" || kind === "build" || kind === "command";
+    return kind === this.chatFilter;
   }
 
   private renderBubble(message: ChatMessage, index: number) {
@@ -1013,9 +1010,15 @@ class WebControlUiApp extends LitElement {
                 <button class="chat-filter ${this.chatFilter === "reply" ? "active" : ""}" type="button" @click=${() => {
                   this.chatFilter = "reply";
                 }}>回复</button>
-                <button class="chat-filter ${this.chatFilter === "ops" ? "active" : ""}" type="button" @click=${() => {
-                  this.chatFilter = "ops";
-                }}>操作日志</button>
+                <button class="chat-filter ${this.chatFilter === "status" ? "active" : ""}" type="button" @click=${() => {
+                  this.chatFilter = "status";
+                }}>状态</button>
+                <button class="chat-filter ${this.chatFilter === "build" ? "active" : ""}" type="button" @click=${() => {
+                  this.chatFilter = "build";
+                }}>构建</button>
+                <button class="chat-filter ${this.chatFilter === "command" ? "active" : ""}" type="button" @click=${() => {
+                  this.chatFilter = "command";
+                }}>命令</button>
               </div>
               <div class="chat-log">
                 ${this.chatMessages
