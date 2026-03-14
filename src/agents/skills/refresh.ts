@@ -168,6 +168,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
 
   const watcher = chokidar.watch(watchTargets, {
     ignoreInitial: true,
+    depth: 2,
     awaitWriteFinish: {
       stabilityThreshold: debounceMs,
       pollInterval: 100,
