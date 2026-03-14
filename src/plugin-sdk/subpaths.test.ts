@@ -1,4 +1,8 @@
 import * as compatSdk from "openclaw/plugin-sdk/compat";
+import type {
+  PluginCommandRunOptions,
+  PluginCommandRunResult,
+} from "openclaw/plugin-sdk/device-pair";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
 import * as lineSdk from "openclaw/plugin-sdk/line";
@@ -7,7 +11,7 @@ import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 const bundledExtensionSubpathLoaders = [
   { id: "acpx", load: () => import("openclaw/plugin-sdk/acpx") },
@@ -110,6 +114,20 @@ describe("plugin-sdk subpath exports", () => {
       expect(typeof mod).toBe("object");
       expect(mod, `subpath ${id} should resolve`).toBeTruthy();
     }
+  });
+
+  it("exports device-pair command runner types", () => {
+    expectTypeOf<PluginCommandRunOptions>().toMatchTypeOf<{
+      argv: string[];
+      timeoutMs: number;
+      cwd?: string;
+      env?: NodeJS.ProcessEnv;
+    }>();
+    expectTypeOf<PluginCommandRunResult>().toMatchTypeOf<{
+      code: number;
+      stdout: string;
+      stderr: string;
+    }>();
   });
 
   it("keeps the newly added bundled plugin-sdk contracts available", async () => {
