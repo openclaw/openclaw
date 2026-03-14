@@ -871,9 +871,10 @@ describe("runHeartbeatOnce", () => {
       );
 
       replySpy.mockResolvedValue([{ text: "Main session alert" }]);
-      const sendWhatsApp = vi
-        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
-        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+      const sendWhatsApp = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
 
       await runHeartbeatOnce({
         cfg,
