@@ -14,10 +14,7 @@ import { normalizeChannelId } from "../../channels/registry.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../../config/config.js";
 import type { ButtonRow } from "../../telegram/model-buttons.js";
 import type { ReplyPayload } from "../types.js";
-import {
-  rejectUnauthorizedCommand,
-  requireCommandFlagEnabled,
-} from "./command-gates.js";
+import { rejectUnauthorizedCommand, requireCommandFlagEnabled } from "./command-gates.js";
 import { buildModelsProviderData } from "./commands-models.js";
 import type { CommandHandler } from "./commands-types.js";
 
