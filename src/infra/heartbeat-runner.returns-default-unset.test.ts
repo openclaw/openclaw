@@ -830,6 +830,77 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("falls back to the main session when runHeartbeatOnce is forced to a cron session", async () => {
+    const tmpDir = await createCaseDir("hb-forced-cron-session-ignored");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
+      const cronSessionKey = `agent:${agentId}:cron:job-1:run:run-1`;
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [mainSessionKey]: {
+            sessionId: "sid-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+          [cronSessionKey]: {
+            sessionId: "sid-cron-run",
+            updatedAt: Date.now() + 10_000,
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567891@g.us",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Main session alert" }]);
+      const sendWhatsApp = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: cronSessionKey,
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Main session alert",
+        expect.any(Object),
+      );
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: mainSessionKey,
+          From: "120363401234567890@g.us",
+          To: "120363401234567890@g.us",
+          Provider: "heartbeat",
+        }),
+        expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
+        cfg,
+      );
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   it("suppresses duplicate heartbeat payloads within 24h", async () => {
     const tmpDir = await createCaseDir("hb-dup-suppress");
     const storePath = path.join(tmpDir, "sessions.json");

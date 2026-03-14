@@ -287,7 +287,8 @@ function resolveHeartbeatSession(
       agentId: resolvedAgentId,
       sessionKey: forcedCandidate,
     });
-    if (forcedCanonical !== "global") {
+    const forcedIsCronSession = forcedCanonical !== "global" && forcedCanonical.includes(":cron:");
+    if (forcedCanonical !== "global" && !forcedIsCronSession) {
       const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
       if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
         return {
