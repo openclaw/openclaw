@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForTransportReady } from "./transport-ready.js";
 
+let injectedSleepError: Error | null = null;
+
 // Perf: `sleepWithAbort` uses `node:timers/promises` which isn't controlled by fake timers.
 // Route sleeps through global `setTimeout` so tests can advance time deterministically.
 vi.mock("./backoff.js", () => ({
   sleepWithAbort: async (ms: number, signal?: AbortSignal) => {
+    if (injectedSleepError) {
+      throw injectedSleepError;
+    }
     if (signal?.aborted) {
       throw new Error("aborted");
     }
@@ -37,6 +42,7 @@ describe("waitForTransportReady", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    injectedSleepError = null;
   });
 
   it("returns when the check succeeds and logs after the delay", async () => {
@@ -142,5 +148,22 @@ describe("waitForTransportReady", () => {
     expect(runtime.error).toHaveBeenCalledTimes(2);
     expect(runtime.error.mock.calls.at(0)?.[0]).toContain("unknown error");
     expect(runtime.error.mock.calls.at(-1)?.[0]).toContain("not ready after 120ms");
+  });
+
+  it("rethrows non-abort sleep failures", async () => {
+    const runtime = createRuntime();
+    injectedSleepError = new Error("sleep exploded");
+
+    await expect(
+      waitForTransportReady({
+        label: "test transport",
+        timeoutMs: 500,
+        pollIntervalMs: 50,
+        runtime,
+        check: async () => ({ ok: false, error: "still down" }),
+      }),
+    ).rejects.toThrow("sleep exploded");
+
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 });
