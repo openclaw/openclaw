@@ -29,6 +29,13 @@ describe("extractModelDirective", () => {
       expect(result.rawModel).toBe("anthropic/claude-opus-4-5");
     });
 
+    it("accepts Telegram bot username suffixes on /model", () => {
+      const result = extractModelDirective("/model@CiwardMacBot gpt-5");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("gpt-5");
+      expect(result.cleaned).toBe("");
+    });
+
     it("extracts /model with profile override", () => {
       const result = extractModelDirective("/model gpt-5@myprofile");
       expect(result.hasDirective).toBe(true);

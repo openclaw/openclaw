@@ -1,5 +1,9 @@
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../../infra/exec-approvals.js";
-import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
+import {
+  INLINE_DIRECTIVE_BOT_SUFFIX_PATTERN,
+  skipDirectiveArgPrefix,
+  takeDirectiveToken,
+} from "../directive-parsing.js";
 
 type ExecDirectiveParse = {
   cleaned: string;
@@ -172,7 +176,7 @@ export function extractExecDirective(body?: string): ExecDirectiveParse {
       invalidNode: false,
     };
   }
-  const re = /(?:^|\s)\/exec(?=$|\s|:)/i;
+  const re = new RegExp(`(?:^|\\s)\\/exec${INLINE_DIRECTIVE_BOT_SUFFIX_PATTERN}(?=$|\\s|:)`, "i");
   const match = re.exec(body);
   if (!match) {
     return {
@@ -186,7 +190,7 @@ export function extractExecDirective(body?: string): ExecDirectiveParse {
     };
   }
   const start = match.index + match[0].indexOf("/exec");
-  const argsStart = start + "/exec".length;
+  const argsStart = match.index + match[0].length;
   const parsed = parseExecDirectiveArgs(body.slice(argsStart));
   const cleanedRaw = `${body.slice(0, start)} ${body.slice(argsStart + parsed.consumed)}`;
   const cleaned = cleanedRaw.replace(/\s+/g, " ").trim();

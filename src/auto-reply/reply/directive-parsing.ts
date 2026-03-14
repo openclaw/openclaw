@@ -1,3 +1,5 @@
+export const INLINE_DIRECTIVE_BOT_SUFFIX_PATTERN = String.raw`(?:@[A-Za-z0-9_]+)?`;
+
 export function skipDirectiveArgPrefix(raw: string): number {
   let i = 0;
   const len = raw.length;
