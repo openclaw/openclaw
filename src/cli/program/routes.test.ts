@@ -5,6 +5,7 @@ const runConfigGetMock = vi.hoisted(() => vi.fn(async () => {}));
 const runConfigUnsetMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const gatewayStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../config-cli.js", () => ({
   runConfigGet: runConfigGetMock,
@@ -14,6 +15,10 @@ vi.mock("../config-cli.js", () => ({
 vi.mock("../../commands/models.js", () => ({
   modelsListCommand: modelsListCommandMock,
   modelsStatusCommand: modelsStatusCommandMock,
+}));
+
+vi.mock("../../commands/gateway-status.js", () => ({
+  gatewayStatusCommand: gatewayStatusCommandMock,
 }));
 
 describe("program routes", () => {
@@ -35,6 +40,15 @@ describe("program routes", () => {
   it("matches status route and always loads plugins for security parity", () => {
     const route = expectRoute(["status"]);
     expect(route?.loadPlugins).toBe(true);
+  });
+
+  it("matches gateway probe route without preloading plugins", async () => {
+    const route = expectRoute(["gateway", "probe"]);
+    expect(route?.loadPlugins).toBe(false);
+    await expect(
+      route?.run(["node", "openclaw", "gateway", "probe", "--timeout", "3000", "--json"]),
+    ).resolves.toBe(true);
+    expect(gatewayStatusCommandMock).toHaveBeenCalledTimes(1);
   });
 
   it("matches health route and preloads plugins only for text output", () => {

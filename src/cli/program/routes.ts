@@ -89,6 +89,54 @@ const routeAgentsList: RouteSpec = {
   },
 };
 
+const routeGatewayProbe: RouteSpec = {
+  match: (path) => path[0] === "gateway" && path[1] === "probe",
+  loadPlugins: false,
+  run: async (argv) => {
+    const url = getFlagValue(argv, "--url");
+    if (url === null) {
+      return false;
+    }
+    const ssh = getFlagValue(argv, "--ssh");
+    if (ssh === null) {
+      return false;
+    }
+    const sshIdentity = getFlagValue(argv, "--ssh-identity");
+    if (sshIdentity === null) {
+      return false;
+    }
+    const token = getFlagValue(argv, "--token");
+    if (token === null) {
+      return false;
+    }
+    const password = getFlagValue(argv, "--password");
+    if (password === null) {
+      return false;
+    }
+    const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
+    if (timeoutMs === null) {
+      return false;
+    }
+    const sshAuto = hasFlag(argv, "--ssh-auto");
+    const json = hasFlag(argv, "--json");
+    const { gatewayStatusCommand } = await import("../../commands/gateway-status.js");
+    await gatewayStatusCommand(
+      {
+        json,
+        url: url ?? undefined,
+        ssh: ssh ?? undefined,
+        sshIdentity: sshIdentity ?? undefined,
+        sshAuto,
+        token: token ?? undefined,
+        password: password ?? undefined,
+        timeoutMs: timeoutMs ?? undefined,
+      },
+      defaultRuntime,
+    );
+    return true;
+  },
+};
+
 const routeMemoryStatus: RouteSpec = {
   match: (path) => path[0] === "memory" && path[1] === "status",
   run: async (argv) => {
@@ -251,6 +299,7 @@ const routeModelsStatus: RouteSpec = {
 const routes: RouteSpec[] = [
   routeHealth,
   routeStatus,
+  routeGatewayProbe,
   routeSessions,
   routeAgentsList,
   routeMemoryStatus,

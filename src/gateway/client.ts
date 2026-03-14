@@ -217,9 +217,18 @@ export class GatewayClient {
         // oxlint-disable-next-line typescript/no-explicit-any
       }) as any;
     }
+    const debugProbe = process.env.OPENCLAW_DEBUG_GATEWAY_PROBE === "1" && this.opts.mode === GATEWAY_CLIENT_MODES.PROBE;
+    const dbg = (...args: unknown[]) => {
+      if (debugProbe) {
+        logDebug(`[probe-debug] ${args.map(String).join(" ")}`);
+      }
+    };
+
+    dbg("ws start", url);
     this.ws = new WebSocket(url, wsOptions);
 
     this.ws.on("open", () => {
+      dbg("ws open", `readyState=${this.ws?.readyState}`);
       if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
         const tlsError = this.validateTlsFingerprint();
         if (tlsError) {
@@ -230,8 +239,13 @@ export class GatewayClient {
       }
       this.queueConnect();
     });
-    this.ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
+    this.ws.on("message", (data) => {
+      const raw = rawDataToString(data);
+      dbg("ws message", raw.slice(0, 120));
+      this.handleMessage(raw);
+    });
     this.ws.on("close", (code, reason) => {
+      dbg("ws close", String(code), rawDataToString(reason));
       const reasonText = rawDataToString(reason);
       const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
       this.pendingConnectErrorDetailCode = null;
@@ -266,6 +280,7 @@ export class GatewayClient {
       this.opts.onClose?.(code, reasonText);
     });
     this.ws.on("error", (err) => {
+      dbg("ws error", String(err));
       logDebug(`gateway client error: ${String(err)}`);
       if (!this.connectSent) {
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
@@ -307,6 +322,9 @@ export class GatewayClient {
       return;
     }
     this.connectSent = true;
+    if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE && process.env.OPENCLAW_DEBUG_GATEWAY_PROBE === "1") {
+      logDebug(`[probe-debug] sendConnect start (wsState=${this.ws?.readyState})`);
+    }
     if (this.connectTimer) {
       clearTimeout(this.connectTimer);
       this.connectTimer = null;
@@ -388,6 +406,9 @@ export class GatewayClient {
 
     void this.request<HelloOk>("connect", params)
       .then((helloOk) => {
+        if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE && process.env.OPENCLAW_DEBUG_GATEWAY_PROBE === "1") {
+          logDebug(`[probe-debug] connect ok`);
+        }
         this.pendingDeviceTokenRetry = false;
         this.deviceTokenRetryBudgetUsed = false;
         this.pendingConnectErrorDetailCode = null;
@@ -410,6 +431,9 @@ export class GatewayClient {
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
+        if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE && process.env.OPENCLAW_DEBUG_GATEWAY_PROBE === "1") {
+          logDebug(`[probe-debug] connect error: ${String(err)}`);
+        }
         this.pendingConnectErrorDetailCode =
           err instanceof GatewayClientRequestError ? readConnectErrorDetailCode(err.details) : null;
         const shouldRetryWithDeviceToken = this.shouldRetryWithStoredDeviceToken({
@@ -565,6 +589,9 @@ export class GatewayClient {
             return;
           }
           this.connectNonce = nonce.trim();
+          if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE && process.env.OPENCLAW_DEBUG_GATEWAY_PROBE === "1") {
+            logDebug(`[probe-debug] connect.challenge nonce set, sending connect`);
+          }
           this.sendConnect();
           return;
         }

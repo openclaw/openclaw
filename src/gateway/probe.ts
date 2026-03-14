@@ -40,6 +40,24 @@ export async function probeGateway(opts: {
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
+  const debug = process.env.OPENCLAW_DEBUG_GATEWAY_PROBE === "1";
+  const dbg = (...args: unknown[]) => {
+    if (debug) {
+      // eslint-disable-next-line no-console
+      console.error("[probe]", ...args);
+    }
+  };
+  if (debug) {
+    dbg("env", {
+      HTTP_PROXY: Boolean(process.env.HTTP_PROXY || process.env.http_proxy),
+      HTTPS_PROXY: Boolean(process.env.HTTPS_PROXY || process.env.https_proxy),
+      ALL_PROXY: Boolean(process.env.ALL_PROXY || process.env.all_proxy),
+      NO_PROXY: Boolean(process.env.NO_PROXY || process.env.no_proxy),
+      GLOBAL_AGENT_HTTP_PROXY: Boolean(process.env.GLOBAL_AGENT_HTTP_PROXY),
+      GLOBAL_AGENT_HTTPS_PROXY: Boolean(process.env.GLOBAL_AGENT_HTTPS_PROXY),
+      GLOBAL_AGENT_NO_PROXY: Boolean(process.env.GLOBAL_AGENT_NO_PROXY),
+    });
+  }
 
   const disableDeviceIdentity = (() => {
     try {
@@ -51,14 +69,23 @@ export async function probeGateway(opts: {
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
-    const settle = (result: Omit<GatewayProbeResult, "url">) => {
+    const settle = async (result: Omit<GatewayProbeResult, "url">) => {
       if (settled) {
         return;
       }
-      settled = true;
       clearTimeout(timer);
       client.stop();
-      resolve({ url: opts.url, ...result });
+      await Promise.resolve();
+      const finalizedError =
+        result.ok || result.error !== "timeout"
+          ? result.error
+          : connectError
+            ? `connect failed: ${connectError}`
+            : result.error;
+      const finalizedClose = close ?? result.close;
+      settled = true;
+      dbg("settle", { ok: result.ok, error: finalizedError, close: finalizedClose, connectError });
+      resolve({ url: opts.url, ...result, error: finalizedError, close: finalizedClose });
     };
 
     const client = new GatewayClient({
@@ -73,12 +100,23 @@ export async function probeGateway(opts: {
       deviceIdentity: disableDeviceIdentity ? null : undefined,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
+        dbg("onConnectError", connectError);
       },
       onClose: (code, reason) => {
         close = { code, reason };
+        dbg("onClose", code, reason);
+      },
+      onEvent: (evt) => {
+        if (evt?.event === "connect.challenge") {
+          const nonce = (evt as { payload?: { nonce?: string } }).payload?.nonce;
+          dbg("onEvent connect.challenge", nonce ? "nonce" : "missing");
+        } else if (evt?.event === "tick") {
+          dbg("onEvent tick");
+        }
       },
       onHelloOk: async () => {
         connectLatencyMs = Date.now() - startedAt;
+        dbg("onHelloOk", connectLatencyMs);
         if (opts.includeDetails === false) {
           settle({
             ok: true,
@@ -93,12 +131,14 @@ export async function probeGateway(opts: {
           return;
         }
         try {
+          dbg("request health/status/presence/config");
           const [health, status, presence, configSnapshot] = await Promise.all([
             client.request("health"),
             client.request("status"),
             client.request("system-presence"),
             client.request("config.get", {}),
           ]);
+          dbg("requests resolved");
           settle({
             ok: true,
             connectLatencyMs,
@@ -110,6 +150,7 @@ export async function probeGateway(opts: {
             configSnapshot,
           });
         } catch (err) {
+          dbg("requests failed", formatErrorMessage(err));
           settle({
             ok: false,
             connectLatencyMs,
@@ -126,6 +167,7 @@ export async function probeGateway(opts: {
 
     const timer = setTimeout(
       () => {
+        dbg("timeout fired", { connectError, close });
         settle({
           ok: false,
           connectLatencyMs,

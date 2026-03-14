@@ -118,6 +118,7 @@ describe("shouldEnsureCliPath", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "sessions", "--json"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "config", "get", "update"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "models", "status", "--json"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "gateway", "probe", "--json"])).toBe(false);
   });
 
   it("keeps path bootstrap for mutating or unknown commands", () => {
