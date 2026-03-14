@@ -571,6 +571,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
+  it("uses slack interactiveReplies capability for messaging guidance", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "slack",
+        capabilities: ["interactiveReplies"],
+      },
+    });
+
+    expect(prompt).toContain("Inline buttons supported.");
+    expect(prompt).not.toContain("Interactive replies not enabled for slack");
+  });
+
   it("includes runtime provider capabilities when present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

@@ -146,7 +146,9 @@ function buildMessagingSection(params: {
           params.inlineButtonsEnabled
             ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
             : params.runtimeChannel
-              ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
+              ? params.runtimeChannel === "slack"
+                ? "- Interactive replies not enabled for slack. If you need them, ask to set channels.slack.capabilities.interactiveReplies (true)."
+                : `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set channels.${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
               : "",
           ...(params.messageToolHints ?? []),
         ]
@@ -374,7 +376,10 @@ export function buildAgentSystemPrompt(params: {
     .map((cap) => String(cap).trim())
     .filter(Boolean);
   const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
-  const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
+  const inlineButtonsEnabled =
+    runtimeChannel === "slack"
+      ? runtimeCapabilitiesLower.has("interactivereplies")
+      : runtimeCapabilitiesLower.has("inlinebuttons");
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
