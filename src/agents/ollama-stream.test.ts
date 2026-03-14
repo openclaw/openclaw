@@ -544,6 +544,79 @@ describe("createOllamaStreamFn", () => {
       [{ type: "text", text: "final answer" }],
     );
   });
+
+  it("emits start with empty content, then text_delta per chunk, then done", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"hello"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":" world"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        // start → text_delta → text_delta → done
+        expect(events).toHaveLength(4);
+
+        expect(events[0]?.type).toBe("start");
+        expect((events[0] as { partial: { content: unknown[] } }).partial.content).toEqual([]);
+
+        expect(events[1]).toMatchObject({ type: "text_delta", delta: "hello", contentIndex: 0 });
+        expect(events[2]).toMatchObject({ type: "text_delta", delta: " world", contentIndex: 0 });
+
+        expect(events[3]?.type).toBe("done");
+      },
+    );
+  });
+
+  it("does not emit start or text_delta for tool-call-only responses", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        // Only the final done event — no start or text_delta
+        expect(events).toHaveLength(1);
+        expect(events[0]?.type).toBe("done");
+        expect((events[0] as { message: { stopReason: string } }).message.stopReason).toBe(
+          "toolUse",
+        );
+      },
+    );
+  });
+
+  it("text_delta partial accumulates content across chunks", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"a"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"b"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"c"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":3}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        const deltas = events.filter(
+          (
+            e,
+          ): e is { type: "text_delta"; partial: { content: { type: string; text: string }[] } } =>
+            e.type === "text_delta",
+        );
+        expect(deltas).toHaveLength(3);
+
+        // The partial's content text should reflect accumulated state
+        // (using a single mutable object, so the final value wins)
+        const lastPartialText = deltas[2].partial.content[0]?.text;
+        expect(lastPartialText).toBe("abc");
+      },
+    );
+  });
 });
 
 describe("resolveOllamaBaseUrlForRun", () => {

@@ -498,21 +498,30 @@ export function createOllamaStreamFn(
         const reader = response.body.getReader();
         let accumulatedContent = "";
         let emittedStart = false;
+        const partialContent: AssistantMessage["content"] = [{ type: "text", text: "" }];
+        const partial = buildAssistantMessageWithZeroUsage({
+          model,
+          content: partialContent,
+          stopReason: "stop",
+        });
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
 
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
-            accumulatedContent += chunk.message.content;
-            const partial = buildAssistantMessageWithZeroUsage({
-              model,
-              content: [{ type: "text", text: accumulatedContent }],
-              stopReason: "stop",
-            });
             if (!emittedStart) {
               emittedStart = true;
-              stream.push({ type: "start", partial });
+              stream.push({
+                type: "start",
+                partial: buildAssistantMessageWithZeroUsage({
+                  model,
+                  content: [],
+                  stopReason: "stop",
+                }),
+              });
             }
+            accumulatedContent += chunk.message.content;
+            (partialContent[0] as { type: "text"; text: string }).text = accumulatedContent;
             stream.push({
               type: "text_delta",
               contentIndex: 0,
