@@ -139,11 +139,13 @@ vi.mock("@buape/carbon", () => {
     retryAfter: number;
     scope: string | null;
     bucket: string | null;
-    constructor(response: Response, body: { message: string; retry_after: number; code?: number }) {
+    constructor(
+      response: Response,
+      body: { message: string; retry_after: number; global: boolean },
+    ) {
       super(body.message);
-      this.discordCode = body.code;
       this.retryAfter = body.retry_after;
-      this.scope = response.headers.get("X-RateLimit-Scope");
+      this.scope = body.global ? "global" : response.headers.get("X-RateLimit-Scope");
       this.bucket = response.headers.get("X-RateLimit-Bucket");
     }
   }
@@ -778,22 +780,22 @@ describe("monitorDiscordProvider", () => {
     const { RateLimitError } = await import("@buape/carbon");
     const { monitorDiscordProvider } = await import("./provider.js");
     const runtime = baseRuntime();
-    clientHandleDeployRequestMock.mockRejectedValueOnce(
-      new RateLimitError(
-        new Response(null, {
-          status: 429,
-          headers: {
-            "X-RateLimit-Scope": "shared",
-            "X-RateLimit-Bucket": "bucket-1",
-          },
-        }),
-        {
-          message: "Max number of daily application command creates has been reached (200)",
-          retry_after: 193.632,
-          code: 30034,
+    const rateLimitError = new RateLimitError(
+      new Response(null, {
+        status: 429,
+        headers: {
+          "X-RateLimit-Scope": "shared",
+          "X-RateLimit-Bucket": "bucket-1",
         },
-      ),
+      }),
+      {
+        message: "Max number of daily application command creates has been reached (200)",
+        retry_after: 193.632,
+        global: false,
+      },
     );
+    rateLimitError.discordCode = 30034;
+    clientHandleDeployRequestMock.mockRejectedValueOnce(rateLimitError);
 
     await monitorDiscordProvider({
       config: baseConfig(),
