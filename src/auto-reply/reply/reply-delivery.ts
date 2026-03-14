@@ -126,8 +126,9 @@ export function createBlockReplyDeliveryHandler(params: {
     if (params.blockStreamingEnabled && params.blockReplyPipeline) {
       params.blockReplyPipeline.enqueue(blockPayload);
     } else if (params.blockStreamingEnabled) {
-      // Send directly when flushing before tool execution (no pipeline but streaming enabled).
-      // Track sent key to avoid duplicate in final payloads.
+      // Send directly when the pipeline was already torn down (pre-tool flush).
+      // Record the key before awaiting delivery to prevent concurrent calls
+      // from duplicating the same block in final payloads.
       params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
       await params.onBlockReply(blockPayload);
     }
