@@ -263,7 +263,31 @@ describe("detectAndLoadPromptImages", () => {
     });
 
     expect(result.images).toHaveLength(0);
-    expect(result.detectedRefs).toHaveLength(0);
+    expect(result.droppedForVision).toBe(1);
+  });
+
+  it("reports droppedForVision count for non-vision models with prompt image refs", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "Check /path/to/screenshot.png",
+      workspaceDir: "/tmp",
+      model: { input: ["text"] },
+      existingImages: [{ type: "image", data: "abc", mimeType: "image/png" }],
+    });
+
+    expect(result.images).toHaveLength(0);
+    // 1 existing image + 1 detected ref = 2 dropped
+    expect(result.droppedForVision).toBe(2);
+    expect(result.detectedRefs).toHaveLength(1);
+  });
+
+  it("reports droppedForVision as 0 for vision-capable models", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "no images here",
+      workspaceDir: "/tmp",
+      model: { input: ["text", "image"] },
+    });
+
+    expect(result.droppedForVision).toBe(0);
   });
 
   it("returns no detected refs when prompt has no image references", async () => {
