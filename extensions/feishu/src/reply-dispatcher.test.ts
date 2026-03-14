@@ -468,8 +468,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "thinking step 1" });
-    result.replyOptions.onReasoningStream?.({ text: "thinking step 1\nstep 2" });
+    // Core agent sends pre-formatted text from formatReasoningMessage
+    result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_thinking step 1_" });
+    result.replyOptions.onReasoningStream?.({
+      text: "Reasoning:\n_thinking step 1_\n_step 2_",
+    });
     result.replyOptions.onPartialReply?.({ text: "answer part" });
     result.replyOptions.onReasoningEnd?.();
     await options.deliver({ text: "answer part final" }, { kind: "final" });
@@ -478,7 +481,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const updateCalls = streamingInstances[0].update.mock.calls.map((c: unknown[]) => c[0]);
     const reasoningUpdate = updateCalls.find((c: string) => c.includes("Thinking"));
     expect(reasoningUpdate).toContain("> 💭 **Thinking**");
+    // formatReasoningPrefix strips "Reasoning:" prefix and italic markers
     expect(reasoningUpdate).toContain("> thinking step");
+    expect(reasoningUpdate).not.toContain("Reasoning:");
+    expect(reasoningUpdate).not.toMatch(/> _.*_/);
 
     const combinedUpdate = updateCalls.find(
       (c: string) => c.includes("Thinking") && c.includes("---"),
@@ -527,7 +533,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "deep thought" });
+    result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_deep thought_" });
     result.replyOptions.onReasoningEnd?.();
     await options.onIdle?.();
 
@@ -536,6 +542,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
     expect(closeArg).toContain("> 💭 **Thinking**");
     expect(closeArg).toContain("> deep thought");
+    expect(closeArg).not.toContain("Reasoning:");
     expect(closeArg).not.toContain("---");
   });
 
@@ -555,21 +562,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(closeArg).toBe("```ts\ncode\n```");
   });
 
-  it("includes combined reasoning+answer text in duplicate detection", async () => {
+  it("deduplicates final text by raw answer payload, not combined card text", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "thought" });
+    result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_thought_" });
     result.replyOptions.onReasoningEnd?.();
-    await options.deliver({ text: "final answer" }, { kind: "final" });
+    await options.deliver({ text: "```ts\nfinal answer\n```" }, { kind: "final" });
 
-    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
-    // Deliver the same combined text again — should be deduped
-    await options.deliver({ text: closeArg }, { kind: "final" });
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
 
-    // Only one streaming session should exist since the second is a duplicate
+    // Deliver the same raw answer text again — should be deduped
+    await options.deliver({ text: "```ts\nfinal answer\n```" }, { kind: "final" });
+
+    // No second streaming session since the raw answer text matches
     expect(streamingInstances).toHaveLength(1);
   });
 

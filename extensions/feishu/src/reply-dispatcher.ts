@@ -144,7 +144,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamText = "";
   let lastPartial = "";
   let reasoningText = "";
-  let reasoningEnded = false;
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
@@ -152,7 +151,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   const formatReasoningPrefix = (thinking: string): string => {
     if (!thinking) return "";
-    const lines = thinking.split("\n").map((line) => `> ${line}`);
+    const withoutLabel = thinking.replace(/^Reasoning:\n/, "");
+    const plain = withoutLabel.replace(/^_(.*)_$/gm, "$1");
+    const lines = plain.split("\n").map((line) => `> ${line}`);
     return `> 💭 **Thinking**\n${lines.join("\n")}`;
   };
 
@@ -249,7 +250,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamText = "";
     lastPartial = "";
     reasoningText = "";
-    reasoningEnded = false;
   };
 
   const sendChunkedTextReply = async (params: {
@@ -347,7 +347,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             if (info?.kind === "final") {
               streamText = mergeStreamingText(streamText, text);
-              deliveredFinalTexts.add(buildCombinedStreamText(reasoningText, streamText));
+              deliveredFinalTexts.add(text);
               await closeStreaming();
             }
             // Send media even when streaming handled the text
@@ -428,11 +428,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             queueReasoningUpdate(payload.text);
           }
         : undefined,
-      onReasoningEnd: streamingEnabled
-        ? () => {
-            reasoningEnded = true;
-          }
-        : undefined,
+      onReasoningEnd: streamingEnabled ? () => {} : undefined,
     },
     markDispatchIdle,
   };
