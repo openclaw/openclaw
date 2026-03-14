@@ -251,11 +251,7 @@ describe("resolveGatewayRuntimeConfig", () => {
   });
 
   describe("HTTP security headers", () => {
-    const strictTransportSecurityCases: Array<{
-      name: string;
-      strictTransportSecurity: string | false;
-      expected: string | undefined;
-    }> = [
+    const cases = [
       {
         name: "resolves strict transport security headers from config",
         strictTransportSecurity: "  max-age=31536000; includeSubDomains  ",
@@ -271,28 +267,29 @@ describe("resolveGatewayRuntimeConfig", () => {
         strictTransportSecurity: "   ",
         expected: undefined,
       },
-    ];
+    ] satisfies ReadonlyArray<{
+      name: string;
+      strictTransportSecurity: string | false;
+      expected: string | undefined;
+    }>;
 
-    it.each(strictTransportSecurityCases)(
-      "$name",
-      async ({ strictTransportSecurity, expected }) => {
-        const result = await resolveGatewayRuntimeConfig({
-          cfg: {
-            gateway: {
-              bind: "loopback",
-              auth: { mode: "none" },
-              http: {
-                securityHeaders: {
-                  strictTransportSecurity,
-                },
+    it.each(cases)("$name", async ({ strictTransportSecurity, expected }) => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            http: {
+              securityHeaders: {
+                strictTransportSecurity,
               },
             },
           },
-          port: 18789,
-        });
+        },
+        port: 18789,
+      });
 
-        expect(result.strictTransportSecurityHeader).toBe(expected);
-      },
-    );
+      expect(result.strictTransportSecurityHeader).toBe(expected);
+    });
   });
 });

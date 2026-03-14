@@ -88,6 +88,70 @@ async function postWebhookJson(params: {
   );
 }
 
+async function postWebhookHeadersOnly(params: {
+  port: number;
+  path: string;
+  declaredLength: number;
+  secret?: string;
+  timeoutMs?: number;
+}): Promise<{ statusCode: number; body: string }> {
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    const finishResolve = (value: { statusCode: number; body: string }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve(value);
+    };
+    const finishReject = (error: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      reject(error);
+    };
+
+    const req = request(
+      {
+        hostname: "127.0.0.1",
+        port: params.port,
+        path: params.path,
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(params.declaredLength),
+          ...(params.secret ? { "x-telegram-bot-api-secret-token": params.secret } : {}),
+        },
+      },
+      (res) => {
+        collectResponseBody(res, (payload) => {
+          finishResolve(payload);
+          req.destroy();
+        });
+      },
+    );
+
+    const timeout = setTimeout(() => {
+      req.destroy(
+        new Error(`webhook header-only post timed out after ${params.timeoutMs ?? 5_000}ms`),
+      );
+      finishReject(new Error("timed out waiting for webhook response"));
+    }, params.timeoutMs ?? 5_000);
+
+    req.on("error", (error) => {
+      if (settled && (error as NodeJS.ErrnoException).code === "ECONNRESET") {
+        return;
+      }
+      finishReject(error);
+    });
+
+    req.flushHeaders();
+  });
+}
+
 function createDeterministicRng(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
@@ -399,7 +463,34 @@ describe("startTelegramWebhook", () => {
           secret: TELEGRAM_SECRET,
         });
         expect(response.status).toBe(200);
-        expect(handlerSpy).toHaveBeenCalled();
+        expect(handlerSpy).toHaveBeenCalledWith(
+          JSON.parse(payload),
+          expect.any(Function),
+          TELEGRAM_SECRET,
+          expect.any(Function),
+        );
+      },
+    );
+  });
+
+  it("rejects unauthenticated requests before reading the request body", async () => {
+    handlerSpy.mockClear();
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+      },
+      async ({ port }) => {
+        const response = await postWebhookHeadersOnly({
+          port,
+          path: TELEGRAM_WEBHOOK_PATH,
+          declaredLength: 1_024 * 1_024,
+          secret: "wrong-secret",
+        });
+
+        expect(response.statusCode).toBe(401);
+        expect(response.body).toBe("unauthorized");
+        expect(handlerSpy).not.toHaveBeenCalled();
       },
     );
   });
