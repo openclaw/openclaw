@@ -221,14 +221,22 @@ export function createAcpxRuntimeService(
           });
           const chromeDevToolsServer = pluginConfig.mcpServers[CHROME_DEVTOOLS_MCP_SERVER_NAME];
           if (chromeDevToolsServer?.command === CHROME_DEVTOOLS_MCP_BUNDLED_BIN) {
-            await ensureChromeDevToolsMcp({
-              command: chromeDevToolsServer.command,
-              logger: ctx.logger,
-              stripProviderAuthEnvVars: pluginConfig.stripProviderAuthEnvVars,
-              spawnOptions: {
-                strictWindowsCmdWrapper: pluginConfig.strictWindowsCmdWrapper,
-              },
-            });
+            try {
+              await ensureChromeDevToolsMcp({
+                command: chromeDevToolsServer.command,
+                logger: ctx.logger,
+                stripProviderAuthEnvVars: pluginConfig.stripProviderAuthEnvVars,
+                spawnOptions: {
+                  strictWindowsCmdWrapper: pluginConfig.strictWindowsCmdWrapper,
+                },
+              });
+            } catch (err) {
+              ctx.logger.warn(
+                `chrome-devtools MCP unavailable; continuing without runtime health gating: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+            }
           }
           if (currentRevision !== lifecycleRevision) {
             return;

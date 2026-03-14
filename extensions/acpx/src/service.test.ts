@@ -606,4 +606,29 @@ describe("createAcpxRuntimeService", () => {
     expect(startResult).toBe("started");
     expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
   });
+
+  it("keeps runtime health checks running when chrome-devtools ensure fails", async () => {
+    const { runtime, probeAvailabilitySpy } = createRuntimeStub(true);
+    const service = createAcpxRuntimeService({
+      runtimeFactory: () => runtime,
+    });
+    const context = createServiceContext({
+      config: { browser: { mcp: { enabled: true } } },
+    });
+    ensureChromeDevToolsMcpSpy.mockRejectedValueOnce(new Error("npm unavailable"));
+
+    await service.start(context);
+
+    await vi.waitFor(() => {
+      expect(ensureAcpxSpy).toHaveBeenCalledOnce();
+      expect(ensureChromeDevToolsMcpSpy).toHaveBeenCalledOnce();
+      expect(probeAvailabilitySpy).toHaveBeenCalledOnce();
+    });
+
+    expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      "chrome-devtools MCP unavailable; continuing without runtime health gating: npm unavailable",
+    );
+    expect(context.logger.info).toHaveBeenCalledWith("acpx runtime backend ready");
+  });
 });
