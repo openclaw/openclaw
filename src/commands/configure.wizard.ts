@@ -1,5 +1,13 @@
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
+import {
+  resolveConfiguredGuardPolicySelection,
+  resolveConfiguredGuardTaxonomy,
+  resolveKnownGuardTaxonomy,
+  upsertGuardPolicySelection,
+  upsertGuardTaxonomy,
+} from "../agents/guard-model-registry.js";
+import { resolveGuardModelRefCompatibility } from "../agents/guard-model.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
@@ -11,6 +19,7 @@ import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { resolveOnboardingSecretInputString } from "../wizard/onboarding.secret-input.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
@@ -29,6 +38,7 @@ import {
   select,
   text,
 } from "./configure.shared.js";
+import { promptGuardModel } from "./guard-model-picker.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
 import { noteChannelStatus, setupChannels } from "./onboard-channels.js";
@@ -63,6 +73,166 @@ async function resolveGatewaySecretInputForWizard(params: {
   } catch {
     return undefined;
   }
+}
+
+function isProviderModelRef(value: string | undefined): value is string {
+  if (!value) {
+    return false;
+  }
+  const trimmed = value.trim();
+  const slashIdx = trimmed.indexOf("/");
+  return slashIdx > 0 && slashIdx < trimmed.length - 1;
+}
+
+function parseGuardTermsCsv(value: string): string[] {
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const part of value.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    terms.push(trimmed);
+  }
+  return terms;
+}
+
+function requireGuardTermsCsv(label: string) {
+  return (value: string) =>
+    parseGuardTermsCsv(value).length > 0 ? undefined : `Enter at least one ${label}`;
+}
+
+async function ensureGuardModelTaxonomy(params: {
+  cfg: OpenClawConfig;
+  prompter: WizardPrompter;
+  modelRef: string;
+}): Promise<{ cfg: OpenClawConfig; taxonomy: { labels: string[]; categories: string[] } }> {
+  const existing = resolveConfiguredGuardTaxonomy(params.cfg, params.modelRef);
+  if (existing) {
+    return {
+      cfg: upsertGuardTaxonomy({
+        cfg: params.cfg,
+        modelRef: params.modelRef,
+        taxonomy: existing,
+      }),
+      taxonomy: existing,
+    };
+  }
+
+  const known = resolveKnownGuardTaxonomy(params.modelRef);
+  if (known) {
+    return {
+      cfg: upsertGuardTaxonomy({
+        cfg: params.cfg,
+        modelRef: params.modelRef,
+        taxonomy: known,
+      }),
+      taxonomy: known,
+    };
+  }
+
+  const labelsRaw = await params.prompter.text({
+    message: `Guard labels for ${params.modelRef} (comma-separated)`,
+    placeholder: "Safe, Unsafe, Controversial",
+    validate: requireGuardTermsCsv("labels"),
+  });
+  const categoriesRaw = await params.prompter.text({
+    message: `Guard categories for ${params.modelRef} (comma-separated)`,
+    placeholder: "Violent, PII, Suicide & Self-Harm, None",
+    validate: requireGuardTermsCsv("categories"),
+  });
+  const taxonomy = {
+    labels: parseGuardTermsCsv(labelsRaw),
+    categories: parseGuardTermsCsv(categoriesRaw),
+  };
+  return {
+    cfg: upsertGuardTaxonomy({
+      cfg: params.cfg,
+      modelRef: params.modelRef,
+      taxonomy,
+    }),
+    taxonomy,
+  };
+}
+
+async function promptGuardPolicySelection(params: {
+  cfg: OpenClawConfig;
+  prompter: WizardPrompter;
+  scope: "input" | "output";
+  modelRef: string;
+  taxonomy: { labels: string[]; categories: string[] };
+}): Promise<OpenClawConfig> {
+  const existing = resolveConfiguredGuardPolicySelection(params.cfg, params.scope, params.modelRef);
+  const enabledLabels =
+    params.taxonomy.labels.length === 0
+      ? []
+      : await params.prompter.multiselect({
+          message: `Enabled ${params.scope} guard labels for ${params.modelRef}`,
+          options: params.taxonomy.labels.map((label) => ({
+            value: label,
+            label,
+          })),
+          initialValues: existing?.enabledLabels ?? params.taxonomy.labels,
+          searchable: params.taxonomy.labels.length > 8,
+        });
+  const enabledCategories =
+    params.taxonomy.categories.length === 0
+      ? []
+      : await params.prompter.multiselect({
+          message: `Enabled ${params.scope} guard categories for ${params.modelRef}`,
+          options: params.taxonomy.categories.map((category) => ({
+            value: category,
+            label: category,
+          })),
+          initialValues: existing?.enabledCategories ?? params.taxonomy.categories,
+          searchable: params.taxonomy.categories.length > 8,
+        });
+
+  return upsertGuardPolicySelection({
+    cfg: params.cfg,
+    scope: params.scope,
+    modelRef: params.modelRef,
+    selection: {
+      enabledLabels,
+      enabledCategories,
+    },
+  });
+}
+
+async function ensureFallbackGuardPolicies(params: {
+  cfg: OpenClawConfig;
+  scope: "input" | "output";
+  fallbackRefs: string[];
+  prompter: WizardPrompter;
+}): Promise<OpenClawConfig> {
+  let nextConfig = params.cfg;
+  for (const modelRef of params.fallbackRefs) {
+    const ensured = await ensureGuardModelTaxonomy({
+      cfg: nextConfig,
+      prompter: params.prompter,
+      modelRef,
+    });
+    nextConfig = ensured.cfg;
+    const existing = resolveConfiguredGuardPolicySelection(nextConfig, params.scope, modelRef);
+    if (existing) {
+      continue;
+    }
+    nextConfig = upsertGuardPolicySelection({
+      cfg: nextConfig,
+      scope: params.scope,
+      modelRef,
+      selection: {
+        enabledLabels: ensured.taxonomy.labels,
+        enabledCategories: ensured.taxonomy.categories,
+      },
+    });
+  }
+  return nextConfig;
 }
 
 async function runGatewayHealthCheck(params: {
@@ -303,6 +473,337 @@ async function promptWebToolsConfig(
   };
 }
 
+const GUARD_ACTION_CHOICES: { value: "block" | "redact" | "warn"; label: string; hint?: string }[] =
+  [
+    {
+      value: "block",
+      label: "Block",
+      hint: "Show flagged content in a quarantine wrapper",
+    },
+    {
+      value: "redact",
+      label: "Redact",
+      hint: "Replace text message but keep other payloads (like tools)",
+    },
+    { value: "warn", label: "Warn", hint: "Append a warning message to the original response" },
+  ];
+
+const GUARD_ERROR_CHOICES: { value: "allow" | "block"; label: string; hint?: string }[] = [
+  {
+    value: "allow",
+    label: "Allow (fail-open)",
+    hint: "If the guard model fails/times out, allow the response",
+  },
+  {
+    value: "block",
+    label: "Block (fail-closed)",
+    hint: "If the guard model fails/times out, block the response",
+  },
+];
+
+async function promptInputGuardModelConfig(
+  nextConfig: OpenClawConfig,
+  runtime: RuntimeEnv,
+  prompter: WizardPrompter,
+): Promise<OpenClawConfig> {
+  const existing = nextConfig.agents?.defaults?.inputGuardModel;
+  const existingPrimary = typeof existing === "string" ? existing : existing?.primary;
+  const existingFallbacks =
+    typeof existing === "object" && existing !== null && Array.isArray(existing.fallbacks)
+      ? existing.fallbacks.filter((entry): entry is string => typeof entry === "string")
+      : undefined;
+
+  note(
+    [
+      "An input guard model screens user messages before they reach the LLM.",
+      "If the message is flagged, it can be blocked, redacted, or returned with a warning.",
+      "Example providers: chutes/Qwen/Qwen3Guard-Gen-0.6B, openai/gpt-4o-mini",
+    ].join("\n"),
+    "Input Guard Model",
+  );
+
+  const enableGuard = guardCancel(
+    await confirm({
+      message: "Configure an input guard model?",
+      initialValue: Boolean(existingPrimary),
+    }),
+    runtime,
+  );
+
+  if (!enableGuard) {
+    if (existingPrimary) {
+      return {
+        ...nextConfig,
+        agents: {
+          ...nextConfig.agents,
+          defaults: {
+            ...nextConfig.agents?.defaults,
+            inputGuardModel: undefined,
+            inputGuardPolicy: undefined,
+            inputGuardModelAction: undefined,
+            inputGuardModelOnError: undefined,
+            inputGuardModelMaxInputChars: undefined,
+          },
+        },
+      };
+    }
+    return nextConfig;
+  }
+
+  const modelSelection = await promptGuardModel({
+    prompter,
+    existingPrimary,
+    message: "Input guard model",
+  });
+  const selectedModelRaw = modelSelection.model ?? existingPrimary;
+  const selectedModel = selectedModelRaw?.trim();
+  if (!isProviderModelRef(selectedModel)) {
+    note(
+      [
+        "Guard model must use provider/model format (for example: chutes/Qwen/Qwen3Guard).",
+        "Keeping existing guard model settings unchanged.",
+      ].join("\n"),
+      "Guard Model",
+    );
+    return nextConfig;
+  }
+  const compatibility = resolveGuardModelRefCompatibility(selectedModel, {
+    cfg: nextConfig,
+  });
+  if (!compatibility.compatible) {
+    note(
+      [
+        "Guard model must use an OpenAI-compatible provider/model (chat/completions API).",
+        compatibility.api
+          ? `Selected model uses "${compatibility.api}" API, which is not supported for guard screening.`
+          : "Selected guard model could not be resolved to an OpenAI-compatible API.",
+        "Keeping existing guard model settings unchanged.",
+      ].join("\n"),
+      "Guard Model",
+    );
+    return nextConfig;
+  }
+
+  const action = guardCancel(
+    await select({
+      message: "Action when input is flagged:",
+      initialValue: nextConfig.agents?.defaults?.inputGuardModelAction ?? "block",
+      options: GUARD_ACTION_CHOICES,
+    }),
+    runtime,
+  );
+
+  const onError = guardCancel(
+    await select({
+      message: "Behavior on API error/timeout:",
+      initialValue: nextConfig.agents?.defaults?.inputGuardModelOnError ?? "allow",
+      options: GUARD_ERROR_CHOICES,
+    }),
+    runtime,
+  );
+
+  const fallbackRefs = existingFallbacks ?? [];
+  const ensuredPrimary = await ensureGuardModelTaxonomy({
+    cfg: nextConfig,
+    prompter,
+    modelRef: selectedModel,
+  });
+  nextConfig = ensuredPrimary.cfg;
+  nextConfig = await promptGuardPolicySelection({
+    cfg: nextConfig,
+    prompter,
+    scope: "input",
+    modelRef: selectedModel,
+    taxonomy: ensuredPrimary.taxonomy,
+  });
+  nextConfig = await ensureFallbackGuardPolicies({
+    cfg: nextConfig,
+    scope: "input",
+    fallbackRefs,
+    prompter,
+  });
+
+  return {
+    ...nextConfig,
+    agents: {
+      ...nextConfig.agents,
+      defaults: {
+        ...nextConfig.agents?.defaults,
+        inputGuardModel: selectedModel
+          ? existingFallbacks && existingFallbacks.length > 0
+            ? { primary: selectedModel, fallbacks: existingFallbacks }
+            : selectedModel
+          : undefined,
+        inputGuardModelAction: action,
+        inputGuardModelOnError: onError,
+      },
+    },
+  };
+}
+
+async function promptOutputGuardModelConfig(
+  nextConfig: OpenClawConfig,
+  runtime: RuntimeEnv,
+  prompter: WizardPrompter,
+): Promise<OpenClawConfig> {
+  // Read from outputGuardModel; fall back to legacy guardModel as initial values
+  const existing =
+    nextConfig.agents?.defaults?.outputGuardModel ?? nextConfig.agents?.defaults?.guardModel;
+  const existingPrimary = typeof existing === "string" ? existing : existing?.primary;
+  const existingFallbacks =
+    typeof existing === "object" && existing !== null && Array.isArray(existing.fallbacks)
+      ? existing.fallbacks.filter((entry): entry is string => typeof entry === "string")
+      : undefined;
+
+  note(
+    [
+      "An output guard model screens LLM replies before they are delivered.",
+      "If the reply is flagged, it can be blocked, redacted, or returned with a warning.",
+      "Example providers: chutes/Qwen/Qwen3Guard-Gen-0.6B, openai/gpt-4o-mini",
+    ].join("\n"),
+    "Output Guard Model",
+  );
+
+  const enableGuard = guardCancel(
+    await confirm({
+      message: "Configure an output guard model?",
+      initialValue: Boolean(existingPrimary),
+    }),
+    runtime,
+  );
+
+  if (!enableGuard) {
+    if (existingPrimary) {
+      return {
+        ...nextConfig,
+        agents: {
+          ...nextConfig.agents,
+          defaults: {
+            ...nextConfig.agents?.defaults,
+            outputGuardModel: undefined,
+            outputGuardPolicy: undefined,
+            outputGuardModelAction: undefined,
+            outputGuardModelOnError: undefined,
+            outputGuardModelMaxInputChars: undefined,
+            // Clear legacy fields to prevent resolveOutputGuardModelConfig fallback from keeping it enabled
+            guardModel: undefined,
+            guardModelAction: undefined,
+            guardModelOnError: undefined,
+            guardModelMaxInputChars: undefined,
+          },
+        },
+      };
+    }
+    return nextConfig;
+  }
+
+  const modelSelection = await promptGuardModel({
+    prompter,
+    existingPrimary,
+    message: "Output guard model",
+  });
+  const selectedModelRaw = modelSelection.model ?? existingPrimary;
+  const selectedModel = selectedModelRaw?.trim();
+  if (!isProviderModelRef(selectedModel)) {
+    note(
+      [
+        "Guard model must use provider/model format (for example: chutes/Qwen/Qwen3Guard).",
+        "Keeping existing guard model settings unchanged.",
+      ].join("\n"),
+      "Guard Model",
+    );
+    return nextConfig;
+  }
+  const compatibility = resolveGuardModelRefCompatibility(selectedModel, {
+    cfg: nextConfig,
+  });
+  if (!compatibility.compatible) {
+    note(
+      [
+        "Guard model must use an OpenAI-compatible provider/model (chat/completions API).",
+        compatibility.api
+          ? `Selected model uses "${compatibility.api}" API, which is not supported for guard screening.`
+          : "Selected guard model could not be resolved to an OpenAI-compatible API.",
+        "Keeping existing guard model settings unchanged.",
+      ].join("\n"),
+      "Guard Model",
+    );
+    return nextConfig;
+  }
+
+  const action = guardCancel(
+    await select({
+      message: "Action when output is flagged:",
+      initialValue:
+        nextConfig.agents?.defaults?.outputGuardModelAction ??
+        nextConfig.agents?.defaults?.guardModelAction ??
+        "block",
+      options: GUARD_ACTION_CHOICES,
+    }),
+    runtime,
+  );
+
+  const onError = guardCancel(
+    await select({
+      message: "Behavior on API error/timeout:",
+      initialValue:
+        nextConfig.agents?.defaults?.outputGuardModelOnError ??
+        nextConfig.agents?.defaults?.guardModelOnError ??
+        "allow",
+      options: GUARD_ERROR_CHOICES,
+    }),
+    runtime,
+  );
+
+  const fallbackRefs = existingFallbacks ?? [];
+  const ensuredPrimary = await ensureGuardModelTaxonomy({
+    cfg: nextConfig,
+    prompter,
+    modelRef: selectedModel,
+  });
+  nextConfig = ensuredPrimary.cfg;
+  nextConfig = await promptGuardPolicySelection({
+    cfg: nextConfig,
+    prompter,
+    scope: "output",
+    modelRef: selectedModel,
+    taxonomy: ensuredPrimary.taxonomy,
+  });
+  nextConfig = await ensureFallbackGuardPolicies({
+    cfg: nextConfig,
+    scope: "output",
+    fallbackRefs,
+    prompter,
+  });
+
+  return {
+    ...nextConfig,
+    agents: {
+      ...nextConfig.agents,
+      defaults: {
+        ...nextConfig.agents?.defaults,
+        outputGuardModel: selectedModel
+          ? existingFallbacks && existingFallbacks.length > 0
+            ? { primary: selectedModel, fallbacks: existingFallbacks }
+            : selectedModel
+          : undefined,
+        outputGuardModelAction: action,
+        outputGuardModelOnError: onError,
+      },
+    },
+  };
+}
+
+async function promptGuardModelConfig(
+  nextConfig: OpenClawConfig,
+  runtime: RuntimeEnv,
+  prompter: WizardPrompter,
+): Promise<OpenClawConfig> {
+  nextConfig = await promptInputGuardModelConfig(nextConfig, runtime, prompter);
+  nextConfig = await promptOutputGuardModelConfig(nextConfig, runtime, prompter);
+  return nextConfig;
+}
+
 export async function runConfigureWizard(
   opts: ConfigureWizardParams,
   runtime: RuntimeEnv = defaultRuntime,
@@ -530,6 +1031,10 @@ export async function runConfigureWizard(
         nextConfig = await promptWebToolsConfig(nextConfig, runtime);
       }
 
+      if (selected.includes("guard-model")) {
+        nextConfig = await promptGuardModelConfig(nextConfig, runtime, prompter);
+      }
+
       if (selected.includes("gateway")) {
         const gateway = await promptGatewayConfig(nextConfig, runtime);
         nextConfig = gateway.config;
@@ -581,6 +1086,11 @@ export async function runConfigureWizard(
 
         if (choice === "web") {
           nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+          await persistConfig();
+        }
+
+        if (choice === "guard-model") {
+          nextConfig = await promptGuardModelConfig(nextConfig, runtime, prompter);
           await persistConfig();
         }
 

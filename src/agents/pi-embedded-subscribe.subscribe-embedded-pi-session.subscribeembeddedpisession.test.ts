@@ -12,7 +12,11 @@ import {
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
+  function createAgentEventHarness(options?: {
+    runId?: string;
+    sessionKey?: string;
+    suppressAssistantAgentEvents?: boolean;
+  }) {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
 
@@ -21,6 +25,7 @@ describe("subscribeEmbeddedPiSession", () => {
       runId: options?.runId ?? "run",
       onAgentEvent,
       sessionKey: options?.sessionKey,
+      suppressAssistantAgentEvents: options?.suppressAssistantAgentEvents,
     });
 
     return { emit, onAgentEvent };
@@ -291,6 +296,31 @@ describe("subscribeEmbeddedPiSession", () => {
     });
     emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
     expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
+  });
+
+  it("suppresses assistant agent-event deltas when configured", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness({
+      suppressAssistantAgentEvents: true,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "Hello world" },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world" }],
+      },
+    });
+
+    const assistantEvents = onAgentEvent.mock.calls.filter(
+      (call) => call[0]?.stream === "assistant",
+    );
+    expect(assistantEvents).toHaveLength(0);
   });
 
   it("does not emit duplicate agent events when message_end repeats", () => {

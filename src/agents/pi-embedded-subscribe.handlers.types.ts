@@ -41,6 +41,7 @@ export type EmbeddedPiSubscribeState = {
   reasoningMode: ReasoningLevel;
   includeReasoning: boolean;
   shouldEmitPartialReplies: boolean;
+  shouldEmitAssistantAgentEvents: boolean;
   streamReasoning: boolean;
 
   deltaBuffer: string;

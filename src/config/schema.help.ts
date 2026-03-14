@@ -783,6 +783,12 @@ export const FIELD_HELP: Record<string, string> = {
     'Include absolute timestamps in message envelopes ("on" or "off").',
   "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
+  "agents.defaults.models.*.guardTaxonomy":
+    "Per-model guard taxonomy metadata used by guard classifiers. These values describe the provider-native labels and categories the model can emit.",
+  "agents.defaults.models.*.guardTaxonomy.labels":
+    "Ordered list of provider-native labels this guard model may return, such as Safe, Unsafe, or Controversial.",
+  "agents.defaults.models.*.guardTaxonomy.categories":
+    "Ordered list of provider-native categories this guard model may return, such as Violent, PII, or None.",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
   "agents.defaults.memorySearch.enabled":
@@ -1010,6 +1016,50 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
   "agents.defaults.pdfMaxPages":
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
+  "agents.defaults.guardModel":
+    "Guard/safety model for screening LLM output before delivery (provider/model). Accepts string or {primary,fallbacks}. Legacy alias for outputGuardModel.",
+  "agents.defaults.guardModel.primary": "Primary guard model (provider/model).",
+  "agents.defaults.guardModel.fallbacks": "Ordered fallback guard models (provider/model).",
+  "agents.defaults.guardModelAction":
+    'Action when guard flags content as unsafe: "block" (show quarantine wrapper, default), "redact" (replace with safe message), or "warn" (annotate reply with warning). Legacy alias for outputGuardModelAction.',
+  "agents.defaults.guardModelOnError":
+    'Behavior on guard model API failure: "allow" (fail-open, default) or "block" (fail-closed). Legacy alias for outputGuardModelOnError.',
+  "agents.defaults.guardModelMaxInputChars":
+    "Maximum characters sent to guard model before truncation with a trailing [truncated] marker (default: 32000). Legacy alias for outputGuardModelMaxInputChars.",
+  "agents.defaults.inputGuardModel":
+    "Guard/safety model for screening user messages *before* they reach the LLM (provider/model). Accepts string or {primary,fallbacks}.",
+  "agents.defaults.inputGuardPolicy":
+    "Per-model input guard enforcement selection keyed by provider/model. Use this to enable or disable specific guard labels/categories for input screening without changing the model's taxonomy metadata.",
+  "agents.defaults.inputGuardPolicy.*.enabledLabels":
+    "Subset of guard labels enabled for input enforcement for this specific guard model. Omit to treat all configured labels as enabled.",
+  "agents.defaults.inputGuardPolicy.*.enabledCategories":
+    "Subset of guard categories enabled for input enforcement for this specific guard model. Omit to treat all configured categories as enabled.",
+  "agents.defaults.inputGuardModel.primary": "Primary input guard model (provider/model).",
+  "agents.defaults.inputGuardModel.fallbacks":
+    "Ordered fallback input guard models (provider/model).",
+  "agents.defaults.inputGuardModelAction":
+    'Input guard action when content is flagged: "block" (show quarantine wrapper, default), "redact" (replace with safe message), or "warn" (annotate with warning).',
+  "agents.defaults.inputGuardModelOnError":
+    'Input guard behavior on API failure: "allow" (fail-open, default) or "block" (fail-closed).',
+  "agents.defaults.inputGuardModelMaxInputChars":
+    "Maximum characters sent to input guard model before truncation with a trailing [truncated] marker (default: 32000).",
+  "agents.defaults.outputGuardModel":
+    "Guard/safety model for screening the LLM's reply *before* delivery (provider/model). Accepts string or {primary,fallbacks}.",
+  "agents.defaults.outputGuardPolicy":
+    "Per-model output guard enforcement selection keyed by provider/model. Use this to enable or disable specific guard labels/categories for output screening without changing the model's taxonomy metadata.",
+  "agents.defaults.outputGuardPolicy.*.enabledLabels":
+    "Subset of guard labels enabled for output enforcement for this specific guard model. Omit to treat all configured labels as enabled.",
+  "agents.defaults.outputGuardPolicy.*.enabledCategories":
+    "Subset of guard categories enabled for output enforcement for this specific guard model. Omit to treat all configured categories as enabled.",
+  "agents.defaults.outputGuardModel.primary": "Primary output guard model (provider/model).",
+  "agents.defaults.outputGuardModel.fallbacks":
+    "Ordered fallback output guard models (provider/model).",
+  "agents.defaults.outputGuardModelAction":
+    'Output guard action when content is flagged: "block" (show quarantine wrapper, default), "redact" (replace with safe message), or "warn" (annotate with warning).',
+  "agents.defaults.outputGuardModelOnError":
+    'Output guard behavior on API failure: "allow" (fail-open, default) or "block" (fail-closed).',
+  "agents.defaults.outputGuardModelMaxInputChars":
+    "Maximum characters sent to output guard model before truncation with a trailing [truncated] marker (default: 32000).",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",

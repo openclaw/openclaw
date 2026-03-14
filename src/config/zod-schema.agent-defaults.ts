@@ -14,6 +14,20 @@ import {
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
+const GuardTaxonomySchema = z
+  .object({
+    labels: z.array(z.string()).optional(),
+    categories: z.array(z.string()).optional(),
+  })
+  .strict();
+
+const GuardPolicySelectionSchema = z
+  .object({
+    enabledLabels: z.array(z.string()).optional(),
+    enabledCategories: z.array(z.string()).optional(),
+  })
+  .strict();
+
 export const AgentDefaultsSchema = z
   .object({
     model: AgentModelSchema.optional(),
@@ -21,12 +35,33 @@ export const AgentDefaultsSchema = z
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
+    guardModel: AgentModelSchema.optional(),
+    guardModelAction: z
+      .union([z.literal("block"), z.literal("redact"), z.literal("warn")])
+      .optional(),
+    guardModelOnError: z.union([z.literal("allow"), z.literal("block")]).optional(),
+    guardModelMaxInputChars: z.number().int().positive().optional(),
+    inputGuardModel: AgentModelSchema.optional(),
+    inputGuardPolicy: z.record(z.string(), GuardPolicySelectionSchema).optional(),
+    inputGuardModelAction: z
+      .union([z.literal("block"), z.literal("redact"), z.literal("warn")])
+      .optional(),
+    inputGuardModelOnError: z.union([z.literal("allow"), z.literal("block")]).optional(),
+    inputGuardModelMaxInputChars: z.number().int().positive().optional(),
+    outputGuardModel: AgentModelSchema.optional(),
+    outputGuardPolicy: z.record(z.string(), GuardPolicySelectionSchema).optional(),
+    outputGuardModelAction: z
+      .union([z.literal("block"), z.literal("redact"), z.literal("warn")])
+      .optional(),
+    outputGuardModelOnError: z.union([z.literal("allow"), z.literal("block")]).optional(),
+    outputGuardModelMaxInputChars: z.number().int().positive().optional(),
     models: z
       .record(
         z.string(),
         z
           .object({
             alias: z.string().optional(),
+            guardTaxonomy: GuardTaxonomySchema.optional(),
             /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
             params: z.record(z.string(), z.unknown()).optional(),
             /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */

@@ -361,6 +361,7 @@ function runAgentAttempt(params: {
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         agentId: params.sessionAgentId,
+        agentDir: params.agentDir,
         sessionFile: params.sessionFile,
         workspaceDir: params.workspaceDir,
         config: params.cfg,
