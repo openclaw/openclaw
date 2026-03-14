@@ -249,6 +249,10 @@ export async function finalizeOnboardingWizard(
         "Health check help",
       );
     }
+
+    // Post-onboard preflight: validate config, auth, workspace, and model after full setup.
+    const { runPostOnboardPreflight } = await import("../commands/onboard-preflight.js");
+    await runPostOnboardPreflight(nextConfig, runtime);
   }
 
   const controlUiEnabled =

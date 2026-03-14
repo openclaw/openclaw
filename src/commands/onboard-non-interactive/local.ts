@@ -237,6 +237,10 @@ export async function runNonInteractiveOnboardingLocal(params: {
       return;
     }
     await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
+
+    // Post-onboard preflight: validate config, auth, workspace, and model after full setup.
+    const { runPostOnboardPreflight } = await import("../onboard-preflight.js");
+    await runPostOnboardPreflight(nextConfig, runtime);
   }
 
   logNonInteractiveOnboardingJson({
