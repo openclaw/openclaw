@@ -90,6 +90,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     directChannelValue && directChannelValue !== "webchat",
   );
   const shouldIncludeConversationInfo = !isDirect || includeDirectConversationInfo;
+  const shouldExposeSenderIdentity = !isDirect;
 
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
@@ -99,14 +100,18 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const conversationInfo = {
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
     reply_to_id: shouldIncludeConversationInfo ? safeTrim(ctx.ReplyToId) : undefined,
-    sender_id: shouldIncludeConversationInfo ? safeTrim(ctx.SenderId) : undefined,
+    sender_id:
+      shouldIncludeConversationInfo && shouldExposeSenderIdentity
+        ? safeTrim(ctx.SenderId)
+        : undefined,
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
-    sender: shouldIncludeConversationInfo
-      ? (safeTrim(ctx.SenderName) ??
-        safeTrim(ctx.SenderE164) ??
-        safeTrim(ctx.SenderId) ??
-        safeTrim(ctx.SenderUsername))
-      : undefined,
+    sender:
+      shouldIncludeConversationInfo && shouldExposeSenderIdentity
+        ? (safeTrim(ctx.SenderName) ??
+          safeTrim(ctx.SenderE164) ??
+          safeTrim(ctx.SenderId) ??
+          safeTrim(ctx.SenderUsername))
+        : undefined,
     timestamp: timestampStr,
     group_subject: safeTrim(ctx.GroupSubject),
     group_channel: safeTrim(ctx.GroupChannel),
@@ -136,18 +141,20 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   }
 
   const senderInfo = {
-    label: resolveSenderLabel({
-      name: safeTrim(ctx.SenderName),
-      username: safeTrim(ctx.SenderUsername),
-      tag: safeTrim(ctx.SenderTag),
-      e164: safeTrim(ctx.SenderE164),
-      id: safeTrim(ctx.SenderId),
-    }),
-    id: safeTrim(ctx.SenderId),
-    name: safeTrim(ctx.SenderName),
-    username: safeTrim(ctx.SenderUsername),
-    tag: safeTrim(ctx.SenderTag),
-    e164: safeTrim(ctx.SenderE164),
+    label: shouldExposeSenderIdentity
+      ? resolveSenderLabel({
+          name: safeTrim(ctx.SenderName),
+          username: safeTrim(ctx.SenderUsername),
+          tag: safeTrim(ctx.SenderTag),
+          e164: safeTrim(ctx.SenderE164),
+          id: safeTrim(ctx.SenderId),
+        })
+      : undefined,
+    id: shouldExposeSenderIdentity ? safeTrim(ctx.SenderId) : undefined,
+    name: shouldExposeSenderIdentity ? safeTrim(ctx.SenderName) : undefined,
+    username: shouldExposeSenderIdentity ? safeTrim(ctx.SenderUsername) : undefined,
+    tag: shouldExposeSenderIdentity ? safeTrim(ctx.SenderTag) : undefined,
+    e164: shouldExposeSenderIdentity ? safeTrim(ctx.SenderE164) : undefined,
   };
   if (senderInfo?.label) {
     blocks.push(

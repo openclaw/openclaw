@@ -18,14 +18,6 @@ function parseConversationInfoPayload(text: string): Record<string, unknown> {
   return JSON.parse(match[1]) as Record<string, unknown>;
 }
 
-function parseSenderInfoPayload(text: string): Record<string, unknown> {
-  const match = text.match(/Sender \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
-  if (!match?.[1]) {
-    throw new Error("missing sender info json block");
-  }
-  return JSON.parse(match[1]) as Record<string, unknown>;
-}
-
 describe("buildInboundMetaSystemPrompt", () => {
   it("includes session-stable routing fields", () => {
     const prompt = buildInboundMetaSystemPrompt({
@@ -134,7 +126,8 @@ describe("buildInboundUserContextPrefix", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["message_id"]).toBe("short-id");
     expect(conversationInfo["message_id_full"]).toBeUndefined();
-    expect(conversationInfo["sender"]).toBe("+15551234567");
+    expect(conversationInfo["sender"]).toBeUndefined();
+    expect(conversationInfo["sender_id"]).toBeUndefined();
     expect(conversationInfo["conversation_label"]).toBeUndefined();
   });
 
@@ -194,16 +187,14 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["sender"]).toBe("Tyler");
   });
 
-  it("includes sender metadata block for direct chats", () => {
+  it("omits sender metadata block for direct chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       SenderName: "Tyler",
       SenderId: "+15551234567",
     } as TemplateContext);
 
-    const senderInfo = parseSenderInfoPayload(text);
-    expect(senderInfo["label"]).toBe("Tyler (+15551234567)");
-    expect(senderInfo["id"]).toBe("+15551234567");
+    expect(text).not.toContain("Sender (untrusted metadata):");
   });
 
   it("includes formatted timestamp in conversation info when provided", () => {
