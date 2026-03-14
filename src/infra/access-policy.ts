@@ -460,7 +460,7 @@ export function resolveArgv0(command: string, cwd?: string): string | null {
   // to the actual script so script-policy lookups and sha256 checks are not bypassed
   // by prepending `env`. Recurse so the inner command gets the same full treatment
   // (NAME=value stripping, quoting, cwd-relative resolution, symlink following).
-  if (path.basename(token) === "env" && commandRest) {
+  if (path.basename(token, path.extname(token)) === "env" && commandRest) {
     // Strip the env/"/usr/bin/env" token itself from commandRest.
     let afterEnv = commandRest.replace(/^\S+\s*/, "");
     // Skip env options and their arguments so `env -i /script.sh` resolves to
@@ -532,7 +532,11 @@ export function applyScriptPolicyOverride(
         if (!k.startsWith("~")) {
           return false;
         }
-        return k.replace(/^~(?=$|[/\\])/, os.homedir()) === resolvedArgv0;
+        // path.normalize() harmonises separator style so "~/bin/x" expanded on
+        // Windows (C:\Users\Runner/bin/x) matches resolvedArgv0 (C:\Users\Runner\bin\x).
+        return (
+          path.normalize(k.replace(/^~(?=$|[/\\])/, os.homedir())) === path.normalize(resolvedArgv0)
+        );
       })?.[1])
     : undefined;
   if (!override) {

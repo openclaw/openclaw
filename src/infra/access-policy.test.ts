@@ -757,7 +757,11 @@ describe("resolveArgv0", () => {
     expect(result).toMatch(/sh$/);
   });
 
-  it("looks through quoted /usr/bin/env to the real script", () => {
+  // The following tests use /bin/sh and Unix env behaviour — skip on Windows where
+  // /bin/sh doesn't exist and env resolves to env.EXE with different semantics.
+  const itUnix = it.skipIf(process.platform === "win32");
+
+  itUnix("looks through quoted /usr/bin/env to the real script", () => {
     // `"/usr/bin/env" /bin/sh` — argv0 is quoted, but env look-through must still fire.
     // Without this fix, commandRest was empty in the quoted branch so env look-through
     // was skipped and the function returned /usr/bin/env instead of /bin/sh.
@@ -766,32 +770,32 @@ describe("resolveArgv0", () => {
     expect(result).toMatch(/sh$/);
   });
 
-  it("looks through env -i flag to reach the real script", () => {
+  itUnix("looks through env -i flag to reach the real script", () => {
     // `env -i /bin/sh` — without fix, recurses on `-i /bin/sh` and resolves `-i` as argv0.
     const result = resolveArgv0("env -i /bin/sh -c echo");
     expect(result).not.toBeNull();
     expect(result).toMatch(/sh$/);
   });
 
-  it("looks through env --ignore-environment long flag", () => {
+  itUnix("looks through env --ignore-environment long flag", () => {
     const result = resolveArgv0("env --ignore-environment /bin/sh -c echo");
     expect(result).not.toBeNull();
     expect(result).toMatch(/sh$/);
   });
 
-  it("looks through env -u VAR (option that consumes next token)", () => {
+  itUnix("looks through env -u VAR (option that consumes next token)", () => {
     const result = resolveArgv0("env -u HOME /bin/sh -c echo");
     expect(result).not.toBeNull();
     expect(result).toMatch(/sh$/);
   });
 
-  it("looks through env -- end-of-options marker", () => {
+  itUnix("looks through env -- end-of-options marker", () => {
     const result = resolveArgv0("env -- /bin/sh -c echo");
     expect(result).not.toBeNull();
     expect(result).toMatch(/sh$/);
   });
 
-  it("resolves bare binary name via PATH rather than cwd", () => {
+  itUnix("resolves bare binary name via PATH rather than cwd", () => {
     // `sh` with no `/` should find /bin/sh on PATH, not <cwd>/sh.
     // Without fix, path.resolve(cwd, "sh") produces <cwd>/sh which doesn't exist.
     const result = resolveArgv0("sh -c echo", "/nonexistent/cwd");
@@ -805,7 +809,7 @@ describe("resolveArgv0", () => {
     expect(resolveArgv0("./script.py", undefined)).toBeNull(); // no cwd → null
   });
 
-  it("uses a literal PATH= env prefix override when looking up bare names", () => {
+  itUnix("uses a literal PATH= env prefix override when looking up bare names", () => {
     // PATH=/nonexistent has no $, so findOnPath uses /nonexistent — sh not found there,
     // falls back to cwd resolution rather than the real process PATH.
     const result = resolveArgv0("PATH=/nonexistent sh", "/some/cwd");
@@ -815,26 +819,26 @@ describe("resolveArgv0", () => {
     }
   });
 
-  it("ignores PATH= prefix containing shell vars and uses process PATH instead", () => {
+  itUnix("ignores PATH= prefix containing shell vars and uses process PATH instead", () => {
     // PATH=/alt:$PATH has $, so the override is skipped; sh found on process PATH.
     const result = resolveArgv0("PATH=/alt:$PATH sh");
     expect(result).not.toBeNull();
     expect(result).toMatch(/sh$/);
   });
 
-  it("strips --block-signal as a standalone flag without consuming next token", () => {
+  itUnix("strips --block-signal as a standalone flag without consuming next token", () => {
     // --block-signal uses [=SIG] syntax — must not consume /bin/sh as its argument.
     const result = resolveArgv0("env --block-signal /bin/sh -c echo");
     expect(result).not.toBeNull();
     expect(result).toMatch(/sh$/);
   });
 
-  it("strips --default-signal and --ignore-signal as standalone flags", () => {
+  itUnix("strips --default-signal and --ignore-signal as standalone flags", () => {
     expect(resolveArgv0("env --default-signal /bin/sh")).toMatch(/sh$/);
     expect(resolveArgv0("env --ignore-signal /bin/sh")).toMatch(/sh$/);
   });
 
-  it("recurses into env -S split-string argument to find real argv0", () => {
+  itUnix("recurses into env -S split-string argument to find real argv0", () => {
     // env -S "FOO=1 /bin/sh -c echo" — the argument to -S is itself a command string.
     // Must recurse and return /bin/sh, not null or /usr/bin/env.
     const result = resolveArgv0('env -S "FOO=1 /bin/sh -c echo"');
@@ -842,13 +846,13 @@ describe("resolveArgv0", () => {
     expect(result).toMatch(/sh$/);
   });
 
-  it("recurses into env --split-string long form", () => {
+  itUnix("recurses into env --split-string long form", () => {
     const result = resolveArgv0("env --split-string '/bin/sh -c echo'");
     expect(result).not.toBeNull();
     expect(result).toMatch(/sh$/);
   });
 
-  it("looks through env -C with a quoted directory arg containing spaces", () => {
+  itUnix("looks through env -C with a quoted directory arg containing spaces", () => {
     // env -C "/path with space" /bin/sh — the dir arg is quoted; must not leave a
     // dangling fragment that gets treated as the command.
     const result = resolveArgv0('env -C "/path with space" /bin/sh -c echo');
@@ -856,7 +860,7 @@ describe("resolveArgv0", () => {
     expect(result).toMatch(/sh$/);
   });
 
-  it("looks through env --chdir with a quoted directory arg", () => {
+  itUnix("looks through env --chdir with a quoted directory arg", () => {
     const result = resolveArgv0("env --chdir '/tmp/my dir' /bin/sh -c echo");
     expect(result).not.toBeNull();
     expect(result).toMatch(/sh$/);
