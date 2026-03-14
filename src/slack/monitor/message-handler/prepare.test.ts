@@ -297,6 +297,39 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.RawBody).toContain("Readiness probe failed");
   });
 
+  it("extracts Block Kit text for bot messages with no text or attachments", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Zenduty" }) as any;
+
+    const account = createSlackAccount({ allowBots: true });
+    const message = createSlackMessage({
+      text: "",
+      bot_id: "B0ZENDUTY01",
+      subtype: "bot_message",
+      blocks: [
+        { type: "header", text: { type: "plain_text", text: "Incident #4521" } },
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "Service *search-service-v2* is down in production" },
+        },
+      ],
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, account, message);
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("Incident #4521");
+    expect(prepared!.ctxPayload.RawBody).toContain("search-service-v2");
+  });
+
   it("keeps channel metadata out of GroupSystemPrompt", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {

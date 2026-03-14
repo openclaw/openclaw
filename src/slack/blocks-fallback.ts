@@ -44,6 +44,40 @@ function readContextText(block: SlackBlockWithFields): string | undefined {
   return textParts.length > 0 ? textParts.join(" ") : undefined;
 }
 
+/** Extract text from all blocks (for inbound bot messages where we want full content). */
+export function extractAllSlackBlocksText(blocks: (Block | KnownBlock)[]): string {
+  const parts: string[] = [];
+  for (const raw of blocks) {
+    const block = raw as SlackBlockWithFields;
+    let text: string | undefined;
+    switch (block.type) {
+      case "header":
+        text = readHeaderText(block);
+        break;
+      case "section":
+        text = readSectionText(block);
+        break;
+      case "image":
+        text = readImageText(block) ?? "Shared an image";
+        break;
+      case "video":
+        text = readVideoText(block) ?? "Shared a video";
+        break;
+      case "file":
+        text = "Shared a file";
+        break;
+      case "context":
+        text = readContextText(block);
+        break;
+    }
+    if (text) {
+      parts.push(text);
+    }
+  }
+  return parts.join("\n");
+}
+
+/** Return the first meaningful text from blocks (for outbound fallback previews). */
 export function buildSlackBlocksFallbackText(blocks: (Block | KnownBlock)[]): string {
   for (const raw of blocks) {
     const block = raw as SlackBlockWithFields;
