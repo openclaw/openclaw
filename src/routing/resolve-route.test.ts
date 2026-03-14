@@ -656,6 +656,52 @@ describe("backward compatibility: peer.kind group ↔ channel", () => {
   });
 });
 
+describe("Slack peer id normalization for bindings", () => {
+  test("target-style channel ids match runtime raw channel ids", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "gemini",
+          match: {
+            channel: "slack",
+            peer: { kind: "channel", id: "channel:c123456" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "channel", id: "C123456" },
+    });
+    expect(route.agentId).toBe("gemini");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("target-style user ids match runtime raw direct peer ids", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "ops",
+          match: {
+            channel: "slack",
+            peer: { kind: "direct", id: "user:u123456" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "direct", id: "U123456" },
+    });
+    expect(route.agentId).toBe("ops");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+});
+
 describe("role-based agent routing", () => {
   type DiscordBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 
