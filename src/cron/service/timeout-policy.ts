@@ -8,6 +8,14 @@ import type { CronJob } from "../types.js";
 export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
 
 /**
+ * Maximum time a job may spend waiting in the queue (e.g. for lane
+ * acquisition) before execution actually starts.  This fires independently
+ * of the per-execution timeout so that a job cannot wait indefinitely when
+ * all lanes are occupied.
+ */
+export const MAX_QUEUE_WAIT_MS = 5 * 60_000; // 5 minutes
+
+/**
  * Agent turns can legitimately run much longer than generic cron jobs.
  * Use a larger safety ceiling when no explicit timeout is set.
  */

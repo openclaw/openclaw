@@ -23,9 +23,13 @@ import {
 import { locked } from "./locked.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
-import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
+import {
+  DEFAULT_JOB_TIMEOUT_MS,
+  MAX_QUEUE_WAIT_MS,
+  resolveCronJobTimeoutMs,
+} from "./timeout-policy.js";
 
-export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
+export { DEFAULT_JOB_TIMEOUT_MS, MAX_QUEUE_WAIT_MS } from "./timeout-policy.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
 
@@ -73,19 +77,51 @@ export async function executeJobCoreWithTimeout(
 
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
+  let queueWaitTimeoutId: NodeJS.Timeout | undefined;
+  let rejectTimeout: ((err: Error) => void) | undefined;
+
+  // Deferred: start the execution timer only once execution actually begins
+  // (after lane acquisition for isolated jobs) so queue wait time is not
+  // charged against the configured timeout budget.
+  const startExecutionTimer = () => {
+    if (timeoutId !== undefined || runAbortController.signal.aborted) {
+      return;
+    }
+    // Execution has started — cancel the queue-wait timeout.
+    if (queueWaitTimeoutId !== undefined) {
+      clearTimeout(queueWaitTimeoutId);
+      queueWaitTimeoutId = undefined;
+    }
+    timeoutId = setTimeout(() => {
+      runAbortController.abort(timeoutErrorMessage());
+      rejectTimeout?.(new Error(timeoutErrorMessage()));
+    }, jobTimeoutMs);
+  };
+
   try {
+    // Arm the queue-wait timeout before Promise.race so that
+    // startExecutionTimer can always cancel it — even if executeJobCore
+    // invokes onExecutionStart synchronously (e.g., sessionTarget "main").
+    // Cap the queue wait to the lesser of MAX_QUEUE_WAIT_MS and the full
+    // job timeout so long-running jobs get proportional queue patience.
+    const effectiveQueueWaitMs = Math.min(MAX_QUEUE_WAIT_MS, jobTimeoutMs);
+    const queueWaitPromise = new Promise<never>((_, reject) => {
+      rejectTimeout = reject;
+      queueWaitTimeoutId = setTimeout(() => {
+        runAbortController.abort(queueWaitTimeoutErrorMessage());
+        reject(new Error(queueWaitTimeoutErrorMessage()));
+      }, effectiveQueueWaitMs);
+    });
     return await Promise.race([
-      executeJobCore(state, job, runAbortController.signal),
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          runAbortController.abort(timeoutErrorMessage());
-          reject(new Error(timeoutErrorMessage()));
-        }, jobTimeoutMs);
-      }),
+      executeJobCore(state, job, runAbortController.signal, startExecutionTimer),
+      queueWaitPromise,
     ]);
   } finally {
     if (timeoutId) {
       clearTimeout(timeoutId);
+    }
+    if (queueWaitTimeoutId) {
+      clearTimeout(queueWaitTimeoutId);
     }
   }
 }
@@ -100,12 +136,19 @@ function resolveRunConcurrency(state: CronServiceState): number {
 function timeoutErrorMessage(): string {
   return "cron: job execution timed out";
 }
+function queueWaitTimeoutErrorMessage(): string {
+  return "cron: job timed out waiting for execution to start";
+}
 
 function isAbortError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
   }
-  return err.name === "AbortError" || err.message === timeoutErrorMessage();
+  return (
+    err.name === "AbortError" ||
+    err.message === timeoutErrorMessage() ||
+    err.message === queueWaitTimeoutErrorMessage()
+  );
 }
 /**
  * Exponential backoff delays (in ms) indexed by consecutive error count.
@@ -1006,6 +1049,7 @@ export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
   abortSignal?: AbortSignal,
+  onExecutionStart?: () => void,
 ): Promise<
   CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
 > {
@@ -1039,6 +1083,7 @@ export async function executeJobCore(
     return resolveAbortError();
   }
   if (job.sessionTarget === "main") {
+    onExecutionStart?.();
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {
       const kind = job.payload.kind;
@@ -1134,6 +1179,7 @@ export async function executeJobCore(
     job,
     message: job.payload.message,
     abortSignal,
+    onExecutionStart,
   });
 
   if (abortSignal?.aborted) {
