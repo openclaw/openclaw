@@ -266,6 +266,11 @@ describe("sendMessageDiscord", () => {
         }),
       }),
     );
+    const body = postMock.mock.calls[0]?.[1]?.body as
+      | { files?: Array<{ data?: Blob; name?: string }> }
+      | undefined;
+    expect(body?.files?.[0]?.data).toBeInstanceOf(Blob);
+    expect(body?.files?.[0]?.data?.type).toBe("image/jpeg");
     expect(loadWebMedia).toHaveBeenCalledWith(
       "file:///tmp/photo.jpg",
       expect.objectContaining({ maxBytes: 8 * 1024 * 1024 }),

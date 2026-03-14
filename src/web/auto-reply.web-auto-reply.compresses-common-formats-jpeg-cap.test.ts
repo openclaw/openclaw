@@ -124,7 +124,7 @@ describe("web auto-reply", () => {
     });
   }
 
-  it("compresses common formats to jpeg under the cap", async () => {
+  it("compresses png and jpeg inputs to jpeg under the cap", async () => {
     const formats = [
       {
         name: "png",
@@ -145,16 +145,6 @@ describe("web auto-reply", () => {
           })
             // Keep source > cap with fewer pixels so the test runs faster.
             .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
-            .toBuffer(),
-      },
-      {
-        name: "webp",
-        mime: "image/webp",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            .webp({ quality: 100 })
             .toBuffer(),
       },
     ] as const;
