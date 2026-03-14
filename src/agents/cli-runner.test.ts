@@ -231,6 +231,45 @@ describe("runCliAgent with process supervisor", () => {
     await loadFreshCliRunnerModuleForTest();
   });
 
+  it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "Run: node script.mjs",
+      provider: "codex-cli",
+      model: "gpt-5.2-codex",
+      timeoutMs: 1_000,
+      runId: "run-no-tools-disabled",
+      extraSystemPrompt: "You are a helpful assistant.",
+    });
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      argv?: string[];
+      input?: string;
+    };
+    // The CLI runner must not inject "Tools are disabled" into the system
+    // prompt passed to CLI backends. CLI backends (e.g., Claude Code CLI)
+    // manage their own native tools; the injected text caused them to
+    // refuse using their own tools. See: openclaw/openclaw#44135
+    const allArgs = (input.argv ?? []).join("\n");
+    expect(allArgs).not.toContain("Tools are disabled in this session");
+  });
+
   it("runs CLI through supervisor and returns payload", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
