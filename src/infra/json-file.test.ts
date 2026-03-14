@@ -35,8 +35,12 @@ describe("json-file helpers", () => {
 
       const fileMode = fs.statSync(pathname).mode & 0o777;
       const dirMode = fs.statSync(path.dirname(pathname)).mode & 0o777;
-      expect(fileMode).toBe(0o600);
-      expect(dirMode).toBe(0o700);
+      if (process.platform === "win32") {
+        expect(fileMode & 0o111).toBe(0);
+      } else {
+        expect(fileMode).toBe(0o600);
+        expect(dirMode).toBe(0o700);
+      }
     });
   });
 

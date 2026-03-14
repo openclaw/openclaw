@@ -9,6 +9,8 @@ import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { pickGatewaySelfPresence } from "../gateway-presence.js";
 
+const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
+
 type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
 
 export type GatewayStatusTarget = {
@@ -324,6 +326,17 @@ export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
   return `${colorize(rich, theme.heading, kindLabel)} ${colorize(rich, theme.muted, target.url)}`;
 }
 
+export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
+  if (probe.ok || probe.connectLatencyMs == null) {
+    return false;
+  }
+  return MISSING_SCOPE_PATTERN.test(probe.error ?? "");
+}
+
+export function isProbeReachable(probe: GatewayProbeResult): boolean {
+  return probe.ok || isScopeLimitedProbeFailure(probe);
+}
+
 export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
   if (probe.ok) {
     const latency =
@@ -335,7 +348,10 @@ export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean)
   if (probe.connectLatencyMs != null) {
     const latency =
       typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
-    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${colorize(rich, theme.error, "RPC: failed")}${detail}`;
+    const rpcStatus = isScopeLimitedProbeFailure(probe)
+      ? colorize(rich, theme.warn, "RPC: limited")
+      : colorize(rich, theme.error, "RPC: failed");
+    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${rpcStatus}${detail}`;
   }
 
   return `${colorize(rich, theme.error, "Connect: failed")}${detail}`;
