@@ -23,6 +23,7 @@ import {
   dropSessionStoreObjectCache,
   getSerializedSessionStore,
   readSessionStoreCache,
+  readSessionStoreCacheRaw,
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
@@ -44,6 +45,134 @@ import {
 } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
+
+// ============================================================================
+// Write-behind persistence
+// ============================================================================
+
+/**
+ * When `OPENCLAW_SESSION_STORE_WRITE_BEHIND=1` (default), session store writes
+ * are debounced: mutations update the in-memory cache immediately, and a
+ * coalesced disk flush is scheduled after `WRITE_BEHIND_DELAY_MS`.  This
+ * eliminates filesystem lock contention when many sub-agents or cron jobs
+ * run concurrently — the common case in production.
+ *
+ * Set `OPENCLAW_SESSION_STORE_WRITE_BEHIND=0` to disable and flush
+ * synchronously on every mutation (the legacy behaviour).
+ */
+const WRITE_BEHIND_DELAY_MS = 2_000;
+
+function isWriteBehindEnabled(): boolean {
+  const envValue = process.env.OPENCLAW_SESSION_STORE_WRITE_BEHIND;
+  if (envValue === "1" || envValue === "true") {
+    return true;
+  }
+  if (envValue === "0" || envValue === "false") {
+    return false;
+  }
+  // Disable in test environments for deterministic behaviour.
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return false;
+  }
+  return true; // on by default in production
+}
+
+/**
+ * Read the authoritative in-memory store for a dirty write-behind path.
+ * Bypasses TTL and mtime validation since the cache IS the truth.
+ */
+function getWriteBehindCacheEntry(storePath: string): Record<string, SessionEntry> | null {
+  return readSessionStoreCacheRaw(storePath);
+}
+
+/** Pending write-behind timers keyed by storePath. */
+const WRITE_BEHIND_TIMERS = new Map<string, NodeJS.Timeout>();
+
+/** Stores with pending (unflushed) mutations. */
+const WRITE_BEHIND_DIRTY = new Set<string>();
+
+/**
+ * Schedule a debounced disk flush for `storePath`.  If a flush is already
+ * scheduled it is replaced (coalesced) so rapid mutations produce at most one
+ * disk write per `WRITE_BEHIND_DELAY_MS` window.
+ */
+function scheduleWriteBehind(storePath: string, store: Record<string, SessionEntry>): void {
+  const existing = WRITE_BEHIND_TIMERS.get(storePath);
+  if (existing) {
+    clearTimeout(existing);
+  }
+  WRITE_BEHIND_DIRTY.add(storePath);
+  const timer = setTimeout(() => {
+    WRITE_BEHIND_TIMERS.delete(storePath);
+    WRITE_BEHIND_DIRTY.delete(storePath);
+    void flushWriteBehind(storePath, store);
+  }, WRITE_BEHIND_DELAY_MS);
+  timer.unref?.(); // don't keep the process alive just for a pending flush
+  WRITE_BEHIND_TIMERS.set(storePath, timer);
+}
+
+/** Perform the actual atomic write to disk. */
+async function flushWriteBehind(
+  storePath: string,
+  store: Record<string, SessionEntry>,
+): Promise<void> {
+  try {
+    await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+    const json = JSON.stringify(store, null, 2);
+    await writeSessionStoreAtomic({ storePath, store, serialized: json });
+  } catch (err) {
+    log.warn(`write-behind flush failed for ${storePath}: ${String(err)}`);
+  }
+}
+
+/**
+ * Flush all pending write-behind stores synchronously on process exit so we
+ * never lose more than one debounce window of mutations.
+ */
+function flushAllWriteBehindSync(): void {
+  for (const [storePath, timer] of WRITE_BEHIND_TIMERS) {
+    clearTimeout(timer);
+    WRITE_BEHIND_TIMERS.delete(storePath);
+    WRITE_BEHIND_DIRTY.delete(storePath);
+    // Best-effort synchronous flush via the serialized cache. The full store
+    // object isn't easily accessible here, but the serialized cache is kept up
+    // to date by `updateSessionStoreWriteCaches` on every mutation so writing
+    // it back is equivalent.
+    try {
+      const cached = getSerializedSessionStore(storePath);
+      if (cached) {
+        fs.mkdirSync(path.dirname(storePath), { recursive: true });
+        fs.writeFileSync(storePath, cached, { encoding: "utf-8", mode: 0o600 });
+      }
+    } catch {
+      // Best-effort — process is exiting.
+    }
+  }
+}
+
+// Register the synchronous exit hook once.
+let _exitHookRegistered = false;
+function ensureWriteBehindExitHook(): void {
+  if (_exitHookRegistered) {
+    return;
+  }
+  _exitHookRegistered = true;
+  process.on("exit", flushAllWriteBehindSync);
+}
+
+// ============================================================================
+// Filesystem lock opt-in
+// ============================================================================
+
+/**
+ * Set `OPENCLAW_SESSION_STORE_FSLOCK=1` to re-enable the cross-process
+ * filesystem lock for exotic multi-gateway setups.  Off by default since the
+ * gateway enforces single-instance via port binding.
+ */
+function isFsLockEnabled(): boolean {
+  const envValue = process.env.OPENCLAW_SESSION_STORE_FSLOCK;
+  return envValue === "1" || envValue === "true";
+}
 
 // ============================================================================
 // Session Store Cache with TTL Support
@@ -173,6 +302,32 @@ export function clearSessionStoreCacheForTest(): void {
     }
   }
   LOCK_QUEUES.clear();
+  // Cancel any pending write-behind timers so tests don't leak.
+  for (const [, timer] of WRITE_BEHIND_TIMERS) {
+    clearTimeout(timer);
+  }
+  WRITE_BEHIND_TIMERS.clear();
+  WRITE_BEHIND_DIRTY.clear();
+}
+
+/** Flush any pending write-behind for the given store (used in tests). */
+export async function flushWriteBehindForTest(storePath: string): Promise<void> {
+  const timer = WRITE_BEHIND_TIMERS.get(storePath);
+  if (timer) {
+    clearTimeout(timer);
+    WRITE_BEHIND_TIMERS.delete(storePath);
+  }
+  WRITE_BEHIND_DIRTY.delete(storePath);
+  // Re-read from the in-memory cache and flush to disk.
+  const cached = readSessionStoreCacheRaw(storePath);
+  if (cached) {
+    await flushWriteBehind(storePath, cached);
+  }
+}
+
+/** Check whether there are unflushed mutations for the given store. */
+export function hasWriteBehindPending(storePath: string): boolean {
+  return WRITE_BEHIND_DIRTY.has(storePath);
 }
 
 /** Expose lock queue size for tests. */
@@ -196,6 +351,16 @@ export function loadSessionStore(
   storePath: string,
   opts: LoadSessionStoreOptions = {},
 ): Record<string, SessionEntry> {
+  // When write-behind has unflushed mutations the in-memory cache is the
+  // authoritative source of truth — even when the caller asks for skipCache.
+  // Falling through to disk would return stale data.
+  if (isWriteBehindEnabled() && WRITE_BEHIND_DIRTY.has(storePath)) {
+    const entry = getWriteBehindCacheEntry(storePath);
+    if (entry) {
+      return structuredClone(entry);
+    }
+  }
+
   // Check cache first if enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     const currentFileStat = getFileStatSnapshot(storePath);
@@ -461,6 +626,25 @@ async function saveSessionStoreUnlocked(
     return;
   }
 
+  // ── Write-behind: update in-memory caches immediately, defer disk I/O ──
+  if (isWriteBehindEnabled()) {
+    ensureWriteBehindExitHook();
+    // Always update both caches so reads return the latest state.
+    setSerializedSessionStore(storePath, json);
+    writeSessionStoreCache({
+      storePath,
+      store,
+      // Use a far-future mtime so the cache is never considered stale.
+      mtimeMs: Date.now() + 86_400_000,
+      serialized: json,
+    });
+    // Schedule a coalesced disk flush.
+    scheduleWriteBehind(storePath, store);
+    return;
+  }
+
+  // ── Synchronous flush (legacy path) ──
+
   // Windows: keep retry semantics because rename can fail while readers hold locks.
   if (process.platform === "win32") {
     for (let i = 0; i < 5; i++) {
@@ -644,6 +828,7 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
     return;
   }
   queue.running = true;
+  const useFsLock = isFsLockEnabled();
   try {
     while (queue.pending.length > 0) {
       const task = queue.pending.shift();
@@ -662,11 +847,13 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
       let failed: unknown;
       let hasFailure = false;
       try {
-        lock = await acquireSessionWriteLock({
-          sessionFile: storePath,
-          timeoutMs: remainingTimeoutMs,
-          staleMs: task.staleMs,
-        });
+        if (useFsLock) {
+          lock = await acquireSessionWriteLock({
+            sessionFile: storePath,
+            timeoutMs: remainingTimeoutMs,
+            staleMs: task.staleMs,
+          });
+        }
         result = await task.fn();
       } catch (err) {
         hasFailure = true;
