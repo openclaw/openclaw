@@ -88,14 +88,15 @@ export const ExecApprovalsNodeSetParamsSchema = Type.Object(
 export const ExecApprovalRequestParamsSchema = Type.Object(
   {
     id: Type.Optional(NonEmptyString),
-    command: NonEmptyString,
+    command: Type.Optional(NonEmptyString),
     commandArgv: Type.Optional(Type.Array(Type.String())),
     systemRunPlan: Type.Optional(
       Type.Object(
         {
           argv: Type.Array(Type.String()),
           cwd: Type.Union([Type.String(), Type.Null()]),
-          rawCommand: Type.Union([Type.String(), Type.Null()]),
+          commandText: Type.String(),
+          commandPreview: Type.Optional(Type.Union([Type.String(), Type.Null()])),
           agentId: Type.Union([Type.String(), Type.Null()]),
           sessionKey: Type.Union([Type.String(), Type.Null()]),
           mutableFileOperand: Type.Optional(

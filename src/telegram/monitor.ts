@@ -8,7 +8,11 @@ import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
-import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
+import {
+  isRecoverableTelegramNetworkError,
+  isTelegramPollingNetworkError,
+} from "./network-errors.js";
 import { TelegramPollingSession } from "./polling-session.js";
 import { makeProxyFetch } from "./proxy.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
@@ -73,16 +77,18 @@ const isGrammyHttpError = (err: unknown): boolean => {
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
   let pollingSession: TelegramPollingSession | undefined;
+  let execApprovalsHandler: TelegramExecApprovalHandler | undefined;
 
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
     const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
-    if (isGrammyHttpError(err) && isNetworkError) {
+    const isTelegramPollingError = isTelegramPollingNetworkError(err);
+    if (isGrammyHttpError(err) && isNetworkError && isTelegramPollingError) {
       log(`[telegram] Suppressed network error: ${formatErrorMessage(err)}`);
       return true;
     }
 
     const activeRunner = pollingSession?.activeRunner;
-    if (isNetworkError && activeRunner && activeRunner.isRunning()) {
+    if (isNetworkError && isTelegramPollingError && activeRunner && activeRunner.isRunning()) {
       pollingSession?.markForceRestarted();
       pollingSession?.abortActiveFetch();
       void activeRunner.stop().catch(() => {});
@@ -110,6 +116,14 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     const proxyFetch =
       opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
+
+    execApprovalsHandler = new TelegramExecApprovalHandler({
+      token,
+      accountId: account.accountId,
+      cfg,
+      runtime: opts.runtime,
+    });
+    await execApprovalsHandler.start();
 
     const persistedOffsetRaw = await readTelegramUpdateOffset({
       accountId: account.accountId,
@@ -178,6 +192,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     });
     await pollingSession.runUntilAbort();
   } finally {
+    await execApprovalsHandler?.stop().catch(() => {});
     unregisterHandler();
   }
 }

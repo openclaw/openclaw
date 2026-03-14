@@ -12,7 +12,7 @@ import {
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
-import { resolveControlCommandGate } from "../../channels/command-gating.js";
+import { resolveDualTextControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop } from "../../channels/logging.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -24,6 +24,7 @@ import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,
 } from "../../security/dm-policy-shared.js";
+import { sanitizeTerminalText } from "../../terminal/safe-text.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
   formatIMessageChatTarget,
@@ -31,6 +32,7 @@ import {
   normalizeIMessageHandle,
 } from "../targets.js";
 import { detectReflectedContent } from "./reflection-guard.js";
+import type { SelfChatCache } from "./self-chat-cache.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 
 type IMessageReplyContext = {
@@ -101,6 +103,7 @@ export function resolveIMessageInboundDecision(params: {
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   echoCache?: { has: (scope: string, lookup: { text?: string; messageId?: string }) => boolean };
+  selfChatCache?: SelfChatCache;
   logVerbose?: (msg: string) => void;
 }): IMessageInboundDecision {
   const senderRaw = params.message.sender ?? "";
@@ -109,13 +112,10 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "missing sender" };
   }
   const senderNormalized = normalizeIMessageHandle(sender);
-  if (params.message.is_from_me) {
-    return { kind: "drop", reason: "from me" };
-  }
-
   const chatId = params.message.chat_id ?? undefined;
   const chatGuid = params.message.chat_guid ?? undefined;
   const chatIdentifier = params.message.chat_identifier ?? undefined;
+  const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
 
   const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
   const groupListPolicy = groupIdCandidate
@@ -138,6 +138,18 @@ export function resolveIMessageInboundDecision(params: {
     groupIdCandidate && groupListPolicy.allowlistEnabled && groupListPolicy.groupConfig,
   );
   const isGroup = Boolean(params.message.is_group) || treatAsGroupByConfig;
+  const selfChatLookup = {
+    accountId: params.accountId,
+    isGroup,
+    chatId,
+    sender,
+    text: params.bodyText,
+    createdAt,
+  };
+  if (params.message.is_from_me) {
+    params.selfChatCache?.remember(selfChatLookup);
+    return { kind: "drop", reason: "from me" };
+  }
   if (isGroup && !chatId) {
     return { kind: "drop", reason: "group without chat_id" };
   }
@@ -215,6 +227,17 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "empty body" };
   }
 
+  if (
+    params.selfChatCache?.has({
+      ...selfChatLookup,
+      text: bodyText,
+    })
+  ) {
+    const preview = sanitizeTerminalText(truncateUtf16Safe(bodyText, 50));
+    params.logVerbose?.(`imessage: dropping self-chat reflected duplicate: "${preview}"`);
+    return { kind: "drop", reason: "self-chat echo" };
+  }
+
   // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
   const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
@@ -250,7 +273,6 @@ export function resolveIMessageInboundDecision(params: {
   }
 
   const replyContext = describeReplyContext(params.message);
-  const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
   const historyKey = isGroup
     ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
     : undefined;
@@ -289,17 +311,15 @@ export function resolveIMessageInboundDecision(params: {
         })
       : false;
   const hasControlCommandInMessage = hasControlCommand(messageText, params.cfg);
-  const commandGate = resolveControlCommandGate({
+  const { commandAuthorized, shouldBlock } = resolveDualTextControlCommandGate({
     useAccessGroups,
-    authorizers: [
-      { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-      { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
-    ],
-    allowTextCommands: true,
+    primaryConfigured: commandDmAllowFrom.length > 0,
+    primaryAllowed: ownerAllowedForCommands,
+    secondaryConfigured: effectiveGroupAllowFrom.length > 0,
+    secondaryAllowed: groupAllowedForCommands,
     hasControlCommand: hasControlCommandInMessage,
   });
-  const commandAuthorized = commandGate.commandAuthorized;
-  if (isGroup && commandGate.shouldBlock) {
+  if (isGroup && shouldBlock) {
     if (params.logVerbose) {
       logInboundDrop({
         log: params.logVerbose,

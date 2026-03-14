@@ -29,13 +29,15 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
 const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   anthropic: {
     providerFamily: "anthropic",
+    dropThinkingBlockModelHints: ["claude"],
   },
   "amazon-bedrock": {
     providerFamily: "anthropic",
+    dropThinkingBlockModelHints: ["claude"],
   },
+  // kimi-coding natively supports Anthropic tool framing (input_schema);
+  // converting to OpenAI format causes XML text fallback instead of tool_use blocks.
   "kimi-coding": {
-    anthropicToolSchemaMode: "openai-functions",
-    anthropicToolChoiceMode: "openai-string-modes",
     preserveAnthropicThinkingSignatures: false,
   },
   mistral: {
@@ -62,6 +64,11 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     geminiThoughtSignatureModelHints: ["gemini"],
   },
   opencode: {
+    openAiCompatTurnValidation: false,
+    geminiThoughtSignatureSanitization: true,
+    geminiThoughtSignatureModelHints: ["gemini"],
+  },
+  "opencode-go": {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
     geminiThoughtSignatureModelHints: ["gemini"],
