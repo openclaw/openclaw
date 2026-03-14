@@ -1,46 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { BrowserProfileUnavailableError } from "../errors.js";
 import { registerBrowserBasicRoutes } from "./basic.js";
-import type { BrowserResponse, BrowserRouteHandler, BrowserRouteRegistrar } from "./types.js";
-
-function createApp() {
-  const getHandlers = new Map<string, BrowserRouteHandler>();
-  const postHandlers = new Map<string, BrowserRouteHandler>();
-  const deleteHandlers = new Map<string, BrowserRouteHandler>();
-  const app: BrowserRouteRegistrar = {
-    get: (path, handler) => void getHandlers.set(path, handler),
-    post: (path, handler) => void postHandlers.set(path, handler),
-    delete: (path, handler) => void deleteHandlers.set(path, handler),
-  };
-  return { app, getHandlers };
-}
-
-function createResponse() {
-  let statusCode = 200;
-  let jsonBody: unknown;
-  const res: BrowserResponse = {
-    status(code) {
-      statusCode = code;
-      return res;
-    },
-    json(body) {
-      jsonBody = body;
-    },
-  };
-  return {
-    res,
-    get statusCode() {
-      return statusCode;
-    },
-    get body() {
-      return jsonBody;
-    },
-  };
-}
+import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 describe("basic browser routes", () => {
   it("maps existing-session status failures to JSON browser errors", async () => {
-    const { app, getHandlers } = createApp();
+    const { app, getHandlers } = createBrowserRouteApp();
     registerBrowserBasicRoutes(app, {
       state: () => ({
         resolved: {
@@ -71,7 +36,7 @@ describe("basic browser routes", () => {
     const handler = getHandlers.get("/");
     expect(handler).toBeTypeOf("function");
 
-    const response = createResponse();
+    const response = createBrowserRouteResponse();
     await handler?.({ params: {}, query: { profile: "chrome-live" } }, response.res);
 
     expect(response.statusCode).toBe(409);
