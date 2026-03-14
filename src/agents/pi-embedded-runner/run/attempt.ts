@@ -1399,10 +1399,17 @@ export async function runEmbeddedAttempt(
   let restoreSkillEnv: (() => void) | undefined;
   process.chdir(effectiveWorkspace);
   try {
+    // In sandboxed non-rw sessions, skill files are synced into the sandbox
+    // workspace but the pre-built snapshot prompt contains host-compacted paths
+    // (~/...) that are unreachable inside the container. When sandboxed, skip
+    // the snapshot and rebuild the prompt with container-relative paths.
+    const isSandboxedNonRw = sandbox?.enabled && sandbox.workspaceAccess !== "rw";
+    const effectiveSnapshot = isSandboxedNonRw ? undefined : params.skillsSnapshot;
+
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
-      skillsSnapshot: params.skillsSnapshot,
+      skillsSnapshot: effectiveSnapshot,
     });
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
@@ -1415,10 +1422,11 @@ export async function runEmbeddedAttempt(
         });
 
     const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: params.skillsSnapshot,
+      skillsSnapshot: effectiveSnapshot,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      containerSkillsPrefix: isSandboxedNonRw ? sandbox.containerWorkdir : undefined,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

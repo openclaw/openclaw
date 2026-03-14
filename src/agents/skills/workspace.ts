@@ -53,6 +53,18 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   }));
 }
 
+/**
+ * Remap skill file paths to container-relative paths for sandboxed sessions.
+ * Skills synced into the sandbox workspace live at `<containerPrefix>/skills/<name>/SKILL.md`.
+ * The model inside the container can only access these paths, not the host paths.
+ */
+function remapSkillPathsToContainer(skills: Skill[], containerPrefix: string): Skill[] {
+  return skills.map((s) => ({
+    ...s,
+    filePath: path.posix.join(containerPrefix, "skills", path.basename(s.baseDir), "SKILL.md"),
+  }));
+}
+
 function debugSkillCommandOnce(
   messageKey: string,
   message: string,
@@ -598,6 +610,13 @@ type WorkspaceSkillBuildOptions = {
   /** If provided, only include skills with these names */
   skillFilter?: string[];
   eligibility?: SkillEligibilityContext;
+  /**
+   * When set, skill file paths in the prompt are remapped to container-relative
+   * paths under this prefix (e.g. `/workspace`) instead of using `~` compaction.
+   * This is needed for sandboxed non-rw sessions where the model can only access
+   * files inside the container, not host paths.
+   */
+  containerSkillsPrefix?: string;
 };
 
 function resolveWorkspaceSkillPromptState(
@@ -627,11 +646,10 @@ function resolveWorkspaceSkillPromptState(
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
-  const prompt = [
-    remoteNote,
-    truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
-  ]
+  const remappedSkills = opts?.containerSkillsPrefix
+    ? remapSkillPathsToContainer(skillsForPrompt, opts.containerSkillsPrefix)
+    : compactSkillPaths(skillsForPrompt);
+  const prompt = [remoteNote, truncationNote, formatSkillsForPrompt(remappedSkills)]
     .filter(Boolean)
     .join("\n");
   return { eligible, prompt, resolvedSkills };
@@ -642,6 +660,8 @@ export function resolveSkillsPromptForRun(params: {
   entries?: SkillEntry[];
   config?: OpenClawConfig;
   workspaceDir: string;
+  /** When set, remap skill paths to container-relative paths (for sandbox sessions). */
+  containerSkillsPrefix?: string;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
@@ -651,6 +671,7 @@ export function resolveSkillsPromptForRun(params: {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
+      containerSkillsPrefix: params.containerSkillsPrefix,
     });
     return prompt.trim() ? prompt : "";
   }
