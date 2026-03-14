@@ -83,7 +83,7 @@ type SlackSendFn = ReturnType<typeof getSlackRuntime>["channel"]["slack"]["sendM
  * enabling per-agent display names via the `chat:write.customize` Slack scope.
  * Falls back gracefully if the scope is missing (handled in send.ts).
  */
-function mapOutboundIdentityToSlack(identity?: {
+export function mapOutboundIdentityToSlack(identity?: {
   name?: string;
   avatarUrl?: string;
   emoji?: string;
