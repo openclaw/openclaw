@@ -47,6 +47,10 @@ describe("OPENCLAW_LOG_LEVEL", () => {
     expect(getResolvedLoggerSettings()).toEqual({
       level: "debug",
       file: testLogPath,
+      formattedFile: path.join(
+        path.dirname(testLogPath),
+        `${path.basename(testLogPath, path.extname(testLogPath))}-formatted${path.extname(testLogPath)}`,
+      ),
       maxFileBytes: defaultMaxFileBytes,
     });
     expect(getResolvedConsoleSettings()).toEqual({
