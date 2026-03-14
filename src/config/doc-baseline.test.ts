@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildConfigDocBaseline,
+  collectConfigDocBaselineEntries,
+  dedupeConfigDocBaselineEntries,
   normalizeConfigDocBaselineHelpPath,
   renderConfigDocBaselineStatefile,
   writeConfigDocBaselineStatefile,
@@ -63,6 +65,57 @@ describe("config doc baseline", () => {
     expect(tokenEntry?.help).toContain("gateway access");
     expect(tokenEntry?.tags).toContain("auth");
     expect(tokenEntry?.tags).toContain("security");
+  });
+
+  it("matches array help hints that still use [] notation", async () => {
+    const baseline = await buildConfigDocBaseline();
+    const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
+
+    expect(byPath.get("session.sendPolicy.rules.*.match.keyPrefix")).toMatchObject({
+      help: expect.stringContaining("prefer rawKeyPrefix when exact full-key matching is required"),
+      sensitive: false,
+    });
+  });
+
+  it("walks union branches for nested config keys", async () => {
+    const baseline = await buildConfigDocBaseline();
+    const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
+
+    expect(byPath.get("bindings.*")).toMatchObject({
+      hasChildren: true,
+    });
+    expect(byPath.get("bindings.*.type")).toBeDefined();
+    expect(byPath.get("bindings.*.match.channel")).toBeDefined();
+    expect(byPath.get("bindings.*.match.peer.id")).toBeDefined();
+  });
+
+  it("merges tuple item metadata instead of dropping earlier entries", () => {
+    const entries = dedupeConfigDocBaselineEntries(
+      collectConfigDocBaselineEntries(
+        {
+          type: "array",
+          items: [
+            {
+              type: "string",
+              enum: ["alpha"],
+            },
+            {
+              type: "number",
+              enum: [42],
+            },
+          ],
+        },
+        {},
+        "tupleValues",
+      ),
+    );
+    const tupleEntry = new Map(entries.map((entry) => [entry.path, entry])).get("tupleValues.*");
+
+    expect(tupleEntry).toMatchObject({
+      type: ["number", "string"],
+    });
+    expect(tupleEntry?.enumValues).toEqual(expect.arrayContaining([42, "alpha"]));
+    expect(tupleEntry?.enumValues).toHaveLength(2);
   });
 
   it("supports check mode for stale generated artifacts", async () => {

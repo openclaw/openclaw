@@ -21,6 +21,9 @@ type JsonSchemaObject = JsonSchemaNode & {
   enum?: unknown[];
   default?: unknown;
   deprecated?: boolean;
+  anyOf?: JsonSchemaObject[];
+  allOf?: JsonSchemaObject[];
+  oneOf?: JsonSchemaObject[];
 };
 
 export type ConfigDocBaselineKind = "core" | "channel" | "plugin";
@@ -139,7 +142,145 @@ function schemaHasChildren(schema: JsonSchemaObject): boolean {
   if (Array.isArray(schema.items)) {
     return schema.items.some((entry) => typeof entry === "object" && entry !== null);
   }
+  for (const branch of [schema.oneOf, schema.anyOf, schema.allOf]) {
+    if (branch?.some((entry) => entry && typeof entry === "object" && schemaHasChildren(entry))) {
+      return true;
+    }
+  }
   return Boolean(schema.items && typeof schema.items === "object");
+}
+
+function splitHintLookupPath(path: string): string[] {
+  const normalized = normalizeBaselinePath(path);
+  return normalized ? normalized.split(".").filter(Boolean) : [];
+}
+
+function resolveUiHintMatch(
+  uiHints: ConfigSchemaResponse["uiHints"],
+  path: string,
+): ConfigSchemaResponse["uiHints"][string] | undefined {
+  const targetParts = splitHintLookupPath(path);
+  let bestMatch:
+    | {
+        hint: ConfigSchemaResponse["uiHints"][string];
+        wildcardCount: number;
+      }
+    | undefined;
+
+  for (const [hintPath, hint] of Object.entries(uiHints)) {
+    const hintParts = splitHintLookupPath(hintPath);
+    if (hintParts.length !== targetParts.length) {
+      continue;
+    }
+
+    let wildcardCount = 0;
+    let matches = true;
+    for (let index = 0; index < hintParts.length; index += 1) {
+      const hintPart = hintParts[index];
+      const targetPart = targetParts[index];
+      if (hintPart === targetPart) {
+        continue;
+      }
+      if (hintPart === "*") {
+        wildcardCount += 1;
+        continue;
+      }
+      matches = false;
+      break;
+    }
+
+    if (!matches) {
+      continue;
+    }
+    if (!bestMatch || wildcardCount < bestMatch.wildcardCount) {
+      bestMatch = { hint, wildcardCount };
+    }
+  }
+
+  return bestMatch?.hint;
+}
+
+function normalizeTypeValue(value: string | string[] | undefined): string | string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    const normalized = [...new Set(value)].toSorted((left, right) => left.localeCompare(right));
+    return normalized.length === 1 ? normalized[0] : normalized;
+  }
+  return value;
+}
+
+function mergeTypeValues(
+  left: string | string[] | undefined,
+  right: string | string[] | undefined,
+): string | string[] | undefined {
+  const merged = new Set<string>();
+  for (const value of [left, right]) {
+    if (!value) {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        merged.add(entry);
+      }
+      continue;
+    }
+    merged.add(value);
+  }
+  return normalizeTypeValue([...merged]);
+}
+
+function areJsonValuesEqual(left: JsonValue | undefined, right: JsonValue | undefined): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function mergeJsonValueArrays(
+  left: JsonValue[] | undefined,
+  right: JsonValue[] | undefined,
+): JsonValue[] | undefined {
+  if (!left?.length) {
+    return right ? [...right] : undefined;
+  }
+  if (!right?.length) {
+    return [...left];
+  }
+
+  const merged = new Map<string, JsonValue>();
+  for (const value of [...left, ...right]) {
+    merged.set(JSON.stringify(value), value);
+  }
+  return [...merged.entries()]
+    .toSorted(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+    .map(([, value]) => value);
+}
+
+function mergeConfigDocBaselineEntry(
+  current: ConfigDocBaselineEntry,
+  next: ConfigDocBaselineEntry,
+): ConfigDocBaselineEntry {
+  const label = current.label === next.label ? current.label : (current.label ?? next.label);
+  const help = current.help === next.help ? current.help : (current.help ?? next.help);
+  const defaultValue = areJsonValuesEqual(current.defaultValue, next.defaultValue)
+    ? (current.defaultValue ?? next.defaultValue)
+    : undefined;
+
+  return {
+    path: current.path,
+    kind: current.kind,
+    type: mergeTypeValues(current.type, next.type),
+    required: current.required && next.required,
+    enumValues: mergeJsonValueArrays(current.enumValues, next.enumValues),
+    defaultValue,
+    deprecated: current.deprecated || next.deprecated,
+    sensitive: current.sensitive || next.sensitive,
+    tags: [...new Set([...current.tags, ...next.tags])].toSorted((left, right) =>
+      left.localeCompare(right),
+    ),
+    label,
+    help,
+    hasChildren: current.hasChildren || next.hasChildren,
+  };
 }
 
 function resolveEntryKind(configPath: string): ConfigDocBaselineKind {
@@ -248,7 +389,7 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
   });
 }
 
-function walkSchema(
+export function collectConfigDocBaselineEntries(
   schema: JsonSchemaObject,
   uiHints: ConfigSchemaResponse["uiHints"],
   pathPrefix = "",
@@ -257,11 +398,11 @@ function walkSchema(
 ): ConfigDocBaselineEntry[] {
   const normalizedPath = normalizeBaselinePath(pathPrefix);
   if (normalizedPath) {
-    const hint = uiHints[normalizedPath];
+    const hint = resolveUiHintMatch(uiHints, normalizedPath);
     entries.push({
       path: normalizedPath,
       kind: resolveEntryKind(normalizedPath),
-      type: Array.isArray(schema.type) ? [...schema.type] : schema.type,
+      type: normalizeTypeValue(schema.type),
       required,
       enumValues: normalizeEnumValues(schema.enum),
       defaultValue: normalizeJsonValue(schema.default),
@@ -283,14 +424,14 @@ function walkSchema(
       continue;
     }
     const childPath = normalizedPath ? `${normalizedPath}.${key}` : key;
-    walkSchema(child, uiHints, childPath, requiredKeys.has(key), entries);
+    collectConfigDocBaselineEntries(child, uiHints, childPath, requiredKeys.has(key), entries);
   }
 
   if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
     const wildcard = asSchemaObject(schema.additionalProperties);
     if (wildcard) {
       const wildcardPath = normalizedPath ? `${normalizedPath}.*` : "*";
-      walkSchema(wildcard, uiHints, wildcardPath, false, entries);
+      collectConfigDocBaselineEntries(wildcard, uiHints, wildcardPath, false, entries);
     }
   }
 
@@ -301,23 +442,36 @@ function walkSchema(
         continue;
       }
       const itemPath = normalizedPath ? `${normalizedPath}.*` : "*";
-      walkSchema(child, uiHints, itemPath, false, entries);
+      collectConfigDocBaselineEntries(child, uiHints, itemPath, false, entries);
     }
   } else if (schema.items && typeof schema.items === "object") {
     const itemSchema = asSchemaObject(schema.items);
     if (itemSchema) {
       const itemPath = normalizedPath ? `${normalizedPath}.*` : "*";
-      walkSchema(itemSchema, uiHints, itemPath, false, entries);
+      collectConfigDocBaselineEntries(itemSchema, uiHints, itemPath, false, entries);
+    }
+  }
+
+  for (const branchSchema of [schema.oneOf, schema.anyOf, schema.allOf]) {
+    for (const branch of branchSchema ?? []) {
+      const child = asSchemaObject(branch);
+      if (!child) {
+        continue;
+      }
+      collectConfigDocBaselineEntries(child, uiHints, normalizedPath, required, entries);
     }
   }
 
   return entries;
 }
 
-function dedupeEntries(entries: ConfigDocBaselineEntry[]): ConfigDocBaselineEntry[] {
+export function dedupeConfigDocBaselineEntries(
+  entries: ConfigDocBaselineEntry[],
+): ConfigDocBaselineEntry[] {
   const byPath = new Map<string, ConfigDocBaselineEntry>();
   for (const entry of entries) {
-    byPath.set(entry.path, entry);
+    const current = byPath.get(entry.path);
+    byPath.set(entry.path, current ? mergeConfigDocBaselineEntry(current, entry) : entry);
   }
   return [...byPath.values()].toSorted((left, right) => left.path.localeCompare(right.path));
 }
@@ -328,7 +482,9 @@ export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
   if (!schemaRoot) {
     throw new Error("config schema root is not an object");
   }
-  const entries = dedupeEntries(walkSchema(schemaRoot, response.uiHints));
+  const entries = dedupeConfigDocBaselineEntries(
+    collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
+  );
   return {
     generatedBy: GENERATED_BY,
     entries,

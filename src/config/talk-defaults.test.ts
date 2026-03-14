@@ -30,6 +30,8 @@ describe("talk silence timeout defaults", () => {
 
     expect(FIELD_HELP["talk.silenceTimeoutMs"]).toContain(defaultsDescription);
     expect(talkEntry?.help).toContain(defaultsDescription);
+    expect(readRepoFile("docs/gateway/configuration-reference.md")).toContain(defaultsDescription);
+    expect(readRepoFile("docs/nodes/talk.md")).toContain(defaultsDescription);
   });
 
   it("matches the Apple and Android runtime constants", () => {
