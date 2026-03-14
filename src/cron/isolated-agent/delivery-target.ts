@@ -6,7 +6,10 @@ import {
   resolveAgentMainSessionKey,
   resolveStorePath,
 } from "../../config/sessions.js";
-import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import {
+  listConfiguredMessageChannels,
+  resolveMessageChannelSelection,
+} from "../../infra/outbound/channel-selection.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import {
@@ -84,6 +87,18 @@ export async function resolveDeliveryTarget(
         channelResolutionError = new Error(
           `${detail} Set delivery.channel explicitly or use a main session with a previous channel.`,
         );
+        // Only fall back when exactly one channel is configured (unambiguous).
+        // With multiple channels we must not silently pick one — let the
+        // ambiguity surface so the user sets delivery.channel explicitly.
+        try {
+          const configured = await listConfiguredMessageChannels(cfg);
+          if (configured.length === 1) {
+            fallbackChannel = configured[0];
+          }
+        } catch {
+          // listConfiguredMessageChannels failed; leave fallbackChannel undefined
+          // so the caller gets the original channelResolutionError.
+        }
       }
     }
   }
