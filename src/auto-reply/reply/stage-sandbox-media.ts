@@ -58,9 +58,15 @@ export async function stageSandboxMedia(params: {
   const staged = new Map<string, string>(); // absolute source -> relative sandbox path
 
   for (const raw of rawPaths) {
-    const source = resolveAbsolutePath(raw);
+    let source = resolveAbsolutePath(raw);
     if (!source || staged.has(source)) {
       continue;
+    }
+    // Backward compatibility: if source doesn't exist and accountId is available,
+    // check the base inbound/ directory for media saved before per-agent isolation.
+    const originalSource = source;
+    if (ctx.AccountId && !ctx.MediaRemoteHost) {
+      source = await resolveInboundSourceWithFallback(source, ctx.AccountId);
     }
     const allowed = await isAllowedSourcePath({
       source,
@@ -74,7 +80,9 @@ export async function stageSandboxMedia(params: {
     if (!fileName) {
       continue;
     }
-    const relativeDest = sandbox ? path.join("media", "inbound", fileName) : fileName;
+    // Scope inbound media inside the sandbox by account ID when available
+    const inboundSubdir = ctx.AccountId ? path.join("inbound", ctx.AccountId) : "inbound";
+    const relativeDest = sandbox ? path.join("media", inboundSubdir, fileName) : fileName;
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
 
     try {
@@ -106,8 +114,8 @@ export async function stageSandboxMedia(params: {
     }
 
     // For sandbox use relative path, for remote cache use absolute path
-    const stagedPath = sandbox ? path.posix.join("media", "inbound", fileName) : dest;
-    staged.set(source, stagedPath);
+    const stagedPath = sandbox ? path.posix.join("media", inboundSubdir, fileName) : dest;
+    staged.set(originalSource, stagedPath);
   }
 
   rewriteStagedMediaPaths({
@@ -182,6 +190,36 @@ function resolveAbsolutePath(value: string): string | null {
     return null;
   }
   return resolved;
+}
+
+/**
+ * If the source file does not exist at its expected path, check the base
+ * inbound/ directory as a fallback for media saved before per-agent isolation.
+ */
+async function resolveInboundSourceWithFallback(
+  source: string,
+  accountId: string,
+): Promise<string> {
+  try {
+    await fs.access(source);
+    return source;
+  } catch {
+    // File not found at the expected path; try base inbound/ directory
+  }
+  const mediaDir = getMediaDir();
+  const scopedInbound = path.join(mediaDir, "inbound", accountId);
+  if (!source.startsWith(scopedInbound + path.sep)) {
+    // Source is not in the scoped directory; try it as-is
+    return source;
+  }
+  const fileName = path.basename(source);
+  const fallback = path.join(mediaDir, "inbound", fileName);
+  try {
+    await fs.access(fallback);
+    return fallback;
+  } catch {
+    return source;
+  }
 }
 
 async function isAllowedSourcePath(params: {
