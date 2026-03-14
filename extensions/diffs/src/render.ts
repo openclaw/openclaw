@@ -8,6 +8,7 @@ import type {
 } from "@pierre/diffs";
 import { RegisteredCustomThemes, parsePatchFiles } from "@pierre/diffs";
 import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
+import { ensurePierreThemesRegistered } from "./pierre-themes.js";
 import type {
   DiffInput,
   DiffRenderOptions,
@@ -375,6 +376,8 @@ async function renderBeforeAfterDiff(
   input: Extract<DiffInput, { kind: "before_after" }>,
   options: DiffRenderOptions,
 ): Promise<{ viewerBodyHtml: string; imageBodyHtml: string; fileCount: number }> {
+  await ensurePierreThemesRegistered();
+
   const fileName = resolveBeforeAfterFileName(input);
   const lang = normalizeSupportedLanguage(input.lang);
   const oldFile: FileContents = {
@@ -433,6 +436,8 @@ async function renderPatchDiff(
   input: Extract<DiffInput, { kind: "patch" }>,
   options: DiffRenderOptions,
 ): Promise<{ viewerBodyHtml: string; imageBodyHtml: string; fileCount: number }> {
+  await ensurePierreThemesRegistered();
+
   const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
   if (files.length === 0) {
     throw new Error("Patch input did not contain any file diffs.");
