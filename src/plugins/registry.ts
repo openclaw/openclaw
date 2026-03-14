@@ -13,6 +13,7 @@ import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
+import { normalizeRegisteredProvider } from "./provider-validation.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import {
   isPluginHookName,
@@ -418,6 +419,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const existing = registry.channels.find((entry) => entry.plugin.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `channel already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
     record.channelIds.push(id);
     registry.channels.push({
       pluginId: record.id,
@@ -428,16 +439,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const registerProvider = (record: PluginRecord, provider: ProviderPlugin) => {
-    const id = typeof provider?.id === "string" ? provider.id.trim() : "";
-    if (!id) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "provider registration missing id",
-      });
+    const normalizedProvider = normalizeRegisteredProvider({
+      pluginId: record.id,
+      source: record.source,
+      provider,
+      pushDiagnostic,
+    });
+    if (!normalizedProvider) {
       return;
     }
+    const id = normalizedProvider.id;
     const existing = registry.providers.find((entry) => entry.provider.id === id);
     if (existing) {
       pushDiagnostic({
@@ -451,7 +462,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.providerIds.push(id);
     registry.providers.push({
       pluginId: record.id,
-      provider,
+      provider: normalizedProvider,
       source: record.source,
     });
   };

@@ -18,7 +18,7 @@ const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
 
-type SecretResolutionSource = "config" | "secretRef" | "env" | "missing";
+type SecretResolutionSource = "config" | "secretRef" | "env" | "missing"; // pragma: allowlist secret
 type RuntimeWebProviderSource = "configured" | "auto-detect" | "none";
 
 export type RuntimeWebDiagnosticCode =
@@ -471,39 +471,30 @@ export async function resolveRuntimeWebTools(params: {
       }
     }
 
+    const failUnresolvedSearchNoFallback = (unresolved: { path: string; reason: string }) => {
+      const diagnostic: RuntimeWebDiagnostic = {
+        code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+        message: unresolved.reason,
+        path: unresolved.path,
+      };
+      diagnostics.push(diagnostic);
+      searchMetadata.diagnostics.push(diagnostic);
+      pushWarning(params.context, {
+        code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+        path: unresolved.path,
+        message: unresolved.reason,
+      });
+      throw new Error(`[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK] ${unresolved.reason}`);
+    };
+
     if (configuredProvider) {
       const unresolved = unresolvedWithoutFallback[0];
       if (unresolved) {
-        const diagnostic: RuntimeWebDiagnostic = {
-          code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
-          message: unresolved.reason,
-          path: unresolved.path,
-        };
-        diagnostics.push(diagnostic);
-        searchMetadata.diagnostics.push(diagnostic);
-        pushWarning(params.context, {
-          code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
-          path: unresolved.path,
-          message: unresolved.reason,
-        });
-        throw new Error(`[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK] ${unresolved.reason}`);
+        failUnresolvedSearchNoFallback(unresolved);
       }
     } else {
       if (!selectedProvider && unresolvedWithoutFallback.length > 0) {
-        const unresolved = unresolvedWithoutFallback[0];
-        const diagnostic: RuntimeWebDiagnostic = {
-          code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
-          message: unresolved.reason,
-          path: unresolved.path,
-        };
-        diagnostics.push(diagnostic);
-        searchMetadata.diagnostics.push(diagnostic);
-        pushWarning(params.context, {
-          code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
-          path: unresolved.path,
-          message: unresolved.reason,
-        });
-        throw new Error(`[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK] ${unresolved.reason}`);
+        failUnresolvedSearchNoFallback(unresolvedWithoutFallback[0]);
       }
 
       if (selectedProvider) {

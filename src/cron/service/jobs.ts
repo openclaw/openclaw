@@ -132,11 +132,15 @@ function resolveEveryAnchorMs(params: {
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
+  const isIsolatedLike =
+    job.sessionTarget === "isolated" ||
+    job.sessionTarget === "current" ||
+    job.sessionTarget.startsWith("session:");
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated cron jobs require payload.kind="agentTurn"');
+  if (isIsolatedLike && job.payload.kind !== "agentTurn") {
+    throw new Error('isolated/current/session cron jobs require payload.kind="agentTurn"');
   }
 }
 
@@ -181,6 +185,7 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
   if (!job.delivery || job.delivery.mode === "none") {
     return;
   }
+  // Webhook delivery is allowed for any session target
   if (job.delivery.mode === "webhook") {
     const target = normalizeHttpWebhookUrl(job.delivery.to);
     if (!target) {
@@ -189,7 +194,11 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
     job.delivery.to = target;
     return;
   }
-  if (job.sessionTarget !== "isolated") {
+  const isIsolatedLike =
+    job.sessionTarget === "isolated" ||
+    job.sessionTarget === "current" ||
+    job.sessionTarget.startsWith("session:");
+  if (!isIsolatedLike) {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
   }
   if (job.delivery.channel === "telegram") {
@@ -606,11 +615,11 @@ export function applyJobPatch(
   if (!patch.delivery && patch.payload?.kind === "agentTurn") {
     // Back-compat: legacy clients still update delivery via payload fields.
     const legacyDeliveryPatch = buildLegacyDeliveryPatch(patch.payload);
-    if (
-      legacyDeliveryPatch &&
-      job.sessionTarget === "isolated" &&
-      job.payload.kind === "agentTurn"
-    ) {
+    const isIsolatedLike =
+      job.sessionTarget === "isolated" ||
+      job.sessionTarget === "current" ||
+      job.sessionTarget.startsWith("session:");
+    if (legacyDeliveryPatch && isIsolatedLike && job.payload.kind === "agentTurn") {
       job.delivery = mergeCronDelivery(job.delivery, legacyDeliveryPatch);
     }
   }

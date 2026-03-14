@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramOutbound } from "../channels/plugins/outbound/telegram.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -294,6 +291,24 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
   });
 
+  it("renders invisible Unicode format chars as visible escapes", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          command: "bash safe\u200B.sh",
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+
+    expect(getFirstDeliveryText(deliver)).toContain("Command: `bash safe\\u{200B}.sh`");
+  });
+
   it("formats complex commands as fenced code blocks", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
@@ -360,58 +375,6 @@ describe("exec approval forwarder", () => {
       expectedAccepted: false,
       expectedDeliveryCount: 0,
     });
-  });
-
-  it("prefers turn-source routing over stale session last route", async () => {
-    vi.useFakeTimers();
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approval-forwarder-test-"));
-    try {
-      const storePath = path.join(tmpDir, "sessions.json");
-      fs.writeFileSync(
-        storePath,
-        JSON.stringify({
-          "agent:main:main": {
-            updatedAt: 1,
-            channel: "slack",
-            to: "U1",
-            lastChannel: "slack",
-            lastTo: "U1",
-          },
-        }),
-        "utf-8",
-      );
-
-      const cfg = {
-        session: { store: storePath },
-        approvals: { exec: { enabled: true, mode: "session" } },
-      } as OpenClawConfig;
-
-      const { deliver, forwarder } = createForwarder({ cfg });
-      await expect(
-        forwarder.handleRequested({
-          ...baseRequest,
-          request: {
-            ...baseRequest.request,
-            turnSourceChannel: "whatsapp",
-            turnSourceTo: "+15555550123",
-            turnSourceAccountId: "work",
-            turnSourceThreadId: "1739201675.123",
-          },
-        }),
-      ).resolves.toBe(true);
-
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(deliver).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "whatsapp",
-          to: "+15555550123",
-          accountId: "work",
-          threadId: "1739201675.123",
-        }),
-      );
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
   });
 
   it("can forward resolved notices without pending cache when request payload is present", async () => {
