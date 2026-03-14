@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
+import {
+  applyFutureThreadModelDefaultToSessionEntry,
+  applyModelOverrideToSessionEntry,
+} from "./model-overrides.js";
 
 function applyOpenAiSelection(entry: SessionEntry) {
   return applyModelOverrideToSessionEntry({
@@ -115,6 +118,53 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.providerOverride).toBeUndefined();
     expect(entry.modelOverride).toBeUndefined();
     expect(entry.contextTokens).toBeUndefined();
+    expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+});
+
+describe("applyFutureThreadModelDefaultToSessionEntry", () => {
+  it("stores future-thread default provider/model on parent sessions", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "parent-sess-1",
+      updatedAt: before,
+    };
+
+    const result = applyFutureThreadModelDefaultToSessionEntry({
+      entry,
+      selection: {
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+      },
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.futureThreadProviderOverride).toBe("openai-codex");
+    expect(entry.futureThreadModelOverride).toBe("gpt-5.3-codex");
+    expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+
+  it("clears future-thread defaults when model reset targets configured default", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "parent-sess-2",
+      updatedAt: before,
+      futureThreadProviderOverride: "openai-codex",
+      futureThreadModelOverride: "gpt-5.3-codex",
+    };
+
+    const result = applyFutureThreadModelDefaultToSessionEntry({
+      entry,
+      selection: {
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        isDefault: true,
+      },
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.futureThreadProviderOverride).toBeUndefined();
+    expect(entry.futureThreadModelOverride).toBeUndefined();
     expect((entry.updatedAt ?? 0) > before).toBe(true);
   });
 });

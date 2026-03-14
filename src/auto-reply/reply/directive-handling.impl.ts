@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -10,7 +11,11 @@ import { type SessionEntry, updateSessionStore } from "../../config/sessions.js"
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  applyFutureThreadModelDefaultToSessionEntry,
+  applyModelOverrideToSessionEntry,
+} from "../../sessions/model-overrides.js";
+import { resolveTelegramThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -313,6 +318,7 @@ export async function handleDirectiveOnly(
     directives.hasFastDirective &&
     directives.fastMode !== undefined &&
     directives.fastMode !== currentFastMode;
+  const telegramChannelHint = sessionEntry.channel ?? sessionEntry.lastChannel;
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
   if (directives.hasThinkDirective && directives.thinkLevel) {
@@ -365,6 +371,30 @@ export async function handleDirectiveOnly(
       selection: modelSelection,
       profileOverride,
     });
+
+    const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
+      sessionKey,
+      channelHint: telegramChannelHint,
+    });
+    if (telegramParentSessionKey) {
+      const parentEntry =
+        sessionStore[telegramParentSessionKey] ??
+        ({
+          sessionId: crypto.randomUUID(),
+          updatedAt: Date.now(),
+        } satisfies SessionEntry);
+      const { updated: parentUpdated } = applyFutureThreadModelDefaultToSessionEntry({
+        entry: parentEntry,
+        selection: {
+          provider: modelSelection.provider,
+          model: modelSelection.model,
+          isDefault: modelSelection.isDefault,
+        },
+      });
+      if (parentUpdated) {
+        sessionStore[telegramParentSessionKey] = parentEntry;
+      }
+    }
   }
   if (directives.hasQueueDirective && directives.queueReset) {
     delete sessionEntry.queueMode;
@@ -390,6 +420,13 @@ export async function handleDirectiveOnly(
   if (storePath) {
     await updateSessionStore(storePath, (store) => {
       store[sessionKey] = sessionEntry;
+      const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
+        sessionKey,
+        channelHint: telegramChannelHint,
+      });
+      if (telegramParentSessionKey && sessionStore[telegramParentSessionKey]) {
+        store[telegramParentSessionKey] = sessionStore[telegramParentSessionKey]!;
+      }
     });
   }
   if (modelSelection) {
@@ -485,6 +522,13 @@ export async function handleDirectiveOnly(
         ? `Model reset to default (${labelWithAlias}).`
         : `Model set to ${labelWithAlias}.`,
     );
+    if (resolveTelegramThreadParentSessionKey({ sessionKey, channelHint: telegramChannelHint })) {
+      parts.push(
+        modelSelection.isDefault
+          ? "New Telegram threads in this chat now follow the default model."
+          : `New Telegram threads in this chat will default to ${labelWithAlias}.`,
+      );
+    }
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);
     }

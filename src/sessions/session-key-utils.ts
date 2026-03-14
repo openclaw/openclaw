@@ -130,3 +130,104 @@ export function resolveThreadParentSessionKey(
   const parent = raw.slice(0, idx).trim();
   return parent ? parent : null;
 }
+
+function resolveTelegramChatRoot(params: {
+  sessionKey: string | undefined | null;
+  allowMainScopedThreads: boolean;
+}): string | null {
+  const { sessionKey, allowMainScopedThreads } = params;
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+  const parsed = parseAgentSessionKey(raw);
+  const scoped = (parsed?.rest ?? raw).toLowerCase();
+  if (!scoped.startsWith("telegram:")) {
+    if (!allowMainScopedThreads) {
+      return null;
+    }
+    if (!scoped.startsWith("main:") && scoped !== "main") {
+      return null;
+    }
+  }
+  const hasThreadMarker = scoped.includes(":thread:") || scoped.includes(":topic:");
+  if (!hasThreadMarker) {
+    if (scoped === "main" && allowMainScopedThreads) {
+      return "main";
+    }
+    if (!scoped.startsWith("telegram:")) {
+      return null;
+    }
+  }
+  if (!scoped.startsWith("telegram:") && !allowMainScopedThreads) {
+    return null;
+  }
+  const threadIndex = scoped.indexOf(":thread:");
+  const topicIndex = scoped.indexOf(":topic:");
+  const cutIndex =
+    threadIndex >= 0 && topicIndex >= 0
+      ? Math.min(threadIndex, topicIndex)
+      : threadIndex >= 0
+        ? threadIndex
+        : topicIndex;
+  return (cutIndex >= 0 ? scoped.slice(0, cutIndex) : scoped).trim() || null;
+}
+
+/**
+ * Resolve parent session key for Telegram thread/topic sessions only.
+ * Returns null for non-Telegram sessions so callers can avoid cross-channel
+ * side effects when applying thread-default behavior.
+ */
+export function resolveTelegramThreadParentSessionKey(params: {
+  sessionKey: string | undefined | null;
+  parentSessionKey?: string | null;
+  channelHint?: string | null;
+}): string | null {
+  const raw = (params.sessionKey ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = parseAgentSessionKey(raw);
+  const scoped = (parsed?.rest ?? raw).toLowerCase();
+  if (!scoped.includes(":thread:") && !scoped.includes(":topic:")) {
+    return null;
+  }
+  const channelHint = (params.channelHint ?? "").trim().toLowerCase();
+  const allowMainScopedThreads = channelHint === "telegram";
+  if (!scoped.startsWith("telegram:") && !allowMainScopedThreads) {
+    return null;
+  }
+
+  const sessionChatRoot = resolveTelegramChatRoot({
+    sessionKey: raw,
+    allowMainScopedThreads,
+  });
+  if (!sessionChatRoot) {
+    return null;
+  }
+
+  const explicitParent = (params.parentSessionKey ?? "").trim();
+  if (explicitParent && explicitParent !== raw) {
+    const explicitParentRoot = resolveTelegramChatRoot({
+      sessionKey: explicitParent,
+      allowMainScopedThreads,
+    });
+    if (explicitParentRoot && explicitParentRoot === sessionChatRoot) {
+      return explicitParent;
+    }
+  }
+
+  const derivedParent = resolveThreadParentSessionKey(raw);
+  if (!derivedParent || derivedParent === raw) {
+    return null;
+  }
+  const derivedParentRoot = resolveTelegramChatRoot({
+    sessionKey: derivedParent,
+    allowMainScopedThreads,
+  });
+  if (!derivedParentRoot || derivedParentRoot !== sessionChatRoot) {
+    return null;
+  }
+  return derivedParent;
+}
