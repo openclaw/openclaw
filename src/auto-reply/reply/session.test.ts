@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as sessionsConfig from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
@@ -373,6 +374,79 @@ describe("initSessionState thread forking", () => {
       ? await fs.realpath(parsedHeader.parentSession)
       : undefined;
     expect(actualParentSession).toBe(expectedParentSession);
+  });
+
+  it("uses a stable parent entry reference during parent-fork initialization", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-stable-parent-ref-");
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir);
+
+    const parentSessionId = "parent-stable-ref";
+    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
+    const header = {
+      type: "session",
+      version: 3,
+      id: parentSessionId,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    };
+    const message = {
+      type: "message",
+      id: "m1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "Parent prompt" },
+    };
+    await fs.writeFile(
+      parentSessionFile,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+      "utf-8",
+    );
+
+    const parentSessionKey = "agent:main:slack:channel:c1";
+    const unstableParentStore = {} as Record<string, SessionEntry>;
+    let parentReads = 0;
+    Object.defineProperty(unstableParentStore, parentSessionKey, {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        parentReads += 1;
+        if (parentReads === 1) {
+          return {
+            sessionId: parentSessionId,
+            sessionFile: parentSessionFile,
+            updatedAt: Date.now(),
+          };
+        }
+        return undefined;
+      },
+    });
+
+    const loadStoreSpy = vi
+      .spyOn(sessionsConfig, "loadSessionStore")
+      .mockReturnValue(unstableParentStore);
+
+    try {
+      const cfg = {
+        session: { store: path.join(root, "sessions.json") },
+      } as OpenClawConfig;
+      const threadSessionKey = "agent:main:slack:channel:c1:thread:stable";
+      const result = await initSessionState({
+        ctx: {
+          Body: "Thread reply",
+          SessionKey: threadSessionKey,
+          ParentSessionKey: parentSessionKey,
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.sessionKey).toBe(threadSessionKey);
+      expect(result.sessionEntry.forkedFromParent).toBe(true);
+      expect(parentReads).toBe(1);
+    } finally {
+      loadStoreSpy.mockRestore();
+    }
   });
 
   it("records topic-specific session files when MessageThreadId is present", async () => {
