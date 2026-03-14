@@ -726,4 +726,45 @@ describe("chat view", () => {
     expect(labels).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
     expect(labels).not.toContain("Subagent:");
   });
+
+  it("disambiguates duplicate grouped labels with the scoped key suffix", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
+    state.settings.sessionKey = state.sessionKey;
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
+          kind: "direct",
+          updatedAt: null,
+          label: "cron-config-check",
+        },
+        {
+          key: "agent:main:subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
+          kind: "direct",
+          updatedAt: null,
+          label: "cron-config-check",
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(labels).toContain(
+      "Subagent: cron-config-check · subagent:4f2146de-887b-4176-9abe-91140082959b",
+    );
+    expect(labels).toContain(
+      "Subagent: cron-config-check · subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
+    );
+    expect(labels).not.toContain("Subagent: cron-config-check");
+  });
 });
