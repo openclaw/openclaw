@@ -141,12 +141,17 @@ export const channelsHandlers: GatewayRequestHandlers = {
             configured = await plugin.config.isConfigured(account, cfg);
           }
           if (configured) {
-            probeResult = await plugin.status.probeAccount({
-              account,
-              timeoutMs,
-              cfg,
-            });
-            lastProbeAt = Date.now();
+            try {
+              probeResult = await plugin.status.probeAccount({
+                account,
+                timeoutMs,
+                cfg,
+              });
+              lastProbeAt = Date.now();
+            } catch (err) {
+              probeResult = { ok: false, error: formatForLog(err) };
+              lastProbeAt = Date.now();
+            }
           }
         }
         let auditResult: unknown;
@@ -156,12 +161,16 @@ export const channelsHandlers: GatewayRequestHandlers = {
             configured = await plugin.config.isConfigured(account, cfg);
           }
           if (configured) {
-            auditResult = await plugin.status.auditAccount({
-              account,
-              timeoutMs,
-              cfg,
-              probe: probeResult,
-            });
+            try {
+              auditResult = await plugin.status.auditAccount({
+                account,
+                timeoutMs,
+                cfg,
+                probe: probeResult,
+              });
+            } catch (err) {
+              auditResult = { ok: false, error: formatForLog(err) };
+            }
           }
         }
         const runtimeSnapshot = resolveRuntimeSnapshot(channelId, accountId, defaultAccountId);
