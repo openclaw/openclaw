@@ -33,8 +33,8 @@ export function resolveFeishuToolAccount(params: {
     cfg: params.api.config,
     accountId:
       normalizeOptionalAccountId(params.executeParams?.accountId) ??
-      readConfiguredDefaultAccountId(params.api.config) ??
-      normalizeOptionalAccountId(params.defaultAccountId),
+      normalizeOptionalAccountId(params.defaultAccountId) ??
+      readConfiguredDefaultAccountId(params.api.config),
   });
 }
 
