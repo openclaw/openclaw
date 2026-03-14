@@ -66,4 +66,20 @@ describe("resolveAgentOutboundIdentity", () => {
 
     expect(resolveAgentOutboundIdentity({} as never, "main")).toBeUndefined();
   });
+
+  it("drops blank remote avatar urls while keeping other identity fields", () => {
+    resolveAgentIdentityMock.mockReturnValueOnce({
+      name: "  Agent Smith  ",
+      emoji: "  🕶️  ",
+    });
+    resolveAgentAvatarMock.mockReturnValueOnce({
+      kind: "remote",
+      url: "   ",
+    });
+
+    expect(resolveAgentOutboundIdentity({} as never, "main")).toEqual({
+      name: "Agent Smith",
+      emoji: "🕶️",
+    });
+  });
 });
