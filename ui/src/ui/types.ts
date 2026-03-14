@@ -318,6 +318,7 @@ export type PresenceEntry = {
 export type GatewaySessionsDefaults = {
   model: string | null;
   contextTokens: number | null;
+  thinkingDefault?: string;
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;

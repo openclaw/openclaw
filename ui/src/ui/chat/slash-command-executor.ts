@@ -166,11 +166,11 @@ async function executeThink(
 
   if (!rawLevel) {
     try {
-      const { session, models, catalogAvailable } = await loadThinkingCommandState(
+      const { session, defaults, models, catalogAvailable } = await loadThinkingCommandState(
         client,
         sessionKey,
       );
-      const levelLine = `Current thinking level: ${resolveCurrentThinkingLevel(session, models)}.`;
+      const levelLine = `Current thinking level: ${resolveCurrentThinkingLevel(session, models, defaults?.thinkingDefault)}.`;
       const catalogNote = catalogAvailable
         ? ""
         : " _(model catalog unavailable — level may be inaccurate)_";
@@ -290,7 +290,7 @@ async function executeStatus(
   sessionKey: string,
 ): Promise<SlashCommandResult> {
   try {
-    const { session, models } = await loadThinkingCommandState(client, sessionKey);
+    const { session, defaults, models } = await loadThinkingCommandState(client, sessionKey);
     if (!session) {
       return { content: "No active session." };
     }
@@ -302,8 +302,9 @@ async function executeStatus(
       lines.push(`Provider: \`${session.modelProvider}\``);
     }
     // Use resolveCurrentThinkingLevel so the effective level (including model
-    // defaults) is shown, not just the raw persisted field which may be unset.
-    lines.push(`Thinking: **${resolveCurrentThinkingLevel(session, models)}**`);
+    // defaults and agents.defaults.thinkingDefault config) is shown, not just
+    // the raw persisted field which may be unset.
+    lines.push(`Thinking: **${resolveCurrentThinkingLevel(session, models, defaults?.thinkingDefault)}**`);
     const verboseLevel = normalizeVerboseLevel(session.verboseLevel) ?? "off";
     lines.push(`Verbose: **${verboseLevel}**`);
     lines.push(`Fast mode: **${resolveCurrentFastMode(session)}**`);
@@ -588,6 +589,7 @@ async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey
   const models = catalogAvailable ? (modelsResult.value?.models ?? []) : [];
   return {
     session: resolveCurrentSession(sessions, sessionKey),
+    defaults: sessions.defaults,
     models,
     catalogAvailable,
   };
@@ -596,10 +598,20 @@ async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey
 function resolveCurrentThinkingLevel(
   session: GatewaySessionRow | undefined,
   models: ModelCatalogEntry[],
+  configuredDefault?: string,
 ): string {
   const persisted = normalizeThinkLevel(session?.thinkingLevel);
   if (persisted) {
     return persisted;
+  }
+  // Honour agents.defaults.thinkingDefault from the gateway config before
+  // falling back to the model-catalog default, matching the runtime resolution
+  // order used by resolveThinkingDefault in src/agents/model-selection.ts.
+  if (configuredDefault) {
+    const normalized = normalizeThinkLevel(configuredDefault);
+    if (normalized) {
+      return normalized;
+    }
   }
   if (!session?.modelProvider || !session.model) {
     return "off";

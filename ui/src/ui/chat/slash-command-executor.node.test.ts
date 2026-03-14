@@ -501,6 +501,49 @@ describe("executeSlashCommand /status", () => {
     expect(result.content).toContain("Thinking: **low**");
   });
 
+  it("uses agents.defaults.thinkingDefault when no per-session override or catalog default", async () => {
+    // Regression for P2 finding (comment #2934861720): /status must honour
+    // agents.defaults.thinkingDefault from the gateway config, not just the
+    // model-catalog default, so configured-default workflows show the correct level.
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: { model: null, contextTokens: null, thinkingDefault: "medium" },
+          sessions: [
+            row("agent:main:main", {
+              model: "claude-opus-4-5",
+              modelProvider: "anthropic",
+              // thinkingLevel intentionally absent
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        // No reasoning:true — model catalog alone would return "off"
+        return {
+          models: [
+            {
+              id: "claude-opus-4-5",
+              name: "Claude Opus 4.5",
+              provider: "anthropic",
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "status",
+      "",
+    );
+
+    // Should show "medium" (agents.defaults.thinkingDefault), not "off"
+    expect(result.content).toContain("Thinking: **medium**");
+  });
+
   it("returns 'No active session.' when session is not found", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {

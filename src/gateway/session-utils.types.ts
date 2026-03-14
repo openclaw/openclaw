@@ -11,6 +11,7 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  thinkingDefault?: string;
 };
 
 export type GatewaySessionRow = {
