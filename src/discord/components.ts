@@ -167,6 +167,8 @@ export type DiscordComponentEntry = {
   messageId?: string;
   createdAt?: number;
   expiresAt?: number;
+  /** Text content of the card that contains this button, for context when dispatching. */
+  cardText?: string;
 };
 
 export type DiscordModalFieldDefinition = {
@@ -947,6 +949,25 @@ export function buildDiscordComponentMessage(params: {
     | File
   > = [];
 
+  // Collect all text content from the spec to attach as context to button entries.
+  const cardTextParts: string[] = [];
+  if (params.spec.text ?? params.fallbackText) {
+    cardTextParts.push((params.spec.text ?? params.fallbackText)!);
+  }
+  for (const block of params.spec.blocks ?? []) {
+    if (block.type === "text") {
+      cardTextParts.push(block.text);
+    } else if (block.type === "section") {
+      if (block.text) {
+        cardTextParts.push(block.text);
+      }
+      if (block.texts) {
+        cardTextParts.push(...block.texts);
+      }
+    }
+  }
+  const cardText = cardTextParts.length > 0 ? cardTextParts.join("\n") : undefined;
+
   const addEntry = (entry: DiscordComponentEntry) => {
     entries.push({
       ...entry,
@@ -954,6 +975,7 @@ export function buildDiscordComponentMessage(params: {
       agentId: params.agentId,
       accountId: params.accountId,
       reusable: entry.reusable ?? params.spec.reusable,
+      cardText: entry.cardText ?? cardText,
     });
   };
 
@@ -1137,13 +1159,20 @@ export function formatDiscordComponentEventText(params: {
   kind: "button" | "select";
   label: string;
   values?: string[];
+  cardText?: string;
 }): string {
+  let text: string;
   if (params.kind === "button") {
-    return `Clicked "${params.label}".`;
+    text = `Clicked "${params.label}".`;
+  } else {
+    const values = params.values ?? [];
+    text =
+      values.length === 0
+        ? `Updated "${params.label}".`
+        : `Selected ${values.join(", ")} from "${params.label}".`;
   }
-  const values = params.values ?? [];
-  if (values.length === 0) {
-    return `Updated "${params.label}".`;
+  if (params.cardText) {
+    text += `\n\nCard context:\n${params.cardText}`;
   }
-  return `Selected ${values.join(", ")} from "${params.label}".`;
+  return text;
 }
