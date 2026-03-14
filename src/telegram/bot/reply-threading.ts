@@ -32,15 +32,19 @@ export function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
 }
 
-export async function sendChunkedTelegramReplyText<TChunk, TReplyMarkup = unknown>(params: {
+export async function sendChunkedTelegramReplyText<
+  TChunk,
+  TReplyMarkup = unknown,
+  TProgress extends DeliveryProgress = DeliveryProgress,
+>(params: {
   chunks: readonly TChunk[];
-  progress: DeliveryProgress;
+  progress: TProgress;
   replyToId?: number;
   replyToMode: ReplyToMode;
   replyMarkup?: TReplyMarkup;
   replyQuoteText?: string;
   quoteOnlyOnFirstChunk?: boolean;
-  markDelivered?: (progress: DeliveryProgress) => void;
+  markDelivered?: (progress: TProgress) => void;
   sendChunk: (opts: {
     chunk: TChunk;
     isFirstChunk: boolean;
