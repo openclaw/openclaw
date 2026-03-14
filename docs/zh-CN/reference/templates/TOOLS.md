@@ -15,7 +15,20 @@ x-i18n:
 
 Skills 定义了工具的*工作方式*。此文件用于记录*你的*具体信息——那些你的环境中独有的内容。
 
-## 应该放什么
+## 环境
+
+- **服务器：** _（如 AWS EC2、本地机器、VPS）_
+- **系统：** _（如 Ubuntu 24.04 ARM64、macOS）_
+- **IP：** _（按需填写内外网地址）_
+- **运行时：** _（如 Node.js v22、Python 3.12）_
+
+## 项目
+
+_（列出活跃项目及关键信息）_
+
+- **project-name** — 简短描述，特殊规则或约定
+
+## 还应该放什么
 
 例如：
 
@@ -24,19 +37,22 @@ Skills 定义了工具的*工作方式*。此文件用于记录*你的*具体信
 - TTS 首选语音
 - 音箱/房间名称
 - 设备昵称
+- API 端点或服务 URL
 - 任何与环境相关的内容
 
 ## 示例
 
 ```markdown
-### Cameras
-
-- living-room → 主区域，180° 广角
-- front-door → 入口，运动触发
-
 ### SSH
 
-- home-server → 192.168.1.100, user: admin
+- prod-server → 10.0.0.1, user: deploy
+- staging → 10.0.0.2, user: deploy
+
+### 服务配置
+
+- Config: ~/.openclaw/openclaw.json
+- Auth: ~/.openclaw/agents/main/agent/auth-profiles.json
+- Workspace: ~/workspace/
 
 ### TTS
 
