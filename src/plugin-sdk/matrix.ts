@@ -103,6 +103,8 @@ export {
   resolveSenderScopedGroupPolicy,
 } from "./group-access.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+export { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
+export type { KeyedAsyncQueueHooks } from "./keyed-async-queue.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { runPluginCommandWithTimeout } from "./run-command.js";
 export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-dispatch.js";
