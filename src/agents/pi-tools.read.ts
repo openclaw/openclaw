@@ -620,8 +620,7 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   }) as unknown as AnyAgentTool;
   const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, params.root, {
     resolvePath: (_root, pathParam) => pathParam,
-    readFile: (filePath, signal) =>
-      params.bridge.readFile({ filePath, cwd: params.root, signal }),
+    readFile: (filePath, signal) => params.bridge.readFile({ filePath, cwd: params.root, signal }),
   });
   return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
 }

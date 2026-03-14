@@ -30,9 +30,7 @@ export function wrapHostEditToolWithPostWriteRecovery(
   options?: PostWriteRecoveryOptions,
 ): AnyAgentTool {
   const resolvePath = options?.resolvePath ?? resolveHostEditPath;
-  const readFile =
-    options?.readFile ??
-    ((filePath: string) => fs.readFile(filePath, "utf-8"));
+  const readFile = options?.readFile ?? ((filePath: string) => fs.readFile(filePath, "utf-8"));
 
   return {
     ...base,
