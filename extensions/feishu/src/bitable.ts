@@ -179,12 +179,20 @@ async function listRecords(
   tableId: string,
   pageSize?: number,
   pageToken?: string,
+  filter?: string,
+  sort?: string[],
+  fieldNames?: string[],
+  viewId?: string,
 ) {
   const res = await client.bitable.appTableRecord.list({
     path: { app_token: appToken, table_id: tableId },
     params: {
       page_size: pageSize ?? 100,
       ...(pageToken && { page_token: pageToken }),
+      ...(filter && { filter }),
+      ...(sort && sort.length > 0 && { sort: JSON.stringify(sort) }),
+      ...(fieldNames && fieldNames.length > 0 && { field_names: JSON.stringify(fieldNames) }),
+      ...(viewId && { view_id: viewId }),
     },
   });
   ensureLarkSuccess(res, "bitable.appTableRecord.list", { appToken, tableId, pageSize });
@@ -458,6 +466,26 @@ const ListRecordsSchema = Type.Object({
     description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  view_id: Type.Optional(
+    Type.String({ description: "View ID to scope the query to a specific view" }),
+  ),
+  filter: Type.Optional(
+    Type.String({
+      description:
+        'Server-side filter expression. Syntax: AND/OR(condition1, condition2, ...). Conditions: CurrentValue.[field]="value", CurrentValue.[field]>123, etc. Example: AND(CurrentValue.[Status]="Open", CurrentValue.[Score]>7)',
+    }),
+  ),
+  sort: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        'Array of sort expressions. Example: ["Score DESC", "Name ASC"]. Each entry is "field_name DESC" or "field_name ASC".',
+    }),
+  ),
+  field_names: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Only return these fields (by name). Omit to return all fields.",
+    }),
+  ),
   page_size: Type.Optional(
     Type.Number({
       description: "Number of records per page (1-500, default 100)",
@@ -603,6 +631,10 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   registerBitableTool<{
     app_token: string;
     table_id: string;
+    view_id?: string;
+    filter?: string;
+    sort?: string[];
+    field_names?: string[];
     page_size?: number;
     page_token?: string;
     accountId?: string;
@@ -618,6 +650,10 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
         params.table_id,
         params.page_size,
         params.page_token,
+        params.filter,
+        params.sort,
+        params.field_names,
+        params.view_id,
       );
     },
   });
