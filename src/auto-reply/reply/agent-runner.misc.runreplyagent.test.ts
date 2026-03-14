@@ -890,6 +890,42 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(lifecyclePhases).toEqual(["start", "end"]);
     expect(result).toMatchObject({ text: "ok" });
   });
+
+  it("applies outbound transforms to CLI assistant stream events", async () => {
+    const runId = "00000000-0000-0000-0000-000000000002";
+    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
+    const assistantTexts: string[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.runId !== runId || evt.stream !== "assistant") {
+        return;
+      }
+      const text = evt.data?.text;
+      if (typeof text === "string") {
+        assistantTexts.push(text);
+      }
+    });
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      runOutboundTransforms: (text: string) => text.replaceAll("secret", "public"),
+    });
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "secret answer" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "opus-4.5",
+        },
+      },
+    });
+
+    try {
+      await createRun();
+    } finally {
+      unsubscribe();
+      randomSpy.mockRestore();
+    }
+
+    expect(assistantTexts).toEqual(["public answer"]);
+  });
 });
 
 describe("runReplyAgent messaging tool suppression", () => {

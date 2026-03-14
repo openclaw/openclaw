@@ -265,7 +265,7 @@ export async function runAgentTurnWithFallback(params: {
                   emitAgentEvent({
                     runId,
                     stream: "assistant",
-                    data: { text: cliText },
+                    data: { text: applyOutboundTransforms(cliText) },
                   });
                 }
 
