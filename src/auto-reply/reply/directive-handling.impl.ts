@@ -27,6 +27,7 @@ import {
   withOptions,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
+import { maybeBlockOversizedModelSwitch } from "./model-switch-guard.js";
 
 function resolveExecDefaults(params: {
   cfg: OpenClawConfig;
@@ -130,6 +131,19 @@ export async function handleDirectiveOnly(
   }
   const modelSelection = modelResolution.modelSelection;
   const profileOverride = modelResolution.profileOverride;
+  const blockedModelSwitchText = modelSelection
+    ? maybeBlockOversizedModelSwitch({
+        cfg: params.cfg,
+        sessionEntry,
+        currentProvider: provider,
+        currentModel: model,
+        targetProvider: modelSelection.provider,
+        targetModel: modelSelection.model,
+      })
+    : undefined;
+  if (blockedModelSwitchText) {
+    return { text: blockedModelSwitchText };
+  }
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;

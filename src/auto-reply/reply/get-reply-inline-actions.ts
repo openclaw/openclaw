@@ -1,5 +1,4 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
-import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
 import { getChannelDock } from "../../channels/dock.js";
@@ -30,23 +29,29 @@ import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
-let builtinSlashCommands: Set<string> | null = null;
+const INLINE_DIRECTIVE_COMMAND_NAMES = [
+  "think",
+  "verbose",
+  "reasoning",
+  "elevated",
+  "exec",
+  "model",
+  "status",
+  "queue",
+] as const;
+
+let cachedBuiltinSlashCommands: Set<string> | undefined;
 
 function getBuiltinSlashCommands(): Set<string> {
-  if (builtinSlashCommands) {
-    return builtinSlashCommands;
+  if (cachedBuiltinSlashCommands) {
+    return cachedBuiltinSlashCommands;
   }
-  builtinSlashCommands = listReservedChatSlashCommandNames([
-    "think",
-    "verbose",
-    "reasoning",
-    "elevated",
-    "exec",
-    "model",
-    "status",
-    "queue",
+  // Resolve this lazily to avoid an import-time cycle through
+  // skill-commands -> commands-registry -> plugins/runtime -> get-reply.
+  cachedBuiltinSlashCommands = listReservedChatSlashCommandNames([
+    ...INLINE_DIRECTIVE_COMMAND_NAMES,
   ]);
-  return builtinSlashCommands;
+  return cachedBuiltinSlashCommands;
 }
 
 function resolveSlashCommandName(commandBodyNormalized: string): string | null {
@@ -205,6 +210,8 @@ export async function handleInlineActions(params: {
         resolveGatewayMessageChannel(ctx.Provider) ??
         undefined;
 
+      // Delay the full tool registry import until a slash command actually dispatches a tool.
+      const { createOpenClawTools } = await import("../../agents/openclaw-tools.runtime.js");
       const tools = createOpenClawTools({
         agentSessionKey: sessionKey,
         agentChannel: channel,

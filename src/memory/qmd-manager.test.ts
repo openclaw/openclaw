@@ -62,7 +62,37 @@ function isMcporterCommand(cmd: unknown): boolean {
   if (typeof cmd !== "string") {
     return false;
   }
-  return /(^|[\\/])mcporter(?:\.cmd)?$/i.test(cmd);
+  return /(^|[\\/])mcporter(?:\.cmd|\.exe)?$/i.test(cmd);
+}
+
+async function seedWindowsCmdShimFixture(params: {
+  rootDir: string;
+  packageName: "mcporter" | "qmd";
+}) {
+  const nodeModulesDir = path.join(params.rootDir, "node_modules");
+  const shimDir = path.join(nodeModulesDir, ".bin");
+  const packageDir = path.join(nodeModulesDir, params.packageName);
+  const entrypointPath = path.join(packageDir, "dist", `${params.packageName}.exe`);
+  const scriptPath = path.join(packageDir, "dist", "cli.js");
+  await fs.mkdir(path.dirname(entrypointPath), { recursive: true });
+  await fs.mkdir(shimDir, { recursive: true });
+  await fs.writeFile(
+    path.join(shimDir, `${params.packageName}.cmd`),
+    `@echo off\r\n"%~dp0\\..\\${params.packageName}\\dist\\${params.packageName}.exe" %*\r\n`,
+    "utf8",
+  );
+  await fs.writeFile(entrypointPath, "", "utf8");
+  await fs.writeFile(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: params.packageName,
+      version: "0.0.0",
+      bin: { [params.packageName]: "dist/cli.js" },
+    }),
+    "utf8",
+  );
+  await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+  return { shimDir };
 }
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -92,8 +122,6 @@ import { QmdMemoryManager } from "./qmd-manager.js";
 import { requireNodeSqlite } from "./sqlite.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
-const originalPath = process.env.PATH;
-const originalPathExt = process.env.PATHEXT;
 const originalWindowsPath = (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
 
 describe("QmdMemoryManager", () => {
@@ -104,6 +132,8 @@ describe("QmdMemoryManager", () => {
   let stateDir: string;
   let cfg: OpenClawConfig;
   const agentId = "main";
+  const originalPath = process.env.PATH;
+  const originalPathExt = process.env.PATHEXT;
 
   async function createManager(params?: { mode?: "full" | "status"; cfg?: OpenClawConfig }) {
     const cfgToUse = params?.cfg ?? cfg;
@@ -142,6 +172,14 @@ describe("QmdMemoryManager", () => {
     // Only workspace must exist for configured collection paths; state paths are
     // created lazily by manager code when needed.
     await fs.mkdir(workspaceDir);
+    if (process.platform === "win32") {
+      // Isolate Windows shim resolution from the runner's ambient PATH so qmd
+      // unit tests stay deterministic under the fail-closed wrapper policy.
+      const { shimDir } = await seedWindowsCmdShimFixture({ rootDir: tmpRoot, packageName: "qmd" });
+      await seedWindowsCmdShimFixture({ rootDir: tmpRoot, packageName: "mcporter" });
+      process.env.PATH = shimDir;
+      process.env.PATHEXT = ".CMD;.EXE;.BAT;.COM";
+    }
     process.env.OPENCLAW_STATE_DIR = stateDir;
     // Keep the default Windows path unresolved for most tests so spawn mocks can
     // match the logical package command. Tests that verify wrapper resolution
@@ -181,6 +219,8 @@ describe("QmdMemoryManager", () => {
     }
     delete (globalThis as Record<string, unknown>).__openclawMcporterDaemonStart;
     delete (globalThis as Record<string, unknown>).__openclawMcporterColdStartWarned;
+    process.env.PATH = originalPath;
+    process.env.PATHEXT = originalPathExt;
   });
 
   it("debounces back-to-back sync calls", async () => {
@@ -1101,19 +1141,7 @@ describe("QmdMemoryManager", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const previousPath = process.env.PATH;
     try {
-      const nodeModulesDir = path.join(tmpRoot, "node_modules");
-      const shimDir = path.join(nodeModulesDir, ".bin");
-      const packageDir = path.join(nodeModulesDir, "qmd");
-      const scriptPath = path.join(packageDir, "dist", "cli.js");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.mkdir(shimDir, { recursive: true });
-      await fs.writeFile(path.join(shimDir, "qmd.cmd"), "@echo off\r\n", "utf8");
-      await fs.writeFile(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({ name: "qmd", version: "0.0.0", bin: { qmd: "dist/cli.js" } }),
-        "utf8",
-      );
-      await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+      const { shimDir } = await seedWindowsCmdShimFixture({ rootDir: tmpRoot, packageName: "qmd" });
       process.env.PATH = `${shimDir};${previousPath ?? ""}`;
 
       const { manager } = await createManager({ mode: "status" });
@@ -1129,8 +1157,10 @@ describe("QmdMemoryManager", () => {
       expect(qmdCalls.length).toBeGreaterThan(0);
       for (const call of qmdCalls) {
         const command = String(call[0]);
+        const args = call[1] as string[] | undefined;
         const options = call[2] as { shell?: boolean } | undefined;
         expect(command).not.toMatch(/(^|[\\/])qmd\.cmd$/i);
+        expect(args?.[0]).toBe("update");
         expect(options?.shell).not.toBe(true);
       }
 
@@ -1612,19 +1642,10 @@ describe("QmdMemoryManager", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const previousPath = process.env.PATH;
     try {
-      const nodeModulesDir = path.join(tmpRoot, "node_modules");
-      const shimDir = path.join(nodeModulesDir, ".bin");
-      const packageDir = path.join(nodeModulesDir, "mcporter");
-      const scriptPath = path.join(packageDir, "dist", "cli.js");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.mkdir(shimDir, { recursive: true });
-      await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\r\n", "utf8");
-      await fs.writeFile(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({ name: "mcporter", version: "0.0.0", bin: { mcporter: "dist/cli.js" } }),
-        "utf8",
-      );
-      await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+      const { shimDir } = await seedWindowsCmdShimFixture({
+        rootDir: tmpRoot,
+        packageName: "mcporter",
+      });
       process.env.PATH = `${shimDir};${previousPath ?? ""}`;
 
       cfg = {
@@ -1658,9 +1679,11 @@ describe("QmdMemoryManager", () => {
       );
       expect(mcporterCall).toBeDefined();
       const callCommand = mcporterCall?.[0];
+      const callArgs = mcporterCall?.[1] as string[] | undefined;
       expect(typeof callCommand).toBe("string");
       const options = mcporterCall?.[2] as { shell?: boolean } | undefined;
       expect(callCommand).not.toBe("mcporter.cmd");
+      expect(callArgs?.[0]).toBe("call");
       expect(options?.shell).not.toBe(true);
 
       await manager.close();
@@ -1670,7 +1693,7 @@ describe("QmdMemoryManager", () => {
     }
   });
 
-  it("fails closed on Windows EINVAL cmd-shim failures instead of retrying through the shell", async () => {
+  it("does not retry Windows mcporter wrapper failures through the shell", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const previousPath = process.env.PATH;
     try {
@@ -1710,18 +1733,30 @@ describe("QmdMemoryManager", () => {
       });
 
       const { manager } = await createManager();
-      await expect(
-        manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
-      ).rejects.toThrow(/without shell execution|EINVAL/);
+      let searchResult: unknown;
+      let searchError: unknown;
+      try {
+        searchResult = await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+      } catch (err) {
+        searchError = err;
+      }
       const attemptedCmdShim = (firstCallCommand ?? "").toLowerCase().endsWith(".cmd");
+      if (searchError !== undefined) {
+        const searchErrorMessage =
+          searchError instanceof Error ? searchError.message : JSON.stringify(searchError);
+        expect(searchErrorMessage).toMatch(/without shell execution|EINVAL/);
+      } else {
+        // Some hosts resolve the wrapper to a direct entrypoint before spawn,
+        // which is also acceptable as long as we never fall back to shell mode.
+        expect(searchResult).toEqual([]);
+      }
+      expect(
+        spawnMock.mock.calls.some(
+          (call: unknown[]) => (call[2] as { shell?: boolean } | undefined)?.shell === true,
+        ),
+      ).toBe(false);
       if (attemptedCmdShim) {
-        expect(
-          spawnMock.mock.calls.some(
-            (call: unknown[]) =>
-              call[0] === "mcporter" &&
-              (call[2] as { shell?: boolean } | undefined)?.shell === true,
-          ),
-        ).toBe(false);
+        expect(searchError).toBeDefined();
       }
       await manager.close();
     } finally {

@@ -1,7 +1,12 @@
 import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { parseSlackBlocksInput } from "../../../slack/blocks-input.js";
-import { sendMessageSlack, type SlackSendIdentity } from "../../../slack/send.js";
+import {
+  sendMessageSlack,
+  type SlackSendFn,
+  type SlackSendIdentity,
+  type SlackSendOpts,
+} from "../../../slack/send.js";
 import type { ChannelOutboundAdapter } from "../types.js";
 import { sendTextMediaPayload } from "./direct-text-media.js";
 
@@ -49,14 +54,14 @@ async function applySlackMessageSendingHooks(params: {
 }
 
 async function sendSlackOutboundMessage(params: {
-  cfg: NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"];
+  cfg: SlackSendOpts["cfg"];
   to: string;
   text: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   blocks?: NonNullable<Parameters<typeof sendMessageSlack>[2]>["blocks"];
   accountId?: string | null;
-  deps?: { sendSlack?: typeof sendMessageSlack } | null;
+  deps?: { sendSlack?: SlackSendFn } | null;
   replyToId?: string | null;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
