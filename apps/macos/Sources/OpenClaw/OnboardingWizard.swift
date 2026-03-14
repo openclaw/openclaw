@@ -27,6 +27,50 @@ private func bridgeToLocal(_ value: ProtocolAnyCodable?) -> AnyCodable? {
     value.map(bridgeToLocal)
 }
 
+private let onboardingBidiControlScalars: Set<UInt32> = [
+    0x202A, // LRE
+    0x202B, // RLE
+    0x202C, // PDF
+    0x202D, // LRO
+    0x202E, // RLO
+    0x2066, // LRI
+    0x2067, // RLI
+    0x2068, // FSI
+    0x2069, // PDI
+]
+
+private func normalizeGatewayFailureMessage(_ message: String) -> String {
+    let filteredScalars = message.unicodeScalars.filter { scalar in
+        if CharacterSet.controlCharacters.contains(scalar) {
+            return false
+        }
+        return !onboardingBidiControlScalars.contains(scalar.value)
+    }
+    return String(String.UnicodeScalarView(filteredScalars))
+        .replacingOccurrences(of: "\t", with: " ")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+func onboardingGatewayReadyFailureDescription(status: GatewayProcessManager.Status) -> String {
+    if case let .failed(rawMessage) = status {
+        let message = normalizeGatewayFailureMessage(rawMessage).lowercased()
+        if message.contains("openclaw cli not found") || message.contains("cli not found") {
+            return "OpenClaw CLI not found. Install the CLI and try again."
+        }
+        if message.contains("node") && message.contains("not found") {
+            return "Node.js runtime not found. Install Node.js 22+ and try again."
+        }
+        if message.contains("launchd disabled") {
+            return "Gateway auto-start is disabled. Enable launchd or start the gateway manually."
+        }
+        if message.contains("did not start in time") || message.contains("timeout") {
+            return "Gateway did not start in time. Check Gateway logs and try again."
+        }
+        return "Gateway failed to start. Check Gateway logs for details."
+    }
+    return "Gateway did not become ready. Check that it is running."
+}
+
 @MainActor
 @Observable
 final class OnboardingWizardModel {
@@ -83,7 +127,8 @@ final class OnboardingWizardModel {
                 throw NSError(
                     domain: "Gateway",
                     code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Gateway did not become ready. Check that it is running."])
+                    userInfo: [NSLocalizedDescriptionKey: onboardingGatewayReadyFailureDescription(
+                        status: GatewayProcessManager.shared.status)])
             }
             var params: [String: AnyCodable] = ["mode": AnyCodable("local")]
             if let workspace, !workspace.isEmpty {
@@ -96,7 +141,7 @@ final class OnboardingWizardModel {
         } catch {
             self.status = "error"
             self.errorMessage = error.localizedDescription
-            onboardingWizardLogger.error("start failed: \(error.localizedDescription, privacy: .public)")
+            onboardingWizardLogger.error("start failed: \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -123,7 +168,7 @@ final class OnboardingWizardModel {
             }
             self.status = "error"
             self.errorMessage = error.localizedDescription
-            onboardingWizardLogger.error("submit failed: \(error.localizedDescription, privacy: .public)")
+            onboardingWizardLogger.error("submit failed: \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -137,7 +182,7 @@ final class OnboardingWizardModel {
         } catch {
             self.status = "error"
             self.errorMessage = error.localizedDescription
-            onboardingWizardLogger.error("cancel failed: \(error.localizedDescription, privacy: .public)")
+            onboardingWizardLogger.error("cancel failed: \(error.localizedDescription, privacy: .private)")
         }
     }
 

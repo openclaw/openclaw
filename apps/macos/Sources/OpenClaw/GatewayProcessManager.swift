@@ -375,15 +375,26 @@ final class GatewayProcessManager {
         Task { await ControlChannel.shared.configure() }
     }
 
+    private func shouldAbortReadinessWait(for status: Status) -> Bool {
+        guard case let .failed(message) = status else { return false }
+        // Only treat the active startup-timeout status as recoverable.
+        // Using prior failure metadata here can mask new fatal failures.
+        return message != "Gateway did not start in time"
+    }
+
     func waitForGatewayReady(timeout: TimeInterval = 6) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if !self.desiredActive { return false }
+            // Startup can fail before readiness polling begins (for example missing CLI).
+            // Return immediately so callers can surface the concrete failure reason.
+            if self.shouldAbortReadinessWait(for: self.status) { return false }
             do {
                 _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
                 self.clearLastFailure()
                 return true
             } catch {
+                if self.shouldAbortReadinessWait(for: self.status) { return false }
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
         }
@@ -419,6 +430,10 @@ final class GatewayProcessManager {
 extension GatewayProcessManager {
     func setTestingConnection(_ connection: GatewayConnection?) {
         self.testingConnection = connection
+    }
+
+    func setTestingStatus(_ status: Status) {
+        self.status = status
     }
 
     func setTestingDesiredActive(_ active: Bool) {
