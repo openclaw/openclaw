@@ -1,5 +1,6 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
   isLocalGatewayAddress,
@@ -13,6 +14,15 @@ import {
   resolveGatewayListenHosts,
   resolveHostName,
 } from "./net.js";
+
+vi.mock("../infra/tailnet.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/tailnet.js")>();
+  return {
+    ...actual,
+    pickPrimaryTailnetIPv4: vi.fn(actual.pickPrimaryTailnetIPv4),
+    pickPrimaryTailnetIPv6: vi.fn(actual.pickPrimaryTailnetIPv6),
+  };
+});
 
 describe("resolveHostName", () => {
   it("normalizes IPv4/hostname and IPv6 host forms", () => {
@@ -542,14 +552,14 @@ describe("isSecureWebSocketUrl", () => {
 
 describe("isLocalGatewayAddress", () => {
   afterEach(() => {
-    vi.restoreAllMocks();
+    vi.mocked(pickPrimaryTailnetIPv4).mockReset();
+    vi.mocked(pickPrimaryTailnetIPv6).mockReset();
   });
 
-  it("matches tailnet IPv6 regardless of canonical form", async () => {
+  it("matches tailnet IPv6 regardless of canonical form", () => {
     // Simulate a tailnet IPv6 address returned by the OS in short form
-    const tailnetModule = await import("../infra/tailnet.js");
-    vi.spyOn(tailnetModule, "pickPrimaryTailnetIPv4").mockReturnValue(undefined);
-    vi.spyOn(tailnetModule, "pickPrimaryTailnetIPv6").mockReturnValue("fd7a:115c:a1e0::1");
+    vi.mocked(pickPrimaryTailnetIPv4).mockReturnValue(undefined);
+    vi.mocked(pickPrimaryTailnetIPv6).mockReturnValue("fd7a:115c:a1e0::1");
 
     // Non-canonical (expanded) form of the same address must match
     expect(isLocalGatewayAddress("fd7a:115c:a1e0:0:0:0:0:1")).toBe(true);
@@ -561,10 +571,9 @@ describe("isLocalGatewayAddress", () => {
     expect(isLocalGatewayAddress("fd7a:115c:a1e0::2")).toBe(false);
   });
 
-  it("matches tailnet IPv4 via normalized comparison", async () => {
-    const tailnetModule = await import("../infra/tailnet.js");
-    vi.spyOn(tailnetModule, "pickPrimaryTailnetIPv4").mockReturnValue("100.100.100.100");
-    vi.spyOn(tailnetModule, "pickPrimaryTailnetIPv6").mockReturnValue(undefined);
+  it("matches tailnet IPv4 via normalized comparison", () => {
+    vi.mocked(pickPrimaryTailnetIPv4).mockReturnValue("100.100.100.100");
+    vi.mocked(pickPrimaryTailnetIPv6).mockReturnValue(undefined);
 
     expect(isLocalGatewayAddress("100.100.100.100")).toBe(true);
     // IPv4-mapped IPv6 form of the same address must match
