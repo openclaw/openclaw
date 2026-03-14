@@ -255,6 +255,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "aborted") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
+      const finalText = streamAssembler.finalize(
+        evt.runId,
+        evt.message,
+        state.showThinking,
+        evt.errorMessage,
+      );
+      if (finalText !== "(no output)") {
+        chatLog.finalizeAssistant(finalText, evt.runId);
+      } else {
+        chatLog.dropAssistant(evt.runId);
+      }
       chatLog.addSystem("run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId);

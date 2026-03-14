@@ -215,6 +215,76 @@ describe("resolveCtrlCAction", () => {
     });
   });
 
+  it("aborts the active run before using exit semantics", () => {
+    expect(
+      resolveCtrlCAction({
+        hasInput: false,
+        hasActiveRun: true,
+        now: 2000,
+        lastCtrlCAt: 0,
+      }),
+    ).toEqual({
+      action: "abort",
+      nextLastCtrlCAt: 0,
+    });
+  });
+
+  it("prefers abort over clearing draft input when a run is active", () => {
+    expect(
+      resolveCtrlCAction({
+        hasInput: true,
+        hasActiveRun: true,
+        now: 2000,
+        lastCtrlCAt: 0,
+      }),
+    ).toEqual({
+      action: "abort",
+      nextLastCtrlCAt: 0,
+    });
+  });
+
+  it("does not arm exit confirmation when ctrl+c aborts an active run", () => {
+    expect(
+      resolveCtrlCAction({
+        hasInput: false,
+        hasActiveRun: true,
+        now: 2000,
+        lastCtrlCAt: 1200,
+      }),
+    ).toEqual({
+      action: "abort",
+      nextLastCtrlCAt: 0,
+    });
+  });
+
+  it("falls back to clear or exit handling while an abort request is already pending", () => {
+    expect(
+      resolveCtrlCAction({
+        hasInput: true,
+        hasActiveRun: true,
+        abortPending: true,
+        now: 2000,
+        lastCtrlCAt: 0,
+      }),
+    ).toEqual({
+      action: "clear",
+      nextLastCtrlCAt: 2000,
+    });
+
+    expect(
+      resolveCtrlCAction({
+        hasInput: false,
+        hasActiveRun: true,
+        abortPending: true,
+        now: 2800,
+        lastCtrlCAt: 2000,
+      }),
+    ).toEqual({
+      action: "exit",
+      nextLastCtrlCAt: 2000,
+    });
+  });
+
   it("exits on second ctrl+c within the exit window", () => {
     expect(resolveCtrlCAction({ hasInput: false, now: 2800, lastCtrlCAt: 2000 })).toEqual({
       action: "exit",

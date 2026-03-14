@@ -279,6 +279,36 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalled();
   });
 
+  it("preserves partial assistant text when a run is aborted", () => {
+    const { state, chatLog, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-abort" },
+    });
+
+    handleChatEvent({
+      runId: "run-abort",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: [{ type: "text", text: "partial reply" }] },
+    });
+
+    chatLog.finalizeAssistant.mockClear();
+    chatLog.dropAssistant.mockClear();
+    chatLog.addSystem.mockClear();
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-abort",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+      message: { content: [{ type: "text", text: "partial reply" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("partial reply", "run-abort");
+    expect(chatLog.dropAssistant).not.toHaveBeenCalled();
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted");
+    expect(setActivityStatus).toHaveBeenCalledWith("aborted");
+  });
+
   it("ignores lifecycle updates for non-active runs in the same session", () => {
     const { state, tui, setActivityStatus, handleChatEvent, handleAgentEvent } =
       createHandlersHarness({

@@ -4,6 +4,178 @@ import { createSessionActions } from "./tui-session-actions.js";
 import type { TuiStateAccess } from "./tui-types.js";
 
 describe("tui session actions", () => {
+  it("clears the local active run when abort fails", async () => {
+    const abortChat = vi.fn().mockRejectedValue(new Error("gateway disconnected"));
+    const addSystem = vi.fn();
+    const requestRender = vi.fn();
+    const setActivityStatus = vi.fn();
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      currentSessionId: null,
+      activeChatRunId: "run-1",
+      historyLoaded: false,
+      sessionInfo: {},
+      initialSessionApplied: true,
+      isConnected: false,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "disconnected",
+      activityStatus: "running",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const { abortActive } = createSessionActions({
+      client: { abortChat } as unknown as GatewayChatClient,
+      chatLog: { addSystem } as unknown as import("./components/chat-log.js").ChatLog,
+      tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus,
+    });
+
+    await abortActive();
+
+    expect(abortChat).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      runId: "run-1",
+    });
+    expect(state.activeChatRunId).toBeNull();
+    expect(addSystem).toHaveBeenCalledWith("abort failed: Error: gateway disconnected");
+    expect(setActivityStatus).toHaveBeenCalledWith("abort failed");
+    expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("does not clear a newer active run when an older abort fails", async () => {
+    let rejectAbort: ((reason?: unknown) => void) | undefined;
+    const abortChat = vi.fn().mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectAbort = reject;
+        }),
+    );
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      currentSessionId: null,
+      activeChatRunId: "run-old",
+      historyLoaded: false,
+      sessionInfo: {},
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "running",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+    const addSystem = vi.fn();
+    const requestRender = vi.fn();
+    const setActivityStatus = vi.fn();
+    const clearAbortPending = vi.fn();
+
+    const { abortActive } = createSessionActions({
+      client: { abortChat } as unknown as GatewayChatClient,
+      chatLog: { addSystem } as unknown as import("./components/chat-log.js").ChatLog,
+      tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus,
+      clearAbortPending,
+    });
+
+    const pending = abortActive();
+    state.activeChatRunId = "run-new";
+    rejectAbort?.(new Error("gateway disconnected"));
+    await pending;
+
+    expect(state.activeChatRunId).toBe("run-new");
+    expect(clearAbortPending).toHaveBeenCalledWith("run-old");
+    expect(addSystem).toHaveBeenCalledWith("abort failed: Error: gateway disconnected");
+    expect(setActivityStatus).toHaveBeenCalledWith("abort failed");
+    expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("clears stale active runs when chat.abort reports aborted: false", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: false });
+    const addSystem = vi.fn();
+    const requestRender = vi.fn();
+    const setActivityStatus = vi.fn();
+    const clearAbortPending = vi.fn();
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      currentSessionId: null,
+      activeChatRunId: "run-stale",
+      historyLoaded: false,
+      sessionInfo: {},
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "running",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const { abortActive } = createSessionActions({
+      client: { abortChat } as unknown as GatewayChatClient,
+      chatLog: { addSystem } as unknown as import("./components/chat-log.js").ChatLog,
+      tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus,
+      clearAbortPending,
+    });
+
+    await abortActive();
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(clearAbortPending).toHaveBeenCalledWith("run-stale");
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(addSystem).not.toHaveBeenCalled();
+    expect(requestRender).toHaveBeenCalled();
+  });
+
   it("queues session refreshes and applies the latest result", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     let resolveSecond: ((value: unknown) => void) | undefined;
