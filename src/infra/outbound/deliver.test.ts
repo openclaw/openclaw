@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -83,7 +84,7 @@ type DeliverOutboundArgs = Parameters<typeof deliverOutboundPayloads>[0];
 type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
 type DeliverSession = DeliverOutboundArgs["session"];
 
-function setMatrixTextOnlyPlugin(sendText: ReturnType<typeof vi.fn>) {
+function setMatrixTextOnlyPlugin(sendText: NonNullable<ChannelOutboundAdapter["sendText"]>) {
   setActivePluginRegistry(
     createTestRegistry([
       {

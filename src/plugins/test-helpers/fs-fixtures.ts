@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,8 +15,8 @@ export function mkdirSafeDir(dir: string) {
 }
 
 export function makeTrackedTempDir(prefix: string, trackedDirs: string[]) {
-  const dir = path.join(os.tmpdir(), `${prefix}-${randomUUID()}`);
-  mkdirSafeDir(dir);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), String(prefix) + "-"));
+  chmodSafeDir(dir);
   trackedDirs.push(dir);
   return dir;
 }

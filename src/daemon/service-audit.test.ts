@@ -22,7 +22,7 @@ function createGatewayAudit({
   expectedGatewayToken?: string;
   path?: string;
   serviceToken?: string;
-  environmentValueSources?: Record<string, string>;
+  environmentValueSources?: Record<string, "file" | "inline">;
 } = {}) {
   return auditGatewayServiceConfig({
     env: { HOME: "/tmp" },
