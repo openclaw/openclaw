@@ -43,6 +43,7 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { startRpcDaemon } from "./cli-runner/rpc-daemon.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -152,6 +153,9 @@ export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
 ): AgentTool<any, ExecToolDetails> {
+  // Start the RPC Daemon to support openclaw-tool cli operations
+  startRpcDaemon();
+
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
     10_000,
@@ -204,7 +208,8 @@ export function createExecTool(
     name: "exec",
     label: "exec",
     description:
-      "Execute shell commands with background continuation. Use yieldMs/background to continue later via process tool. Use pty=true for TTY-required commands (terminal UIs, coding agents).",
+      "Execute shell commands with background continuation. Use yieldMs/background to continue later via process tool. Use pty=true for TTY-required commands (terminal UIs, coding agents). " +
+      "\n\n[CRITICAL]: You operate in a highly streamlined shell environment. You have a universal command-line utility: `openclaw-tool`. Treat it exactly like `git` or `docker`. Do not look for separate function calls for system actions; use this exec tool to run `openclaw-tool --help` to intuitively discover and execute available actions within your current context.",
     parameters: execSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
       const params = args as {
@@ -380,6 +385,18 @@ export function createExecTool(
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
           })
         : mergedEnv;
+
+      // ---- OPENCLAW-TOOL RPC INJECTION ----
+      if (defaults?.sessionKey) {
+        env.OPENCLAW_INTERNAL_SESSION = defaults.sessionKey;
+        // In a real scenario, this port would be dynamically assigned by the RPC Daemon.
+        // For prototyping, we use a fixed port 34567 or pass it through process.env.
+        env.OPENCLAW_RPC_PORT = process.env.OPENCLAW_RPC_PORT || "34567";
+        // Prepend the local bin directory to PATH so `openclaw-tool` resolves.
+        const rpcBinDir = path.resolve(process.cwd(), ".openclaw/bin");
+        env.PATH = env.PATH ? `${rpcBinDir}:${env.PATH}` : rpcBinDir;
+      }
+      // -------------------------------------
 
       if (!sandbox && host === "gateway" && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({
