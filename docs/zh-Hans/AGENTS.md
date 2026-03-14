@@ -1,15 +1,15 @@
-# AGENTS.md - zh-CN 文档翻译工作区
+# AGENTS.md - zh-Hans 文档翻译工作区
 
 ## Read When
 
-- 维护 `docs/zh-CN/**`
+- 维护 `docs/zh-Hans/**`
 - 更新中文翻译流水线（glossary/TM/prompt）
 - 处理中文翻译反馈或回归
 
 ## Pipeline（docs-i18n）
 
 - 源文档：`docs/**/*.md`
-- 目标文档：`docs/zh-CN/**/*.md`
+- 目标文档：`docs/zh-Hans/**/*.md`
 - 术语表：`docs/.i18n/glossary.zh-CN.json`
 - 翻译记忆库：`docs/.i18n/zh-CN.tm.jsonl`
 - 提示词规则：`scripts/docs-i18n/translator.go`
@@ -34,7 +34,7 @@ go run scripts/docs-i18n/main.go -mode segment docs/channels/matrix.md
 - 超大文件若超时，优先做**定点替换**或拆分后再跑。
 - 翻译后检查中文引号、CJK-Latin 间距和术语一致性。
 
-## zh-CN 样式规则
+## zh-Hans 样式规则
 
 - CJK-Latin 间距：遵循 W3C CLREQ（如 `Gateway 网关`、`Skills 配置`）。
 - 中文引号：正文/标题使用 `“”`；代码/CLI/键名保持 ASCII 引号。
