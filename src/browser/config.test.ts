@@ -26,7 +26,6 @@ describe("browser config", () => {
     expect(user?.driver).toBe("existing-session");
     expect(user?.cdpPort).toBe(0);
     expect(user?.cdpUrl).toBe("");
-    expect(user?.mcpTargetUrl).toBeUndefined();
     // chrome-relay is no longer auto-created
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
@@ -112,24 +111,6 @@ describe("browser config", () => {
     expect(profile?.cdpPort).toBe(9222);
     expect(profile?.cdpUrl).toBe("http://example.com:9222");
     expect(profile?.cdpIsLoopback).toBe(false);
-  });
-
-  it("supports MCP browser URLs for existing-session profiles", () => {
-    const resolved = resolveBrowserConfig({
-      profiles: {
-        user: {
-          driver: "existing-session",
-          cdpUrl: "http://127.0.0.1:9222",
-          color: "#00AA00",
-        },
-      },
-    });
-
-    const profile = resolveProfile(resolved, "user");
-    expect(profile?.driver).toBe("existing-session");
-    expect(profile?.cdpUrl).toBe("");
-    expect(profile?.mcpTargetUrl).toBe("http://127.0.0.1:9222");
-    expect(profile?.cdpIsLoopback).toBe(true);
   });
 
   it("uses profile cdpUrl when provided", () => {
