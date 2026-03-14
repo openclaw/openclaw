@@ -22,6 +22,7 @@ import {
   applyScriptPolicyOverride,
   checkAccessPolicy,
   resolveArgv0,
+  resolveScriptKey,
 } from "../infra/access-policy.js";
 import { isBwrapAvailable, wrapCommandWithBwrap } from "../infra/exec-sandbox-bwrap.js";
 import {
@@ -388,15 +389,15 @@ export async function runExecProcess(opts: {
     // itself. A script in both deny[] and scripts{} is a config error; the deny wins.
     // For scripts{} entries not in deny[], we skip the broader rules/default check
     // so a sha256-matched script doesn't also need an explicit exec rule in the base policy.
-    // Mirror the tilde-expansion logic in applyScriptPolicyOverride so that
-    // scripts keys written as "~/bin/deploy.sh" are matched even though argv0
-    // is always an absolute path after resolveArgv0.
+    // Use resolveScriptKey so that both tilde keys ("~/bin/deploy.sh") and
+    // symlink keys ("/usr/bin/python" → /usr/bin/python3.12) match argv0, which
+    // is always the realpathSync result from resolveArgv0. Without symlink
+    // resolution, a symlink-keyed script would silently bypass the override gate,
+    // running under the base policy with no integrity or deny-narrowing checks.
     const _scripts = opts.permissions.scripts ?? {};
-    const hasScriptOverride =
-      argv0 in _scripts ||
-      Object.keys(_scripts).some(
-        (k) => k.startsWith("~") && k.replace(/^~(?=$|[/\\])/, os.homedir()) === argv0,
-      );
+    const hasScriptOverride = Object.keys(_scripts).some(
+      (k) => path.normalize(resolveScriptKey(k)) === path.normalize(argv0),
+    );
     // Use default:"rwx" so only actual deny-pattern hits produce "deny".
     // Without a default, permAllows(undefined, "exec") → false → every path
     // not matched by a deny pattern would be incorrectly blocked.

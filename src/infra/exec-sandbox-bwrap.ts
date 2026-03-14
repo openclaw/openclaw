@@ -299,5 +299,10 @@ export function wrapCommandWithBwrap(
 ): string {
   const bwrapArgs = generateBwrapArgs(config, homeDir, scriptOverrideRules);
   const argStr = bwrapArgs.map((a) => (a === "--" ? "--" : shellEscape(a))).join(" ");
+  // /bin/sh is intentional: sandboxed commands must use a shell whose path is
+  // within the bwrap mount namespace. The user's configured shell (getShellConfig)
+  // may live outside the mounted paths (e.g. /opt/homebrew/bin/fish) and would
+  // not be reachable inside the sandbox. /bin/sh is always available via
+  // SYSTEM_RO_BIND_PATHS or the permissive --ro-bind / / base mount.
   return `bwrap ${argStr} /bin/sh -c ${shellEscape(command)}`;
 }

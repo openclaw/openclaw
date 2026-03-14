@@ -223,6 +223,11 @@ export function generateSeatbeltProfile(
     }
     lines.push(`(allow process-fork)`);
     lines.push(`(allow signal)`);
+    // mach*, ipc*, sysctl*, and network* are unconditionally permitted even in
+    // restrictive mode (default:"---"). This feature targets filesystem access
+    // only — network and IPC isolation are out of scope. Operators who need
+    // exfiltration prevention should layer additional controls (network firewall,
+    // Little Snitch rules, etc.) on top of the access-policy filesystem gates.
     lines.push(`(allow mach*)`);
     lines.push(`(allow ipc*)`);
     lines.push(`(allow sysctl*)`);
@@ -356,5 +361,9 @@ export function wrapCommandWithSeatbelt(command: string, profile: string): strin
   } finally {
     fs.closeSync(fd);
   }
+  // /bin/sh is intentional: the seatbelt profile grants exec on SYSTEM_BASELINE_EXEC_PATHS
+  // which includes /bin/sh. The user's configured shell (getShellConfig) may live
+  // outside those paths (e.g. /opt/homebrew/bin/fish) and would be denied by the
+  // profile. POSIX sh is always reachable under the baseline allowances.
   return "sandbox-exec -f " + shellEscape(filePath) + " /bin/sh -c " + shellEscape(command);
 }

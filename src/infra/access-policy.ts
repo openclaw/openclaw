@@ -563,6 +563,26 @@ export function resolveArgv0(command: string, cwd?: string, _depth = 0): string 
 }
 
 /**
+ * Normalize a scripts config key for comparison against a resolveArgv0 result.
+ *
+ * Expands a leading ~ and resolves symlinks for absolute paths, so that a key
+ * like "/usr/bin/python" (symlink → /usr/bin/python3.12) still matches when
+ * resolveArgv0 returns the real path "/usr/bin/python3.12".
+ */
+export function resolveScriptKey(k: string): string {
+  const expanded = k.startsWith("~") ? k.replace(/^~(?=$|[/\\])/, os.homedir()) : k;
+  if (!path.isAbsolute(expanded)) {
+    return expanded;
+  }
+  try {
+    return fs.realpathSync(expanded);
+  } catch {
+    // Key path doesn't exist — keep expanded; the lookup will simply not match.
+    return expanded;
+  }
+}
+
+/**
  * Apply a per-script policy overlay to the base agent policy.
  *
  * Looks up resolvedArgv0 in policy.scripts. If found:
@@ -579,22 +599,16 @@ export function applyScriptPolicyOverride(
   policy: AccessPolicyConfig,
   resolvedArgv0: string,
 ): { policy: AccessPolicyConfig; overrideRules?: Record<string, PermStr>; hashMismatch?: true } {
-  // Normalise ~ in scripts keys so "~/bin/deploy.sh" matches the resolved absolute
-  // path "/home/user/bin/deploy.sh" that resolveArgv0 returns. A direct lookup
-  // would always miss tilde-keyed entries, silently skipping sha256 verification.
+  // Normalize scripts keys via resolveScriptKey so that:
+  //   - tilde keys ("~/bin/deploy.sh") expand to absolute paths
+  //   - symlink keys ("/usr/bin/python" → /usr/bin/python3.12) resolve to real paths
+  // resolveArgv0 always returns the realpathSync result, so both forms must be
+  // normalized the same way or the lookup silently misses, skipping sha256 verification.
   const scripts = policy.scripts;
   const override = scripts
-    ? (scripts[resolvedArgv0] ??
-      Object.entries(scripts).find(([k]) => {
-        if (!k.startsWith("~")) {
-          return false;
-        }
-        // path.normalize() harmonises separator style so "~/bin/x" expanded on
-        // Windows (C:\Users\Runner/bin/x) matches resolvedArgv0 (C:\Users\Runner\bin\x).
-        return (
-          path.normalize(k.replace(/^~(?=$|[/\\])/, os.homedir())) === path.normalize(resolvedArgv0)
-        );
-      })?.[1])
+    ? Object.entries(scripts).find(
+        ([k]) => path.normalize(resolveScriptKey(k)) === path.normalize(resolvedArgv0),
+      )?.[1]
     : undefined;
   if (!override) {
     return { policy };

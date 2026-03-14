@@ -11,6 +11,7 @@ import {
   checkAccessPolicy,
   findBestRule,
   resolveArgv0,
+  resolveScriptKey,
   validateAccessPolicyConfig,
 } from "./access-policy.js";
 
@@ -947,6 +948,33 @@ describe("resolveArgv0", () => {
 });
 
 // ---------------------------------------------------------------------------
+// resolveScriptKey
+// ---------------------------------------------------------------------------
+
+describe("resolveScriptKey", () => {
+  it("expands leading ~", () => {
+    const result = resolveScriptKey("~/bin/deploy.sh");
+    expect(result).toBe(path.join(HOME, "bin/deploy.sh"));
+  });
+
+  it("returns non-absolute keys unchanged", () => {
+    expect(resolveScriptKey("deploy.sh")).toBe("deploy.sh");
+  });
+
+  it("returns non-existent absolute path unchanged", () => {
+    const p = "/no/such/path/definitely-missing-xyz";
+    expect(resolveScriptKey(p)).toBe(p);
+  });
+
+  it("resolves an absolute path that exists to its real path", () => {
+    // Use os.tmpdir() itself — guaranteed to exist; realpathSync may resolve
+    // macOS /tmp → /private/tmp so we accept either the same string or a longer one.
+    const result = resolveScriptKey(os.tmpdir());
+    expect(path.isAbsolute(result)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // applyScriptPolicyOverride
 // ---------------------------------------------------------------------------
 
@@ -966,6 +994,31 @@ describe("applyScriptPolicyOverride", () => {
     const { policy, hashMismatch } = applyScriptPolicyOverride(base, "/my/script.sh");
     expect(hashMismatch).toBeUndefined();
     expect(policy).toBe(base);
+  });
+
+  it("matches a scripts key that is a symlink to the resolved argv0 path", () => {
+    // Simulate the symlink case: create a real file and a symlink to it, then
+    // register the symlink path as the scripts key. resolveArgv0 returns the
+    // realpathSync result, so the key must be resolved the same way to match.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ap-symlink-test-"));
+    const realScript = path.join(tmpDir, "script-real.sh");
+    const symlinkScript = path.join(tmpDir, "script-link.sh");
+    fs.writeFileSync(realScript, "#!/bin/sh\necho ok\n");
+    fs.symlinkSync(realScript, symlinkScript);
+    try {
+      const resolvedReal = fs.realpathSync(symlinkScript);
+      const base: AccessPolicyConfig = {
+        rules: { "/**": "r--" },
+        // Key is the symlink path; resolvedArgv0 will be the real path.
+        scripts: { [symlinkScript]: { rules: { "/tmp/**": "rwx" } } },
+      };
+      const { overrideRules, hashMismatch } = applyScriptPolicyOverride(base, resolvedReal);
+      expect(hashMismatch).toBeUndefined();
+      // Without symlink resolution in the key lookup this would be undefined.
+      expect(overrideRules?.["/tmp/**"]).toBe("rwx");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true });
+    }
   });
 
   it("returns override rules separately so seatbelt emits them after deny", () => {
@@ -1023,13 +1076,17 @@ describe("applyScriptPolicyOverride", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ap-test-"));
     const scriptPath = path.join(tmpDir, "script.sh");
     fs.writeFileSync(scriptPath, "#!/bin/sh\necho hi\n");
+    // resolveArgv0 returns the realpathSync result; simulate that here so the
+    // key lookup (which also calls realpathSync) matches correctly on macOS where
+    // os.tmpdir() returns /var/folders/... but realpathSync yields /private/var/...
+    const realScriptPath = fs.realpathSync(scriptPath);
     try {
       const base: AccessPolicyConfig = {
         scripts: {
           [scriptPath]: { sha256: "deadbeef".padEnd(64, "0"), rules: { "/tmp/**": "rwx" } },
         },
       };
-      const { policy, hashMismatch } = applyScriptPolicyOverride(base, scriptPath);
+      const { policy, hashMismatch } = applyScriptPolicyOverride(base, realScriptPath);
       expect(hashMismatch).toBe(true);
       expect(policy).toBe(base);
     } finally {
@@ -1056,12 +1113,16 @@ describe("applyScriptPolicyOverride", () => {
     const content = "#!/bin/sh\necho hi\n";
     fs.writeFileSync(scriptPath, content);
     const hash = crypto.createHash("sha256").update(Buffer.from(content)).digest("hex");
+    const realScriptPath = fs.realpathSync(scriptPath);
     try {
       const base: AccessPolicyConfig = {
         rules: { "/**": "r--" },
         scripts: { [scriptPath]: { sha256: hash, rules: { "/tmp/**": "rwx" } } },
       };
-      const { policy, overrideRules, hashMismatch } = applyScriptPolicyOverride(base, scriptPath);
+      const { policy, overrideRules, hashMismatch } = applyScriptPolicyOverride(
+        base,
+        realScriptPath,
+      );
       expect(hashMismatch).toBeUndefined();
       expect(overrideRules?.["/tmp/**"]).toBe("rwx");
       expect(policy.rules?.["/tmp/**"]).toBeUndefined();
