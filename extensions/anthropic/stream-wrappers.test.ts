@@ -6,6 +6,7 @@ import {
   createAnthropicFastModeWrapper,
   createAnthropicServiceTierWrapper,
   createAnthropicThinkingPrefillWrapper,
+  resolveAnthropicBetas,
   wrapAnthropicProviderStream,
 } from "./stream-wrappers.js";
 
@@ -85,20 +86,20 @@ describe("anthropic stream wrappers", () => {
     vi.restoreAllMocks();
   });
 
-  it("strips context-1m for Claude CLI or legacy token auth and warns", () => {
+  it("strips legacy context-1m betas for Claude CLI or legacy token auth", () => {
     const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
     const headers = runWrapper("sk-ant-oat01-123");
     expect(headers?.["anthropic-beta"]).toBeDefined();
     expect(headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
     expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
-    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
   });
 
-  it("keeps context-1m for API key auth", () => {
+  it("strips legacy context-1m betas for API key auth", () => {
     const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
     const headers = runWrapper("sk-ant-api-123");
     expect(headers?.["anthropic-beta"]).toBeDefined();
-    expect(headers?.["anthropic-beta"]).toContain(CONTEXT_1M_BETA);
+    expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -111,8 +112,35 @@ describe("anthropic stream wrappers", () => {
 
   it("composes the anthropic provider stream chain from extra params", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-api-123");
-    expect(captured.headers?.["anthropic-beta"]).toContain(CONTEXT_1M_BETA);
+    expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
     expect(captured.payload).toMatchObject({ service_tier: "auto" });
+  });
+
+  it("does not emit the legacy context-1m beta from context1m or explicit config", () => {
+    expect(
+      resolveAnthropicBetas(
+        { context1m: true, anthropicBeta: [CONTEXT_1M_BETA, "files-api-2025-04-14"] },
+        "claude-sonnet-4-6",
+      ),
+    ).toEqual(["files-api-2025-04-14"]);
+  });
+
+  it("preserves OAuth-required betas when context1m is the only configured beta trigger", () => {
+    const captured: { headers?: Record<string, string> } = {};
+    const wrapped = wrapAnthropicProviderStream({
+      streamFn: createPayloadCapturingBaseStream(captured),
+      modelId: "claude-sonnet-4-6",
+      extraParams: { context1m: true },
+    } as never);
+
+    void wrapped?.(
+      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
+      {} as never,
+      { apiKey: "sk-ant-oat01-oauth-token" } as never,
+    );
+
+    expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
+    expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
 });
 

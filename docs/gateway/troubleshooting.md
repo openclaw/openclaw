@@ -76,7 +76,7 @@ Look for:
 
 - Selected Anthropic Opus/Sonnet model has `params.context1m: true`.
 - Current Anthropic credential is not eligible for long-context usage.
-- Requests fail only on long sessions/model runs that need the 1M beta path.
+- Requests fail only on long sessions/model runs that need the 1M context path.
 
 Fix options:
 

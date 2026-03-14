@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/models: keep per-agent primary models strict when `fallbacks` is omitted, so probe-only custom providers are not tried as hidden fallback candidates unless the agent explicitly opts in. Fixes #73332. Thanks @haumanto.
+- Providers/Anthropic: stop sending the retired `context-1m-2025-08-07` beta for `context1m` while preserving OAuth-required Anthropic beta headers. (#45613) Thanks @haoyu-haoyu.
 - Cron/Telegram: preserve explicit `:topic:` delivery targets over stale session-derived thread IDs when isolated cron announces to Telegram forum topics. Carries forward #59069; refs #49704 and #43808. Thanks @roytong9.
 - Build/runtime: write the runtime-postbuild stamp after `pnpm build` writes the build stamp, so the next CLI invocation does not re-sync runtime artifacts after a successful build. Fixes #73151. Thanks @bittoby.
 - CLI/channels: list configured chat channel accounts from read-only setup metadata even when the standalone CLI has not loaded the runtime channel registry, so `openclaw channels list` shows Telegram accounts before auth providers. Fixes #73319 and #73322. Thanks @mlaihk.
