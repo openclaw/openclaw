@@ -159,6 +159,7 @@ async function probeProfileGateway(params: {
       params.auth.token || params.auth.password
         ? { token: params.auth.token, password: params.auth.password }
         : undefined,
+    disableDeviceIdentity: true,
     timeoutMs:
       typeof params.timeoutMs === "number"
         ? Math.max(1, Math.min(PROBE_TIMEOUT_MS, params.timeoutMs))

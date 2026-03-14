@@ -34,6 +34,7 @@ export async function probeGateway(opts: {
   auth?: GatewayProbeAuth;
   timeoutMs: number;
   includeDetails?: boolean;
+  disableDeviceIdentity?: boolean;
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
   const instanceId = randomUUID();
@@ -42,6 +43,9 @@ export async function probeGateway(opts: {
   let close: GatewayProbeClose | null = null;
 
   const disableDeviceIdentity = (() => {
+    if (opts.disableDeviceIdentity) {
+      return true;
+    }
     try {
       return isLoopbackHost(new URL(opts.url).hostname);
     } catch {

@@ -222,6 +222,7 @@ describe("runRescueWatchdogJob", () => {
     expect(result.status).toBe("ok");
     expect(probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({
+        disableDeviceIdentity: true,
         url: "wss://gateway.internal:18789",
       }),
     );
@@ -261,6 +262,7 @@ describe("runRescueWatchdogJob", () => {
     expect(result.status).toBe("ok");
     expect(probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({
+        disableDeviceIdentity: true,
         url: "ws://[::1]:18789",
       }),
     );
@@ -302,7 +304,47 @@ describe("runRescueWatchdogJob", () => {
     expect(resolveGatewayBindHost).toHaveBeenCalledWith("custom", "192.168.10.77");
     expect(probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({
+        disableDeviceIdentity: true,
         url: "ws://127.0.0.1:18789",
+      }),
+    );
+  });
+
+  it("disables device identity even when probing a non-loopback monitored host", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        port: 18_789,
+        bind: "tailnet",
+        auth: {
+          mode: "token",
+          token: "main-token",
+        },
+      },
+    });
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      error: null,
+    });
+
+    const result = await runRescueWatchdogJob({
+      job: {
+        id: "job-tailnet-bind",
+        name: "rescue",
+        payload: {
+          kind: "rescueWatchdog",
+          monitoredProfile: "work",
+          timeoutSeconds: 120,
+        },
+      } as never,
+      monitoredProfile: "work",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disableDeviceIdentity: true,
+        url: "ws://100.64.0.10:18789",
       }),
     );
   });
