@@ -10,8 +10,10 @@ import {
 } from "../../sessions/input-provenance.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
+  addEmptyThinkingToToolCallMessages,
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
+  hasHistoryToolCallWithoutThinking,
   isCompactionFailureError,
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
@@ -527,6 +529,8 @@ export async function sanitizeSessionHistory(params: {
   sessionManager: SessionManager;
   sessionId: string;
   policy?: TranscriptPolicy;
+  /** When true, ensures all assistant tool call messages have thinking blocks. */
+  thinkingEnabled?: boolean;
 }): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy =
@@ -575,11 +579,22 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
-  const sanitizedOpenAI = isOpenAIResponsesApi
+  let sanitizedOpenAI = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
         downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage),
       )
     : sanitizedCompactionUsage;
+
+  // When thinking is enabled on an OpenAI Responses API model and history has tool calls
+  // without thinking blocks, add empty thinking blocks to ensure API compatibility.
+  // Fixes: "400 thinking is enabled but reasoning_content is missing in assistant tool call message"
+  if (
+    isOpenAIResponsesApi &&
+    params.thinkingEnabled &&
+    hasHistoryToolCallWithoutThinking(sanitizedOpenAI)
+  ) {
+    sanitizedOpenAI = addEmptyThinkingToToolCallMessages(sanitizedOpenAI);
+  }
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
