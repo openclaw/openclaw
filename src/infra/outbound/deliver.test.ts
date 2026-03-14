@@ -88,7 +88,7 @@ async function deliverWhatsAppPayload(params: {
   sendWhatsApp: NonNullable<
     NonNullable<Parameters<typeof deliverOutboundPayloads>[0]["deps"]>["sendWhatsApp"]
   >;
-  payload: { text: string; mediaUrl?: string };
+  payload: DeliverOutboundPayload;
   cfg?: OpenClawConfig;
 }) {
   return deliverOutboundPayloads({

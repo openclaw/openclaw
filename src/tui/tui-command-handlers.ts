@@ -510,8 +510,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const isBtw = isBtwCommand(text);
+    const runId = randomUUID();
     try {
-      const runId = randomUUID();
       if (!isBtw) {
         chatLog.addUser(text);
         noteLocalRunId(runId);
