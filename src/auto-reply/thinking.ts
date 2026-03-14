@@ -1,10 +1,17 @@
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ElevatedMode = "off" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
 export type UsageDisplayLevel = "off" | "tokens" | "full";
+export type ThinkingCatalogEntry = {
+  provider: string;
+  id: string;
+  reasoning?: boolean;
+};
+
+const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 
 function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
@@ -14,6 +21,9 @@ function normalizeProviderId(provider?: string | null): string {
   if (normalized === "z.ai" || normalized === "z-ai") {
     return "zai";
   }
+  if (normalized === "bedrock" || normalized === "aws-bedrock") {
+    return "amazon-bedrock";
+  }
   return normalized;
 }
 
@@ -22,9 +32,16 @@ export function isBinaryThinkingProvider(provider?: string | null): boolean {
 }
 
 export const XHIGH_MODEL_REFS = [
+  "openai/gpt-5.4",
+  "openai/gpt-5.4-pro",
   "openai/gpt-5.2",
+  "openai-codex/gpt-5.4",
+  "openai-codex/gpt-5.3-codex",
+  "openai-codex/gpt-5.3-codex-spark",
   "openai-codex/gpt-5.2-codex",
   "openai-codex/gpt-5.1-codex",
+  "github-copilot/gpt-5.2-codex",
+  "github-copilot/gpt-5.2",
 ] as const;
 
 const XHIGH_MODEL_SET = new Set(XHIGH_MODEL_REFS.map((entry) => entry.toLowerCase()));
@@ -39,7 +56,14 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
+  const key = raw.trim().toLowerCase();
+  const collapsed = key.replace(/[\s_-]+/g, "");
+  if (collapsed === "adaptive" || collapsed === "auto") {
+    return "adaptive";
+  }
+  if (collapsed === "xhigh" || collapsed === "extrahigh") {
+    return "xhigh";
+  }
   if (["off"].includes(key)) {
     return "off";
   }
@@ -59,9 +83,6 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
     ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
   ) {
     return "high";
-  }
-  if (["xhigh", "x-high", "x_high"].includes(key)) {
-    return "xhigh";
   }
   if (["think"].includes(key)) {
     return "minimal";
@@ -86,6 +107,7 @@ export function listThinkingLevels(provider?: string | null, model?: string | nu
   if (supportsXHighThinking(provider, model)) {
     levels.push("xhigh");
   }
+  levels.push("adaptive");
   return levels;
 }
 
@@ -118,8 +140,33 @@ export function formatXHighModelHint(): string {
   return `${refs.slice(0, -1).join(", ")} or ${refs[refs.length - 1]}`;
 }
 
-// Normalize verbose flags used to toggle agent verbosity.
-export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
+export function resolveThinkingDefaultForModel(params: {
+  provider: string;
+  model: string;
+  catalog?: ThinkingCatalogEntry[];
+}): ThinkLevel {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const modelLower = params.model.trim().toLowerCase();
+  const isAnthropicFamilyModel =
+    normalizedProvider === "anthropic" ||
+    normalizedProvider === "amazon-bedrock" ||
+    modelLower.includes("anthropic/") ||
+    modelLower.includes(".anthropic.");
+  if (isAnthropicFamilyModel && CLAUDE_46_MODEL_RE.test(modelLower)) {
+    return "adaptive";
+  }
+  const candidate = params.catalog?.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  if (candidate?.reasoning) {
+    return "low";
+  }
+  return "off";
+}
+
+type OnOffFullLevel = "off" | "on" | "full";
+
+function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefined {
   if (!raw) {
     return undefined;
   }
@@ -136,22 +183,14 @@ export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undef
   return undefined;
 }
 
+// Normalize verbose flags used to toggle agent verbosity.
+export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
+  return normalizeOnOffFullLevel(raw);
+}
+
 // Normalize system notice flags used to toggle system notifications.
 export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0"].includes(key)) {
-    return "off";
-  }
-  if (["full", "all", "everything"].includes(key)) {
-    return "full";
-  }
-  if (["on", "minimal", "true", "yes", "1"].includes(key)) {
-    return "on";
-  }
-  return undefined;
+  return normalizeOnOffFullLevel(raw);
 }
 
 // Normalize response-usage display modes used to toggle per-response usage footers.
@@ -177,6 +216,24 @@ export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | 
 
 export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel {
   return normalizeUsageDisplay(raw) ?? "off";
+}
+
+// Normalize fast-mode flags used to toggle low-latency model behavior.
+export function normalizeFastMode(raw?: string | boolean | null): boolean | undefined {
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (!raw) {
+    return undefined;
+  }
+  const key = raw.toLowerCase();
+  if (["off", "false", "no", "0", "disable", "disabled", "normal"].includes(key)) {
+    return false;
+  }
+  if (["on", "true", "yes", "1", "enable", "enabled", "fast"].includes(key)) {
+    return true;
+  }
+  return undefined;
 }
 
 // Normalize elevated flags used to toggle elevated bash permissions.

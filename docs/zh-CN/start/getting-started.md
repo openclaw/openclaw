@@ -28,7 +28,7 @@ x-i18n:
 - 工作区引导 + Skills
 - 可选的后台服务
 
-如果你想要更深入的参考页面，跳转到：[向导](/start/wizard)、[设置](/start/setup)、[配对](/start/pairing)、[安全](/gateway/security)。
+如果你想要更深入的参考页面，跳转到：[向导](/start/wizard)、[设置](/start/setup)、[配对](/channels/pairing)、[安全](/gateway/security)。
 
 沙箱注意事项：`agents.defaults.sandbox.mode: "non-main"` 使用 `session.mainKey`（默认 `"main"`），因此群组/渠道会话会被沙箱隔离。如果你想要主智能体始终在主机上运行，设置显式的每智能体覆盖：
 
@@ -162,7 +162,7 @@ openclaw pairing list whatsapp
 openclaw pairing approve whatsapp <code>
 ```
 
-配对文档：[配对](/start/pairing)
+配对文档：[配对](/channels/pairing)
 
 ## 从源代码（开发）
 
@@ -203,4 +203,4 @@ openclaw message send --target +15555550123 --message "Hello from OpenClaw"
 - macOS 菜单栏应用 + 语音唤醒：[macOS 应用](/platforms/macos)
 - iOS/Android 节点（Canvas/相机/语音）：[节点](/nodes)
 - 远程访问（SSH 隧道 / Tailscale Serve）：[远程访问](/gateway/remote) 和 [Tailscale](/gateway/tailscale)
-- 常开 / VPN 设置：[远程访问](/gateway/remote)、[exe.dev](/platforms/exe-dev)、[Hetzner](/platforms/hetzner)、[macOS 远程](/platforms/mac/remote)
+- 常开 / VPN 设置：[远程访问](/gateway/remote)、[exe.dev](/install/exe-dev)、[Hetzner](/install/hetzner)、[macOS 远程](/platforms/mac/remote)

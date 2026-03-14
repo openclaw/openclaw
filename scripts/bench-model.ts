@@ -106,7 +106,7 @@ async function main(): Promise<void> {
     contextWindow: 200000,
     maxTokens: 8192,
   };
-  const opusModel = getModel("anthropic", "claude-opus-4-5");
+  const opusModel = getModel("anthropic", "claude-opus-4-6");
 
   console.log(`Prompt: ${prompt}`);
   console.log(`Runs: ${runs}`);

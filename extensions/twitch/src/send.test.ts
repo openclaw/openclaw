@@ -10,9 +10,13 @@
  * - Registry integration
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sendMessageTwitchInternal } from "./send.js";
+import {
+  BASE_TWITCH_TEST_ACCOUNT,
+  installTwitchTestHooks,
+  makeTwitchTestConfig,
+} from "./test-fixtures.js";
 
 // Mock dependencies
 vi.mock("./config.js", () => ({
@@ -43,32 +47,18 @@ describe("send", () => {
   };
 
   const mockAccount = {
-    username: "testbot",
-    token: "oauth:test123",
-    clientId: "test-client-id",
-    channel: "#testchannel",
+    ...BASE_TWITCH_TEST_ACCOUNT,
+    accessToken: "test123",
   };
 
-  const mockConfig = {
-    channels: {
-      twitch: {
-        accounts: {
-          default: mockAccount,
-        },
-      },
-    },
-  } as unknown as OpenClawConfig;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  const mockConfig = makeTwitchTestConfig(mockAccount);
+  installTwitchTestHooks();
 
   describe("sendMessageTwitchInternal", () => {
-    it("should send a message successfully", async () => {
+    async function mockSuccessfulSend(params: {
+      messageId: string;
+      stripMarkdown?: (text: string) => string;
+    }) {
       const { getAccountConfig } = await import("./config.js");
       const { getClientManager } = await import("./client-manager-registry.js");
       const { stripMarkdownForTwitch } = await import("./utils/markdown.js");
@@ -77,10 +67,18 @@ describe("send", () => {
       vi.mocked(getClientManager).mockReturnValue({
         sendMessage: vi.fn().mockResolvedValue({
           ok: true,
-          messageId: "twitch-msg-123",
+          messageId: params.messageId,
         }),
-      } as ReturnType<typeof getClientManager>);
-      vi.mocked(stripMarkdownForTwitch).mockImplementation((text) => text);
+      } as unknown as ReturnType<typeof getClientManager>);
+      vi.mocked(stripMarkdownForTwitch).mockImplementation(
+        params.stripMarkdown ?? ((text) => text),
+      );
+
+      return { stripMarkdownForTwitch };
+    }
+
+    it("should send a message successfully", async () => {
+      await mockSuccessfulSend({ messageId: "twitch-msg-123" });
 
       const result = await sendMessageTwitchInternal(
         "#testchannel",
@@ -96,18 +94,10 @@ describe("send", () => {
     });
 
     it("should strip markdown when enabled", async () => {
-      const { getAccountConfig } = await import("./config.js");
-      const { getClientManager } = await import("./client-manager-registry.js");
-      const { stripMarkdownForTwitch } = await import("./utils/markdown.js");
-
-      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
-      vi.mocked(getClientManager).mockReturnValue({
-        sendMessage: vi.fn().mockResolvedValue({
-          ok: true,
-          messageId: "twitch-msg-456",
-        }),
-      } as ReturnType<typeof getClientManager>);
-      vi.mocked(stripMarkdownForTwitch).mockImplementation((text) => text.replace(/\*\*/g, ""));
+      const { stripMarkdownForTwitch } = await mockSuccessfulSend({
+        messageId: "twitch-msg-456",
+        stripMarkdown: (text) => text.replace(/\*\*/g, ""),
+      });
 
       await sendMessageTwitchInternal(
         "#testchannel",
@@ -237,7 +227,7 @@ describe("send", () => {
       vi.mocked(isAccountConfigured).mockReturnValue(true);
       vi.mocked(getClientManager).mockReturnValue({
         sendMessage: vi.fn().mockRejectedValue(new Error("Connection lost")),
-      } as ReturnType<typeof getClientManager>);
+      } as unknown as ReturnType<typeof getClientManager>);
 
       const result = await sendMessageTwitchInternal(
         "#testchannel",
@@ -266,7 +256,7 @@ describe("send", () => {
       });
       vi.mocked(getClientManager).mockReturnValue({
         sendMessage: mockSend,
-      } as ReturnType<typeof getClientManager>);
+      } as unknown as ReturnType<typeof getClientManager>);
 
       await sendMessageTwitchInternal(
         "",

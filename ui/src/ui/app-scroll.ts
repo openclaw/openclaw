@@ -15,7 +15,7 @@ type ScrollHost = {
   topbarObserver: ResizeObserver | null;
 };
 
-export function scheduleChatScroll(host: ScrollHost, force = false) {
+export function scheduleChatScroll(host: ScrollHost, force = false, smooth = false) {
   if (host.chatScrollFrame) {
     cancelAnimationFrame(host.chatScrollFrame);
   }
@@ -61,7 +61,17 @@ export function scheduleChatScroll(host: ScrollHost, force = false) {
       if (effectiveForce) {
         host.chatHasAutoScrolled = true;
       }
-      target.scrollTop = target.scrollHeight;
+      const smoothEnabled =
+        smooth &&
+        (typeof window === "undefined" ||
+          typeof window.matchMedia !== "function" ||
+          !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      const scrollTop = target.scrollHeight;
+      if (typeof target.scrollTo === "function") {
+        target.scrollTo({ top: scrollTop, behavior: smoothEnabled ? "smooth" : "auto" });
+      } else {
+        target.scrollTop = scrollTop;
+      }
       host.chatUserNearBottom = true;
       host.chatNewMessagesBelow = false;
       const retryDelay = effectiveForce ? 150 : 120;

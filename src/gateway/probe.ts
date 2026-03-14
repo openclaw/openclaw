@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import { READ_SCOPE } from "./method-scopes.js";
+import { isLoopbackHost } from "./net.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -26,23 +29,25 @@ export type GatewayProbeResult = {
   configSnapshot: unknown;
 };
 
-function formatError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
-}
-
 export async function probeGateway(opts: {
   url: string;
   auth?: GatewayProbeAuth;
   timeoutMs: number;
+  includeDetails?: boolean;
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
   const instanceId = randomUUID();
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
+
+  const disableDeviceIdentity = (() => {
+    try {
+      return isLoopbackHost(new URL(opts.url).hostname);
+    } catch {
+      return false;
+    }
+  })();
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
@@ -60,18 +65,33 @@ export async function probeGateway(opts: {
       url: opts.url,
       token: opts.auth?.token,
       password: opts.auth?.password,
+      scopes: [READ_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
+      deviceIdentity: disableDeviceIdentity ? null : undefined,
       onConnectError: (err) => {
-        connectError = formatError(err);
+        connectError = formatErrorMessage(err);
       },
       onClose: (code, reason) => {
         close = { code, reason };
       },
       onHelloOk: async () => {
         connectLatencyMs = Date.now() - startedAt;
+        if (opts.includeDetails === false) {
+          settle({
+            ok: true,
+            connectLatencyMs,
+            error: null,
+            close,
+            health: null,
+            status: null,
+            presence: null,
+            configSnapshot: null,
+          });
+          return;
+        }
         try {
           const [health, status, presence, configSnapshot] = await Promise.all([
             client.request("health"),
@@ -93,7 +113,7 @@ export async function probeGateway(opts: {
           settle({
             ok: false,
             connectLatencyMs,
-            error: formatError(err),
+            error: formatErrorMessage(err),
             close,
             health: null,
             status: null,

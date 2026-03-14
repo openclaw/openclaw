@@ -169,7 +169,7 @@ OpenClaw 的立场：
   - OpenClaw 使用 `npm pack` 然后在该目录中运行 `npm install --omit=dev`（npm 生命周期脚本可以在安装期间执行代码）。
   - 优先使用固定的精确版本（`@scope/pkg@1.2.3`），并在启用之前检查磁盘上解压的代码。
 
-详情：[插件](/plugin)
+详情：[插件](/tools/plugin)
 
 ## 私信访问模型（配对/白名单/开放/禁用）
 
@@ -187,7 +187,7 @@ openclaw pairing list <channel>
 openclaw pairing approve <channel> <code>
 ```
 
-详情 + 磁盘上的文件：[配对](/start/pairing)
+详情 + 磁盘上的文件：[配对](/channels/pairing)
 
 ## 私信会话隔离（多用户模式）
 
@@ -214,7 +214,7 @@ OpenClaw 有两个独立的"谁可以触发我？"层：
     - `channels.discord.guilds` / `channels.slack.channels`：单平台白名单 + 提及默认值。
   - **安全说明：** 将 `dmPolicy="open"` 和 `groupPolicy="open"` 视为最后手段的设置。应该很少使用；除非你完全信任房间的每个成员，否则优先使用配对 + 白名单。
 
-详情：[配置](/gateway/configuration)和[群组](/concepts/groups)
+详情：[配置](/gateway/configuration)和[群组](/channels/groups)
 
 ## 提示词注入（是什么，为什么重要）
 
@@ -584,7 +584,7 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 
 ## 单智能体访问配置（多智能体）
 
-通过多智能体路由，每个智能体可以有自己的沙箱 + 工具策略：使用这个为每个智能体提供**完全访问**、**只读**或**无访问**权限。参见[多智能体沙箱和工具](/multi-agent-sandbox-tools)了解详情和优先级规则。
+通过多智能体路由，每个智能体可以有自己的沙箱 + 工具策略：使用这个为每个智能体提供**完全访问**、**只读**或**无访问**权限。参见[多智能体沙箱和工具](/tools/multi-agent-sandbox-tools)了解详情和优先级规则。
 
 常见用例：
 

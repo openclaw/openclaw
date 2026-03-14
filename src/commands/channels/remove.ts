@@ -1,3 +1,4 @@
+import { deleteTelegramUpdateOffset } from "../../../extensions/telegram/src/update-offset-store.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   getChannelPlugin,
@@ -112,6 +113,11 @@ export async function channelsRemoveCommand(
       cfg: next,
       accountId: resolvedAccountId,
     });
+
+    // Clean up Telegram polling offset to prevent stale offset on bot token change (#18233)
+    if (channel === "telegram") {
+      await deleteTelegramUpdateOffset({ accountId: resolvedAccountId });
+    }
   } else {
     if (!plugin.config.setAccountEnabled) {
       runtime.error(`Channel ${channel} does not support disable.`);

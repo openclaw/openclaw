@@ -10,6 +10,7 @@ export type MediaAttachment = {
   url?: string;
   mime?: string;
   index: number;
+  alreadyTranscribed?: boolean;
 };
 
 export type MediaUnderstandingOutput = {

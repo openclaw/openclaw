@@ -294,7 +294,7 @@ OpenClaw 从父进程（shell、launchd/systemd、CI 等）读取环境变量。
 }
 ```
 
-参见 [/environment](/environment) 了解优先级和来源详情。
+参见 [/environment](/help/environment) 了解优先级和来源详情。
 
 ### `env.shellEnv`（可选）
 
@@ -789,7 +789,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 - **只读**工具 + 工作区
 - **无文件系统访问**（仅消息/会话工具）
 
-参见[多智能体沙箱与工具](/multi-agent-sandbox-tools)了解优先级和更多示例。
+参见[多智能体沙箱与工具](/tools/multi-agent-sandbox-tools)了解优先级和更多示例。
 
 完全访问（无沙箱）：
 
@@ -2780,7 +2780,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 ### `plugins`（扩展）
 
 控制插件发现、允许/拒绝和每插件配置。插件从 `~/.openclaw/extensions`、`<workspace>/.openclaw/extensions` 以及任何 `plugins.load.paths` 条目加载。**配置更改需要重启 Gateway 网关。**
-参见 [/plugin](/plugin) 了解详情。
+参见 [/plugin](/tools/plugin) 了解详情。
 
 字段：
 

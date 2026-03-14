@@ -14,10 +14,14 @@ A2UI_RENDERER_DIR="$ROOT_DIR/vendor/a2ui/renderers/lit"
 A2UI_APP_DIR="$ROOT_DIR/apps/shared/OpenClawKit/Tools/CanvasA2UI"
 
 # Docker builds exclude vendor/apps via .dockerignore.
-# In that environment we must keep the prebuilt bundle.
+# In that environment we can keep a prebuilt bundle only if it exists.
 if [[ ! -d "$A2UI_RENDERER_DIR" || ! -d "$A2UI_APP_DIR" ]]; then
-  echo "A2UI sources missing; keeping prebuilt bundle."
-  exit 0
+  if [[ -f "$OUTPUT_FILE" ]]; then
+    echo "A2UI sources missing; keeping prebuilt bundle."
+    exit 0
+  fi
+  echo "A2UI sources missing and no prebuilt bundle found at: $OUTPUT_FILE" >&2
+  exit 1
 fi
 
 INPUT_PATHS=(
@@ -28,13 +32,13 @@ INPUT_PATHS=(
 )
 
 compute_hash() {
-  ROOT_DIR="$ROOT_DIR" node --input-type=module - "${INPUT_PATHS[@]}" <<'NODE'
+  ROOT_DIR="$ROOT_DIR" node --input-type=module --eval '
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
 const rootDir = process.env.ROOT_DIR ?? process.cwd();
-const inputs = process.argv.slice(2);
+const inputs = process.argv.slice(1);
 const files = [];
 
 async function walk(entryPath) {
@@ -69,7 +73,7 @@ for (const filePath of files) {
 }
 
 process.stdout.write(hash.digest("hex"));
-NODE
+' "${INPUT_PATHS[@]}"
 }
 
 current_hash="$(compute_hash)"
@@ -82,6 +86,10 @@ if [[ -f "$HASH_FILE" ]]; then
 fi
 
 pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
-rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
+if command -v rolldown >/dev/null 2>&1 && rolldown --version >/dev/null 2>&1; then
+  rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
+else
+  pnpm -s dlx rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
+fi
 
 echo "$current_hash" > "$HASH_FILE"

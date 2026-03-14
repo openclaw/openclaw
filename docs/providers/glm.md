@@ -9,12 +9,22 @@ title: "GLM Models"
 # GLM models
 
 GLM is a **model family** (not a company) available through the Z.AI platform. In OpenClaw, GLM
-models are accessed via the `zai` provider and model IDs like `zai/glm-4.7`.
+models are accessed via the `zai` provider and model IDs like `zai/glm-5`.
 
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice zai-api-key
+# Coding Plan Global, recommended for Coding Plan users
+openclaw onboard --auth-choice zai-coding-global
+
+# Coding Plan CN (China region), recommended for Coding Plan users
+openclaw onboard --auth-choice zai-coding-cn
+
+# General API
+openclaw onboard --auth-choice zai-global
+
+# General API CN (China region)
+openclaw onboard --auth-choice zai-cn
 ```
 
 ## Config snippet
@@ -22,12 +32,12 @@ openclaw onboard --auth-choice zai-api-key
 ```json5
 {
   env: { ZAI_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "zai/glm-4.7" } } },
+  agents: { defaults: { model: { primary: "zai/glm-5" } } },
 }
 ```
 
 ## Notes
 
 - GLM versions and availability can change; check Z.AI's docs for the latest.
-- Example model IDs include `glm-4.7` and `glm-4.6`.
+- Example model IDs include `glm-5`, `glm-4.7`, and `glm-4.6`.
 - For provider details, see [/providers/zai](/providers/zai).

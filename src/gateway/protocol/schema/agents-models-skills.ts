@@ -44,6 +44,62 @@ export const AgentsListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentsCreateParamsSchema = Type.Object(
+  {
+    name: NonEmptyString,
+    workspace: NonEmptyString,
+    emoji: Type.Optional(Type.String()),
+    avatar: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsCreateResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    agentId: NonEmptyString,
+    name: NonEmptyString,
+    workspace: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsUpdateParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    name: Type.Optional(NonEmptyString),
+    workspace: Type.Optional(NonEmptyString),
+    model: Type.Optional(NonEmptyString),
+    avatar: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsUpdateResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    agentId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsDeleteParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    deleteFiles: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsDeleteResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    agentId: NonEmptyString,
+    removedBindings: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
 export const AgentsFileEntrySchema = Type.Object(
   {
     name: NonEmptyString,
@@ -148,6 +204,67 @@ export const SkillsUpdateParamsSchema = Type.Object(
     enabled: Type.Optional(Type.Boolean()),
     apiKey: Type.Optional(Type.String()),
     env: Type.Optional(Type.Record(NonEmptyString, Type.String())),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolsCatalogParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    includePlugins: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolCatalogProfileSchema = Type.Object(
+  {
+    id: Type.Union([
+      Type.Literal("minimal"),
+      Type.Literal("coding"),
+      Type.Literal("messaging"),
+      Type.Literal("full"),
+    ]),
+    label: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const ToolCatalogEntrySchema = Type.Object(
+  {
+    id: NonEmptyString,
+    label: NonEmptyString,
+    description: Type.String(),
+    source: Type.Union([Type.Literal("core"), Type.Literal("plugin")]),
+    pluginId: Type.Optional(NonEmptyString),
+    optional: Type.Optional(Type.Boolean()),
+    defaultProfiles: Type.Array(
+      Type.Union([
+        Type.Literal("minimal"),
+        Type.Literal("coding"),
+        Type.Literal("messaging"),
+        Type.Literal("full"),
+      ]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolCatalogGroupSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    label: NonEmptyString,
+    source: Type.Union([Type.Literal("core"), Type.Literal("plugin")]),
+    pluginId: Type.Optional(NonEmptyString),
+    tools: Type.Array(ToolCatalogEntrySchema),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolsCatalogResultSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    profiles: Type.Array(ToolCatalogProfileSchema),
+    groups: Type.Array(ToolCatalogGroupSchema),
   },
   { additionalProperties: false },
 );

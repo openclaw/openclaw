@@ -129,7 +129,7 @@ OpenClaw 可以显示或隐藏模型推理：
 - 当模型产生推理内容时，它仍计入 token 使用量。
 - Telegram 支持将推理流式传输到草稿气泡中。
 
-详情：[思考 + 推理指令](/tools/thinking)和 [Token 使用](/token-use)。
+详情：[思考 + 推理指令](/tools/thinking)和 [Token 使用](/reference/token-use)。
 
 ## 前缀、线程和回复
 

@@ -1,9 +1,9 @@
+import Darwin
 import Testing
 @testable import OpenClawDiscovery
 
-@Suite
 struct WideAreaGatewayDiscoveryTests {
-    @Test func discoversBeaconFromTailnetDnsSdFallback() {
+    @Test func `discovers beacon from tailnet dns sd fallback`() {
         setenv("OPENCLAW_WIDE_AREA_DOMAIN", "openclaw.internal", 1)
         let statusJson = """
         {

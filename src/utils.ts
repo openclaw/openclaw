@@ -3,9 +3,27 @@ import os from "node:os";
 import path from "node:path";
 import { resolveOAuthDir } from "./config/paths.js";
 import { logVerbose, shouldLogVerbose } from "./globals.js";
+import {
+  resolveEffectiveHomeDir,
+  resolveHomeRelativePath,
+  resolveRequiredHomeDir,
+} from "./infra/home-dir.js";
+import { isPlainObject } from "./infra/plain-object.js";
 
 export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
+}
+
+/**
+ * Check if a file or directory exists at the given path.
+ */
+export async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.promises.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function clampNumber(value: number, min: number, max: number): number {
@@ -16,23 +34,43 @@ export function clampInt(value: number, min: number, max: number): number {
   return clampNumber(Math.floor(value), min, max);
 }
 
+/** Alias for clampNumber (shorter, more common name) */
+export const clamp = clampNumber;
+
+/**
+ * Escapes special regex characters in a string so it can be used in a RegExp constructor.
+ */
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Safely parse JSON, returning null on error instead of throwing.
+ */
+export function safeParseJson<T>(raw: string): T | null {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+export { isPlainObject };
+
+/**
+ * Type guard for Record<string, unknown> (less strict than isPlainObject).
+ * Accepts any non-null object that isn't an array.
+ */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export type WebChannel = "web";
 
 export function assertWebChannel(input: string): asserts input is WebChannel {
   if (input !== "web") {
     throw new Error("Web channel must be 'web'");
   }
-}
-
-export function normalizePath(p: string): string {
-  if (!p.startsWith("/")) {
-    return `/${p}`;
-  }
-  return p;
-}
-
-export function withWhatsAppPrefix(number: string): string {
-  return number.startsWith("whatsapp:") ? number : `whatsapp:${number}`;
 }
 
 export function normalizeE164(number: string): string {
@@ -233,16 +271,15 @@ export function truncateUtf16Safe(input: string, maxLen: number): string {
   return sliceUtf16Safe(input, 0, limit);
 }
 
-export function resolveUserPath(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return trimmed;
+export function resolveUserPath(
+  input: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  if (!input) {
+    return "";
   }
-  if (trimmed.startsWith("~")) {
-    const expanded = trimmed.replace(/^~(?=$|[\\/])/, os.homedir());
-    return path.resolve(expanded);
-  }
-  return path.resolve(trimmed);
+  return resolveHomeRelativePath(input, { env, homedir });
 }
 
 export function resolveConfigDir(
@@ -251,9 +288,9 @@ export function resolveConfigDir(
 ): string {
   const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (override) {
-    return resolveUserPath(override);
+    return resolveUserPath(override, env, homedir);
   }
-  const newDir = path.join(homedir(), ".openclaw");
+  const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
   try {
     const hasNew = fs.existsSync(newDir);
     if (hasNew) {
@@ -266,35 +303,35 @@ export function resolveConfigDir(
 }
 
 export function resolveHomeDir(): string | undefined {
-  const envHome = process.env.HOME?.trim();
-  if (envHome) {
-    return envHome;
-  }
-  const envProfile = process.env.USERPROFILE?.trim();
-  if (envProfile) {
-    return envProfile;
-  }
-  try {
-    const home = os.homedir();
-    return home?.trim() ? home : undefined;
-  } catch {
+  return resolveEffectiveHomeDir(process.env, os.homedir);
+}
+
+function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefined {
+  const home = resolveHomeDir();
+  if (!home) {
     return undefined;
   }
+  const explicitHome = process.env.OPENCLAW_HOME?.trim();
+  if (explicitHome) {
+    return { home, prefix: "$OPENCLAW_HOME" };
+  }
+  return { home, prefix: "~" };
 }
 
 export function shortenHomePath(input: string): string {
   if (!input) {
     return input;
   }
-  const home = resolveHomeDir();
-  if (!home) {
+  const display = resolveHomeDisplayPrefix();
+  if (!display) {
     return input;
   }
+  const { home, prefix } = display;
   if (input === home) {
-    return "~";
+    return prefix;
   }
-  if (input.startsWith(`${home}/`)) {
-    return `~${input.slice(home.length)}`;
+  if (input.startsWith(`${home}/`) || input.startsWith(`${home}\\`)) {
+    return `${prefix}${input.slice(home.length)}`;
   }
   return input;
 }
@@ -303,11 +340,11 @@ export function shortenHomeInString(input: string): string {
   if (!input) {
     return input;
   }
-  const home = resolveHomeDir();
-  if (!home) {
+  const display = resolveHomeDisplayPrefix();
+  if (!display) {
     return input;
   }
-  return input.split(home).join("~");
+  return input.split(display.home).join(display.prefix);
 }
 
 export function displayPath(input: string): string {

@@ -1,6 +1,7 @@
+import type { DmPolicy, GroupPolicy, SecretInput } from "openclaw/plugin-sdk/matrix";
+export type { DmPolicy, GroupPolicy };
+
 export type ReplyToMode = "off" | "first" | "all";
-export type GroupPolicy = "open" | "disabled" | "allowlist";
-export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
 export type MatrixDmConfig = {
   /** If false, ignore all incoming Matrix DMs. Default: true. */
@@ -38,11 +39,18 @@ export type MatrixActionConfig = {
   channelInfo?: boolean;
 };
 
+/** Per-account Matrix config (excludes the accounts field to prevent recursion). */
+export type MatrixAccountConfig = Omit<MatrixConfig, "accounts">;
+
 export type MatrixConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** If false, do not start Matrix. Default: true. */
   enabled?: boolean;
+  /** Multi-account configuration keyed by account ID. */
+  accounts?: Record<string, MatrixAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
   /** Matrix homeserver URL (https://matrix.example.org). */
   homeserver?: string;
   /** Matrix user id (@user:server). */
@@ -50,7 +58,7 @@ export type MatrixConfig = {
   /** Matrix access token. */
   accessToken?: string;
   /** Matrix password (used only to fetch access token). */
-  password?: string;
+  password?: SecretInput;
   /** Optional device name when logging in via password. */
   deviceName?: string;
   /** Initial sync limit for startup (default: @vector-im/matrix-bot-sdk default). */
@@ -92,6 +100,19 @@ export type MatrixConfig = {
 export type CoreConfig = {
   channels?: {
     matrix?: MatrixConfig;
+    defaults?: {
+      groupPolicy?: "open" | "allowlist" | "disabled";
+    };
+  };
+  commands?: {
+    useAccessGroups?: boolean;
+  };
+  session?: {
+    store?: string;
+  };
+  messages?: {
+    ackReaction?: string;
+    ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   };
   [key: string]: unknown;
 };

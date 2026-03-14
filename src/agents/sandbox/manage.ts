@@ -23,14 +23,18 @@ export type SandboxBrowserInfo = SandboxBrowserRegistryEntry & {
   imageMatch: boolean;
 };
 
-export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
-  const config = loadConfig();
-  const registry = await readRegistry();
-  const results: SandboxContainerInfo[] = [];
+async function listSandboxRegistryItems<
+  TEntry extends { containerName: string; image: string; sessionKey: string },
+>(params: {
+  read: () => Promise<{ entries: TEntry[] }>;
+  resolveConfiguredImage: (agentId?: string) => string;
+}): Promise<Array<TEntry & { running: boolean; imageMatch: boolean }>> {
+  const registry = await params.read();
+  const results: Array<TEntry & { running: boolean; imageMatch: boolean }> = [];
 
   for (const entry of registry.entries) {
     const state = await dockerContainerState(entry.containerName);
-    // Get actual image from container
+    // Get actual image from container.
     let actualImage = entry.image;
     if (state.exists) {
       try {
@@ -46,7 +50,7 @@ export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
       }
     }
     const agentId = resolveSandboxAgentId(entry.sessionKey);
-    const configuredImage = resolveSandboxConfigForAgent(config, agentId).docker.image;
+    const configuredImage = params.resolveConfiguredImage(agentId);
     results.push({
       ...entry,
       image: actualImage,
@@ -58,38 +62,21 @@ export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
   return results;
 }
 
+export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
+  const config = loadConfig();
+  return listSandboxRegistryItems<SandboxRegistryEntry>({
+    read: readRegistry,
+    resolveConfiguredImage: (agentId) => resolveSandboxConfigForAgent(config, agentId).docker.image,
+  });
+}
+
 export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
   const config = loadConfig();
-  const registry = await readBrowserRegistry();
-  const results: SandboxBrowserInfo[] = [];
-
-  for (const entry of registry.entries) {
-    const state = await dockerContainerState(entry.containerName);
-    let actualImage = entry.image;
-    if (state.exists) {
-      try {
-        const result = await execDocker(
-          ["inspect", "-f", "{{.Config.Image}}", entry.containerName],
-          { allowFailure: true },
-        );
-        if (result.code === 0) {
-          actualImage = result.stdout.trim();
-        }
-      } catch {
-        // ignore
-      }
-    }
-    const agentId = resolveSandboxAgentId(entry.sessionKey);
-    const configuredImage = resolveSandboxConfigForAgent(config, agentId).browser.image;
-    results.push({
-      ...entry,
-      image: actualImage,
-      running: state.running,
-      imageMatch: actualImage === configuredImage,
-    });
-  }
-
-  return results;
+  return listSandboxRegistryItems<SandboxBrowserRegistryEntry>({
+    read: readBrowserRegistry,
+    resolveConfiguredImage: (agentId) =>
+      resolveSandboxConfigForAgent(config, agentId).browser.image,
+  });
 }
 
 export async function removeSandboxContainer(containerName: string): Promise<void> {

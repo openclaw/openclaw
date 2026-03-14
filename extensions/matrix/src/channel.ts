@@ -1,15 +1,21 @@
 import {
+  buildOpenGroupPolicyWarning,
+  collectAllowlistProviderGroupPolicyWarnings,
+  createScopedAccountConfigAccessors,
+  createScopedChannelConfigBase,
+  createScopedDmSecurityResolver,
+} from "openclaw/plugin-sdk/compat";
+import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
+  buildProbeChannelStatusSummary,
+  collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
-  formatPairingApproveHint,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
-  setAccountEnabledInConfigSection,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk";
-import type { CoreConfig } from "./types.js";
+} from "openclaw/plugin-sdk/matrix";
+import { buildTrafficStatusSummary } from "../../shared/channel-status-summary.js";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
@@ -19,6 +25,7 @@ import {
 } from "./group-mentions.js";
 import {
   listMatrixAccountIds,
+  resolveMatrixAccountConfig,
   resolveDefaultMatrixAccountId,
   resolveMatrixAccount,
   type ResolvedMatrixAccount,
@@ -30,6 +37,11 @@ import { sendMessageMatrix } from "./matrix/send.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import { matrixOutbound } from "./outbound.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
+import { normalizeSecretInputString } from "./secret-input.js";
+import type { CoreConfig } from "./types.js";
+
+// Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
+let matrixStartupLock: Promise<void> = Promise.resolve();
 
 const meta = {
   id: "matrix",
@@ -87,6 +99,37 @@ function buildMatrixConfigUpdate(
   };
 }
 
+const matrixConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) =>
+    resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }),
+  resolveAllowFrom: (account) => account.dm?.allowFrom,
+  formatAllowFrom: (allowFrom) => normalizeMatrixAllowList(allowFrom),
+});
+
+const matrixConfigBase = createScopedChannelConfigBase<ResolvedMatrixAccount, CoreConfig>({
+  sectionKey: "matrix",
+  listAccountIds: listMatrixAccountIds,
+  resolveAccount: (cfg, accountId) => resolveMatrixAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultMatrixAccountId,
+  clearBaseFields: [
+    "name",
+    "homeserver",
+    "userId",
+    "accessToken",
+    "password",
+    "deviceName",
+    "initialSyncLimit",
+  ],
+});
+
+const resolveMatrixDmPolicy = createScopedDmSecurityResolver<ResolvedMatrixAccount>({
+  channelKey: "matrix",
+  resolvePolicy: (account) => account.config.dm?.policy,
+  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
+  allowFromPathSuffix: "dm.",
+  normalizeEntry: (raw) => normalizeMatrixUserId(raw),
+});
+
 export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   id: "matrix",
   meta,
@@ -108,32 +151,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   reload: { configPrefixes: ["channels.matrix"] },
   configSchema: buildChannelConfigSchema(MatrixConfigSchema),
   config: {
-    listAccountIds: (cfg) => listMatrixAccountIds(cfg as CoreConfig),
-    resolveAccount: (cfg, accountId) => resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultMatrixAccountId(cfg as CoreConfig),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg: cfg as CoreConfig,
-        sectionKey: "matrix",
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg: cfg as CoreConfig,
-        sectionKey: "matrix",
-        accountId,
-        clearBaseFields: [
-          "name",
-          "homeserver",
-          "userId",
-          "accessToken",
-          "password",
-          "deviceName",
-          "initialSyncLimit",
-        ],
-      }),
+    ...matrixConfigBase,
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({
       accountId: account.accountId,
@@ -142,28 +160,27 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       configured: account.configured,
       baseUrl: account.homeserver,
     }),
-    resolveAllowFrom: ({ cfg }) =>
-      ((cfg as CoreConfig).channels?.matrix?.dm?.allowFrom ?? []).map((entry) => String(entry)),
-    formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
+    ...matrixConfigAccessors,
   },
   security: {
-    resolveDmPolicy: ({ account }) => ({
-      policy: account.config.dm?.policy ?? "pairing",
-      allowFrom: account.config.dm?.allowFrom ?? [],
-      policyPath: "channels.matrix.dm.policy",
-      allowFromPath: "channels.matrix.dm.allowFrom",
-      approveHint: formatPairingApproveHint("matrix"),
-      normalizeEntry: (raw) => normalizeMatrixUserId(raw),
-    }),
+    resolveDmPolicy: resolveMatrixDmPolicy,
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = (cfg as CoreConfig).channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        '- Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms.',
-      ];
+      return collectAllowlistProviderGroupPolicyWarnings({
+        cfg: cfg as CoreConfig,
+        providerConfigPresent: (cfg as CoreConfig).channels?.matrix !== undefined,
+        configuredGroupPolicy: account.config.groupPolicy,
+        collect: (groupPolicy) =>
+          groupPolicy === "open"
+            ? [
+                buildOpenGroupPolicyWarning({
+                  surface: "Matrix rooms",
+                  openBehavior: "allows any room to trigger (mention-gated)",
+                  remediation:
+                    'Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms',
+                }),
+              ]
+            : [],
+      });
     },
   },
   groups: {
@@ -171,7 +188,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     resolveToolPolicy: resolveMatrixGroupToolPolicy,
   },
   threading: {
-    resolveReplyToMode: ({ cfg }) => (cfg as CoreConfig).channels?.matrix?.replyToMode ?? "off",
+    resolveReplyToMode: ({ cfg, accountId }) =>
+      resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }).replyToMode ?? "off",
     buildToolContext: ({ context, hasRepliedRef }) => {
       const currentTarget = context.To;
       return {
@@ -278,10 +296,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         .map((id) => ({ kind: "group", id }) as const);
       return ids;
     },
-    listPeersLive: async ({ cfg, query, limit }) =>
-      listMatrixDirectoryPeersLive({ cfg, query, limit }),
-    listGroupsLive: async ({ cfg, query, limit }) =>
-      listMatrixDirectoryGroupsLive({ cfg, query, limit }),
+    listPeersLive: async ({ cfg, accountId, query, limit }) =>
+      listMatrixDirectoryPeersLive({ cfg, accountId, query, limit }),
+    listGroupsLive: async ({ cfg, accountId, query, limit }) =>
+      listMatrixDirectoryGroupsLive({ cfg, accountId, query, limit }),
   },
   resolver: {
     resolveTargets: async ({ cfg, inputs, kind, runtime }) =>
@@ -305,7 +323,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         return "Matrix requires --homeserver";
       }
       const accessToken = input.accessToken?.trim();
-      const password = input.password?.trim();
+      const password = normalizeSecretInputString(input.password);
       const userId = input.userId?.trim();
       if (!accessToken && !password) {
         return "Matrix requires --access-token or --password";
@@ -343,7 +361,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         homeserver: input.homeserver?.trim(),
         userId: input.userId?.trim(),
         accessToken: input.accessToken?.trim(),
-        password: input.password?.trim(),
+        password: normalizeSecretInputString(input.password),
         deviceName: input.deviceName?.trim(),
         initialSyncLimit: input.initialSyncLimit,
       });
@@ -358,34 +376,15 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       lastStopAt: null,
       lastError: null,
     },
-    collectStatusIssues: (accounts) =>
-      accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) {
-          return [];
-        }
-        return [
-          {
-            channel: "matrix",
-            accountId: account.accountId,
-            kind: "runtime",
-            message: `Channel error: ${lastError}`,
-          },
-        ];
-      }),
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      baseUrl: snapshot.baseUrl ?? null,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
-    probeAccount: async ({ timeoutMs, cfg }) => {
+    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("matrix", accounts),
+    buildChannelSummary: ({ snapshot }) =>
+      buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
+    probeAccount: async ({ account, timeoutMs, cfg }) => {
       try {
-        const auth = await resolveMatrixAuth({ cfg: cfg as CoreConfig });
+        const auth = await resolveMatrixAuth({
+          cfg: cfg as CoreConfig,
+          accountId: account.accountId,
+        });
         return await probeMatrix({
           homeserver: auth.homeserver,
           accessToken: auth.accessToken,
@@ -412,8 +411,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       lastError: runtime?.lastError ?? null,
       probe,
       lastProbeAt: runtime?.lastProbeAt ?? null,
-      lastInboundAt: runtime?.lastInboundAt ?? null,
-      lastOutboundAt: runtime?.lastOutboundAt ?? null,
+      ...buildTrafficStatusSummary(runtime),
     }),
   },
   gateway: {
@@ -424,8 +422,32 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         baseUrl: account.homeserver,
       });
       ctx.log?.info(`[${account.accountId}] starting provider (${account.homeserver ?? "matrix"})`);
+
+      // Serialize startup: wait for any previous startup to complete import phase.
+      // This works around a race condition with concurrent dynamic imports.
+      //
+      // INVARIANT: The import() below cannot hang because:
+      // 1. It only loads local ESM modules with no circular awaits
+      // 2. Module initialization is synchronous (no top-level await in ./matrix/index.js)
+      // 3. The lock only serializes the import phase, not the provider startup
+      const previousLock = matrixStartupLock;
+      let releaseLock: () => void = () => {};
+      matrixStartupLock = new Promise<void>((resolve) => {
+        releaseLock = resolve;
+      });
+      await previousLock;
+
       // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-      const { monitorMatrixProvider } = await import("./matrix/index.js");
+      // Wrap in try/finally to ensure lock is released even if import fails.
+      let monitorMatrixProvider: typeof import("./matrix/index.js").monitorMatrixProvider;
+      try {
+        const module = await import("./matrix/index.js");
+        monitorMatrixProvider = module.monitorMatrixProvider;
+      } finally {
+        // Release lock after import completes or fails
+        releaseLock();
+      }
+
       return monitorMatrixProvider({
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,

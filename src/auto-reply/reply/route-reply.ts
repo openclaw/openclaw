@@ -7,14 +7,30 @@
  * across multiple providers.
  */
 
-import type { OpenClawConfig } from "../../config/config.js";
-import type { OriginatingChannelType } from "../templating.js";
-import type { ReplyPayload } from "../types.js";
+import { parseSlackBlocksInput } from "../../../extensions/slack/src/blocks-input.js";
+import { isSlackInteractiveRepliesEnabled } from "../../../extensions/slack/src/interactive-replies.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import type { OriginatingChannelType } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import {
+  formatBtwTextForExternalDelivery,
+  shouldSuppressReasoningPayload,
+} from "./reply-payloads.js";
+
+let deliverRuntimePromise: Promise<
+  typeof import("../../infra/outbound/deliver-runtime.js")
+> | null = null;
+
+function loadDeliverRuntime() {
+  deliverRuntimePromise ??= import("../../infra/outbound/deliver-runtime.js");
+  return deliverRuntimePromise;
+}
 
 export type RouteReplyParams = {
   /** The reply payload to send. */
@@ -35,6 +51,10 @@ export type RouteReplyParams = {
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */
   mirror?: boolean;
+  /** Whether this message is being sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier for correlation with received events */
+  groupId?: string;
 };
 
 export type RouteReplyResult = {
@@ -56,16 +76,22 @@ export type RouteReplyResult = {
  */
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
   const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
+  if (shouldSuppressReasoningPayload(payload)) {
+    return { ok: true };
+  }
   const normalizedChannel = normalizeMessageChannel(channel);
+  const resolvedAgentId = params.sessionKey
+    ? resolveSessionAgentId({
+        sessionKey: params.sessionKey,
+        config: cfg,
+      })
+    : undefined;
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
   const responsePrefix = params.sessionKey
     ? resolveEffectiveMessagesConfig(
         cfg,
-        resolveSessionAgentId({
-          sessionKey: params.sessionKey,
-          config: cfg,
-        }),
+        resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
         { channel: normalizedChannel, accountId },
       ).responsePrefix
     : cfg.messages?.responsePrefix === "auto"
@@ -73,21 +99,43 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
+    enableSlackInteractiveReplies:
+      channel === "slack" ? isSlackInteractiveRepliesEnabled({ cfg, accountId }) : false,
   });
   if (!normalized) {
     return { ok: true };
   }
+  const externalPayload: ReplyPayload = {
+    ...normalized,
+    text: formatBtwTextForExternalDelivery(normalized),
+  };
 
-  let text = normalized.text ?? "";
-  let mediaUrls = (normalized.mediaUrls?.filter(Boolean) ?? []).length
-    ? (normalized.mediaUrls?.filter(Boolean) as string[])
-    : normalized.mediaUrl
-      ? [normalized.mediaUrl]
+  let text = externalPayload.text ?? "";
+  let mediaUrls = (externalPayload.mediaUrls?.filter(Boolean) ?? []).length
+    ? (externalPayload.mediaUrls?.filter(Boolean) as string[])
+    : externalPayload.mediaUrl
+      ? [externalPayload.mediaUrl]
       : [];
-  const replyToId = normalized.replyToId;
+  const replyToId = externalPayload.replyToId;
+  let hasSlackBlocks = false;
+  if (
+    channel === "slack" &&
+    externalPayload.channelData?.slack &&
+    typeof externalPayload.channelData.slack === "object" &&
+    !Array.isArray(externalPayload.channelData.slack)
+  ) {
+    try {
+      hasSlackBlocks = Boolean(
+        parseSlackBlocksInput((externalPayload.channelData.slack as { blocks?: unknown }).blocks)
+          ?.length,
+      );
+    } catch {
+      hasSlackBlocks = false;
+    }
+  }
 
   // Skip empty replies.
-  if (!text.trim() && mediaUrls.length === 0) {
+  if (!text.trim() && mediaUrls.length === 0 && !hasSlackBlocks) {
     return { ok: true };
   }
 
@@ -108,29 +156,39 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
 
   const resolvedReplyToId =
     replyToId ??
-    (channelId === "slack" && threadId != null && threadId !== "" ? String(threadId) : undefined);
+    ((channelId === "slack" || channelId === "mattermost") && threadId != null && threadId !== ""
+      ? String(threadId)
+      : undefined);
   const resolvedThreadId = channelId === "slack" ? null : (threadId ?? null);
 
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { deliverOutboundPayloads } = await import("../../infra/outbound/deliver.js");
+    const { deliverOutboundPayloads } = await loadDeliverRuntime();
+    const outboundSession = buildOutboundSessionContext({
+      cfg,
+      agentId: resolvedAgentId,
+      sessionKey: params.sessionKey,
+    });
     const results = await deliverOutboundPayloads({
       cfg,
       channel: channelId,
       to,
       accountId: accountId ?? undefined,
-      payloads: [normalized],
+      payloads: [externalPayload],
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
+      session: outboundSession,
       abortSignal,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {
               sessionKey: params.sessionKey,
-              agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
+              agentId: resolvedAgentId,
               text,
               mediaUrls,
+              ...(params.isGroup != null ? { isGroup: params.isGroup } : {}),
+              ...(params.groupId ? { groupId: params.groupId } : {}),
             }
           : undefined,
     });

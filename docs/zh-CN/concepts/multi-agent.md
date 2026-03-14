@@ -113,7 +113,7 @@ openclaw agents list --bindings
 注意事项：
 
 - 私信访问控制是**每 WhatsApp 账户全局的**（配对/允许列表），而不是每智能体。
-- 对于共享群组，将群组绑定到一个智能体或使用 [广播群组](/broadcast-groups)。
+- 对于共享群组，将群组绑定到一个智能体或使用 [广播群组](/channels/broadcast-groups)。
 
 ## 路由规则（消息如何选择智能体）
 
@@ -369,4 +369,4 @@ openclaw agents list --bindings
 如果你需要每智能体边界，使用 `agents.list[].tools` 拒绝 `exec`。
 对于群组定向，使用 `agents.list[].groupChat.mentionPatterns` 使 @提及清晰地映射到目标智能体。
 
-参见 [多智能体沙箱和工具](/multi-agent-sandbox-tools) 了解详细示例。
+参见 [多智能体沙箱和工具](/tools/multi-agent-sandbox-tools) 了解详细示例。

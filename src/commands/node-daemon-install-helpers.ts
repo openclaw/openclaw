@@ -1,15 +1,12 @@
-import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
 import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
-import {
-  renderSystemNodeWarning,
-  resolvePreferredNodePath,
-  resolveSystemNodeInfo,
-} from "../daemon/runtime-paths.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
-import { resolveGatewayDevMode } from "./daemon-install-helpers.js";
-
-type WarnFn = (message: string, title?: string) => void;
+import {
+  emitDaemonInstallRuntimeWarning,
+  resolveDaemonInstallRuntimeInputs,
+} from "./daemon-install-plan.shared.js";
+import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
+import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
 
 export type NodeInstallPlan = {
   programArguments: string[];
@@ -29,15 +26,14 @@ export async function buildNodeInstallPlan(params: {
   runtime: NodeDaemonRuntime;
   devMode?: boolean;
   nodePath?: string;
-  warn?: WarnFn;
+  warn?: DaemonInstallWarnFn;
 }): Promise<NodeInstallPlan> {
-  const devMode = params.devMode ?? resolveGatewayDevMode();
-  const nodePath =
-    params.nodePath ??
-    (await resolvePreferredNodePath({
-      env: params.env,
-      runtime: params.runtime,
-    }));
+  const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
+    env: params.env,
+    runtime: params.runtime,
+    devMode: params.devMode,
+    nodePath: params.nodePath,
+  });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     host: params.host,
     port: params.port,
@@ -50,13 +46,13 @@ export async function buildNodeInstallPlan(params: {
     nodePath,
   });
 
-  if (params.runtime === "node") {
-    const systemNode = await resolveSystemNodeInfo({ env: params.env });
-    const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
-    if (warning) {
-      params.warn?.(warning, "Node daemon runtime");
-    }
-  }
+  await emitDaemonInstallRuntimeWarning({
+    env: params.env,
+    runtime: params.runtime,
+    programArguments,
+    warn: params.warn,
+    title: "Node daemon runtime",
+  });
 
   const environment = buildNodeServiceEnvironment({ env: params.env });
   const description = formatNodeServiceDescription({

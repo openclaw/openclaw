@@ -103,15 +103,9 @@ extension NodeServiceManager {
     }
 
     private static func parseServiceJson(from raw: String) -> ParsedServiceJson? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let start = trimmed.firstIndex(of: "{"),
-              let end = trimmed.lastIndex(of: "}")
-        else {
-            return nil
-        }
-        let jsonText = String(trimmed[start...end])
-        guard let data = jsonText.data(using: .utf8) else { return nil }
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        guard let parsed = JSONObjectExtractionSupport.extract(from: raw) else { return nil }
+        let jsonText = parsed.text
+        let object = parsed.object
         let ok = object["ok"] as? Bool
         let result = object["result"] as? String
         let message = object["message"] as? String
@@ -139,12 +133,6 @@ extension NodeServiceManager {
     }
 
     private static func summarize(_ text: String) -> String? {
-        let lines = text
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard let last = lines.last else { return nil }
-        let normalized = last.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        return normalized.count > 200 ? String(normalized.prefix(199)) + "…" : normalized
+        TextSummarySupport.summarizeLastLine(text)
     }
 }

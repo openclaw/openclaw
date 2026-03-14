@@ -4,10 +4,13 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  ReplyRuntimeConfigSchemaShape,
   ToolPolicySchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/nextcloud-talk";
 import { z } from "zod";
+import { requireChannelOpenAllowFrom } from "../../shared/config-schema-helpers.js";
+import { buildSecretInputSchema } from "./secret-input.js";
 
 export const NextcloudTalkRoomSchema = z
   .object({
@@ -26,10 +29,10 @@ export const NextcloudTalkAccountSchemaBase = z
     enabled: z.boolean().optional(),
     markdown: MarkdownConfigSchema,
     baseUrl: z.string().optional(),
-    botSecret: z.string().optional(),
+    botSecret: buildSecretInputSchema().optional(),
     botSecretFile: z.string().optional(),
     apiUser: z.string().optional(),
-    apiPassword: z.string().optional(),
+    apiPassword: buildSecretInputSchema().optional(),
     apiPasswordFile: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     webhookPort: z.number().int().positive().optional(),
@@ -40,40 +43,31 @@ export const NextcloudTalkAccountSchemaBase = z
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     rooms: z.record(z.string(), NextcloudTalkRoomSchema.optional()).optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    responsePrefix: z.string().optional(),
-    mediaMaxMb: z.number().positive().optional(),
+    ...ReplyRuntimeConfigSchemaShape,
   })
   .strict();
 
 export const NextcloudTalkAccountSchema = NextcloudTalkAccountSchemaBase.superRefine(
   (value, ctx) => {
-    requireOpenAllowFrom({
+    requireChannelOpenAllowFrom({
+      channel: "nextcloud-talk",
       policy: value.dmPolicy,
       allowFrom: value.allowFrom,
       ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.nextcloud-talk.dmPolicy="open" requires channels.nextcloud-talk.allowFrom to include "*"',
+      requireOpenAllowFrom,
     });
   },
 );
 
 export const NextcloudTalkConfigSchema = NextcloudTalkAccountSchemaBase.extend({
   accounts: z.record(z.string(), NextcloudTalkAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  requireOpenAllowFrom({
+  requireChannelOpenAllowFrom({
+    channel: "nextcloud-talk",
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.nextcloud-talk.dmPolicy="open" requires channels.nextcloud-talk.allowFrom to include "*"',
+    requireOpenAllowFrom,
   });
 });

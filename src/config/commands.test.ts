@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { resolveNativeSkillsEnabled } from "./commands.js";
+import {
+  isCommandFlagEnabled,
+  isRestartEnabled,
+  isNativeCommandsExplicitlyDisabled,
+  resolveNativeCommandsEnabled,
+  resolveNativeSkillsEnabled,
+} from "./commands.js";
 
 describe("resolveNativeSkillsEnabled", () => {
   it("uses provider defaults for auto", () => {
@@ -43,6 +49,86 @@ describe("resolveNativeSkillsEnabled", () => {
         providerSetting: false,
         globalSetting: true,
       }),
+    ).toBe(false);
+  });
+});
+
+describe("resolveNativeCommandsEnabled", () => {
+  it("follows the same provider default heuristic", () => {
+    expect(resolveNativeCommandsEnabled({ providerId: "discord", globalSetting: "auto" })).toBe(
+      true,
+    );
+    expect(resolveNativeCommandsEnabled({ providerId: "telegram", globalSetting: "auto" })).toBe(
+      true,
+    );
+    expect(resolveNativeCommandsEnabled({ providerId: "slack", globalSetting: "auto" })).toBe(
+      false,
+    );
+  });
+
+  it("honors explicit provider/global booleans", () => {
+    expect(
+      resolveNativeCommandsEnabled({
+        providerId: "slack",
+        providerSetting: true,
+        globalSetting: false,
+      }),
+    ).toBe(true);
+    expect(
+      resolveNativeCommandsEnabled({
+        providerId: "discord",
+        globalSetting: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isNativeCommandsExplicitlyDisabled", () => {
+  it("returns true only for explicit false at provider or fallback global", () => {
+    expect(
+      isNativeCommandsExplicitlyDisabled({ providerSetting: false, globalSetting: true }),
+    ).toBe(true);
+    expect(
+      isNativeCommandsExplicitlyDisabled({ providerSetting: undefined, globalSetting: false }),
+    ).toBe(true);
+    expect(
+      isNativeCommandsExplicitlyDisabled({ providerSetting: true, globalSetting: false }),
+    ).toBe(false);
+    expect(
+      isNativeCommandsExplicitlyDisabled({ providerSetting: "auto", globalSetting: false }),
+    ).toBe(false);
+  });
+});
+
+describe("isRestartEnabled", () => {
+  it("defaults to enabled unless explicitly false", () => {
+    expect(isRestartEnabled(undefined)).toBe(true);
+    expect(isRestartEnabled({})).toBe(true);
+    expect(isRestartEnabled({ commands: {} })).toBe(true);
+    expect(isRestartEnabled({ commands: { restart: true } })).toBe(true);
+    expect(isRestartEnabled({ commands: { restart: false } })).toBe(false);
+  });
+
+  it("ignores inherited restart flags", () => {
+    expect(
+      isRestartEnabled({
+        commands: Object.create({ restart: false }) as Record<string, unknown>,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("isCommandFlagEnabled", () => {
+  it("requires own boolean true", () => {
+    expect(isCommandFlagEnabled({ commands: { bash: true } }, "bash")).toBe(true);
+    expect(isCommandFlagEnabled({ commands: { bash: false } }, "bash")).toBe(false);
+    expect(
+      isCommandFlagEnabled(
+        {
+          commands: Object.create({ bash: true }) as Record<string, unknown>,
+        },
+        "bash",
+      ),
     ).toBe(false);
   });
 });

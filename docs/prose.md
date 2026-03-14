@@ -11,7 +11,7 @@ title: "OpenProse"
 
 OpenProse is a portable, markdown-first workflow format for orchestrating AI sessions. In OpenClaw it ships as a plugin that installs an OpenProse skill pack plus a `/prose` slash command. Programs live in `.prose` files and can spawn multiple sub-agents with explicit control flow.
 
-Official site: https://www.prose.md
+Official site: [https://www.prose.md](https://www.prose.md)
 
 ## What it can do
 
@@ -31,7 +31,7 @@ Restart the Gateway after enabling the plugin.
 
 Dev/local checkout: `openclaw plugins install ./extensions/open-prose`
 
-Related docs: [Plugins](/plugin), [Plugin manifest](/plugins/manifest), [Skills](/tools/skills).
+Related docs: [Plugins](/tools/plugin), [Plugin manifest](/plugins/manifest), [Skills](/tools/skills).
 
 ## Slash command
 

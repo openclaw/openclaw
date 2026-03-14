@@ -1,6 +1,7 @@
-import type { IncomingMessage } from "node:http";
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage } from "node:http";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[name.toLowerCase()];
@@ -76,4 +77,28 @@ export function resolveSessionKey(params: {
   const user = params.user?.trim();
   const mainKey = user ? `${params.prefix}-user:${user}` : `${params.prefix}:${randomUUID()}`;
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
+}
+
+export function resolveGatewayRequestContext(params: {
+  req: IncomingMessage;
+  model: string | undefined;
+  user?: string | undefined;
+  sessionPrefix: string;
+  defaultMessageChannel: string;
+  useMessageChannelHeader?: boolean;
+}): { agentId: string; sessionKey: string; messageChannel: string } {
+  const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
+  const sessionKey = resolveSessionKey({
+    req: params.req,
+    agentId,
+    user: params.user,
+    prefix: params.sessionPrefix,
+  });
+
+  const messageChannel = params.useMessageChannelHeader
+    ? (normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ??
+      params.defaultMessageChannel)
+    : params.defaultMessageChannel;
+
+  return { agentId, sessionKey, messageChannel };
 }

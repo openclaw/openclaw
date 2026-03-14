@@ -173,7 +173,7 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 ## 插件 + 工具
 
 插件可以在核心集之外注册**额外的工具**（和 CLI 命令）。
-参见[插件](/plugin)了解安装 + 配置，以及 [Skills](/tools/skills) 了解
+参见[插件](/tools/plugin)了解安装 + 配置，以及 [Skills](/tools/skills) 了解
 工具使用指导如何被注入到提示中。一些插件随工具一起提供自己的 Skills
 （例如，voice-call 插件）。
 
