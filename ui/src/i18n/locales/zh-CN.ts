@@ -326,6 +326,12 @@ export const zh_CN: TranslationMap = {
       saveChanges: "保存更改",
       addJob: "添加任务",
       cancel: "取消",
+      pipeline: "流水线",
+      pipelineSub: "链式触发任务 — 当前任务成功或失败时自动触发另一个任务。",
+      onSuccessJobId: "成功时触发任务 ID",
+      onFailureJobId: "失败时触发任务 ID",
+      pipelinePlaceholder: "输入任务 ID",
+      pipelineHelp: "留空则不触发链式任务。",
     },
     jobList: {
       allJobs: "所有任务",

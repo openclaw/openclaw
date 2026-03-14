@@ -335,6 +335,12 @@ export const en: TranslationMap = {
       saveChanges: "Save changes",
       addJob: "Add job",
       cancel: "Cancel",
+      pipeline: "Pipeline",
+      pipelineSub: "Chain jobs together — trigger another job when this one succeeds or fails.",
+      onSuccessJobId: "On success: trigger job ID",
+      onFailureJobId: "On failure: trigger job ID",
+      pipelinePlaceholder: "Enter job ID",
+      pipelineHelp: "Leave blank to run no chained job for this outcome.",
     },
     jobList: {
       allJobs: "all jobs",

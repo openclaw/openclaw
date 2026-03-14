@@ -491,6 +491,8 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
       job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
         ? String(job.payload.timeoutSeconds)
         : "",
+    onSuccessJobId: job.onSuccessJobId ?? "",
+    onFailureJobId: job.onFailureJobId ?? "",
   };
 
   if (job.schedule.kind === "at") {
@@ -670,6 +672,8 @@ export async function addCronJob(state: CronState) {
     const agentId = form.clearAgent ? null : form.agentId.trim();
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
+    const onSuccessJobId = form.onSuccessJobId.trim() || null;
+    const onFailureJobId = form.onFailureJobId.trim() || null;
     const job = {
       name: form.name.trim(),
       description: form.description.trim(),
@@ -683,6 +687,8 @@ export async function addCronJob(state: CronState) {
       payload,
       delivery,
       failureAlert,
+      onSuccessJobId,
+      onFailureJobId,
     };
     if (!job.name) {
       throw new Error(t("cron.errors.nameRequiredShort"));
