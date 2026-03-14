@@ -53,6 +53,45 @@ The retry window is intentionally modest: 15 attempts with `0.2s` sleeps, or abo
    - the `launchctl print` output before and after,
    - whether the recovery path reloaded the plist and restored the service.
 
+### Field test report (2026-03-14)
+
+The patch was exercised on a second macOS machine using a source-built checkout installed as the active LaunchAgent-backed gateway service.
+
+Test environment highlights:
+
+- repo checkout: `/Users/jian/dev/oss/openclaw`
+- branch: `fix/macos-launchd-restart-repair`
+- launchd label: `ai.openclaw.gateway`
+- runtime command: `/opt/homebrew/opt/node/bin/node /Users/jian/dev/oss/openclaw/dist/index.js gateway --port 18789`
+- gateway mode during testing: `gateway.mode=local`
+- tailscale daemon on test Mac: available and logged in
+
+Observed passing scenarios:
+
+1. Repeated `config.patch` restart cycles
+   - 3-cycle smoke run: all green
+   - 6-cycle soak run: all green
+2. Full `config.apply`
+   - schema-valid full config apply survived restart cleanly
+3. Mixed write-path run
+   - alternating `config.patch` / `config.apply` cycles survived
+4. Tailscale exposure change
+   - `gateway.tailscale.mode=serve` applied through `config.patch`
+   - gateway restarted cleanly and `tailscale serve status` showed the expected proxy
+5. Tailscale churn
+   - toggled `gateway.tailscale.mode` through `serve -> off -> serve -> off`
+   - LaunchAgent remained loaded and gateway remained healthy after each restart
+6. Manual service lifecycle command
+   - `node openclaw.mjs gateway restart` succeeded and the gateway came back healthy
+7. Reboot + login
+   - after rebooting the test Mac and logging in again, the LaunchAgent was loaded, the gateway was running, RPC probe was ok, and tailscale serve configuration still pointed at the gateway
+
+Across these runs, the key former failure signature did not recur:
+
+- no `LaunchAgent (not loaded)` state after restart
+- no `Could not find service "ai.openclaw.gateway"` after config-triggered restart
+- no `Service not installed` / `doctor --repair` recovery needed
+
 ### Caveat
 
-This is a candidate fix, not a proven fix. It hardens one plausible failure mode in the detached launchd restart handoff, but it does not prove that the root cause of #45178 is fully understood yet.
+This is now a strong candidate fix with real macOS/launchd evidence behind it, but one narrow path was not deliberately forced in testing: the new fallback repair branch inside the detached launchd handoff. The field runs strongly suggest the normal launchd-supervised restart path is now healthy, but they do not prove the explicit repair fallback is correct under an artificially sabotaged launchd state.
