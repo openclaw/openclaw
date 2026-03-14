@@ -132,3 +132,22 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     expect(ctx.content).toBe('<at user_id="ou_x">&lt;script&gt;</at> test');
   });
 });
+
+describe("parseFeishuMessageEvent – image message content (#44792)", () => {
+  it("returns [Image] placeholder for image messages so agent uses MediaPath", () => {
+    const event = {
+      sender: { sender_id: { open_id: "ou_user" } },
+      message: {
+        message_id: "msg_img",
+        chat_id: "oc_dm",
+        chat_type: "p2p",
+        message_type: "image",
+        content: JSON.stringify({
+          image_key: "img_v3_02vo_53bcb69b-2d18-4be7-b6ba-8e8a09fe2e5g",
+        }),
+      },
+    };
+    const ctx = parseFeishuMessageEvent(event as any);
+    expect(ctx.content).toBe("[Image]");
+  });
+});

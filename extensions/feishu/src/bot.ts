@@ -312,6 +312,11 @@ function parseMessageContent(content: string, messageType: string): string {
     const { textContent } = parsePostContent(content);
     return textContent;
   }
+  if (messageType === "image") {
+    // Return placeholder so the agent uses MediaPath (actual saved path) instead of
+    // constructing a path from image_key, which would be wrong (#44792).
+    return "[Image]";
+  }
 
   try {
     const parsed = JSON.parse(content);
