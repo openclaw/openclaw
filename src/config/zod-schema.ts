@@ -207,10 +207,12 @@ const CronHookEntrySchema = z
   .object({
     script: z.string(),
     priority: z.number().int().optional(),
+    timeoutMs: z.number().int().positive().optional(),
     filter: z
       .object({
         workflow: z.array(z.string()).optional(),
         jobId: z.array(z.string()).optional(),
+        jobName: z.array(z.string()).optional(),
         agentId: z.array(z.string()).optional(),
       })
       .strict()

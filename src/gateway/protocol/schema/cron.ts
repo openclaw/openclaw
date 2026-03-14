@@ -262,6 +262,27 @@ export const CronJobSchema = Type.Object(
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
     state: CronJobStateSchema,
+    hooks: Type.Optional(
+      Type.Object(
+        {
+          beforeRun: Type.Optional(Type.Array(Type.String())),
+          afterComplete: Type.Optional(Type.Array(Type.String())),
+          onFailure: Type.Optional(Type.Array(Type.String())),
+          afterRun: Type.Optional(Type.Array(Type.String())),
+          skipGlobal: Type.Optional(
+            Type.Array(
+              Type.Union([
+                Type.Literal("beforeRun"),
+                Type.Literal("afterComplete"),
+                Type.Literal("onFailure"),
+                Type.Literal("afterRun"),
+              ]),
+            ),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

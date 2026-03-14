@@ -33,14 +33,26 @@ export type CronHookEntry = {
   script: string;
   /** Execution priority — lower numbers run first (default: 10). */
   priority?: number;
+  /** Per-hook timeout in milliseconds (default: 10000). */
+  timeoutMs?: number;
   /** Only run this hook when the filter criteria match. */
   filter?: {
     workflow?: string[];
     jobId?: string[];
+    /** Match by job name (case-insensitive substring match). */
+    jobName?: string[];
     agentId?: string[];
   };
 };
 
+/**
+ * Lifecycle hook points for cron job execution:
+ * - `beforeRun`: fires before the job executes; may abort the job via `{ abort: true }`.
+ * - `afterComplete`: fires only when the job succeeds (status "ok").
+ * - `onFailure`: fires only when the job fails (status "error").
+ * - `afterRun`: always fires regardless of outcome (like a `finally` block),
+ *   including after `beforeRun` aborts. Use for cleanup, audit, or metrics.
+ */
 export type CronLifecycleHookPoint = "beforeRun" | "afterComplete" | "onFailure" | "afterRun";
 
 /** Global cron lifecycle hooks registered in openclaw.json cron section. */
