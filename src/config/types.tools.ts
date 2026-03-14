@@ -242,7 +242,7 @@ export type ExecToolConfig = {
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
-  /** Default time (ms) before an exec command auto-backgrounds. */
+  /** Default yield window (ms) used when exec is explicitly requested to yield/background. */
   backgroundMs?: number;
   /** Default timeout (seconds) before auto-killing exec commands. */
   timeoutSec?: number;
