@@ -113,7 +113,7 @@ async function runLinkEntries(params: {
       }
     } catch (err) {
       if (err instanceof SsrFBlockedError) {
-        logVerbose(`SSRF blocked for ${params.url}: ${String(err)}`);
+        logVerbose(`SSRF blocked for ${params.url}: ${err.message}`);
         return null;
       }
       lastError = err;
