@@ -97,8 +97,6 @@ describe("resolveSlackRoomContextHints", () => {
       channelConfig: { systemPrompt: null },
     });
     // Should only contain platform prompt, no extra newlines from empty parts
-    const parts = result.groupSystemPrompt!.split("\n\n");
-    // Platform prompt is multi-paragraph itself, but no trailing empty sections
     expect(result.groupSystemPrompt).not.toMatch(/\n\n$/);
   });
 });
