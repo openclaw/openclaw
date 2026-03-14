@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { InboundDebounceByProvider } from "../config/types.messages.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 
 const resolveMs = (value: unknown): number | undefined => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -128,7 +127,14 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
     const buffer: DebounceBuffer<T> = { items: [item], timeout: null, debounceMs };
     buffers.set(key, buffer);
-    pruneMapToMaxSize(buffers, maxKeys);
+    // Evict oldest keys, cancelling their pending timers to avoid ghost flushes.
+    while (buffers.size > maxKeys) {
+      const oldest = buffers.keys().next();
+      if (oldest.done) break;
+      const evicted = buffers.get(oldest.value);
+      if (evicted?.timeout) clearTimeout(evicted.timeout);
+      buffers.delete(oldest.value);
+    }
     scheduleFlush(key, buffer);
   };
 
