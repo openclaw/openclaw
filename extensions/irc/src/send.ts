@@ -1,4 +1,5 @@
 import { resolveIrcAccount } from "./accounts.js";
+import { getActiveClient } from "./active-clients.js";
 import type { IrcClient } from "./client.js";
 import { connectIrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
@@ -67,13 +68,19 @@ export async function sendMessageIrc(
   if (client?.isReady()) {
     client.sendPrivmsg(target, payload);
   } else {
-    const transient = await connectIrcClient(
-      buildIrcConnectOptions(account, {
-        connectTimeoutMs: 12000,
-      }),
-    );
-    transient.sendPrivmsg(target, payload);
-    transient.quit("sent");
+    // Try the monitor's persistent client first (already connected and joined to channels)
+    const active = getActiveClient(account.accountId);
+    if (active) {
+      active.sendPrivmsg(target, payload);
+    } else {
+      const transient = await connectIrcClient(
+        buildIrcConnectOptions(account, {
+          connectTimeoutMs: 12000,
+        }),
+      );
+      transient.sendPrivmsg(target, payload);
+      transient.quit("sent");
+    }
   }
 
   runtime.channel.activity.record({
