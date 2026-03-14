@@ -238,7 +238,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared).toBeNull();
   });
 
-  it("delivers file-only message with placeholder when media download fails", async () => {
+  it("delivers file-only message with skip reasons when media download fails", async () => {
     // Files without url_private will fail to download, simulating a download
     // failure.  The message should still be delivered with a fallback
     // placeholder instead of being silently dropped (#25064).
@@ -250,12 +250,13 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     expect(prepared).toBeTruthy();
-    expect(prepared!.ctxPayload.RawBody).toContain("[Slack file:");
+    expect(prepared!.ctxPayload.RawBody).toContain("[Slack file skipped: voice.ogg]");
+    expect(prepared!.ctxPayload.RawBody).toContain("[Slack file skipped: photo.jpg]");
     expect(prepared!.ctxPayload.RawBody).toContain("voice.ogg");
     expect(prepared!.ctxPayload.RawBody).toContain("photo.jpg");
   });
 
-  it("falls back to generic file label when a Slack file name is empty", async () => {
+  it("falls back to generic file label in skip summary when a Slack file name is empty", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
         text: "",
@@ -264,7 +265,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     expect(prepared).toBeTruthy();
-    expect(prepared!.ctxPayload.RawBody).toContain("[Slack file: file]");
+    expect(prepared!.ctxPayload.RawBody).toContain("[Slack file skipped: file]");
   });
 
   it("extracts attachment text for bot messages with empty text when allowBots is true (#27616)", async () => {

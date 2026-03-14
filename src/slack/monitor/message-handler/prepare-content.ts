@@ -1,5 +1,6 @@
 import { logVerbose } from "../../../globals.js";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
+import { type SlackFileContentIssueReason, resolveSlackFileContent } from "../file-content.js";
 import {
   MAX_SLACK_MEDIA_FILES,
   resolveSlackAttachmentContent,
@@ -12,6 +13,20 @@ export type SlackResolvedMessageContent = {
   rawBody: string;
   effectiveDirectMedia: SlackMediaResult[] | null;
 };
+
+function formatSlackFileIssue(reason: SlackFileContentIssueReason): string {
+  switch (reason) {
+    case "permission":
+      return "permission denied (missing scope or auth)";
+    case "size_exceeded":
+      return "size exceeds limit";
+    case "unsupported_format":
+      return "unsupported format";
+    case "download_failed":
+    default:
+      return "download failed";
+  }
+}
 
 function filterInheritedParentFiles(params: {
   files: SlackFile[] | undefined;
@@ -60,16 +75,30 @@ export async function resolveSlackMessageContent(params: {
     token: params.botToken,
     maxBytes: params.mediaMaxBytes,
   });
+  const fileContent = await resolveSlackFileContent({
+    files: ownFiles,
+    token: params.botToken,
+    maxBytes: params.mediaMaxBytes,
+  });
 
   const mergedMedia = [...(media ?? []), ...(attachmentContent?.media ?? [])];
   const effectiveDirectMedia = mergedMedia.length > 0 ? mergedMedia : null;
   const mediaPlaceholder = effectiveDirectMedia
     ? effectiveDirectMedia.map((item) => item.placeholder).join(" ")
     : undefined;
+  const extractedFileContent = fileContent.snippets
+    .map((snippet) => {
+      const truncatedNotice = snippet.truncated ? "\n[truncated]" : "";
+      return `[Slack file content: ${snippet.fileName}]\n${snippet.text}${truncatedNotice}`;
+    })
+    .join("\n\n");
+  const fileIssueSummary = fileContent.issues
+    .map((issue) => `[Slack file skipped: ${issue.fileName}] ${formatSlackFileIssue(issue.reason)}`)
+    .join("\n");
 
   const fallbackFiles = ownFiles ?? [];
   const fileOnlyFallback =
-    !mediaPlaceholder && fallbackFiles.length > 0
+    !mediaPlaceholder && !extractedFileContent && !fileIssueSummary && fallbackFiles.length > 0
       ? fallbackFiles
           .slice(0, MAX_SLACK_MEDIA_FILES)
           .map((file) => file.name?.trim() || "file")
@@ -90,6 +119,8 @@ export async function resolveSlackMessageContent(params: {
       (params.message.text ?? "").trim(),
       attachmentContent?.text,
       botAttachmentText,
+      extractedFileContent,
+      fileIssueSummary,
       mediaPlaceholder,
       fileOnlyPlaceholder,
     ]
