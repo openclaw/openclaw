@@ -248,6 +248,8 @@ export type CompactionStatus = {
   active: boolean;
   startedAt: number | null;
   completedAt: number | null;
+  attempt?: number;
+  maxAttempts?: number;
 };
 
 export type FallbackStatus = {
@@ -286,6 +288,17 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
       startedAt: Date.now(),
       completedAt: null,
     };
+  } else if (phase === "progress") {
+    // Chunk-by-chunk compaction in progress: keep active, update attempt counter.
+    const attempt = typeof data.attempt === "number" ? data.attempt : undefined;
+    const maxAttempts = typeof data.maxAttempts === "number" ? data.maxAttempts : undefined;
+    host.compactionStatus = {
+      active: true,
+      startedAt: host.compactionStatus?.startedAt ?? Date.now(),
+      completedAt: null,
+      attempt,
+      maxAttempts,
+    };
   } else if (phase === "end") {
     host.compactionStatus = {
       active: false,
@@ -297,6 +310,9 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
       host.compactionStatus = null;
       host.compactionClearTimer = null;
     }, COMPACTION_TOAST_DURATION_MS);
+  } else if (phase === "error") {
+    // Compaction failed; clear the indicator immediately without a success toast.
+    host.compactionStatus = null;
   }
 }
 

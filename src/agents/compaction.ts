@@ -343,6 +343,8 @@ export async function summarizeInStages(params: {
   previousSummary?: string;
   parts?: number;
   minMessagesForSplit?: number;
+  /** Called before each chunk is summarized; reports (currentChunk, totalChunks). */
+  onChunkProgress?: (current: number, total: number) => void;
 }): Promise<string> {
   const { messages } = params;
   if (messages.length === 0) {
@@ -363,11 +365,12 @@ export async function summarizeInStages(params: {
   }
 
   const partialSummaries: string[] = [];
-  for (const chunk of splits) {
+  for (let i = 0; i < splits.length; i++) {
+    params.onChunkProgress?.(i + 1, splits.length);
     partialSummaries.push(
       await summarizeWithFallback({
         ...params,
-        messages: chunk,
+        messages: splits[i],
         previousSummary: undefined,
       }),
     );
