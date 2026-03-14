@@ -80,6 +80,7 @@ describe("plugins init", () => {
     expect(pkg.name).toBe("my-plugin");
     expect(pkg.type).toBe("module");
     expect(pkg.openclaw.extensions).toEqual(["./index.ts"]);
+    expect(pkg.devDependencies).toEqual({ openclaw: "*" });
 
     const index = fs.readFileSync(path.join(dir, "index.ts"), "utf-8");
     expect(index).toContain("OpenClawPluginApi");

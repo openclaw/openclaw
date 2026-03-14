@@ -17,8 +17,12 @@ export type PluginInitOptions = {
 const VALID_KINDS: readonly PluginKind[] = ["memory", "context-engine"];
 
 function validatePluginId(id: string): string | null {
-  if (!id) {
+  const trimmed = id.trim();
+  if (!trimmed) {
     return "invalid plugin name: missing";
+  }
+  if (trimmed !== id) {
+    return "invalid plugin name: leading or trailing whitespace";
   }
   if (id === "." || id === "..") {
     return "invalid plugin name: reserved path segment";
@@ -79,6 +83,7 @@ export function runPluginInit(dir: string | undefined, opts: PluginInitOptions) 
     name: id,
     version: "0.0.1",
     type: "module",
+    devDependencies: { openclaw: "*" },
     openclaw: { extensions: ["./index.ts"] },
   };
 
@@ -88,12 +93,17 @@ export function runPluginInit(dir: string | undefined, opts: PluginInitOptions) 
     [path.join(targetDir, "package.json"), JSON.stringify(pkg, null, 2) + "\n"],
   ];
 
-  for (const [filePath, content] of files) {
-    if (fs.existsSync(filePath) && !force) {
-      defaultRuntime.error(`${path.basename(filePath)} already exists (use --force to overwrite)`);
-      defaultRuntime.exit(1);
-      return;
+  if (!force) {
+    for (const [filePath] of files) {
+      if (fs.existsSync(filePath)) {
+        defaultRuntime.error(`${path.basename(filePath)} already exists (use --force to overwrite)`);
+        defaultRuntime.exit(1);
+        return;
+      }
     }
+  }
+
+  for (const [filePath, content] of files) {
     fs.writeFileSync(filePath, content, "utf-8");
   }
 
