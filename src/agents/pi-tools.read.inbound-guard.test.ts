@@ -45,6 +45,15 @@ describe("isInboundMediaPath", () => {
     expect(isInboundMediaPath("/workspace/media//inbound/file.txt")).toBe(true);
     expect(isInboundMediaPath("/workspace/./media/inbound/file.txt")).toBe(true);
   });
+
+  // Regression for P1 finding: case-insensitive filesystems (macOS, Windows) must
+  // not allow upper-cased path segments to bypass the inbound media guard.
+  it("matches case-insensitively for macOS/Windows filesystem compatibility (P1)", () => {
+    expect(isInboundMediaPath("MEDIA/INBOUND/file.txt")).toBe(true);
+    expect(isInboundMediaPath("media/INBOUND/file.txt")).toBe(true);
+    expect(isInboundMediaPath("/workspace/MEDIA/inbound/file.txt")).toBe(true);
+    expect(isInboundMediaPath("/workspace/Media/Inbound/file.txt")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

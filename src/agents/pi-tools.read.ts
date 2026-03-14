@@ -64,10 +64,15 @@ const INBOUND_MEDIA_PATH_SEGMENT = "media/inbound";
  * forms such as "media//inbound/file.txt" or "media/./inbound/file.txt" are
  * collapsed before the trust check, preventing bypass via redundant separators or
  * dot segments.
+ *
+ * The comparison is case-insensitive so that paths like "MEDIA/INBOUND/file.txt"
+ * are correctly classified on case-insensitive filesystems (macOS, Windows).
  */
 export function isInboundMediaPath(filePath: string): boolean {
   const posix = filePath.replace(/\\/g, "/");
-  const normalized = path.posix.normalize(posix);
+  // Normalise then lower-case so that case-insensitive filesystems (macOS/Windows)
+  // cannot bypass the guard with upper-cased path segments.
+  const normalized = path.posix.normalize(posix).toLowerCase();
   return (
     normalized.includes(`/${INBOUND_MEDIA_PATH_SEGMENT}/`) ||
     normalized.startsWith(`${INBOUND_MEDIA_PATH_SEGMENT}/`) ||
@@ -721,8 +726,14 @@ function wrapInboundFileResult(
       typeof (block as { text?: unknown }).text === "string"
     ) {
       const text = (block as { text: string }).text;
+      // sanitizeForPromptLiteral strips control/newline characters; additionally
+      // escape < and > so that an attacker-controlled filename cannot inject
+      // markup into the label line that sits outside the <untrusted-text> block.
+      const safeLabel = sanitizeForPromptLiteral(filePath)
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
       const wrapped = wrapUntrustedPromptDataBlock({
-        label: `File: ${sanitizeForPromptLiteral(filePath)}`,
+        label: `File: ${safeLabel}`,
         text,
       });
       return { ...(block as object), text: wrapped || text };
