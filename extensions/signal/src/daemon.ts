@@ -15,7 +15,7 @@ export type SignalDaemonOpts = {
 
 export type SignalDaemonHandle = {
   pid?: number;
-  stop: () => void;
+  stop: () => Promise<void>;
   exited: Promise<SignalDaemonExitEvent>;
   isExited: () => boolean;
 };
@@ -134,14 +134,37 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
     settleExit({ source: "spawn-error", code: null, signal: null });
   });
 
+  let stopPromise: Promise<void> | undefined;
+
   return {
     pid: child.pid ?? undefined,
     exited: exitedPromise,
     isExited: () => exited,
     stop: () => {
-      if (!child.killed && !exited) {
-        child.kill("SIGTERM");
+      if (exited) {
+        return Promise.resolve();
       }
+      if (stopPromise) {
+        return stopPromise;
+      }
+      child.kill("SIGTERM");
+      stopPromise = new Promise<void>((resolve) => {
+        const t = setTimeout(() => {
+          try {
+            child.kill("SIGKILL");
+          } catch {}
+          resolve();
+        }, 5000);
+        child.once("exit", () => {
+          clearTimeout(t);
+          resolve();
+        });
+        if (child.exitCode !== null) {
+          clearTimeout(t);
+          resolve();
+        }
+      });
+      return stopPromise;
     },
   };
 }
