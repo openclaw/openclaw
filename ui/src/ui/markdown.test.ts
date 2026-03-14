@@ -105,6 +105,21 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("link");
   });
 
+  it("keeps oversized plain-text replies readable instead of forcing code-block chrome", () => {
+    const input =
+      Array.from(
+        { length: 320 },
+        (_, i) => `Paragraph ${i + 1}: ${"Long plain-text reply. ".repeat(8)}`,
+      ).join("\n\n") + "\n";
+
+    const html = toSanitizedMarkdownHtml(input);
+
+    expect(html).not.toContain('<pre class="code-block">');
+    expect(html).toContain("<p>");
+    expect(html).toContain("Paragraph 1:");
+    expect(html).toContain("Paragraph 320:");
+  });
+
   it("falls back to escaped plain text if marked.parse throws (#36213)", () => {
     const parseSpy = vi.spyOn(marked, "parse").mockImplementation(() => {
       throw new Error("forced parse failure");

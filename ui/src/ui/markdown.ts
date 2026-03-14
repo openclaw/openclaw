@@ -124,8 +124,9 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
     : "";
   if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
-    const escaped = escapeHtml(`${truncated.text}${suffix}`);
-    const html = `<pre class="code-block">${escaped}</pre>`;
+    // Large plain-text replies should stay readable in chat bubbles instead of
+    // inheriting the capped code-block chrome used for actual code samples.
+    const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(input, sanitized);
@@ -217,4 +218,13 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function renderEscapedPlainTextHtml(value: string): string {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .split(/\n{2,}/)
+    .filter((segment) => segment.length > 0)
+    .map((segment) => `<p>${escapeHtml(segment).replace(/\n/g, "<br>")}</p>`)
+    .join("");
 }
