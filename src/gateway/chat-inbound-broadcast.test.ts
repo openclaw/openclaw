@@ -9,7 +9,7 @@ import {
 } from "../hooks/internal-hooks.js";
 
 describe("chat.inbound broadcast hook", () => {
-  let broadcast: ReturnType<typeof vi.fn>;
+  let broadcast: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
   let chatInboundHookHandler: InternalHookHandler;
 
   beforeEach(() => {
