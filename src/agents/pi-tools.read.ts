@@ -59,9 +59,15 @@ const INBOUND_MEDIA_PATH_SEGMENT = "media/inbound";
  * Returns true if the given file path is inside the inbound media staging directory.
  * These files originate from external senders (WhatsApp, Telegram, Slack, etc.)
  * and must be treated as untrusted data.
+ *
+ * path.posix.normalize is applied after backslash conversion so that non-canonical
+ * forms such as "media//inbound/file.txt" or "media/./inbound/file.txt" are
+ * collapsed before the trust check, preventing bypass via redundant separators or
+ * dot segments.
  */
 export function isInboundMediaPath(filePath: string): boolean {
-  const normalized = filePath.replace(/\\/g, "/");
+  const posix = filePath.replace(/\\/g, "/");
+  const normalized = path.posix.normalize(posix);
   return (
     normalized.includes(`/${INBOUND_MEDIA_PATH_SEGMENT}/`) ||
     normalized.startsWith(`${INBOUND_MEDIA_PATH_SEGMENT}/`) ||

@@ -34,6 +34,17 @@ describe("isInboundMediaPath", () => {
     expect(isInboundMediaPath("/inbound/media/file.txt")).toBe(false);
     expect(isInboundMediaPath("media-inbound/file.txt")).toBe(false);
   });
+
+  // Regression for P1 finding: non-canonical path forms must not bypass the guard.
+  // Without path.posix.normalize, "media//inbound/file.txt" and
+  // "media/./inbound/file.txt" would fail the literal substring checks and return
+  // false, allowing an attacker-controlled attachment to skip prompt-injection wrapping.
+  it("normalises non-canonical path forms before matching (P1 regression #45393)", () => {
+    expect(isInboundMediaPath("media//inbound/file.txt")).toBe(true);
+    expect(isInboundMediaPath("media/./inbound/file.txt")).toBe(true);
+    expect(isInboundMediaPath("/workspace/media//inbound/file.txt")).toBe(true);
+    expect(isInboundMediaPath("/workspace/./media/inbound/file.txt")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
