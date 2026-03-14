@@ -28,7 +28,7 @@ const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs: number) => ({
   drained: true,
 }));
-const flushAllInboundDebouncers = vi.fn(async () => 0);
+const flushAllInboundDebouncers = vi.fn(async (_options?: { timeoutMs?: number }) => 0);
 const waitForFollowupQueueDrain = vi.fn(async (_timeoutMs: number) => ({
   drained: true,
   remaining: 0,
