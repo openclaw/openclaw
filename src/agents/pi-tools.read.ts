@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
-import { appendFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
+import { appendFileWithinRoot, readFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -758,9 +758,12 @@ function createHostWriteOperations(
         root,
         additionalRoots: allowedRoots,
       });
+      if (!sandboxResult.relative) {
+        throw new Error(`Cannot write to root directory itself: ${absolutePath}`);
+      }
       await writeFileWithinRoot({
         rootDir: sandboxResult.matchedRoot,
-        relativePath: sandboxResult.relative || path.basename(sandboxResult.resolved),
+        relativePath: sandboxResult.relative,
         data: content,
         encoding: "utf-8",
         mkdir: true,
@@ -800,7 +803,14 @@ function createHostEditOperations(
         root,
         additionalRoots: allowedRoots,
       });
-      return await fs.readFile(sandboxResult.resolved);
+      if (!sandboxResult.relative) {
+        throw new Error(`Cannot read root directory itself: ${absolutePath}`);
+      }
+      const safeRead = await readFileWithinRoot({
+        rootDir: sandboxResult.matchedRoot,
+        relativePath: sandboxResult.relative,
+      });
+      return safeRead.content.toString("utf-8");
     },
     writeFile: async (absolutePath: string, content: string) => {
       const sandboxResult = await assertSandboxPath({
@@ -809,9 +819,12 @@ function createHostEditOperations(
         root,
         additionalRoots: allowedRoots,
       });
+      if (!sandboxResult.relative) {
+        throw new Error(`Cannot write to root directory itself: ${absolutePath}`);
+      }
       await writeFileWithinRoot({
         rootDir: sandboxResult.matchedRoot,
-        relativePath: sandboxResult.relative || path.basename(sandboxResult.resolved),
+        relativePath: sandboxResult.relative,
         data: content,
         encoding: "utf-8",
         mkdir: true,

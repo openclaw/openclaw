@@ -531,7 +531,7 @@ describe("image tool implicit imageModel config", () => {
           config: cfg,
           agentDir,
           workspaceDir,
-          fsPolicy: { workspaceOnly: true },
+          fsPolicy: { workspaceOnly: true, allowedRoots: [] },
         });
 
         // File inside workspace is allowed.
