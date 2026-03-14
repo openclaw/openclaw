@@ -56,7 +56,7 @@ function resolveLocatorForInteraction(
   }
   const selector = resolved.selector!;
   return {
-    locator: page.locator(selector).first(),
+    locator: page.locator(selector),
     label: selector,
   };
 }
