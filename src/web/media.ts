@@ -291,10 +291,21 @@ async function loadWebMediaInternal(
     // Otherwise fall back to per-kind defaults.
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
     if (params.kind === "image") {
+      // Skip optimization for formats that shouldn't be converted to JPEG:
+      // - GIF: loses transparency and animation
+      // - WebP: already efficient, conversion loses quality
       const isGif = params.contentType === "image/gif";
-      if (isGif || !optimizeImages) {
+      const isWebp = params.contentType === "image/webp";
+      const shouldSkipOptimization = isGif || isWebp;
+      if (shouldSkipOptimization || !optimizeImages) {
         if (params.buffer.length > cap) {
-          throw new Error(formatCapLimit(isGif ? "GIF" : "Media", cap, params.buffer.length));
+          let skipLabel = "Media";
+          if (isGif) {
+            skipLabel = "GIF";
+          } else if (isWebp) {
+            skipLabel = "WebP";
+          }
+          throw new Error(formatCapLimit(skipLabel, cap, params.buffer.length));
         }
         return {
           buffer: params.buffer,
