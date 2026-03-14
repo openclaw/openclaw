@@ -90,31 +90,31 @@ describe("sendMessageIMessage", () => {
     expect(result.messageId).toBe("123");
   });
 
-  it("prepends reply tag as the first token when replyToId is provided", async () => {
+  it("does not inject a visible reply tag when replyToId is provided", async () => {
     await sendWithDefaults("chat_id:123", "  hello\nworld", {
       replyToId: "abc-123",
     });
     const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:abc-123]] hello\nworld");
+    expect(params.text).toBe("  hello\nworld");
   });
 
-  it("rewrites an existing leading reply tag to keep the requested id first", async () => {
+  it("strips an existing leading reply tag instead of sending it visibly", async () => {
     await sendWithDefaults("chat_id:123", " [[reply_to:old-id]] hello", {
       replyToId: "new-id",
     });
     const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:new-id]] hello");
+    expect(params.text).toBe("hello");
   });
 
-  it("sanitizes replyToId before writing the leading reply tag", async () => {
+  it("ignores replyToId sanitation for visible message text", async () => {
     await sendWithDefaults("chat_id:123", "hello", {
       replyToId: " [ab]\n\u0000c\td ] ",
     });
     const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:abcd]] hello");
+    expect(params.text).toBe("hello");
   });
 
-  it("skips reply tagging when sanitized replyToId is empty", async () => {
+  it("leaves plain messages unchanged when replyToId is empty", async () => {
     await sendWithDefaults("chat_id:123", "hello", {
       replyToId: "[]\u0000\n\r",
     });
