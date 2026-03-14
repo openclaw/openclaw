@@ -659,7 +659,15 @@ export async function runHeartbeatOnce(opts: {
   }
   const { entry, sessionKey, storePath } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
-  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
+  // When the heartbeat was triggered by an exec completion or cron event (not a
+  // periodic poll), preserve the session's threadId so the reply routes back to
+  // the originating Telegram forum topic / Discord thread instead of the DM.
+  const isEventDriven =
+    preflight.pendingEventEntries.some((e) => isExecCompletionEvent(e.text)) ||
+    preflight.pendingEventEntries.some(
+      (e) => e.contextKey?.startsWith("cron:") && isCronSystemEvent(e.text),
+    );
+  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat, isEventDriven });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
