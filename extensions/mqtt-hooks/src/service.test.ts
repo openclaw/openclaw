@@ -47,7 +47,10 @@ class DelayedSubscribeMqttClient extends FakeMqttClient {
 
 const sharedMocks = vi.hoisted(() => ({
   dispatchWakeIngressAction: vi.fn(),
-  dispatchAgentIngressAction: vi.fn(() => "run-1"),
+  dispatchAgentIngressAction: vi.fn(() => ({
+    runId: "run-1",
+    completion: Promise.resolve(),
+  })),
   resolveHookIngressPolicies: vi.fn(() => ({
     agentPolicy: {
       defaultAgentId: "main",
@@ -88,6 +91,10 @@ describe("createMqttHooksService", () => {
     sharedMocks.dispatchWakeIngressAction.mockClear();
     sharedMocks.dispatchAgentIngressAction.mockClear();
     sharedMocks.resolveHookIngressPolicies.mockClear();
+    sharedMocks.dispatchAgentIngressAction.mockImplementation(() => ({
+      runId: "run-1",
+      completion: Promise.resolve(),
+    }));
   });
 
   it("subscribes on connect and dispatches agent messages", async () => {
@@ -130,6 +137,88 @@ describe("createMqttHooksService", () => {
 
     await vi.waitFor(() => {
       expect(sharedMocks.dispatchAgentIngressAction).toHaveBeenCalledOnce();
+    });
+
+    await service.stop?.({
+      config: {},
+      stateDir: "/tmp/openclaw-state",
+      logger,
+    });
+  });
+
+  it("holds queue concurrency until agent dispatch completion settles", async () => {
+    const firstDispatchCompletion = {
+      resolve: null as null | (() => void),
+    };
+    sharedMocks.dispatchAgentIngressAction.mockImplementationOnce(() => ({
+      runId: "run-1",
+      completion: new Promise<void>((resolve) => {
+        firstDispatchCompletion.resolve = resolve;
+      }),
+    }));
+    sharedMocks.dispatchAgentIngressAction.mockImplementationOnce(() => ({
+      runId: "run-2",
+      completion: Promise.resolve(),
+    }));
+
+    const fakeClient = new FakeMqttClient();
+    const service = createMqttHooksService({
+      pluginConfig: resolveMqttHooksPluginConfig({
+        broker: { url: "mqtt://broker.local:1883" },
+        runtime: {
+          maxConcurrentMessages: 1,
+        },
+        subscriptions: [
+          {
+            id: "alerts",
+            topic: "home/alerts/#",
+            qos: 1,
+            action: "agent",
+            agentId: "hooks",
+            ignoreRetainedOnStartup: false,
+          },
+        ],
+      }),
+      clientFactory: () => fakeClient as never,
+      now: () => new Date("2026-03-10T12:00:00.000Z").getTime(),
+      payloadHasher: () => "hash-1",
+    });
+
+    const logger = createLogger();
+    await service.start({
+      config: {},
+      stateDir: "/tmp/openclaw-state",
+      logger,
+    });
+
+    fakeClient.emit("connect");
+    await vi.waitFor(() => {
+      expect(fakeClient.subscribed).toEqual([{ topic: "home/alerts/#", qos: 1 }]);
+    });
+
+    fakeClient.emit("message", "home/alerts/one", Buffer.from('{"message":"one"}'), {
+      qos: 1,
+      retain: false,
+      dup: false,
+    });
+    await vi.waitFor(() => {
+      expect(sharedMocks.dispatchAgentIngressAction).toHaveBeenCalledTimes(1);
+    });
+
+    fakeClient.emit("message", "home/alerts/two", Buffer.from('{"message":"two"}'), {
+      qos: 1,
+      retain: false,
+      dup: false,
+    });
+    await Promise.resolve();
+    expect(sharedMocks.dispatchAgentIngressAction).toHaveBeenCalledTimes(1);
+
+    if (!firstDispatchCompletion.resolve) {
+      throw new Error("expected first agent dispatch completion handle");
+    }
+    firstDispatchCompletion.resolve();
+    await vi.waitFor(() => {
+      expect(sharedMocks.dispatchAgentIngressAction).toHaveBeenCalledTimes(2);
     });
 
     await service.stop?.({

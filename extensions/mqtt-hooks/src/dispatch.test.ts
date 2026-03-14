@@ -62,7 +62,10 @@ describe("dispatchMqttEnvelope", () => {
   });
 
   it("dispatches agent payloads with normalized session routing", () => {
-    const dispatchAgent = vi.fn(() => "run-123");
+    const dispatchAgent = vi.fn(() => ({
+      runId: "run-123",
+      completion: Promise.resolve(),
+    }));
     const result = dispatchMqttEnvelope({
       subscription: {
         id: "agent",
@@ -87,7 +90,11 @@ describe("dispatchMqttEnvelope", () => {
       },
     });
 
-    expect(result).toEqual({ ok: true, runId: "run-123" });
+    expect(result).toEqual({
+      ok: true,
+      runId: "run-123",
+      completion: expect.any(Promise),
+    });
     expect(dispatchAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         message: 'Description=Kitchen alert Payload={"message":"smoke"}',

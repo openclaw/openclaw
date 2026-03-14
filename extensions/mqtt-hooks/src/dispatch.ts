@@ -1,6 +1,7 @@
 import type {
   HookAgentDispatchPayload,
   HookMessageChannel,
+  IngressAgentDispatchResult,
   IngressDispatchPoliciesResolved,
 } from "openclaw/plugin-sdk/mqtt-hooks";
 import {
@@ -18,10 +19,12 @@ import type { MqttMessageEnvelope, MqttSubscriptionConfig } from "./types.js";
 
 export type MqttIngressDispatchers = {
   dispatchWake: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
-  dispatchAgent: (value: HookAgentDispatchPayload) => string;
+  dispatchAgent: (value: HookAgentDispatchPayload) => IngressAgentDispatchResult;
 };
 
-export type MqttDispatchResult = { ok: true; runId?: string } | { ok: false; error: string };
+export type MqttDispatchResult =
+  | { ok: true; runId?: string; completion?: Promise<void> }
+  | { ok: false; error: string };
 
 function buildTemplateContext(envelope: MqttMessageEnvelope) {
   return {
@@ -96,7 +99,7 @@ export function dispatchMqttEnvelope(params: {
     };
   }
 
-  const runId = params.dispatchers.dispatchAgent({
+  const dispatch = params.dispatchers.dispatchAgent({
     message,
     name: params.subscription.name,
     agentId: targetAgentId,
@@ -113,5 +116,5 @@ export function dispatchMqttEnvelope(params: {
     timeoutSeconds: params.subscription.timeoutSeconds,
   });
 
-  return { ok: true, runId };
+  return { ok: true, runId: dispatch.runId, completion: dispatch.completion };
 }

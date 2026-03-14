@@ -14,6 +14,11 @@ type IngressLogger = {
 
 const defaultIngressDeps = createDefaultDeps();
 
+export type IngressAgentDispatchResult = {
+  runId: string;
+  completion: Promise<void>;
+};
+
 export function dispatchWakeIngressAction(
   value: { text: string; mode: "now" | "next-heartbeat" },
   options?: { sessionKey?: string; heartbeatReason?: string },
@@ -35,7 +40,7 @@ export function dispatchAgentIngressAction(
     jobIdFactory?: () => string;
     runIdFactory?: () => string;
   },
-): string {
+): IngressAgentDispatchResult {
   const jobId = (options.jobIdFactory ?? randomUUID)();
   const runId = (options.runIdFactory ?? randomUUID)();
   const now = Date.now();
@@ -65,7 +70,7 @@ export function dispatchAgentIngressAction(
 
   const mainSessionKey = options.mainSessionKey ?? resolveMainSessionKeyFromConfig();
 
-  void (async () => {
+  const completion = (async () => {
     try {
       const cfg = (options.loadConfig ?? loadConfig)();
       const result = await runCronIsolatedAgentTurn({
@@ -99,5 +104,5 @@ export function dispatchAgentIngressAction(
     }
   })();
 
-  return runId;
+  return { runId, completion };
 }

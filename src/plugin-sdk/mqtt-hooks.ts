@@ -6,6 +6,7 @@ export {
   dispatchAgentIngressAction,
   dispatchWakeIngressAction,
 } from "../gateway/ingress-dispatch.js";
+export type { IngressAgentDispatchResult } from "../gateway/ingress-dispatch.js";
 export {
   renderIngressTemplate,
   renderOptionalIngressTemplate,

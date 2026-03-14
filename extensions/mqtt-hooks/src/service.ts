@@ -300,6 +300,10 @@ export function createMqttHooksService(params: {
                 ctx.logger.warn(
                   `mqtt-hooks: dispatch rejected for ${subscription.id}: ${result.error}`,
                 );
+                return;
+              }
+              if (result.completion) {
+                await result.completion;
               }
             } catch (err) {
               ctx.logger.warn(
