@@ -1,3 +1,4 @@
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
@@ -135,15 +136,44 @@ export function createEventHandlers(context: EventHandlerContext) {
     return sessionRuns.has(activeRunId);
   };
 
-  const maybeRefreshHistoryForRun = (runId: string) => {
-    if (isLocalRunId?.(runId)) {
+  const maybeRefreshHistoryForRun = (
+    runId: string,
+    opts?: { allowLocalWithoutDisplayableFinal?: boolean },
+  ) => {
+    const isLocalRun = isLocalRunId?.(runId) ?? false;
+    if (isLocalRun) {
       forgetLocalRunId?.(runId);
-      return;
+      if (!opts?.allowLocalWithoutDisplayableFinal) {
+        return;
+      }
     }
     if (hasConcurrentActiveRun(runId)) {
       return;
     }
     void loadHistory?.();
+  };
+
+  const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
+    const normalizedLeft = (left ?? "").trim().toLowerCase();
+    const normalizedRight = (right ?? "").trim().toLowerCase();
+    if (!normalizedLeft || !normalizedRight) {
+      return false;
+    }
+    if (normalizedLeft === normalizedRight) {
+      return true;
+    }
+    const parsedLeft = parseAgentSessionKey(normalizedLeft);
+    const parsedRight = parseAgentSessionKey(normalizedRight);
+    if (parsedLeft && parsedRight) {
+      return parsedLeft.agentId === parsedRight.agentId && parsedLeft.rest === parsedRight.rest;
+    }
+    if (parsedLeft) {
+      return parsedLeft.rest === normalizedRight;
+    }
+    if (parsedRight) {
+      return normalizedLeft === parsedRight.rest;
+    }
+    return false;
   };
 
   const handleChatEvent = (payload: unknown) => {
@@ -152,7 +182,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as ChatEvent;
     syncSessionKey();
-    if (evt.sessionKey !== state.currentSessionKey) {
+    if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
       return;
     }
     if (finalizedRuns.has(evt.runId)) {
@@ -178,7 +208,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "final") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       if (!evt.message) {
-        maybeRefreshHistoryForRun(evt.runId);
+        maybeRefreshHistoryForRun(evt.runId, {
+          allowLocalWithoutDisplayableFinal: true,
+        });
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
         tui.requestRender();

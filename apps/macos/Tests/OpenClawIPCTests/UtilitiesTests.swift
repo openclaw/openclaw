@@ -3,7 +3,7 @@ import Testing
 @testable import OpenClaw
 
 @Suite(.serialized) struct UtilitiesTests {
-    @Test func ageStringsCoverCommonWindows() {
+    @Test func `age strings cover common windows`() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         #expect(age(from: now, now: now) == "just now")
         #expect(age(from: now.addingTimeInterval(-45), now: now) == "just now")
@@ -15,7 +15,7 @@ import Testing
         #expect(age(from: now.addingTimeInterval(-3 * 86400), now: now) == "3d ago")
     }
 
-    @Test func parseSSHTargetSupportsUserPortAndDefaults() {
+    @Test func `parse SSH target supports user port and defaults`() {
         let parsed1 = CommandResolver.parseSSHTarget("alice@example.com:2222")
         #expect(parsed1?.user == "alice")
         #expect(parsed1?.host == "example.com")
@@ -32,7 +32,7 @@ import Testing
         #expect(parsed3?.port == 22)
     }
 
-    @Test func sanitizedTargetStripsLeadingSSHPrefix() throws {
+    @Test func `sanitized target strips leading SSH prefix`() throws {
         let defaults = try #require(UserDefaults(suiteName: "UtilitiesTests.\(UUID().uuidString)"))
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("ssh  alice@example.com", forKey: remoteTargetKey)
@@ -42,7 +42,7 @@ import Testing
         #expect(settings.target == "alice@example.com")
     }
 
-    @Test func gatewayEntrypointPrefersDistOverBin() throws {
+    @Test func `gateway entrypoint prefers dist over bin`() throws {
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let dist = tmp.appendingPathComponent("dist/index.js")
@@ -56,7 +56,7 @@ import Testing
         #expect(entry == dist.path)
     }
 
-    @Test func logLocatorPicksNewestLogFile() throws {
+    @Test func `log locator picks newest log file`() throws {
         let fm = FileManager()
         let dir = URL(fileURLWithPath: "/tmp/openclaw", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -75,7 +75,7 @@ import Testing
         try? fm.removeItem(at: newer)
     }
 
-    @Test func gatewayEntrypointNilWhenMissing() {
+    @Test func `gateway entrypoint nil when missing`() {
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         #expect(CommandResolver.gatewayEntrypoint(in: tmp) == nil)

@@ -29,25 +29,33 @@ function createStore(params?: {
   };
 }
 
+function expectExhaustedDecision(params: { failureCounts: Record<string, number> }) {
+  const now = Date.now();
+  const decision = resolveDiscordAutoPresenceDecision({
+    discordConfig: {
+      autoPresence: {
+        enabled: true,
+        exhaustedText: "token exhausted",
+      },
+    },
+    authStore: createStore({ cooldownUntil: now + 60_000, failureCounts: params.failureCounts }),
+    gatewayConnected: true,
+    now,
+  });
+
+  expect(decision).toBeTruthy();
+  expect(decision?.state).toBe("exhausted");
+  expect(decision?.presence.status).toBe("dnd");
+  expect(decision?.presence.activities[0]?.state).toBe("token exhausted");
+}
+
 describe("discord auto presence", () => {
   it("maps exhausted runtime signal to dnd", () => {
-    const now = Date.now();
-    const decision = resolveDiscordAutoPresenceDecision({
-      discordConfig: {
-        autoPresence: {
-          enabled: true,
-          exhaustedText: "token exhausted",
-        },
-      },
-      authStore: createStore({ cooldownUntil: now + 60_000, failureCounts: { rate_limit: 2 } }),
-      gatewayConnected: true,
-      now,
-    });
+    expectExhaustedDecision({ failureCounts: { rate_limit: 2 } });
+  });
 
-    expect(decision).toBeTruthy();
-    expect(decision?.state).toBe("exhausted");
-    expect(decision?.presence.status).toBe("dnd");
-    expect(decision?.presence.activities[0]?.state).toBe("token exhausted");
+  it("treats overloaded cooldown as exhausted", () => {
+    expectExhaustedDecision({ failureCounts: { overloaded: 2 } });
   });
 
   it("recovers from exhausted to online once a profile becomes usable", () => {

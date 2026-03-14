@@ -1,8 +1,25 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expect } from "vitest";
+
+function normalizeDarwinTmpPath(filePath: string): string {
+  return process.platform === "darwin" && filePath.startsWith("/private/var/")
+    ? filePath.slice("/private".length)
+    : filePath;
+}
+
+function canonicalizeComparableDir(dirPath: string): string {
+  const normalized = normalizeDarwinTmpPath(path.resolve(dirPath));
+  try {
+    return normalizeDarwinTmpPath(fs.realpathSync.native(normalized));
+  } catch {
+    return normalized;
+  }
+}
 
 export function expectSingleNpmInstallIgnoreScriptsCall(params: {
   calls: Array<[unknown, { cwd?: string } | undefined]>;
-  expectedCwd: string;
+  expectedTargetDir: string;
 }) {
   const npmCalls = params.calls.filter((call) => Array.isArray(call[0]) && call[0][0] === "npm");
   expect(npmCalls.length).toBe(1);
@@ -11,15 +28,14 @@ export function expectSingleNpmInstallIgnoreScriptsCall(params: {
     throw new Error("expected npm install call");
   }
   const [argv, opts] = first;
-  expect(argv).toEqual([
-    "npm",
-    "install",
-    "--omit=dev",
-    "--omit=peer",
-    "--silent",
-    "--ignore-scripts",
-  ]);
-  expect(opts?.cwd).toBe(params.expectedCwd);
+  expect(argv).toEqual(["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"]);
+  expect(opts?.cwd).toBeTruthy();
+  const cwd = String(opts?.cwd);
+  const expectedTargetDir = params.expectedTargetDir;
+  expect(canonicalizeComparableDir(path.dirname(cwd))).toBe(
+    canonicalizeComparableDir(path.dirname(expectedTargetDir)),
+  );
+  expect(path.basename(cwd)).toMatch(/^\.openclaw-install-stage-/);
 }
 
 export function expectSingleNpmPackIgnoreScriptsCall(params: {

@@ -32,6 +32,20 @@ function tokenStore(params: {
   };
 }
 
+function githubCopilotTokenStore(profileId: string, includeInlineToken = true): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      [profileId]: {
+        type: "token",
+        provider: "github-copilot",
+        ...(includeInlineToken ? { token: "" } : {}),
+        tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+      },
+    },
+  };
+}
+
 async function resolveWithConfig(params: {
   profileId: string;
   provider: string;
@@ -42,6 +56,39 @@ async function resolveWithConfig(params: {
     cfg: cfgFor(params.profileId, params.provider, params.mode),
     store: params.store,
     profileId: params.profileId,
+  });
+}
+
+async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
+  const previous = process.env[key];
+  process.env[key] = value;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+  }
+}
+
+async function expectResolvedApiKey(params: {
+  profileId: string;
+  provider: string;
+  mode: "api_key" | "token" | "oauth";
+  store: AuthProfileStore;
+  expectedApiKey: string;
+}) {
+  const result = await resolveApiKeyForProfile({
+    cfg: cfgFor(params.profileId, params.provider, params.mode),
+    store: params.store,
+    profileId: params.profileId,
+  });
+  expect(result).toEqual({
+    apiKey: params.expectedApiKey, // pragma: allowlist secret
+    provider: params.provider,
+    email: undefined,
   });
 }
 
@@ -65,7 +112,7 @@ describe("resolveApiKeyForProfile config compatibility", () => {
       profileId,
     });
     expect(result).toEqual({
-      apiKey: "tok-123",
+      apiKey: "tok-123", // pragma: allowlist secret
       provider: "anthropic",
       email: undefined,
     });
@@ -124,7 +171,7 @@ describe("resolveApiKeyForProfile config compatibility", () => {
     });
     // token ↔ oauth are bidirectionally compatible bearer-token auth paths.
     expect(result).toEqual({
-      apiKey: "access-123",
+      apiKey: "access-123", // pragma: allowlist secret
       provider: "anthropic",
       email: undefined,
     });
@@ -145,7 +192,7 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
       }),
     });
     expect(result).toEqual({
-      apiKey: "tok-123",
+      apiKey: "tok-123", // pragma: allowlist secret
       provider: "anthropic",
       email: undefined,
     });
@@ -165,7 +212,7 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
       }),
     });
     expect(result).toEqual({
-      apiKey: "tok-123",
+      apiKey: "tok-123", // pragma: allowlist secret
       provider: "anthropic",
       email: undefined,
     });
@@ -231,7 +278,7 @@ describe("resolveApiKeyForProfile secret refs", () => {
   it("resolves api_key keyRef from env", async () => {
     const profileId = "openai:default";
     const previous = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-openai-ref";
+    process.env.OPENAI_API_KEY = "sk-openai-ref"; // pragma: allowlist secret
     try {
       const result = await resolveApiKeyForProfile({
         cfg: cfgFor(profileId, "openai", "api_key"),
@@ -248,7 +295,7 @@ describe("resolveApiKeyForProfile secret refs", () => {
         profileId,
       });
       expect(result).toEqual({
-        apiKey: "sk-openai-ref",
+        apiKey: "sk-openai-ref", // pragma: allowlist secret
         provider: "openai",
         email: undefined,
       });
@@ -263,75 +310,34 @@ describe("resolveApiKeyForProfile secret refs", () => {
 
   it("resolves token tokenRef from env", async () => {
     const profileId = "github-copilot:default";
-    const previous = process.env.GITHUB_TOKEN;
-    process.env.GITHUB_TOKEN = "gh-ref-token";
-    try {
-      const result = await resolveApiKeyForProfile({
-        cfg: cfgFor(profileId, "github-copilot", "token"),
-        store: {
-          version: 1,
-          profiles: {
-            [profileId]: {
-              type: "token",
-              provider: "github-copilot",
-              token: "",
-              tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
-            },
-          },
-        },
+    await withEnvVar("GITHUB_TOKEN", "gh-ref-token", async () => {
+      await expectResolvedApiKey({
         profileId,
-      });
-      expect(result).toEqual({
-        apiKey: "gh-ref-token",
         provider: "github-copilot",
-        email: undefined,
+        mode: "token",
+        store: githubCopilotTokenStore(profileId),
+        expectedApiKey: "gh-ref-token", // pragma: allowlist secret
       });
-    } finally {
-      if (previous === undefined) {
-        delete process.env.GITHUB_TOKEN;
-      } else {
-        process.env.GITHUB_TOKEN = previous;
-      }
-    }
+    });
   });
 
   it("resolves token tokenRef without inline token when expires is absent", async () => {
     const profileId = "github-copilot:no-inline-token";
-    const previous = process.env.GITHUB_TOKEN;
-    process.env.GITHUB_TOKEN = "gh-ref-token";
-    try {
-      const result = await resolveApiKeyForProfile({
-        cfg: cfgFor(profileId, "github-copilot", "token"),
-        store: {
-          version: 1,
-          profiles: {
-            [profileId]: {
-              type: "token",
-              provider: "github-copilot",
-              tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
-            },
-          },
-        },
+    await withEnvVar("GITHUB_TOKEN", "gh-ref-token", async () => {
+      await expectResolvedApiKey({
         profileId,
-      });
-      expect(result).toEqual({
-        apiKey: "gh-ref-token",
         provider: "github-copilot",
-        email: undefined,
+        mode: "token",
+        store: githubCopilotTokenStore(profileId, false),
+        expectedApiKey: "gh-ref-token", // pragma: allowlist secret
       });
-    } finally {
-      if (previous === undefined) {
-        delete process.env.GITHUB_TOKEN;
-      } else {
-        process.env.GITHUB_TOKEN = previous;
-      }
-    }
+    });
   });
 
   it("resolves inline ${ENV} api_key values", async () => {
     const profileId = "openai:inline-env";
     const previous = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-openai-inline";
+    process.env.OPENAI_API_KEY = "sk-openai-inline"; // pragma: allowlist secret
     try {
       const result = await resolveApiKeyForProfile({
         cfg: cfgFor(profileId, "openai", "api_key"),
@@ -348,7 +354,7 @@ describe("resolveApiKeyForProfile secret refs", () => {
         profileId,
       });
       expect(result).toEqual({
-        apiKey: "sk-openai-inline",
+        apiKey: "sk-openai-inline", // pragma: allowlist secret
         provider: "openai",
         email: undefined,
       });
@@ -381,7 +387,7 @@ describe("resolveApiKeyForProfile secret refs", () => {
         profileId,
       });
       expect(result).toEqual({
-        apiKey: "gh-inline-token",
+        apiKey: "gh-inline-token", // pragma: allowlist secret
         provider: "github-copilot",
         email: undefined,
       });

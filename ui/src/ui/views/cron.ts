@@ -360,7 +360,9 @@ export function renderCron(props: CronProps) {
     props.runsScope === "all"
       ? t("cron.jobList.allJobs")
       : (selectedJob?.name ?? props.runsJobId ?? t("cron.jobList.selectJob"));
-  const runs = props.runs;
+  const runs = props.runs.toSorted((a, b) =>
+    props.runsSortDir === "asc" ? a.ts - b.ts : b.ts - a.ts,
+  );
   const runStatusOptions = getRunStatusOptions();
   const runDeliveryOptions = getRunDeliveryOptions();
   const selectedStatusLabels = runStatusOptions
@@ -1569,7 +1571,7 @@ function renderJob(job: CronJob, props: CronProps) {
             ?disabled=${props.busy}
             @click=${(event: Event) => {
               event.stopPropagation();
-              selectAnd(() => props.onLoadRuns(job.id));
+              props.onLoadRuns(job.id);
             }}
           >
             ${t("cron.jobList.history")}
