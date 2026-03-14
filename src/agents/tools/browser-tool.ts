@@ -293,11 +293,6 @@ function shouldPreferHostForProfile(profileName: string | undefined) {
   return capabilities.requiresRelay || capabilities.usesChromeMcp;
 }
 
-function isHostOnlyProfileName(profileName: string | undefined) {
-  // User-browser profiles (existing-session, extension relay) are host-only.
-  return shouldPreferHostForProfile(profileName);
-}
-
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -331,7 +326,9 @@ export function createBrowserTool(opts?: {
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
       }
-      if (isHostOnlyProfileName(profile)) {
+      // User-browser profiles (existing-session, extension relay) are host-only.
+      const isUserBrowserProfile = shouldPreferHostForProfile(profile);
+      if (isUserBrowserProfile) {
         if (requestedNode || target === "node") {
           throw new Error(`profile="${profile}" only supports the local host browser.`);
         }
@@ -340,10 +337,9 @@ export function createBrowserTool(opts?: {
             `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
           );
         }
-      }
-      if (!target && !requestedNode && shouldPreferHostForProfile(profile)) {
-        // Local host user-browser profiles should not silently bind to sandbox/node browsers.
-        target = "host";
+        if (!target && !requestedNode) {
+          target = "host";
+        }
       }
 
       const nodeTarget = await resolveBrowserNodeTarget({

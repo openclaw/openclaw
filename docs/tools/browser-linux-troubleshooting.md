@@ -25,7 +25,7 @@ Note, selecting 'chromium-browser' instead of 'chromium'
 chromium-browser is already the newest version (2:1snap1-0ubuntu2).
 ```
 
-This is NOT a real browser — it's just a wrapper.
+This is NOT a real browser - it's just a wrapper.
 
 ### Solution 1: Install Google Chrome (Recommended)
 
@@ -165,7 +165,7 @@ Notes:
 
 ### Problem: "Chrome extension relay is running, but no tab is connected"
 
-You’re using the `chrome-relay` profile (extension relay). It expects the OpenClaw
+You're using an extension relay profile. It expects the OpenClaw
 browser extension to be attached to a live tab.
 
 Fix options:
