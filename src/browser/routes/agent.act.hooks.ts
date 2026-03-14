@@ -1,4 +1,5 @@
 import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   readBody,
@@ -43,7 +44,7 @@ export function registerBrowserAgentActHookRoutes(
         }
         const resolvedPaths = uploadPathsResult.paths;
 
-        if (profileCtx.profile.driver === "existing-session") {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           if (element) {
             return jsonError(
               res,
@@ -123,7 +124,7 @@ export function registerBrowserAgentActHookRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, cdpUrl, tab }) => {
-        if (profileCtx.profile.driver === "existing-session") {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           if (timeoutMs) {
             return jsonError(
               res,

@@ -4,6 +4,7 @@ import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
 import { BrowserProfileNotFoundError, toBrowserErrorResponse } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
   refreshResolvedBrowserConfigFromDisk,
   resolveBrowserProfileWithHotReload,
@@ -164,7 +165,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
       let running = false;
       const profileCtx = createProfileContext(opts, profile);
 
-      if (profile.driver === "existing-session") {
+      if (getBrowserProfileCapabilities(profile).usesChromeMcp) {
         try {
           running = await profileCtx.isReachable(300);
           if (running) {
