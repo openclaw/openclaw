@@ -1272,6 +1272,42 @@
   border-color: rgba(34, 197, 94, 0.35);
 }
 
+/* Context window usage notice */
+.context-notice {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ctx-color, var(--warn)) 35%, transparent);
+  background: var(--ctx-bg, var(--warn-subtle));
+  color: var(--ctx-color, var(--warn));
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  user-select: none;
+  animation: fade-in 0.2s var(--ease-out);
+}
+
+.context-notice__icon {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+.context-notice__detail {
+  color: color-mix(in srgb, currentColor 75%, var(--text));
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
 @keyframes compaction-spin {
   to {
     transform: rotate(360deg);

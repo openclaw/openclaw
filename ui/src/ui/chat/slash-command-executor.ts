@@ -17,6 +17,7 @@ import {
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { resolveSessionContextUsageTokens } from "../presenter.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../types.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 
@@ -290,7 +291,8 @@ async function executeUsage(
     const output = session.outputTokens ?? 0;
     const total = session.totalTokens ?? input + output;
     const ctx = session.contextTokens ?? 0;
-    const pct = ctx > 0 ? Math.round((input / ctx) * 100) : null;
+    const pct =
+      ctx > 0 ? Math.round((resolveSessionContextUsageTokens(session) / ctx) * 100) : null;
 
     const lines = [
       "**Session Usage**",

@@ -31,6 +31,22 @@ export function formatSessionTokens(row: GatewaySessionRow) {
   return ctx ? `${total} / ${ctx}` : String(total);
 }
 
+export function resolveSessionContextUsageTokens(
+  row?: Pick<GatewaySessionRow, "totalTokens" | "totalTokensFresh" | "inputTokens"> | null,
+) {
+  const total = row?.totalTokens;
+  if (typeof total === "number" && Number.isFinite(total) && row?.totalTokensFresh !== false) {
+    // Legacy rows may omit totalTokensFresh; still prefer totalTokens as the best
+    // available proxy for current context usage over accumulated inputTokens.
+    return total;
+  }
+  const input = row?.inputTokens;
+  if (typeof input === "number" && Number.isFinite(input)) {
+    return input;
+  }
+  return 0;
+}
+
 export function formatEventPayload(payload: unknown): string {
   if (payload == null) {
     return "";
