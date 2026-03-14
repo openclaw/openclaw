@@ -176,7 +176,6 @@ const GROK_MODEL_OPTIONS = [
     hint: "default · fast, no reasoning",
   },
   { value: "grok-4-1-fast", label: "grok-4-1-fast", hint: "fast with reasoning" },
-  { value: "grok-3-fast", label: "grok-3-fast", hint: "previous generation" },
 ] as const;
 
 function hasXSearchKeyInEnv(): boolean {
