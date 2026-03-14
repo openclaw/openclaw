@@ -556,6 +556,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     payload: input.payload,
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
+    metadata: input.metadata,
     state: {
       ...input.state,
     },
@@ -643,6 +644,9 @@ export function applyJobPatch(
   }
   if (patch.state) {
     job.state = { ...job.state, ...patch.state };
+  }
+  if ("metadata" in patch) {
+    job.metadata = patch.metadata;
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);

@@ -15,4 +15,8 @@ export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDeliver
     payload: TPayload;
     delivery?: TDelivery;
     failureAlert?: TFailureAlert;
+    /** Caller-supplied metadata, persisted with the job and available at execution time.
+     *  Cron internals treat this as opaque; channel plugins and tooling may use it
+     *  to carry creation-time context (e.g. requester identity, originating chat). */
+    metadata?: Record<string, unknown>;
   };
