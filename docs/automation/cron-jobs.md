@@ -212,6 +212,10 @@ Behavior details:
 - Content: delivery uses the isolated run's outbound payloads (text/media) with normal chunking and
   channel formatting.
 - Heartbeat-only responses (`HEARTBEAT_OK` with no real content) are not delivered.
+- Silent replies (`NO_REPLY`): if the agent's final response text is exactly `NO_REPLY`
+  (case-insensitive), delivery is skipped. The run log is still preserved. Useful for polling
+  jobs where most runs have nothing to report — add "reply `NO_REPLY` if nothing to report"
+  to the prompt. Does not apply to thread-based delivery (`--thread`) or structured content.
 - If the isolated run already sent a message to the same target via the message tool, delivery is
   skipped to avoid duplicates.
 - Missing or invalid delivery targets fail the job unless `delivery.bestEffort = true`.
