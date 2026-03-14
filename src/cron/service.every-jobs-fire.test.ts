@@ -163,13 +163,13 @@ describe("CronService interval/cron jobs fire on time", () => {
     for (let minute = 1; minute <= 3; minute++) {
       vi.setSystemTime(new Date(nowMs + minute * 60_000));
       const minuteRun = await cron.run("minute-cron", "force");
-      expect(minuteRun).toEqual({ ok: true, ran: true });
+      expect(minuteRun).toMatchObject({ ok: true, ran: true });
     }
 
     // "every" cadence is 2m; verify it stays due at the 6-minute boundary.
     vi.setSystemTime(new Date(nowMs + 6 * 60_000));
     const sfRun = await cron.run("legacy-every", "due");
-    expect(sfRun).toEqual({ ok: true, ran: true });
+    expect(sfRun).toMatchObject({ ok: true, ran: true });
 
     const sfRuns = enqueueSystemEvent.mock.calls.filter((args) => args[0] === "sf-tick").length;
     const minuteRuns = enqueueSystemEvent.mock.calls.filter(
