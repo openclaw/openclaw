@@ -256,10 +256,10 @@ async function executeFast(
 
   if (!rawMode || rawMode === "status") {
     try {
-      const session = await loadCurrentSession(client, sessionKey);
+      const { session, defaults } = await loadThinkingCommandState(client, sessionKey);
       return {
         content: formatDirectiveOptions(
-          `Current fast mode: ${resolveCurrentFastMode(session)}.`,
+          `Current fast mode: ${resolveCurrentFastMode(session, defaults?.fastModeDefault)}.`,
           "status, on, off",
         ),
       };
@@ -304,10 +304,12 @@ async function executeStatus(
     // Use resolveCurrentThinkingLevel so the effective level (including model
     // defaults and agents.defaults.thinkingDefault config) is shown, not just
     // the raw persisted field which may be unset.
-    lines.push(`Thinking: **${resolveCurrentThinkingLevel(session, models, defaults?.thinkingDefault)}**`);
+    lines.push(
+      `Thinking: **${resolveCurrentThinkingLevel(session, models, defaults?.thinkingDefault)}**`,
+    );
     const verboseLevel = normalizeVerboseLevel(session.verboseLevel) ?? "off";
     lines.push(`Verbose: **${verboseLevel}**`);
-    lines.push(`Fast mode: **${resolveCurrentFastMode(session)}**`);
+    lines.push(`Fast mode: **${resolveCurrentFastMode(session, defaults?.fastModeDefault)}**`);
     if (session.abortedLastRun) {
       lines.push("Last run: **aborted**");
     }
@@ -623,8 +625,19 @@ function resolveCurrentThinkingLevel(
   });
 }
 
-function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
-  return session?.fastMode === true ? "on" : "off";
+function resolveCurrentFastMode(
+  session: GatewaySessionRow | undefined,
+  configuredDefault?: boolean,
+): "on" | "off" {
+  // Prefer the persisted session override, then the config-level default
+  // (agents.defaults.models.<provider>/<model>.params.fastMode), then off.
+  if (session?.fastMode !== undefined && session.fastMode !== null) {
+    return session.fastMode ? "on" : "off";
+  }
+  if (configuredDefault !== undefined) {
+    return configuredDefault ? "on" : "off";
+  }
+  return "off";
 }
 
 function fmtTokens(n: number): string {
