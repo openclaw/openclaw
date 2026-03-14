@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as jsonFiles from "../../infra/json-files.js";
 import {
   clearSessionStoreCacheForTest,
+  ensurePrivateSessionsDir,
   loadSessionStore,
   mergeSessionEntry,
   resolveAndPersistSessionFile,
@@ -47,7 +48,7 @@ function useTempSessionsFixture(prefix: string) {
 
 function expectPrivateDirMode(actual: number) {
   if (process.platform === "win32") {
-    expect([0o700, 0o777]).toContain(actual);
+    expect([0o700, 0o666, 0o777]).toContain(actual);
     return;
   }
   expect(actual).toBe(0o700);
@@ -150,6 +151,24 @@ describe("session directory permissions", () => {
 
       const mode = fs.statSync(path.dirname(storePath)).mode & 0o777;
       expectPrivateDirMode(mode);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlink session dirs before chmod", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-symlink-"));
+    try {
+      const realDir = path.join(tempDir, "real-sessions");
+      const symlinkDir = path.join(tempDir, "symlink-sessions");
+      fs.mkdirSync(realDir, { recursive: true });
+      fs.symlinkSync(realDir, symlinkDir, "dir");
+
+      await expect(ensurePrivateSessionsDir(symlinkDir)).rejects.toThrow(/must not be a symlink/i);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

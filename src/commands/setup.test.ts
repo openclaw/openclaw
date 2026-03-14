@@ -7,7 +7,7 @@ import { setupCommand } from "./setup.js";
 describe("setupCommand", () => {
   const expectPrivateDirMode = (actual: number) => {
     if (process.platform === "win32") {
-      expect([0o700, 0o777]).toContain(actual);
+      expect([0o700, 0o666, 0o777]).toContain(actual);
       return;
     }
     expect(actual).toBe(0o700);

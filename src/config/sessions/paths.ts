@@ -18,7 +18,22 @@ function resolveAgentSessionsDir(
 
 export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<string> {
   const resolved = path.resolve(sessionsDir);
+  try {
+    const stat = await fsPromises.lstat(resolved);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Session transcripts dir must not be a symlink: ${resolved}`);
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      throw err;
+    }
+  }
   await fsPromises.mkdir(resolved, { recursive: true, mode: 0o700 });
+  const stat = await fsPromises.lstat(resolved);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Session transcripts dir must not be a symlink: ${resolved}`);
+  }
   try {
     await fsPromises.chmod(resolved, 0o700);
   } catch {
