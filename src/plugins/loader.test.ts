@@ -34,7 +34,6 @@ const {
   loadOpenClawPlugins,
   resetGlobalHookRunner,
 } = await importFreshPluginTestModules();
-const previousUmask = process.umask(0o022);
 
 type TempPlugin = { dir: string; file: string; id: string };
 
@@ -300,7 +299,6 @@ afterAll(() => {
   } catch {
     // ignore cleanup failures
   } finally {
-    process.umask(previousUmask);
     cachedBundledTelegramDir = "";
     cachedBundledMemoryDir = "";
   }
