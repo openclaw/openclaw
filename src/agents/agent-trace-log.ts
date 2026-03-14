@@ -301,7 +301,39 @@ export function createAgentTraceLogger(params: {
           type: "message_start",
         });
         break;
-
+      case "message_update": {
+        if (!cfg.verbose || role === "user") {
+          break;
+        }
+        const content = message?.content;
+        let text = "";
+        let reasoning = "";
+        if (typeof content === "string") {
+          text = content;
+        } else if (Array.isArray(content)) {
+          text = content
+            .filter(
+              (b: unknown) =>
+                b && typeof b === "object" && (b as { type?: unknown }).type === "text",
+            )
+            .map((b: unknown) => (b as { text?: string }).text ?? "")
+            .join("");
+          reasoning = content
+            .filter(
+              (b: unknown) =>
+                b && typeof b === "object" && (b as { type?: unknown }).type === "thinking",
+            )
+            .map((b: unknown) => (b as { thinking?: string }).thinking ?? "")
+            .join("");
+        }
+        record({
+          ...base,
+          ts: new Date().toISOString(),
+          type: "message_update",
+          text: cfg.verbose ? text : text.slice(0, 200),
+          reasoning: cfg.verbose ? reasoning : reasoning.slice(0, 200),
+        });
+        break;
       }
 
       case "message_end": {
