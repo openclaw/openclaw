@@ -180,16 +180,22 @@ function assertAllowedHostOrIpOrThrow(hostnameOrIp: string, policy?: SsrFPolicy)
   }
 }
 
-function assertAllowedResolvedAddressesOrThrow(
+/**
+ * Filter out blocked resolved addresses and throw only when no valid addresses remain.
+ * In dual-stack networks DNS may return both valid IPv4 and special-use IPv6 addresses
+ * (e.g. `::`, `::1`, Teredo). We allow the request through the valid addresses rather
+ * than rejecting the entire request because one address is blocked.
+ */
+function filterAllowedResolvedAddresses(
   results: readonly LookupAddress[],
   policy?: SsrFPolicy,
-): void {
-  for (const entry of results) {
-    // Reuse the exact same host/IP classifier as the pre-DNS check to avoid drift.
-    if (isBlockedHostnameOrIp(entry.address, policy)) {
-      throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
-    }
+): LookupAddress[] {
+  // Reuse the exact same host/IP classifier as the pre-DNS check to avoid drift.
+  const allowed = results.filter((entry) => !isBlockedHostnameOrIp(entry.address, policy));
+  if (allowed.length === 0) {
+    throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
   }
+  return allowed;
 }
 
 export function createPinnedLookup(params: {
@@ -319,14 +325,16 @@ export async function resolvePinnedHostnameWithPolicy(
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }
 
-  if (!skipPrivateNetworkChecks) {
-    // Phase 2: re-check DNS answers so public hostnames cannot pivot to private targets.
-    assertAllowedResolvedAddressesOrThrow(results, params.policy);
-  }
+  // Phase 2: filter out blocked DNS answers so public hostnames cannot pivot
+  // to private targets. In dual-stack networks this keeps valid addresses
+  // while discarding special-use ones, only rejecting when none remain.
+  const filteredResults = skipPrivateNetworkChecks
+    ? results
+    : filterAllowedResolvedAddresses(results, params.policy);
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
   // families so Happy Eyeballs and pinned round-robin both attempt IPv4 first.
-  const addresses = dedupeAndPreferIpv4(results);
+  const addresses = dedupeAndPreferIpv4(filteredResults);
   if (addresses.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }

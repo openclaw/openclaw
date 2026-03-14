@@ -58,6 +58,48 @@ describe("ssrf pinning", () => {
     await expect(resolvePinnedHostname("example.com", lookup)).rejects.toThrow(/private|internal/i);
   });
 
+  it("allows requests in dual-stack networks when valid IPv4 exists alongside blocked IPv6", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+      { address: "::", family: 6 },
+      { address: "::1", family: 6 },
+    ]) as unknown as LookupFn;
+
+    const pinned = await resolvePinnedHostname("example.com", lookup);
+    expect(pinned.addresses).toEqual(["93.184.216.34"]);
+  });
+
+  it("filters out Teredo IPv6 addresses while keeping valid IPv4", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "2001::1", family: 6 },
+      { address: "93.184.216.34", family: 4 },
+      { address: "93.184.216.35", family: 4 },
+    ]) as unknown as LookupFn;
+
+    const pinned = await resolvePinnedHostname("example.com", lookup);
+    expect(pinned.addresses).toEqual(["93.184.216.34", "93.184.216.35"]);
+  });
+
+  it("rejects when ALL resolved addresses are blocked in dual-stack", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "::1", family: 6 },
+      { address: "127.0.0.1", family: 4 },
+    ]) as unknown as LookupFn;
+
+    await expect(resolvePinnedHostname("example.com", lookup)).rejects.toThrow(/private|internal/i);
+  });
+
+  it("keeps valid IPv6 addresses alongside valid IPv4 while filtering blocked ones", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "2606:4700:4700::1111", family: 6 },
+      { address: "93.184.216.34", family: 4 },
+      { address: "::", family: 6 },
+    ]) as unknown as LookupFn;
+
+    const pinned = await resolvePinnedHostname("example.com", lookup);
+    expect(pinned.addresses).toEqual(["93.184.216.34", "2606:4700:4700::1111"]);
+  });
+
   it("allows RFC2544 benchmark range addresses only when policy explicitly opts in", async () => {
     const lookup = vi.fn(async () => [
       { address: "198.18.0.153", family: 4 },
