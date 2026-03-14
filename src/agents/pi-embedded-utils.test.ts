@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
   formatReasoningMessage,
+  parseMinimaxToolCallXml,
+  promoteMinimaxToolCallsToBlocks,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
@@ -603,5 +605,277 @@ describe("empty input handling", () => {
     for (const helper of helpers) {
       expect(helper("")).toBe("");
     }
+  });
+});
+
+describe("parseMinimaxToolCallXml", () => {
+  it("returns empty array for text without minimax markers", () => {
+    expect(parseMinimaxToolCallXml("Hello world")).toEqual([]);
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(parseMinimaxToolCallXml("")).toEqual([]);
+  });
+
+  it("parses a single tool invocation", () => {
+    const text = `<minimax:tool_call><invoke name="Bash">
+<parameter name="command">ls -la</parameter>
+</invoke></minimax:tool_call>`;
+    const result = parseMinimaxToolCallXml(text);
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("Bash");
+    expect(result[0].input).toEqual({ command: "ls -la" });
+    expect(result[0].id).toMatch(/^toolu_minimax_\d+$/);
+  });
+
+  it("parses multiple tool invocations", () => {
+    const text = `<invoke name="Read">
+<parameter name="path">file1.txt</parameter>
+</invoke>
+</minimax:tool_call><invoke name="Bash">
+<parameter name="command">pwd</parameter>
+</invoke>
+</minimax:tool_call>`;
+    const result = parseMinimaxToolCallXml(text);
+    expect(result).toHaveLength(2);
+    expect(result[0].name).toBe("Read");
+    expect(result[0].input).toEqual({ path: "file1.txt" });
+    expect(result[1].name).toBe("Bash");
+    expect(result[1].input).toEqual({ command: "pwd" });
+    expect(result[0].id).not.toBe(result[1].id);
+  });
+
+  it("parses multiple parameters", () => {
+    const text = `<minimax:tool_call><invoke name="Write">
+<parameter name="path">/tmp/test.txt</parameter>
+<parameter name="content">hello world</parameter>
+</invoke></minimax:tool_call>`;
+    const result = parseMinimaxToolCallXml(text);
+    expect(result).toHaveLength(1);
+    expect(result[0].input).toEqual({ path: "/tmp/test.txt", content: "hello world" });
+  });
+
+  it("handles invoke with extra attributes", () => {
+    const text = `<invoke name='Bash' data-foo="bar">
+<parameter name="command">ls</parameter>
+</invoke></minimax:tool_call>`;
+    const result = parseMinimaxToolCallXml(text);
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("Bash");
+    expect(result[0].input).toEqual({ command: "ls" });
+  });
+
+  it("skips invoke blocks without name attribute", () => {
+    const text = `<invoke>Drop</invoke><minimax:tool_call>`;
+    const result = parseMinimaxToolCallXml(text);
+    expect(result).toEqual([]);
+  });
+
+  it("generates unique IDs across calls", () => {
+    const text = `<minimax:tool_call><invoke name="Bash">
+<parameter name="command">echo hi</parameter>
+</invoke></minimax:tool_call>`;
+    const r1 = parseMinimaxToolCallXml(text);
+    const r2 = parseMinimaxToolCallXml(text);
+    expect(r1[0].id).not.toBe(r2[0].id);
+  });
+
+  it("handles parameter values with special characters", () => {
+    const text = `<minimax:tool_call><invoke name="Bash">
+<parameter name="command">echo "hello &amp; world" | grep test</parameter>
+</invoke></minimax:tool_call>`;
+    const result = parseMinimaxToolCallXml(text);
+    expect(result).toHaveLength(1);
+    expect(result[0].input.command).toBe('echo "hello & world" | grep test');
+  });
+});
+
+describe("promoteMinimaxToolCallsToBlocks", () => {
+  it("converts XML tool call to structured toolUse block", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `Let me check.<invoke name="Bash">
+<parameter name="command">ls -la</parameter>
+</invoke>
+</minimax:tool_call>`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const types = msg.content.map((b: { type?: string }) => b?.type);
+    expect(types).toContain("text");
+    expect(types).toContain("toolUse");
+
+    const textBlock = msg.content.find((b: { type?: string }) => b?.type === "text") as unknown as {
+      type: string;
+      text: string;
+    };
+    expect(textBlock.text).toBe("Let me check.");
+
+    const toolBlock = msg.content.find(
+      (b: { type?: string }) => b?.type === "toolUse",
+    ) as unknown as {
+      type: string;
+      id: string;
+      name: string;
+      input: Record<string, string>;
+    };
+    expect(toolBlock.name).toBe("Bash");
+    expect(toolBlock.input).toEqual({ command: "ls -la" });
+    expect(toolBlock.id).toMatch(/^toolu_minimax_\d+$/);
+  });
+
+  it("handles tool-only text (no surrounding prose)", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `<invoke name="Bash">
+<parameter name="command">pwd</parameter>
+</invoke>
+</minimax:tool_call>`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const types = msg.content.map((b: { type?: string }) => b?.type);
+    expect(types).not.toContain("text");
+    expect(types).toContain("toolUse");
+  });
+
+  it("handles multiple invoke blocks in one text block", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `First.<invoke name="Read">
+<parameter name="path">a.txt</parameter>
+</invoke>
+</minimax:tool_call>Second.<invoke name="Bash">
+<parameter name="command">pwd</parameter>
+</invoke>
+</minimax:tool_call>`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const toolBlocks = msg.content.filter(
+      (b: { type?: string }) => b?.type === "toolUse",
+    ) as Array<{ name: string }>;
+    expect(toolBlocks).toHaveLength(2);
+    expect(toolBlocks[0].name).toBe("Read");
+    expect(toolBlocks[1].name).toBe("Bash");
+
+    // Verify interleaving is preserved: text → tool → text → tool
+    const types = msg.content.map((b: { type?: string }) => b?.type);
+    expect(types).toEqual(["text", "toolUse", "text", "toolUse"]);
+  });
+
+  it("leaves non-minimax text blocks unchanged", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Normal text." },
+        {
+          type: "text",
+          text: `<invoke name="Bash">
+<parameter name="command">ls</parameter>
+</invoke>
+</minimax:tool_call>`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const textBlocks = msg.content.filter((b: { type?: string }) => b?.type === "text") as Array<{
+      text: string;
+    }>;
+    expect(textBlocks).toHaveLength(1);
+    expect(textBlocks[0].text).toBe("Normal text.");
+  });
+
+  it("does not modify message without minimax markers", () => {
+    const original = [{ type: "text" as const, text: "Hello world" }];
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [...original],
+      timestamp: Date.now(),
+    });
+    promoteMinimaxToolCallsToBlocks(msg);
+    expect(msg.content).toEqual(original);
+  });
+
+  it("preserves existing toolUse blocks", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "toolUse", id: "existing_1", name: "Read", input: { path: "x" } } as never,
+        {
+          type: "text",
+          text: `<invoke name="Bash">
+<parameter name="command">ls</parameter>
+</invoke>
+</minimax:tool_call>`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const toolBlocks = msg.content.filter(
+      (b: { type?: string }) => b?.type === "toolUse",
+    ) as Array<{ id: string; name: string }>;
+    expect(toolBlocks).toHaveLength(2);
+    expect(toolBlocks[0].id).toBe("existing_1");
+    expect(toolBlocks[1].name).toBe("Bash");
+  });
+
+  it("falls back gracefully when invoke has no name", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Before<invoke>Drop</invoke><minimax:tool_call>After",
+        },
+      ],
+      timestamp: Date.now(),
+    });
+    // No parseable invocations → block left as-is for stripMinimaxToolCallXml to handle.
+    promoteMinimaxToolCallsToBlocks(msg);
+    const types = msg.content.map((b: { type?: string }) => b?.type);
+    expect(types).not.toContain("toolUse");
+  });
+
+  it("does not crash on null or undefined content entries", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        null as never,
+        {
+          type: "text",
+          text: `<invoke name="Bash">
+<parameter name="command">ls</parameter>
+</invoke>
+</minimax:tool_call>`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+    expect(() => promoteMinimaxToolCallsToBlocks(msg)).not.toThrow();
+    const types = msg.content.map((b: { type?: string }) => b?.type);
+    expect(types).toContain("toolUse");
   });
 });
