@@ -178,6 +178,24 @@ export type LoggingConfig = {
   redactPatterns?: string[];
 };
 
+export type PrivacyConfig = {
+  enabled?: boolean;
+  rules?: string;
+  encryption?: {
+    algorithm?: string;
+    salt?: string;
+  };
+  mappings?: {
+    ttl?: number;
+    storePath?: string;
+    lockWaitTimeoutMs?: number;
+    lockStaleAfterMs?: number;
+  };
+  log?: {
+    useReplacedContent?: boolean;
+  };
+};
+
 export type DiagnosticsOtelConfig = {
   enabled?: boolean;
   endpoint?: string;
