@@ -65,6 +65,8 @@ export function renderOverview(props: OverviewProps) {
         authMode?: "none" | "token" | "password" | "trusted-proxy";
       }
     | undefined;
+  const activeLocale = i18n.getLocale();
+  const currentLocale = activeLocale || props.settings.locale;
   const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
   const tickIntervalMs = props.hello?.policy?.tickIntervalMs;
   const tick = tickIntervalMs
@@ -189,9 +191,6 @@ export function renderOverview(props: OverviewProps) {
       </div>
     `;
   })();
-
-  const currentLocale = i18n.getLocale();
-
   return html`
     <section class="grid">
       <div class="card">
@@ -295,7 +294,7 @@ export function renderOverview(props: OverviewProps) {
             >
               ${SUPPORTED_LOCALES.map((loc) => {
                 const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc}>${t(`languages.${key}`)}</option>`;
+                return html`<option value=${loc} ?selected=${loc === currentLocale}>${t(`languages.${key}`)}</option>`;
               })}
             </select>
           </label>
