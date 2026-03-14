@@ -134,6 +134,8 @@ export type MsgContext = {
   Surface?: string;
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
+  /** Platform bot user ID for self-message detection in replay/followup paths. */
+  BotUserId?: string;
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
