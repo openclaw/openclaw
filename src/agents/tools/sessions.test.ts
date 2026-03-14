@@ -31,6 +31,7 @@ vi.mock("../../config/config.js", async (importOriginal) => {
 });
 
 import { createSessionsListTool } from "./sessions-list-tool.js";
+import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
 
 let resolveAnnounceTarget: (typeof import("./sessions-announce-target.js"))["resolveAnnounceTarget"];
@@ -208,6 +209,30 @@ describe("extractAssistantText", () => {
       content: [{ type: "text", text: "Handle payment required errors in your API." }],
     };
     expect(extractAssistantText(message)).toBe("Handle payment required errors in your API.");
+  });
+});
+
+describe("resolveAnnounceTargetFromKey — Telegram forum topic", () => {
+  beforeEach(async () => {
+    await installRegistry();
+  });
+
+  it("extracts threadId from Telegram group:topic session key", () => {
+    const target = resolveAnnounceTargetFromKey(
+      "agent:coder:telegram:group:-1003525386997:topic:2",
+    );
+    expect(target).toMatchObject({
+      channel: "telegram",
+      threadId: "2",
+    });
+    // `to` should contain the group ID without the :topic:N suffix
+    expect(target?.to).not.toContain("topic");
+  });
+
+  it("returns no threadId for plain group session keys", () => {
+    const target = resolveAnnounceTargetFromKey("agent:main:telegram:group:-100123456");
+    expect(target).toMatchObject({ channel: "telegram" });
+    expect(target?.threadId).toBeUndefined();
   });
 });
 
