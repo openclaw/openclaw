@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
+import { sessionsWrapupCommand } from "../../commands/sessions-wrapup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
 import { setVerbose } from "../../globals.js";
@@ -154,6 +155,45 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       );
     });
   sessionsCmd.enablePositionalOptions();
+
+  sessionsCmd
+    .command("wrapup")
+    .description(
+      "End an agent's current main session and seed the next session with a summary prompt",
+    )
+    .requiredOption("--summary <text>", "Summary/prompt to inject into the next session")
+    .option("--agent <id>", "Agent id to wrap up (default: configured default agent)")
+    .option("--timeout <seconds>", "Gateway wait timeout in seconds")
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            'openclaw sessions wrapup --agent main --summary "Summarize pending tasks and continue."',
+            "Roll over main session and start next session with a summary prompt.",
+          ],
+        ])}`,
+    )
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            agent?: string;
+            json?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsWrapupCommand(
+          {
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            summary: opts.summary as string | undefined,
+            timeout: opts.timeout as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 
   sessionsCmd
     .command("cleanup")
