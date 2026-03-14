@@ -946,13 +946,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   await updatePluginsAfterCoreUpdate({
-    root,
+    root: result.root ?? root,
     channel,
     configSnapshot,
     opts,
   });
 
-  await tryWriteCompletionCache(root, Boolean(opts.json));
+  await tryWriteCompletionCache(result.root ?? root, Boolean(opts.json));
   await tryInstallShellCompletion({
     jsonMode: Boolean(opts.json),
     skipPrompt: Boolean(opts.yes),
