@@ -172,4 +172,42 @@ describe("redactToolDetail", () => {
       detectSpy.mockRestore();
     }
   });
+
+  it("prefers longer equal-start detector matches to avoid partial leaks", () => {
+    const detectSpy = vi.spyOn(PrivacyDetector.prototype, "detect").mockReturnValue({
+      hasPrivacyRisk: true,
+      matches: [
+        {
+          type: "short",
+          content: "SECRET12",
+          start: 7,
+          end: 15,
+          riskLevel: "medium",
+          description: "short match",
+        },
+        {
+          type: "long",
+          content: "SECRET123456",
+          start: 7,
+          end: 19,
+          riskLevel: "high",
+          description: "long match",
+        },
+      ],
+      riskCount: { short: 1, long: 1 },
+      highestRiskLevel: "high",
+    });
+
+    try {
+      const output = redactWithPrivacyFilter(
+        "prefix SECRET123456 tail=SAFE_MARKER",
+        { mode: "tools", patterns: [] },
+        true,
+      );
+      expect(output).toContain("tail=SAFE_MARKER");
+      expect(output).not.toContain("3456");
+    } finally {
+      detectSpy.mockRestore();
+    }
+  });
 });

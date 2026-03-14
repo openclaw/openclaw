@@ -65,6 +65,20 @@ describe("PrivacyReplacer", () => {
       expect(replaced).not.toContain("13800001111");
     });
 
+    it("prefers longer overlap when matches share the same start", () => {
+      const replacer = new PrivacyReplacer("test-session");
+      const text = "token=abcdef1234567890 tail";
+      const matches: DetectionMatch[] = [
+        makeMatch("high_entropy_string", "abcdef1234", 6),
+        makeMatch("github_token", "abcdef1234567890", 6),
+      ];
+
+      const { replaced } = replacer.replaceAll(text, matches);
+      expect(replaced).not.toContain("abcdef1234567890");
+      expect(replaced).not.toContain("567890");
+      expect(replaced).toContain(" tail");
+    });
+
     it("returns new mappings for first-time replacements", () => {
       const replacer = new PrivacyReplacer("test-session");
       const match = makeMatch("email", "user@test.com", 0);

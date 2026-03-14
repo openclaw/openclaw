@@ -213,7 +213,14 @@ export function redactWithPrivacyFilter(
     const detected = cachedDetector.detect(result);
     if (detected.hasPrivacyRisk) {
       // Apply mask-style redaction (not replacement) for log output.
-      const sorted = [...detected.matches].toSorted((a, b) => b.start - a.start);
+      const sorted = [...detected.matches].toSorted((a, b) => {
+        if (a.start !== b.start) {
+          return b.start - a.start;
+        }
+        // Prefer longer spans for equal-start overlaps to avoid masking only
+        // a prefix and leaving the remainder of a secret visible.
+        return b.end - b.start - (a.end - a.start);
+      });
       let processedStart = Infinity;
       for (const match of sorted) {
         if (match.end > processedStart) {

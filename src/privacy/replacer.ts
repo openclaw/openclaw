@@ -37,7 +37,14 @@ export class PrivacyReplacer {
     const newMappings: PrivacyMapping[] = [];
     // Process from end to start to preserve indices.
     // Also skip matches that overlap with already-processed regions.
-    const sorted = [...matches].toSorted((a, b) => b.start - a.start);
+    const sorted = [...matches].toSorted((a, b) => {
+      if (a.start !== b.start) {
+        return b.start - a.start;
+      }
+      // Prefer longer spans when two matches start at the same index so a
+      // broader secret match wins over a shorter overlapping substring.
+      return b.end - b.start - (a.end - a.start);
+    });
 
     let result = text;
     let processedStart = Infinity;
