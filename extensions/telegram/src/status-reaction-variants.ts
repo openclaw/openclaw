@@ -92,7 +92,7 @@ export const TELEGRAM_STATUS_REACTION_VARIANTS: Record<StatusReactionEmojiKey, s
   web: ["⚡", "🔥", "👍"],
   done: ["👍", "🎉", "💯"],
   error: ["😱", "😨", "🤯"],
-  stallSoft: ["🥱", "😴", "🤔"],
+  stallSoft: ["🥱", "🤔", "😐"],
   stallHard: ["😨", "😱", "⚡"],
   compacting: ["✍", "🤔", "🤯"],
 };
