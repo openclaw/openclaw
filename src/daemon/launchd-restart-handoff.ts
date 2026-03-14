@@ -18,6 +18,11 @@ export type LaunchdRestartTarget = {
   serviceTarget: string;
 };
 
+// Give launchd a short window to reload the KeepAlive job on its own before
+// attempting a manual repair/bootstrap path.
+const START_AFTER_EXIT_PRINT_RETRY_COUNT = 15;
+const START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS = 0.2;
+
 function resolveGuiDomain(): string {
   if (typeof process.getuid !== "function") {
     return "gui/501";
@@ -84,17 +89,26 @@ fi
 `;
   }
 
+  const verifyLaunchdReload = `print_retry_count="${START_AFTER_EXIT_PRINT_RETRY_COUNT}"
+while [ "$print_retry_count" -gt 0 ]; do
+  if launchctl print "$service_target" >/dev/null 2>&1; then
+    exit 0
+  fi
+  print_retry_count=$((print_retry_count - 1))
+  sleep ${START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS}
+done
+`;
+
   return `service_target="$1"
 domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
-if ! launchctl start "$service_target" >/dev/null 2>&1; then
-  launchctl enable "$service_target" >/dev/null 2>&1
-  if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
-    launchctl start "$service_target" >/dev/null 2>&1 || launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
-  else
-    launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
-  fi
+${verifyLaunchdReload}
+launchctl enable "$service_target" >/dev/null 2>&1 || true
+if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
+  launchctl start "$service_target" >/dev/null 2>&1 || launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
+else
+  launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
 fi
 `;
 }

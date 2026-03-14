@@ -40,4 +40,37 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).not.toContain("sleep 1");
     expect(unrefMock).toHaveBeenCalledTimes(1);
   });
+
+  it("probes for launchd auto-reload before attempting repair in start-after-exit mode", () => {
+    const env = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+
+    const result = scheduleDetachedLaunchdRestartHandoff({
+      env,
+      mode: "start-after-exit",
+      waitForPid: 9876,
+    });
+
+    expect(result).toEqual({ ok: true, pid: 4242 });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    expect(args[1]).toContain('while kill -0 "$wait_pid" >/dev/null 2>&1; do');
+    expect(args[1]).toContain('if launchctl print "$service_target" >/dev/null 2>&1; then');
+    expect(args[1]).toContain("print_retry_count=$((print_retry_count - 1))");
+    expect(args[1]).toContain("sleep 0.2");
+    expect(args[1]).toContain('launchctl enable "$service_target" >/dev/null 2>&1 || true');
+    expect(args[1]).toContain(
+      'if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then',
+    );
+    expect(args[1]).toContain(
+      'launchctl start "$service_target" >/dev/null 2>&1 || launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true',
+    );
+    expect(args[1]).toContain(
+      'else\n  launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true\nfi',
+    );
+    expect(unrefMock).toHaveBeenCalledTimes(1);
+  });
 });
