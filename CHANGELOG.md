@@ -4,6 +4,8 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+## 2026.3.13
+
 ### Changes
 
 - Android/chat settings: redesign the chat settings sheet with grouped device and media sections, refresh the Connect and Voice tabs, and tighten the chat composer/session header for a denser mobile layout. (#44894) Thanks @obviyus.
