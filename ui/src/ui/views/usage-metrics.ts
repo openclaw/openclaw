@@ -102,7 +102,7 @@ type UsageMosaicStats = {
 };
 
 function getWeekdayLabels(locale: string): string[] {
-  const fmt = new Intl.DateTimeFormat(locale, { weekday: "short" });
+  const fmt = new Intl.DateTimeFormat(locale, { weekday: "short", timeZone: "UTC" });
   // 1970-01-04 is Sunday (UTC). Build Sun..Sat labels in the active UI locale.
   const base = Date.UTC(1970, 0, 4);
   return Array.from({ length: 7 }, (_, i) => fmt.format(new Date(base + i * 86400000)));
