@@ -93,14 +93,14 @@ function rejectWebchatSessionMutation(params: {
 }
 
 export const sessionsHandlers: GatewayRequestHandlers = {
-  "sessions.list": ({ params, respond }) => {
+  "sessions.list": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
     const p = params;
     const cfg = loadConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    const result = listSessionsFromStore({
+    const result = await listSessionsFromStore({
       cfg,
       storePath,
       store,

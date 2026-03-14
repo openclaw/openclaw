@@ -364,6 +364,120 @@ export function readSessionTitleFieldsFromTranscript(
   }
 }
 
+/**
+ * Async variant of {@link readSessionTitleFieldsFromTranscript}.
+ *
+ * Performs all file I/O with `fs.promises` so the Node.js event loop is not
+ * blocked when called concurrently for many sessions (e.g. via Promise.all).
+ */
+export async function readSessionTitleFieldsFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+  opts?: { includeInterSession?: boolean },
+): Promise<SessionTitleFields> {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+
+  let filePath: string | null = null;
+  for (const p of candidates) {
+    try {
+      await fs.promises.access(p);
+      filePath = p;
+      break;
+    } catch {
+      // candidate does not exist, try next
+    }
+  }
+  if (!filePath) {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  }
+
+  const cacheKey = readSessionTitleFieldsCacheKey(filePath, opts);
+  const cached = getCachedSessionTitleFields(cacheKey, stat);
+  if (cached) {
+    return cached;
+  }
+
+  if (stat.size === 0) {
+    const empty = { firstUserMessage: null, lastMessagePreview: null };
+    setCachedSessionTitleFields(cacheKey, stat, empty);
+    return empty;
+  }
+
+  let fh: fs.promises.FileHandle | null = null;
+  try {
+    fh = await fs.promises.open(filePath, "r");
+    const size = stat.size;
+
+    // Head — first user message
+    let firstUserMessage: string | null = null;
+    try {
+      const maxBytes = 8192;
+      const buf = Buffer.alloc(maxBytes);
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      if (bytesRead > 0) {
+        const chunk = buf.toString("utf-8", 0, bytesRead);
+        firstUserMessage = extractFirstUserMessageFromTranscriptChunk(chunk, opts);
+      }
+    } catch {
+      // ignore head read errors
+    }
+
+    // Tail — last message preview
+    let lastMessagePreview: string | null = null;
+    try {
+      const readStart = Math.max(0, size - LAST_MSG_MAX_BYTES);
+      const readLen = Math.min(size, LAST_MSG_MAX_BYTES);
+      const buf = Buffer.alloc(readLen);
+      await fh.read(buf, 0, readLen, readStart);
+      const chunk = buf.toString("utf-8");
+      const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
+      const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
+      for (let i = tailLines.length - 1; i >= 0; i--) {
+        const line = tailLines[i];
+        try {
+          const parsed = JSON.parse(line);
+          const msg = parsed?.message as TranscriptMessage | undefined;
+          if (msg?.role !== "user" && msg?.role !== "assistant") {
+            continue;
+          }
+          const text = extractTextFromContent(msg.content);
+          if (text) {
+            lastMessagePreview = text;
+            break;
+          }
+        } catch {
+          // skip malformed lines
+        }
+      }
+    } catch {
+      // ignore tail read errors
+    }
+
+    const result = { firstUserMessage, lastMessagePreview };
+    setCachedSessionTitleFields(cacheKey, stat, result);
+    return result;
+  } catch {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  } finally {
+    if (fh !== null) {
+      try {
+        await fh.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 function extractTextFromContent(content: TranscriptMessage["content"]): string | null {
   if (typeof content === "string") {
     const normalized = stripInlineDirectiveTagsForDisplay(content).text.trim();

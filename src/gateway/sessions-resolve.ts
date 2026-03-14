@@ -68,7 +68,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
 
   if (hasSessionId) {
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    const list = listSessionsFromStore({
+    const list = await listSessionsFromStore({
       cfg,
       storePath,
       store,
@@ -112,7 +112,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-  const list = listSessionsFromStore({
+  const list = await listSessionsFromStore({
     cfg,
     storePath,
     store,
