@@ -18,7 +18,7 @@ import {
   normalizePollInput,
   type PollInput,
 } from "../../../src/polls.js";
-import { loadWebMedia } from "../../../src/web/media.js";
+import { loadWebMedia } from "../../whatsapp/src/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { createDiscordClient, resolveDiscordRest } from "./client.js";

@@ -4,7 +4,10 @@ import {
   sendPayloadMediaSequence,
 } from "../../../src/channels/plugins/outbound/direct-text-media.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
-import type { OutboundSendDeps } from "../../../src/infra/outbound/deliver.js";
+import {
+  resolveOutboundSendDep,
+  type OutboundSendDeps,
+} from "../../../src/infra/outbound/deliver.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
@@ -30,7 +33,8 @@ function resolveTelegramSendContext(params: {
     accountId?: string;
   };
 } {
-  const send = params.deps?.sendTelegram ?? sendMessageTelegram;
+  const send =
+    resolveOutboundSendDep<TelegramSendFn>(params.deps, "telegram") ?? sendMessageTelegram;
   return {
     send,
     baseOpts: {

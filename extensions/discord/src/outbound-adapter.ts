@@ -1,6 +1,7 @@
 import { sendTextMediaPayload } from "../../../src/channels/plugins/outbound/direct-text-media.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import { resolveOutboundSendDep } from "../../../src/infra/outbound/deliver.js";
 import type { OutboundIdentity } from "../../../src/infra/outbound/identity.js";
 import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
@@ -93,7 +94,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
         return { channel: "discord", ...webhookResult };
       }
     }
-    const send = deps?.sendDiscord ?? sendMessageDiscord;
+    const send =
+      resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
     const target = resolveDiscordOutboundTarget({ to, threadId });
     const result = await send(target, text, {
       verbose: false,
@@ -116,7 +118,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
     threadId,
     silent,
   }) => {
-    const send = deps?.sendDiscord ?? sendMessageDiscord;
+    const send =
+      resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
     const target = resolveDiscordOutboundTarget({ to, threadId });
     const result = await send(target, text, {
       verbose: false,

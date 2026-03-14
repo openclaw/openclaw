@@ -21,10 +21,10 @@ vi.mock("../../../extensions/whatsapp/src/accounts.js", () => ({
   resolveWhatsAppAccount: vi.fn(() => ({ allowFrom: [] })),
 }));
 
+import { resolveWhatsAppAccount } from "../../../extensions/whatsapp/src/accounts.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
-import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 
 function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
