@@ -1,6 +1,6 @@
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import { resolveIrcAccount } from "./accounts.js";
-import { setActiveClient, removeActiveClient } from "./active-clients.js";
+import { setActiveClient, removeActiveClientIfMatch } from "./active-clients.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import { handleIrcInbound } from "./inbound.js";
@@ -141,7 +141,9 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
 
   return {
     stop: () => {
-      removeActiveClient(account.accountId);
+      if (client) {
+        removeActiveClientIfMatch(account.accountId, client);
+      }
       client?.quit("shutdown");
       client = null;
     },
