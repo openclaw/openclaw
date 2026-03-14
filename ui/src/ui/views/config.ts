@@ -1,3 +1,4 @@
+import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
@@ -556,8 +557,30 @@ function truncateValue(value: unknown, maxLen = 40): string {
   return str.slice(0, maxLen - 3) + "...";
 }
 
+function computeRawDiff(
+  original: string,
+  current: string,
+): Array<{ path: string; from: unknown; to: unknown }> {
+  try {
+    const origObj = JSON5.parse(original);
+    const currObj = JSON5.parse(current);
+    return computeDiff(origObj, currObj);
+  } catch {
+    return [];
+  }
+}
+
 function renderDiffValue(path: string, value: unknown, _uiHints: ConfigUiHints): string {
   if (isSensitiveConfigPath(path) && value != null && truncateValue(value).trim() !== "") {
+    return REDACTED_PLACEHOLDER;
+  }
+  return truncateValue(value);
+}
+
+function renderRawDiffValue(path: string, value: unknown, uiHints: ConfigUiHints): string {
+  const sensitiveCount = countSensitiveConfigValues(value, path.split("."), uiHints);
+  const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
+  if (blurred) {
     return REDACTED_PLACEHOLDER;
   }
   return truncateValue(value);
@@ -580,9 +603,9 @@ function renderAppearanceSection(props: ConfigProps) {
           ${THEME_OPTIONS.map(
             (opt) => html`
               <button
-                class="settings-theme-card ${opt.id === props.theme
-                  ? "settings-theme-card--active"
-                  : ""}"
+                class="settings-theme-card ${
+                  opt.id === props.theme ? "settings-theme-card--active" : ""
+                }"
                 title=${opt.description}
                 @click=${(e: Event) => {
                   if (opt.id !== props.theme) {
@@ -595,11 +618,13 @@ function renderAppearanceSection(props: ConfigProps) {
               >
                 <span class="settings-theme-card__icon" aria-hidden="true">${opt.icon}</span>
                 <span class="settings-theme-card__label">${opt.label}</span>
-                ${opt.id === props.theme
-                  ? html`<span class="settings-theme-card__check" aria-hidden="true"
+                ${
+                  opt.id === props.theme
+                    ? html`<span class="settings-theme-card__check" aria-hidden="true"
                       >${icons.check}</span
                     >`
-                  : nothing}
+                    : nothing
+                }
               </button>
             `,
           )}
@@ -646,14 +671,16 @@ function renderAppearanceSection(props: ConfigProps) {
               ${props.connected ? t("common.connected") : t("common.offline")}
             </span>
           </div>
-          ${props.assistantName
-            ? html`
+          ${
+            props.assistantName
+              ? html`
                 <div class="settings-info-row">
                   <span class="settings-info-row__label">Assistant</span>
                   <span class="settings-info-row__value">${props.assistantName}</span>
                 </div>
               `
-            : nothing}
+              : nothing
+          }
         </div>
       </div>
     </div>
@@ -665,6 +692,7 @@ interface ConfigEphemeralState {
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
+  rawDiffRevealed: boolean;
 }
 
 function createConfigEphemeralState(): ConfigEphemeralState {
@@ -673,6 +701,7 @@ function createConfigEphemeralState(): ConfigEphemeralState {
     envRevealed: false,
     validityDismissed: false,
     revealedSensitivePaths: new Set(),
+    rawDiffRevealed: false,
   };
 }
 
@@ -762,6 +791,8 @@ export function renderConfig(props: ConfigProps) {
 
   // Compute diff for showing changes (works for both form and raw modes)
   const diff = formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
+  const rawDiff =
+    formMode === "raw" && cvs.rawDiffRevealed ? computeRawDiff(props.originalRaw, props.raw) : [];
   const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
   const hasChanges = formMode === "form" ? diff.length > 0 : hasRawChanges;
 
@@ -789,8 +820,9 @@ export function renderConfig(props: ConfigProps) {
       <main class="config-main">
         <div class="config-actions">
           <div class="config-actions__left">
-            ${showModeToggle
-              ? html`
+            ${
+              showModeToggle
+                ? html`
                   <div class="config-mode-toggle">
                     <button
                       class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
@@ -803,36 +835,48 @@ export function renderConfig(props: ConfigProps) {
                     <button
                       class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
                       ?disabled=${!rawAvailable}
-                      title=${rawAvailable
-                        ? "Edit raw JSON/JSON5 config"
-                        : "Raw mode unavailable for this snapshot"}
+                      title=${
+                        rawAvailable
+                          ? "Edit raw JSON/JSON5 config"
+                          : "Raw mode unavailable for this snapshot"
+                      }
                       @click=${() => props.onFormModeChange("raw")}
                     >
                       Raw
                     </button>
                   </div>
                 `
-              : nothing}
-            ${hasChanges
-              ? html`
+                : nothing
+            }
+            ${
+              hasChanges
+                ? html`
                   <span class="config-changes-badge"
-                    >${formMode === "raw"
-                      ? "Unsaved changes"
-                      : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`}</span
+                    >${
+                      formMode === "raw"
+                        ? "Unsaved changes"
+                        : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`
+                    }</span
                   >
                 `
-              : html` <span class="config-status muted">No changes</span> `}
+                : html`
+                    <span class="config-status muted">No changes</span>
+                  `
+            }
           </div>
           <div class="config-actions__right">
-            ${!rawAvailable
-              ? html`
-                  <span class="config-status muted"
-                    >Raw mode disabled (snapshot cannot safely round-trip raw text).</span
-                  >
-                `
-              : nothing}
-            ${props.onOpenFile
-              ? html`
+            ${
+              !rawAvailable
+                ? html`
+                    <span class="config-status muted"
+                      >Raw mode disabled (snapshot cannot safely round-trip raw text).</span
+                    >
+                  `
+                : nothing
+            }
+            ${
+              props.onOpenFile
+                ? html`
                   <button
                     class="btn btn--sm"
                     title=${props.configPath ? `Open ${props.configPath}` : "Open config file"}
@@ -841,7 +885,8 @@ export function renderConfig(props: ConfigProps) {
                     ${icons.fileText} Open
                   </button>
                 `
-              : nothing}
+                : nothing
+            }
             <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
               ${props.loading ? t("common.loading") : t("common.reload")}
             </button>
@@ -858,8 +903,9 @@ export function renderConfig(props: ConfigProps) {
         </div>
 
         <div class="config-top-tabs">
-          ${formMode === "form"
-            ? html`
+          ${
+            formMode === "form"
+              ? html`
                 <div class="config-search config-search--top">
                   <div class="config-search__input-row">
                     <svg
@@ -881,8 +927,9 @@ export function renderConfig(props: ConfigProps) {
                       @input=${(e: Event) =>
                         props.onSearchChange((e.target as HTMLInputElement).value)}
                     />
-                    ${props.searchQuery
-                      ? html`
+                    ${
+                      props.searchQuery
+                        ? html`
                           <button
                             class="config-search__clear"
                             aria-label="Clear search"
@@ -891,11 +938,13 @@ export function renderConfig(props: ConfigProps) {
                             ×
                           </button>
                         `
-                      : nothing}
+                        : nothing
+                    }
                   </div>
                 </div>
               `
-            : nothing}
+              : nothing
+          }
 
           <div
             class="config-top-tabs__scroller"
@@ -918,8 +967,9 @@ export function renderConfig(props: ConfigProps) {
           </div>
         </div>
 
-        ${validity === "invalid" && !cvs.validityDismissed
-          ? html`
+        ${
+          validity === "invalid" && !cvs.validityDismissed
+            ? html`
               <div class="config-validity-warning">
                 <svg
                   class="config-validity-warning__icon"
@@ -952,11 +1002,13 @@ export function renderConfig(props: ConfigProps) {
                 </button>
               </div>
             `
-          : nothing}
+            : nothing
+        }
 
         <!-- Diff panel (form mode only - raw mode doesn't have granular diff) -->
-        ${hasChanges && formMode === "form"
-          ? html`
+        ${
+          hasChanges && formMode === "form"
+            ? html`
               <details class="config-diff">
                 <summary class="config-diff__summary">
                   <span>View ${diff.length} pending change${diff.length !== 1 ? "s" : ""}</span>
@@ -990,27 +1042,81 @@ export function renderConfig(props: ConfigProps) {
                 </div>
               </details>
             `
-          : nothing}
-        ${activeSectionMeta && formMode === "form"
-          ? html`
+            : nothing
+        }
+        <!-- Diff panel for raw mode - only shown when user expands it -->
+        ${
+          hasChanges && formMode === "raw"
+            ? html`
+              <details class="config-diff" ?open=${cvs.rawDiffRevealed} @toggle=${(e: Event) => {
+                const details = e.target as HTMLDetailsElement;
+                cvs.rawDiffRevealed = details.open;
+                props.onRawChange(props.raw);
+              }}>
+                <summary class="config-diff__summary">
+                  <span>View pending changes</span>
+                  <svg
+                    class="config-diff__chevron"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </summary>
+                <div class="config-diff__content">
+                  ${
+                    rawDiff.length > 0
+                      ? rawDiff.map(
+                          (change) => html`
+                            <div class="config-diff__item">
+                              <div class="config-diff__path">${change.path}</div>
+                              <div class="config-diff__values">
+                                <span class="config-diff__from"
+                                  >${renderRawDiffValue(change.path, change.from, props.uiHints)}</span
+                                >
+                                <span class="config-diff__arrow">→</span>
+                                <span class="config-diff__to"
+                                  >${renderRawDiffValue(change.path, change.to, props.uiHints)}</span
+                                >
+                              </div>
+                            </div>
+                          `,
+                        )
+                      : html`
+                          <div class="config-diff__item">Changes detected (JSON diff not available)</div>
+                        `
+                  }
+                </div>
+              </details>
+            `
+            : nothing
+        }
+        ${
+          activeSectionMeta && formMode === "form"
+            ? html`
               <div class="config-section-hero">
                 <div class="config-section-hero__icon">
                   ${getSectionIcon(props.activeSection ?? "")}
                 </div>
                 <div class="config-section-hero__text">
                   <div class="config-section-hero__title">${activeSectionMeta.label}</div>
-                  ${activeSectionMeta.description
-                    ? html`<div class="config-section-hero__desc">
+                  ${
+                    activeSectionMeta.description
+                      ? html`<div class="config-section-hero__desc">
                         ${activeSectionMeta.description}
                       </div>`
-                    : nothing}
+                      : nothing
+                  }
                 </div>
-                ${props.activeSection === "env"
-                  ? html`
+                ${
+                  props.activeSection === "env"
+                    ? html`
                       <button
-                        class="config-env-peek-btn ${envSensitiveVisible
-                          ? "config-env-peek-btn--active"
-                          : ""}"
+                        class="config-env-peek-btn ${
+                          envSensitiveVisible ? "config-env-peek-btn--active" : ""
+                        }"
                         title=${envSensitiveVisible ? "Hide env values" : "Reveal env values"}
                         @click=${() => {
                           cvs.envRevealed = !cvs.envRevealed;
@@ -1033,76 +1139,84 @@ export function renderConfig(props: ConfigProps) {
                         Peek
                       </button>
                     `
-                  : nothing}
+                    : nothing
+                }
               </div>
             `
-          : nothing}
+            : nothing
+        }
         <!-- Form content -->
         <div class="config-content">
-          ${props.activeSection === "__appearance__"
-            ? includeVirtualSections
-              ? renderAppearanceSection(props)
-              : nothing
-            : formMode === "form"
-              ? html`
+          ${
+            props.activeSection === "__appearance__"
+              ? includeVirtualSections
+                ? renderAppearanceSection(props)
+                : nothing
+              : formMode === "form"
+                ? html`
                   ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
-                  ${props.schemaLoading
-                    ? html`
-                        <div class="config-loading">
-                          <div class="config-loading__spinner"></div>
-                          <span>Loading schema…</span>
-                        </div>
-                      `
-                    : renderConfigForm({
-                        schema: analysis.schema,
-                        uiHints: props.uiHints,
-                        value: props.formValue,
-                        rawAvailable,
-                        disabled: props.loading || !props.formValue,
-                        unsupportedPaths: analysis.unsupportedPaths,
-                        onPatch: props.onFormPatch,
-                        searchQuery: props.searchQuery,
-                        activeSection: props.activeSection,
-                        activeSubsection: effectiveSubsection,
-                        revealSensitive:
-                          props.activeSection === "env" ? envSensitiveVisible : false,
-                        isSensitivePathRevealed,
-                        onToggleSensitivePath: (path) => {
-                          toggleSensitivePathReveal(path);
-                          requestUpdate();
-                        },
-                      })}
-                `
-              : (() => {
-                  const sensitiveCount = countSensitiveConfigValues(
-                    props.formValue,
-                    [],
-                    props.uiHints,
-                  );
-                  const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
-                  return html`
-                    ${formUnsafe
+                  ${
+                    props.schemaLoading
                       ? html`
-                          <div class="callout info" style="margin-bottom: 12px">
-                            Your config contains fields the form editor can't safely represent. Use
-                            Raw mode to edit those entries.
+                          <div class="config-loading">
+                            <div class="config-loading__spinner"></div>
+                            <span>Loading schema…</span>
                           </div>
                         `
-                      : nothing}
+                      : renderConfigForm({
+                          schema: analysis.schema,
+                          uiHints: props.uiHints,
+                          value: props.formValue,
+                          rawAvailable,
+                          disabled: props.loading || !props.formValue,
+                          unsupportedPaths: analysis.unsupportedPaths,
+                          onPatch: props.onFormPatch,
+                          searchQuery: props.searchQuery,
+                          activeSection: props.activeSection,
+                          activeSubsection: effectiveSubsection,
+                          revealSensitive:
+                            props.activeSection === "env" ? envSensitiveVisible : false,
+                          isSensitivePathRevealed,
+                          onToggleSensitivePath: (path) => {
+                            toggleSensitivePathReveal(path);
+                            requestUpdate();
+                          },
+                        })
+                  }
+                `
+                : (() => {
+                    const sensitiveCount = countSensitiveConfigValues(
+                      props.formValue,
+                      [],
+                      props.uiHints,
+                    );
+                    const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
+                    return html`
+                    ${
+                      formUnsafe
+                        ? html`
+                            <div class="callout info" style="margin-bottom: 12px">
+                              Your config contains fields the form editor can't safely represent. Use Raw mode to edit those
+                              entries.
+                            </div>
+                          `
+                        : nothing
+                    }
                     <div class="field config-raw-field">
                       <span style="display:flex;align-items:center;gap:8px;">
                         Raw config (JSON/JSON5)
-                        ${sensitiveCount > 0
-                          ? html`
+                        ${
+                          sensitiveCount > 0
+                            ? html`
                               <span class="pill pill--sm"
                                 >${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"}
                                 ${blurred ? "redacted" : "visible"}</span
                               >
                               <button
                                 class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
-                                title=${blurred
-                                  ? "Reveal sensitive values"
-                                  : "Hide sensitive values"}
+                                title=${
+                                  blurred ? "Reveal sensitive values" : "Hide sensitive values"
+                                }
                                 aria-label="Toggle raw config redaction"
                                 aria-pressed=${!blurred}
                                 @click=${() => {
@@ -1113,16 +1227,18 @@ export function renderConfig(props: ConfigProps) {
                                 ${blurred ? icons.eyeOff : icons.eye}
                               </button>
                             `
-                          : nothing}
+                            : nothing
+                        }
                       </span>
-                      ${blurred
-                        ? html`
+                      ${
+                        blurred
+                          ? html`
                             <div class="callout info" style="margin-top: 12px">
                               ${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"}
                               hidden. Use the reveal button above to edit the raw config.
                             </div>
                           `
-                        : html`
+                          : html`
                             <textarea
                               placeholder="Raw config (JSON/JSON5)"
                               .value=${props.raw}
@@ -1130,17 +1246,21 @@ export function renderConfig(props: ConfigProps) {
                                 props.onRawChange((e.target as HTMLTextAreaElement).value);
                               }}
                             ></textarea>
-                          `}
+                          `
+                      }
                     </div>
                   `;
-                })()}
+                  })()
+          }
         </div>
 
-        ${props.issues.length > 0
-          ? html`<div class="callout danger" style="margin-top: 12px;">
+        ${
+          props.issues.length > 0
+            ? html`<div class="callout danger" style="margin-top: 12px;">
               <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
             </div>`
-          : nothing}
+            : nothing
+        }
       </main>
     </div>
   `;

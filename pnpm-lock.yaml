@@ -1276,6 +1276,9 @@ importers:
       dompurify:
         specifier: ^3.3.3
         version: 3.3.3
+      json5:
+        specifier: ^2.2.3
+        version: 2.2.3
       lit:
         specifier: ^3.3.2
         version: 3.3.2
