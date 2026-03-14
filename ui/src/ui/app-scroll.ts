@@ -163,6 +163,9 @@ export function handleChatWheelIntent(host: ScrollHost, event: WheelEvent) {
   if (event.deltaY >= 0) {
     return;
   }
+  if (!host.chatUserNearBottom && host.chatFollowLocked) {
+    return;
+  }
   cancelPendingChatScroll(host);
   host.chatUserNearBottom = false;
   host.chatFollowLocked = true;
