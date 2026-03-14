@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../../src/test-utils/mock-http-response.js";
+import { createTestPluginApi } from "../test-utils/plugin-api.js";
 import plugin from "./index.js";
 
 describe("diffs plugin registration", () => {
@@ -9,33 +10,19 @@ describe("diffs plugin registration", () => {
     const registerHttpRoute = vi.fn();
     const on = vi.fn();
 
-    plugin.register?.({
-      id: "diffs",
-      name: "Diffs",
-      description: "Diffs",
-      source: "test",
-      config: {},
-      runtime: {} as never,
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-      },
-      registerTool,
-      registerHook() {},
-      registerHttpRoute,
-      registerChannel() {},
-      registerGatewayMethod() {},
-      registerCli() {},
-      registerService() {},
-      registerProvider() {},
-      registerCommand() {},
-      registerContextEngine() {},
-      resolvePath(input: string) {
-        return input;
-      },
-      on,
-    });
+    plugin.register?.(
+      createTestPluginApi({
+        id: "diffs",
+        name: "Diffs",
+        description: "Diffs",
+        source: "test",
+        config: {},
+        runtime: {} as never,
+        registerTool,
+        registerHttpRoute,
+        on,
+      }),
+    );
 
     expect(registerTool).toHaveBeenCalledTimes(1);
     expect(registerHttpRoute).toHaveBeenCalledTimes(1);
@@ -65,53 +52,38 @@ describe("diffs plugin registration", () => {
         ) => Promise<boolean>)
       | undefined;
 
-    plugin.register?.({
-      id: "diffs",
-      name: "Diffs",
-      description: "Diffs",
-      source: "test",
-      config: {
-        gateway: {
-          port: 18789,
-          bind: "loopback",
+    plugin.register?.(
+      createTestPluginApi({
+        id: "diffs",
+        name: "Diffs",
+        description: "Diffs",
+        source: "test",
+        config: {
+          gateway: {
+            port: 18789,
+            bind: "loopback",
+          },
         },
-      },
-      pluginConfig: {
-        defaults: {
-          mode: "view",
-          theme: "light",
-          background: false,
-          layout: "split",
-          showLineNumbers: false,
-          diffIndicators: "classic",
-          lineSpacing: 2,
+        pluginConfig: {
+          defaults: {
+            mode: "view",
+            theme: "light",
+            background: false,
+            layout: "split",
+            showLineNumbers: false,
+            diffIndicators: "classic",
+            lineSpacing: 2,
+          },
         },
-      },
-      runtime: {} as never,
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-      },
-      registerTool(tool) {
-        registeredTool = typeof tool === "function" ? undefined : tool;
-      },
-      registerHook() {},
-      registerHttpRoute(params) {
-        registeredHttpRouteHandler = params.handler as typeof registeredHttpRouteHandler;
-      },
-      registerChannel() {},
-      registerGatewayMethod() {},
-      registerCli() {},
-      registerService() {},
-      registerProvider() {},
-      registerCommand() {},
-      registerContextEngine() {},
-      resolvePath(input: string) {
-        return input;
-      },
-      on() {},
-    });
+        runtime: {} as never,
+        registerTool(tool) {
+          registeredTool = typeof tool === "function" ? undefined : tool;
+        },
+        registerHttpRoute(params) {
+          registeredHttpRouteHandler = params.handler as typeof registeredHttpRouteHandler;
+        },
+      }),
+    );
 
     const result = await registeredTool?.execute?.("tool-1", {
       before: "one\n",
