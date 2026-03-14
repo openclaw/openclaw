@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/verdict",
+  "version": "2026.3.9",
+  "description": "Verdict policy engine integration — enforce business, security, and compliance policies on agent tool calls",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
