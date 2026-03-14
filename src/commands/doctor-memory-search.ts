@@ -1,5 +1,9 @@
 import fsSync from "node:fs";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -43,7 +47,8 @@ export async function noteMemorySearchHealth(
   if (backendConfig.backend === "qmd") {
     const qmdCommand = backendConfig.qmd?.command ?? "qmd";
     // Use agent workspace as cwd to ensure relative paths (e.g., ./bin/qmd) resolve correctly
-    const checkResult = await checkQmdBinaryAvailable(qmdCommand, 5000, agentDir);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const checkResult = await checkQmdBinaryAvailable(qmdCommand, 5000, workspaceDir);
     if (!checkResult.available) {
       note(
         [
