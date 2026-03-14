@@ -36,6 +36,22 @@ describe("resolveAnnounceTargetFromKey", () => {
     expect(result!.to).not.toContain("om_xyz");
   });
 
+  it("extracts Slack thread ID with dot separator", () => {
+    const result = resolveAnnounceTargetFromKey(
+      "agent:main:slack:channel:C0123ABC:thread:1234567890.123456",
+    );
+    expect(result).not.toBeNull();
+    expect(result!.threadId).toBe("1234567890.123456");
+    expect(result!.channel).toBe("slack");
+  });
+
+  it("returns no threadId when topic/thread suffix is absent", () => {
+    const result = resolveAnnounceTargetFromKey("agent:main:telegram:group:-1001234567890");
+    expect(result).not.toBeNull();
+    expect(result!.threadId).toBeUndefined();
+    expect(result!.channel).toBe("telegram");
+  });
+
   it("returns null for short session keys", () => {
     expect(resolveAnnounceTargetFromKey("agent:main")).toBeNull();
   });
