@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { markdownToSlackMrkdwn, normalizeSlackOutboundText } from "./format.js";
+import {
+  markdownToSlackMrkdwn,
+  markdownToSlackMrkdwnWithTables,
+  normalizeSlackOutboundText,
+} from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 describe("markdownToSlackMrkdwn", () => {
@@ -76,5 +80,42 @@ describe("escapeSlackMrkdwn", () => {
 describe("normalizeSlackOutboundText", () => {
   it("normalizes markdown for outbound send/update paths", () => {
     expect(normalizeSlackOutboundText(" **bold** ")).toBe("*bold*");
+  });
+});
+
+describe("markdownToSlackMrkdwnWithTables", () => {
+  it("extracts table data in block mode", () => {
+    const md = "Here is a table:\n\n| Name | Age |\n|------|-----|\n| Alice | 30 |\n\nDone.";
+    const result = markdownToSlackMrkdwnWithTables(md, 4000, { tableMode: "block" });
+
+    expect(result.tables).toHaveLength(1);
+    expect(result.tables[0]?.headers).toEqual(["Name", "Age"]);
+    expect(result.tables[0]?.rows).toEqual([["Alice", "30"]]);
+    // Text should still contain surrounding content
+    expect(result.chunks.join("")).toContain("Here is a table");
+    expect(result.chunks.join("")).toContain("Done.");
+  });
+
+  it("returns no tables in non-block modes", () => {
+    const md = "| A | B |\n|---|---|\n| 1 | 2 |";
+    const result = markdownToSlackMrkdwnWithTables(md, 4000, { tableMode: "code" });
+    expect(result.tables).toEqual([]);
+    // Table should be rendered as code
+    expect(result.chunks.join("")).toContain("```");
+  });
+
+  it("handles message with no tables in block mode", () => {
+    const md = "Just some **text** here.";
+    const result = markdownToSlackMrkdwnWithTables(md, 4000, { tableMode: "block" });
+    expect(result.tables).toEqual([]);
+    expect(result.chunks.join("")).toContain("Just some");
+  });
+
+  it("handles multiple tables in block mode", () => {
+    const md = "| A |\n|---|\n| 1 |\n\nSome text\n\n| B |\n|---|\n| 2 |";
+    const result = markdownToSlackMrkdwnWithTables(md, 4000, { tableMode: "block" });
+    expect(result.tables).toHaveLength(2);
+    expect(result.tables[0]?.headers).toEqual(["A"]);
+    expect(result.tables[1]?.headers).toEqual(["B"]);
   });
 });
