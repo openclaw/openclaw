@@ -754,9 +754,13 @@ export async function healthCommand(
       runtime.log(info(`Quantd: ${quantdParts.join(" · ")}`));
     }
     if (summary.monitoring) {
+      const issueLead =
+        summary.monitoring.issues.length > 0
+          ? ` · issues ${summary.monitoring.issues.length} · top ${summary.monitoring.issues[0]?.code}`
+          : "";
       runtime.log(
         info(
-          `Agent activity: active ${summary.monitoring.agents.active} · quiet ${summary.monitoring.agents.quiet} · idle ${summary.monitoring.agents.idle} · hb on ${summary.monitoring.agents.heartbeatEnabled} / off ${summary.monitoring.agents.heartbeatDisabled}`,
+          `Agent activity: active ${summary.monitoring.agents.active} · quiet ${summary.monitoring.agents.quiet} · idle ${summary.monitoring.agents.idle} · hb on ${summary.monitoring.agents.heartbeatEnabled} / off ${summary.monitoring.agents.heartbeatDisabled}${issueLead}`,
         ),
       );
     }

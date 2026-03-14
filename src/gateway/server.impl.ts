@@ -721,6 +721,10 @@ export async function startGatewayServer(
       removeChatRun,
       agentRunSeq,
       nodeSendToSession,
+      enqueueRuntimeSystemEvent: (text: string) =>
+        enqueueSystemEvent(text, {
+          sessionKey: resolveMainSessionKey(cfgAtStart),
+        }),
       ...(typeof cfgAtStart.media?.ttlHours === "number"
         ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.media.ttlHours) }
         : {}),

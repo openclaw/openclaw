@@ -123,4 +123,79 @@ describe("startGatewayMaintenanceTimers", () => {
 
     stopMaintenanceTimers(timers);
   });
+
+  it("broadcasts runtime.formal and emits system events for opened/resolved runtime issues", async () => {
+    const { applyFormalRuntimeMonitoringUpdate } = await import("./server-maintenance.js");
+    const broadcast = vi.fn();
+    const nodeSendToAllSubscribed = vi.fn();
+    const enqueueRuntimeSystemEvent = vi.fn();
+
+    const degraded = {
+      status: "degraded",
+      agents: {
+        defaultAgentId: "gateway",
+        total: 1,
+        active: 0,
+        quiet: 0,
+        idle: 1,
+        heartbeatEnabled: 1,
+        heartbeatDisabled: 0,
+        entries: [],
+      },
+      quantd: { status: "unreachable" },
+      issues: [
+        {
+          code: "quantd.unreachable",
+          priority: "P0",
+          summary: "quantd currently unreachable",
+        },
+      ],
+      issueCounts: { P0: 1, P1: 0, P2: 0, INFO: 0 },
+    } as NonNullable<HealthSummary["monitoring"]>;
+    const healthy = {
+      ...degraded,
+      status: "ok",
+      quantd: { status: "ok" },
+      issues: [],
+      issueCounts: { P0: 0, P1: 0, P2: 0, INFO: 0 },
+    } as NonNullable<HealthSummary["monitoring"]>;
+
+    const first = applyFormalRuntimeMonitoringUpdate({
+      previous: undefined,
+      monitoring: degraded,
+      broadcast,
+      nodeSendToAllSubscribed,
+      enqueueRuntimeSystemEvent,
+      getPresenceVersion: () => 2,
+      getHealthVersion: () => 3,
+    });
+    expect(first).toBe(degraded);
+    expect(broadcast).toHaveBeenCalledWith(
+      "runtime.formal",
+      degraded,
+      expect.objectContaining({
+        stateVersion: { presence: 2, health: 3 },
+      }),
+    );
+    expect(nodeSendToAllSubscribed).toHaveBeenCalledWith("runtime.formal", degraded);
+    expect(enqueueRuntimeSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("quantd.unreachable"),
+    );
+
+    broadcast.mockClear();
+    nodeSendToAllSubscribed.mockClear();
+    enqueueRuntimeSystemEvent.mockClear();
+
+    const second = applyFormalRuntimeMonitoringUpdate({
+      previous: first,
+      monitoring: healthy,
+      broadcast,
+      nodeSendToAllSubscribed,
+      enqueueRuntimeSystemEvent,
+      getPresenceVersion: () => 2,
+      getHealthVersion: () => 4,
+    });
+    expect(second).toBe(healthy);
+    expect(enqueueRuntimeSystemEvent).toHaveBeenCalledWith(expect.stringContaining("resolved"));
+  });
 });

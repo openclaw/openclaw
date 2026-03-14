@@ -1,6 +1,18 @@
 import type { QuantdRuntimeSummary } from "../quantd/runtime-summary.js";
 
 export type AgentActivityStatus = "active" | "quiet" | "idle";
+export type FormalRuntimeIssuePriority = "P0" | "P1" | "P2" | "INFO";
+
+export type FormalRuntimeIssue = {
+  code:
+    | "quantd.unreachable"
+    | "quantd.degraded"
+    | "agents.default_idle"
+    | "agents.all_idle"
+    | "agents.heartbeat_disabled";
+  priority: FormalRuntimeIssuePriority;
+  summary: string;
+};
 
 export type AgentActivityEntry = {
   agentId: string;
@@ -30,10 +42,18 @@ export type FormalRuntimeMonitoringSummary = {
   quantd: {
     status: QuantdRuntimeSummary["status"];
   };
+  issues: FormalRuntimeIssue[];
+  issueCounts: Record<FormalRuntimeIssuePriority, number>;
 };
 
 const ACTIVE_WINDOW_MS = 15 * 60_000;
 const QUIET_WINDOW_MS = 60 * 60_000;
+const EMPTY_ISSUE_COUNTS: Record<FormalRuntimeIssuePriority, number> = {
+  P0: 0,
+  P1: 0,
+  P2: 0,
+  INFO: 0,
+};
 
 function resolveAgentActivityStatus(ageMs: number | null): AgentActivityStatus {
   if (ageMs === null) {
@@ -115,14 +135,59 @@ export function buildFormalRuntimeMonitoringSummary(params: {
     agents: params.agents,
     now: params.now,
   });
+  const issues: FormalRuntimeIssue[] = [];
+  if (params.quantd.status === "unreachable") {
+    issues.push({
+      code: "quantd.unreachable",
+      priority: "P0",
+      summary: "quantd currently unreachable",
+    });
+  } else if (params.quantd.status === "degraded") {
+    issues.push({
+      code: "quantd.degraded",
+      priority: "P1",
+      summary: "quantd is degraded",
+    });
+  }
+
+  const defaultAgent = agents.entries.find((entry) => entry.isDefault);
+  if (defaultAgent?.status === "idle") {
+    issues.push({
+      code: "agents.default_idle",
+      priority: "P1",
+      summary: `default agent ${defaultAgent.agentId} is idle`,
+    });
+  }
+  if (agents.total > 0 && agents.idle === agents.total) {
+    issues.push({
+      code: "agents.all_idle",
+      priority: "P2",
+      summary: "all formal agents are idle",
+    });
+  }
+  if (agents.heartbeatDisabled > 0) {
+    issues.push({
+      code: "agents.heartbeat_disabled",
+      priority: "P2",
+      summary: `${agents.heartbeatDisabled} formal agents have heartbeat disabled`,
+    });
+  }
+
+  const issueCounts = issues.reduce<Record<FormalRuntimeIssuePriority, number>>(
+    (counts, issue) => {
+      counts[issue.priority] += 1;
+      return counts;
+    },
+    { ...EMPTY_ISSUE_COUNTS },
+  );
+
   return {
-    status:
-      params.quantd.status === "degraded" || params.quantd.status === "unreachable"
-        ? "degraded"
-        : "ok",
+    status: issueCounts.P0 > 0 || issueCounts.P1 > 0 || issueCounts.P2 > 0 ? "degraded" : "ok",
     agents,
     quantd: {
       status: params.quantd.status,
     },
+    issues,
+    issueCounts,
   };
 }

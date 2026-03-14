@@ -148,6 +148,16 @@ describe("getHealthSnapshot", () => {
     expect(snap.sessions.recent[0]?.key).toBe("foo");
     expect(snap.quantd?.status).toBe("disabled");
     expect(snap.monitoring?.agents.total).toBeGreaterThan(0);
+    expect(snap.monitoring?.issueCounts).toEqual({
+      P0: 0,
+      P1: 1,
+      P2: 1,
+      INFO: 0,
+    });
+    expect(snap.monitoring?.issues.map((issue) => issue.code)).toEqual([
+      "agents.default_idle",
+      "agents.all_idle",
+    ]);
   });
 
   it("probes telegram getMe + webhook info when configured", async () => {

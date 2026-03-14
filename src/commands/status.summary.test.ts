@@ -83,5 +83,15 @@ describe("getStatusSummary", () => {
     expect(summary.channelSummary).toEqual(["ok"]);
     expect(summary.quantd?.status).toBe("disabled");
     expect(summary.monitoring?.agents.total).toBe(1);
+    expect(summary.monitoring?.issueCounts).toEqual({
+      P0: 0,
+      P1: 1,
+      P2: 1,
+      INFO: 0,
+    });
+    expect(summary.monitoring?.issues.map((issue) => issue.code)).toEqual([
+      "agents.default_idle",
+      "agents.all_idle",
+    ]);
   });
 });

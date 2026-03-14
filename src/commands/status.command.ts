@@ -357,7 +357,11 @@ export async function statusCommand(
     if (!monitoring) {
       return muted("unknown");
     }
-    return `${monitoring.status} · active ${monitoring.agents.active} · quiet ${monitoring.agents.quiet} · idle ${monitoring.agents.idle}`;
+    const issueLead =
+      monitoring.issues.length > 0
+        ? ` · issues ${monitoring.issues.length} · top ${monitoring.issues[0]?.code}`
+        : "";
+    return `${monitoring.status} · active ${monitoring.agents.active} · quiet ${monitoring.agents.quiet} · idle ${monitoring.agents.idle}${issueLead}`;
   })();
   const lastHeartbeatValue = (() => {
     if (!opts.deep) {
