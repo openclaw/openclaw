@@ -233,6 +233,67 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
+      // Different physical paths but same plugin id.
+      const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
+      const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      if (candidateRank < existingRank) {
+        // The incoming candidate has strictly higher precedence than the
+        // already-registered one.
+        //
+        // Auto-discovered global extensions are intentionally kept behind
+        // bundled plugins by discovery order (see discovery.ts).  Only
+        // explicitly-configured origins (config / workspace) are allowed to
+        // silently override a bundled plugin.  A global extension shadowing a
+        // bundled plugin is an unexpected collision — warn the user so they
+        // can investigate (e.g. rename the extension or use plugins.load.paths
+        // to make the intent explicit).
+        const isExplicitOverride =
+          candidate.origin === "config" || candidate.origin === "workspace";
+        if (!isExplicitOverride) {
+          diagnostics.push({
+            level: "warn",
+            pluginId: manifest.id,
+            source: candidate.source,
+            message: `duplicate plugin id detected; "${candidate.origin}" plugin at ${candidate.source} conflicts with "${existing.candidate.origin}" plugin at ${existing.candidate.source}`,
+          });
+          // Keep the higher-precedence entry in the registry (global wins over
+          // bundled in terms of rank) but still emit the warning so the user
+          // is aware of the collision.
+        }
+        records[existing.recordIndex] = buildRecord({
+          manifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+        });
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        continue;
+      }
+      if (candidateRank > existingRank) {
+        // Candidate has strictly lower precedence than the already-registered
+        // entry: it is intentionally shadowed by the higher-precedence copy.
+        //
+        // Special case: global vs bundled collision (in either order) is
+        // unexpected and should warn.  Discovery keeps globals behind bundled
+        // by design; if a global ended up registered first (rare but possible
+        // with custom candidate lists), warn here too.
+        const isGlobalBundledCollision =
+          (candidate.origin === "bundled" && existing.candidate.origin === "global") ||
+          (candidate.origin === "global" && existing.candidate.origin === "bundled");
+        if (isGlobalBundledCollision) {
+          diagnostics.push({
+            level: "warn",
+            pluginId: manifest.id,
+            source: candidate.source,
+            message: `duplicate plugin id detected; "${candidate.origin}" plugin at ${candidate.source} conflicts with "${existing.candidate.origin}" plugin at ${existing.candidate.source}`,
+          });
+        }
+        continue;
+      }
+      // Same precedence level, different physical paths: this is a genuine
+      // unexpected duplicate (two separate same-priority sources both provide
+      // the same plugin id).  Emit a warning so the user can investigate.
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
