@@ -1088,6 +1088,38 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-opus-4-6"); // Config primary as final fallback
     });
 
+    it("retries session override model on 429 instead of falling through to default chain", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: ["anthropic/claude-haiku-3-5", "openrouter/deepseek-chat"],
+            },
+          },
+        },
+      });
+
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error("Rate limit exceeded"), { status: 429 }));
+
+      // Session override model differs from config primary — on 429,
+      // the override should be the sole candidate (no fallback to config default).
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-5",
+          hasSessionModelOverride: true,
+          run,
+        }),
+      ).rejects.toThrow("Rate limit exceeded");
+
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenCalledWith("anthropic", "claude-sonnet-4-5");
+    });
+
     it("uses fallbacks when session model exactly matches config primary", async () => {
       const cfg = makeCfg({
         agents: {

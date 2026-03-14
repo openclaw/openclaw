@@ -261,6 +261,8 @@ function resolveFallbackCandidates(params: {
   model: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
+  /** When true the provider/model came from a session override and should be the sole candidate. */
+  hasSessionModelOverride?: boolean;
 }): ModelCandidate[] {
   const primary = params.cfg
     ? resolveConfiguredModelRef({
@@ -275,6 +277,17 @@ function resolveFallbackCandidates(params: {
   const modelRaw = String(params.model ?? "").trim() || defaultModel;
   const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
   const configuredPrimary = normalizeModelRef(defaultProvider, defaultModel);
+
+  if (
+    params.hasSessionModelOverride &&
+    !sameModelCandidate(normalizedPrimary, configuredPrimary) &&
+    params.fallbacksOverride === undefined
+  ) {
+    // Explicit session model override without a configured fallback chain —
+    // use it as the sole candidate so we don't retry on unrelated models.
+    return [normalizedPrimary];
+  }
+
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider,
@@ -516,6 +529,8 @@ export async function runWithModelFallback<T>(params: {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
+  /** When true the provider/model came from a session override — skip fallback chain on failure. */
+  hasSessionModelOverride?: boolean;
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
 }): Promise<ModelFallbackRunResult<T>> {
@@ -524,6 +539,7 @@ export async function runWithModelFallback<T>(params: {
     provider: params.provider,
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
+    hasSessionModelOverride: params.hasSessionModelOverride,
   });
   const authStore = params.cfg
     ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
