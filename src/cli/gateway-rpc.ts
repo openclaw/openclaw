@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { callGateway } from "../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { parseTimeoutOption, resolveTimeoutMs } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
 
 export type GatewayRpcOpts = {
@@ -15,7 +16,7 @@ export function addGatewayClientOptions(cmd: Command) {
   return cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
-    .option("--timeout <ms>", "Timeout in ms", "30000")
+    .option("--timeout <ms>", "Timeout in ms", parseTimeoutOption, "30000")
     .option("--expect-final", "Wait for final response (agent)", false);
 }
 
@@ -39,7 +40,7 @@ export async function callGatewayFromCli(
         method,
         params,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
-        timeoutMs: Number(opts.timeout ?? 10_000),
+        timeoutMs: resolveTimeoutMs(opts.timeout, 30_000),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),
