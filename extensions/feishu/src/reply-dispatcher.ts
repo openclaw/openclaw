@@ -347,8 +347,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             if (info?.kind === "final") {
               streamText = mergeStreamingText(streamText, text);
-              deliveredFinalTexts.add(text);
               await closeStreaming();
+              deliveredFinalTexts.add(text);
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
