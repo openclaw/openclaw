@@ -715,6 +715,32 @@ describe("send", () => {
       expect(fetchServerInfoMock).not.toHaveBeenCalled();
     });
 
+    it("lazy-refreshes when credentials come from account config (no opts override)", async () => {
+      // When opts.serverUrl is not set, credentials come from cfg — this is the normal
+      // channel.ts path. The lazy-refresh should still fire (not treated as an override).
+      fetchServerInfoMock.mockClear();
+      privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(true);
+      fetchServerInfoMock.mockResolvedValueOnce({ private_api: true, server_version: "1.0.0" });
+
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-uuid-cfg-refresh" } });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Threaded reply", {
+        replyToMessageGuid: "reply-guid-cfg",
+        cfg: {
+          channels: {
+            bluebubbles: {
+              serverUrl: "http://config-server:5678",
+              password: "config-pass",
+            },
+          },
+        },
+      });
+
+      expect(result.messageId).toBe("msg-uuid-cfg-refresh");
+      expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+    });
+
     it("degrades to plain send when lazy-refresh fails to restore Private API", async () => {
       // If fetchBlueBubblesServerInfo returns null (server unreachable),
       // privateApiStatus stays null and the reply should degrade gracefully.
