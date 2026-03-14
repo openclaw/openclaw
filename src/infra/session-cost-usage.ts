@@ -9,6 +9,7 @@ import {
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
+import { isSessionArchiveArtifactName } from "../config/sessions/artifacts.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
@@ -318,7 +319,7 @@ export async function loadCostUsageSummary(params?: {
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .filter((entry) => entry.isFile() && (entry.name.endsWith(".jsonl") || isSessionArchiveArtifactName(entry.name)))
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -393,7 +394,7 @@ export async function discoverAllSessions(params?: {
   const discovered: DiscoveredSession[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+    if (!entry.isFile() || (!entry.name.endsWith(".jsonl") && !isSessionArchiveArtifactName(entry.name))) {
       continue;
     }
 
@@ -409,8 +410,9 @@ export async function discoverAllSessions(params?: {
     }
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
 
-    // Extract session ID from filename (remove .jsonl)
-    const sessionId = entry.name.slice(0, -6);
+    // Extract session ID from filename (remove .jsonl and any archive suffix)
+    const jsonlIndex = entry.name.indexOf(".jsonl");
+    const sessionId = jsonlIndex >= 0 ? entry.name.slice(0, jsonlIndex) : entry.name.slice(0, -6);
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
