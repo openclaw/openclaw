@@ -37,6 +37,7 @@ struct VoiceWakeSettings: View {
     private struct TriggerEntry: Identifiable {
         let id: UUID
         var value: String
+        var agentId: String
     }
 
     private var voiceWakeBinding: Binding<Bool> {
@@ -143,11 +144,18 @@ struct VoiceWakeSettings: View {
     }
 
     private func loadTriggerEntries() {
-        self.triggerEntries = self.state.swabbleTriggerWords.map { TriggerEntry(id: UUID(), value: $0) }
+        self.triggerEntries = self.state.swabbleTriggerEntries.map {
+            TriggerEntry(id: UUID(), value: $0.word, agentId: $0.agentId ?? "")
+        }
     }
 
     private func syncTriggerEntriesToState() {
-        self.state.swabbleTriggerWords = self.triggerEntries.map(\.value)
+        self.state.swabbleTriggerEntries = self.triggerEntries.map {
+            TriggerWordEntry(
+                word: $0.value,
+                agentId: $0.agentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0.agentId
+                    .trimmingCharacters(in: .whitespacesAndNewlines))
+        }
     }
 
     private var triggerTable: some View {
@@ -165,7 +173,9 @@ struct VoiceWakeSettings: View {
                     .contains(where: { $0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
 
                 Button("Reset defaults") {
-                    self.triggerEntries = defaultVoiceWakeTriggers.map { TriggerEntry(id: UUID(), value: $0) }
+                    self.triggerEntries = defaultVoiceWakeTriggers.map {
+                        TriggerEntry(id: UUID(), value: $0, agentId: "")
+                    }
                     self.syncTriggerEntriesToState()
                 }
             }
@@ -178,6 +188,14 @@ struct VoiceWakeSettings: View {
                             .onSubmit {
                                 self.syncTriggerEntriesToState()
                             }
+
+                        TextField("Agent (optional)", text: $entry.agentId)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 120)
+                            .onSubmit {
+                                self.syncTriggerEntriesToState()
+                            }
+                            .help("Agent session key (e.g. \"leo\"). Leave empty for default agent.")
 
                         Button {
                             self.removeWord(id: entry.id)
@@ -204,7 +222,8 @@ struct VoiceWakeSettings: View {
 
             Text(
                 "OpenClaw reacts when any trigger appears in a transcription. "
-                    + "Keep them short to avoid false positives.")
+                    + "Keep them short to avoid false positives. "
+                    + "Set an agent name to route to a specific agent session.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -231,7 +250,7 @@ struct VoiceWakeSettings: View {
     }
 
     private func addWord() {
-        self.triggerEntries.append(TriggerEntry(id: UUID(), value: ""))
+        self.triggerEntries.append(TriggerEntry(id: UUID(), value: "", agentId: ""))
     }
 
     private func removeWord(id: UUID) {
@@ -645,7 +664,7 @@ extension VoiceWakeSettings {
         view.meterError = "No input"
         view.testState = .detected("ok")
         view.isTesting = true
-        view.triggerEntries = [TriggerEntry(id: UUID(), value: "Claude")]
+        view.triggerEntries = [TriggerEntry(id: UUID(), value: "Claude", agentId: "")]
 
         _ = view.body
         _ = view.localePicker

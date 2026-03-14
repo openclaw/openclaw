@@ -75,6 +75,22 @@ final class AppState {
         }
     }
 
+    var swabbleTriggerEntries: [TriggerWordEntry] {
+        didSet {
+            self.ifNotPreview {
+                Self.storeTriggerEntries(self.swabbleTriggerEntries)
+                // Keep the legacy word list in sync for gateway global sync and backward compat.
+                let words = self.swabbleTriggerEntries.map(\.word)
+                if words != self.swabbleTriggerWords {
+                    self.swabbleTriggerWords = words
+                } else {
+                    // Words unchanged but agentId may have changed — still refresh runtime.
+                    Task { await VoiceWakeRuntime.shared.refresh(state: self) }
+                }
+            }
+        }
+    }
+
     var voiceWakeTriggerChime: VoiceWakeChime {
         didSet { self.ifNotPreview { self.storeChime(self.voiceWakeTriggerChime, key: voiceWakeTriggerChimeKey) } }
     }
@@ -255,6 +271,9 @@ final class AppState {
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
         self.swabbleTriggerWords = UserDefaults.standard
             .stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
+        self.swabbleTriggerEntries = Self.loadTriggerEntries(
+            fallbackWords: UserDefaults.standard
+                .stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers)
         self.voiceWakeTriggerChime = Self.loadChime(
             key: voiceWakeTriggerChimeKey,
             fallback: .system(name: "Glass"))
@@ -703,6 +722,17 @@ final class AppState {
     func applyGlobalVoiceWakeTriggers(_ triggers: [String]) {
         self.suppressVoiceWakeGlobalSync = true
         self.swabbleTriggerWords = triggers
+        // Preserve existing agentId mappings for words that still match;
+        // new words get nil agentId.
+        let existing = Dictionary(
+            self.swabbleTriggerEntries.map {
+                ($0.word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), $0.agentId)
+            },
+            uniquingKeysWith: { first, _ in first })
+        self.swabbleTriggerEntries = triggers.map { word in
+            let key = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return TriggerWordEntry(word: word, agentId: existing[key])
+        }
         self.suppressVoiceWakeGlobalSync = false
     }
 
@@ -718,6 +748,23 @@ final class AppState {
 
     func setWorking(_ working: Bool) {
         self.isWorking = working
+    }
+
+    // MARK: - Trigger entry persistence
+
+    private static func loadTriggerEntries(fallbackWords: [String]) -> [TriggerWordEntry] {
+        if let data = UserDefaults.standard.data(forKey: swabbleTriggerEntriesKey),
+           let decoded = try? JSONDecoder().decode([TriggerWordEntry].self, from: data)
+        {
+            return decoded
+        }
+        // Migrate from legacy [String] format.
+        return fallbackWords.map { TriggerWordEntry(word: $0) }
+    }
+
+    private static func storeTriggerEntries(_ entries: [TriggerWordEntry]) {
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        UserDefaults.standard.set(data, forKey: swabbleTriggerEntriesKey)
     }
 
     // MARK: - Chime persistence
@@ -745,6 +792,11 @@ extension AppState {
         state.debugPaneEnabled = true
         state.swabbleEnabled = true
         state.swabbleTriggerWords = ["Claude", "Computer", "Jarvis"]
+        state.swabbleTriggerEntries = [
+            TriggerWordEntry(word: "Claude"),
+            TriggerWordEntry(word: "Computer"),
+            TriggerWordEntry(word: "Jarvis"),
+        ]
         state.voiceWakeTriggerChime = .system(name: "Glass")
         state.voiceWakeSendChime = .system(name: "Ping")
         state.iconAnimationsEnabled = true
