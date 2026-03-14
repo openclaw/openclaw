@@ -245,6 +245,44 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("staggers first trigger when jitter is configured (avoids simultaneous firing)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    // main gets 0 -> first due 30m; ops gets 0.9 -> first due 30m + 9m = 39m
+    const randomSpy = vi
+      .spyOn(Math, "random")
+      .mockImplementationOnce(() => 0)
+      .mockImplementationOnce(() => 0.9);
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "30m", jitter: "10m" } },
+          list: [
+            { id: "main", heartbeat: { every: "30m" } },
+            { id: "ops", heartbeat: { every: "30m", jitter: "10m" } },
+          ],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // At 30m + 1s, only main fires (ops due at 39m)
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy.mock.calls[0]?.[0]).toMatchObject({ agentId: "main" });
+
+    // At 39m + 1s, ops fires
+    await vi.advanceTimersByTimeAsync(9 * 60_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(runSpy.mock.calls[1]?.[0]).toMatchObject({ agentId: "ops" });
+
+    runner.stop();
+    randomSpy.mockRestore();
+  });
+
   it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
