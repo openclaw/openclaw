@@ -58,6 +58,7 @@ import {
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
+  extractRetryAfterMs,
   isTimeoutErrorMessage,
   pickFallbackThinkingLevel,
   type FailoverReason,
@@ -818,6 +819,9 @@ export async function runEmbeddedPiAgent(
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
+      let rateLimitRetryCount = 0;
+      const MAX_RATE_LIMIT_RETRIES = 2;
+      const MAX_RATE_LIMIT_WAIT_MS = 60_000;
       let toolResultTruncationAttempted = false;
       let bootstrapPromptWarningSignaturesSeen =
         params.bootstrapPromptWarningSignaturesSeen ??
@@ -1508,6 +1512,28 @@ export async function runEmbeddedPiAgent(
               `Profile ${lastProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
             );
           }
+
+          // Auto-retry with exponential backoff on 429 rate limits.
+          // Before rotating to another profile/model, wait and retry on the same
+          // profile if the provider signals a short retry window. This avoids
+          // burning through all profiles/fallbacks on transient rate limits.
+          if (rateLimitFailure && !aborted && rateLimitRetryCount < MAX_RATE_LIMIT_RETRIES) {
+            const retryMs = extractRetryAfterMs(lastAssistant?.errorMessage ?? "");
+            const backoffMs =
+              retryMs ?? Math.min(1_000 * 2 ** rateLimitRetryCount, MAX_RATE_LIMIT_WAIT_MS);
+            if (backoffMs <= MAX_RATE_LIMIT_WAIT_MS) {
+              rateLimitRetryCount += 1;
+              log.info(
+                `[rate-limit-retry] Profile ${lastProfileId ?? "?"} rate limited. ` +
+                  `Retry ${rateLimitRetryCount}/${MAX_RATE_LIMIT_RETRIES} in ${backoffMs}ms` +
+                  (retryMs ? ` (server Retry-After)` : ` (exponential backoff)`),
+              );
+              await sleepWithAbort(backoffMs, params.signal);
+              continue;
+            }
+          }
+          // Reset retry counter when moving past rate-limit retry (rotating or succeeding).
+          rateLimitRetryCount = 0;
 
           // Rotate on timeout to try another account/model path in this turn,
           // but exclude post-prompt compaction timeouts (model succeeded; no profile issue).
