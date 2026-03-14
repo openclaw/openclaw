@@ -206,6 +206,15 @@ describe("buildInboundUserContextPrefix", () => {
     expect(senderInfo["id"]).toBe("+15551234567");
   });
 
+  it("omits redundant sender metadata for internal control-ui sender ids", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      SenderId: "openclaw-control-ui",
+    } as TemplateContext);
+
+    expect(text).not.toContain("Sender (untrusted metadata):");
+  });
+
   it("includes formatted timestamp in conversation info when provided", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
