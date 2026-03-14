@@ -280,15 +280,66 @@ describe("gateway-status command", () => {
     const parsed = JSON.parse(runtimeLogs.join("\n")) as {
       warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
     };
-    const unresolvedWarning = parsed.warnings?.find(
+    // When the gateway probe succeeds, SecretRef diagnostics are downgraded
+    // to informational notes (auth_secretref_cli_only) instead of errors,
+    // because the secret is resolved at gateway runtime — the CLI just
+    // cannot read it.
+    const cliOnlyNote = parsed.warnings?.find(
       (warning) =>
-        warning.code === "auth_secretref_unresolved" &&
+        warning.code === "auth_secretref_cli_only" &&
         warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
     );
-    expect(unresolvedWarning).toBeTruthy();
-    expect(unresolvedWarning?.targetIds).toContain("localLoopback");
-    expect(unresolvedWarning?.message).toContain("env:default:MISSING_GATEWAY_TOKEN");
-    expect(unresolvedWarning?.message).not.toContain("missing or empty");
+    expect(cliOnlyNote).toBeTruthy();
+    expect(cliOnlyNote?.targetIds).toContain("localLoopback");
+    expect(cliOnlyNote?.message).toContain("env:default:MISSING_GATEWAY_TOKEN");
+    expect(cliOnlyNote?.message).toContain("gateway is healthy");
+    expect(cliOnlyNote?.message).not.toContain("missing or empty");
+  });
+
+  it("keeps auth_secretref_unresolved code when gateway probe fails", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    const previousProbeImpl = probeGateway.getMockImplementation();
+    probeGateway.mockImplementation(async (opts: { url: string }) => ({
+      ok: false,
+      url: opts.url,
+      connectLatencyMs: null,
+      error: "connection refused",
+      close: null,
+      health: null,
+      status: null,
+      presence: [],
+      configSnapshot: null,
+    }));
+
+    try {
+      await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
+        mockLocalTokenEnvRefConfig();
+
+        try {
+          await runGatewayStatus(runtime, { timeout: "1000", json: true });
+        } catch (err) {
+          // exit(1) expected when all probes fail
+          if (!(err instanceof Error && err.message.includes("__exit__"))) {
+            throw err;
+          }
+        }
+      });
+
+      const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+        warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
+      };
+      const unresolvedWarning = parsed.warnings?.find(
+        (warning) => warning.code === "auth_secretref_unresolved",
+      );
+      expect(unresolvedWarning).toBeTruthy();
+      expect(unresolvedWarning?.message).not.toContain("gateway is healthy");
+    } finally {
+      if (previousProbeImpl) {
+        probeGateway.mockImplementation(previousProbeImpl);
+      } else {
+        probeGateway.mockReset();
+      }
+    }
   });
 
   it("does not resolve local token SecretRef when OPENCLAW_GATEWAY_TOKEN is set", async () => {

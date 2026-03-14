@@ -233,11 +233,21 @@ export async function gatewayStatusCommand(
       continue;
     }
     for (const diagnostic of result.authDiagnostics) {
-      warnings.push({
-        code: "auth_secretref_unresolved",
-        message: diagnostic,
-        targetIds: [result.target.id],
-      });
+      if (result.probe.ok) {
+        // Gateway is healthy — SecretRef is resolved at runtime but unreadable
+        // from CLI context. Downgrade to informational note instead of warning.
+        warnings.push({
+          code: "auth_secretref_cli_only",
+          message: `${diagnostic} (gateway is healthy; secrets are resolved at runtime)`,
+          targetIds: [result.target.id],
+        });
+      } else {
+        warnings.push({
+          code: "auth_secretref_unresolved",
+          message: diagnostic,
+          targetIds: [result.target.id],
+        });
+      }
     }
   }
   for (const result of degradedScopeLimited) {
@@ -319,11 +329,20 @@ export async function gatewayStatusCommand(
   );
   runtime.log(colorize(rich, theme.muted, `Probe budget: ${overallTimeoutMs}ms`));
 
-  if (warnings.length > 0) {
+  const actualWarnings = warnings.filter((w) => w.code !== "auth_secretref_cli_only");
+  const infoNotes = warnings.filter((w) => w.code === "auth_secretref_cli_only");
+  if (actualWarnings.length > 0) {
     runtime.log("");
     runtime.log(colorize(rich, theme.warn, "Warning:"));
-    for (const w of warnings) {
+    for (const w of actualWarnings) {
       runtime.log(`- ${w.message}`);
+    }
+  }
+  if (infoNotes.length > 0) {
+    runtime.log("");
+    runtime.log(colorize(rich, theme.muted, "Note:"));
+    for (const n of infoNotes) {
+      runtime.log(`- ${colorize(rich, theme.muted, n.message)}`);
     }
   }
 
