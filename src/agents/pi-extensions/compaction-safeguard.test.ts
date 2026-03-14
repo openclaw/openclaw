@@ -48,7 +48,6 @@ const {
   SAFETY_MARGIN,
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
-  MAX_FILE_OPS_LIST_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } = __testing;
 
@@ -301,6 +300,21 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).toContain("<workspace-critical-rules>");
     expect(capped).toContain("## Session Startup");
     expect(capped.endsWith(suffix)).toBe(true);
+  });
+
+  it("preserves diagnostic sections (tool failures, file ops) when capping oversized body", () => {
+    const diagnosticSuffix =
+      "\n\n## Tool Failures\n- exec: failed\n\n<read-files>\nfoo.ts\n</read-files>\n\n" +
+      "<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, diagnosticSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("## Tool Failures");
+    expect(capped).toContain("<read-files>");
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped.endsWith(diagnosticSuffix)).toBe(true);
   });
 });
 

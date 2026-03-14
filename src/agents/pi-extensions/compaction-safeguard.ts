@@ -1053,13 +1053,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           : `${structuredInstructions}\n\n${qualityFeedbackInstruction}`;
       }
 
-      summary = appendSummarySection(summary, toolFailureSection);
-      summary = appendSummarySection(summary, fileOpsSummary);
-
-      // Append workspace critical context (Session Startup + Red Lines from AGENTS.md)
-      // after capping the main summary body so the critical rules survive truncation.
+      // Cap the main history body first, then append diagnostics and workspace rules
+      // so they survive truncation. Truncation keeps the prefix (slice(0, budget)),
+      // so sections appended at the end would be dropped first—tool failures and
+      // file ops are high-signal diagnostics we want to preserve.
+      const diagnosticSuffix = appendSummarySection(
+        appendSummarySection("", toolFailureSection),
+        fileOpsSummary,
+      );
       const workspaceContext = await readWorkspaceContextForSummary();
-      summary = capCompactionSummaryPreservingSuffix(summary, workspaceContext);
+      const reservedSuffix = appendSummarySection(diagnosticSuffix, workspaceContext);
+      summary = capCompactionSummaryPreservingSuffix(summary, reservedSuffix);
 
       return {
         compaction: {
