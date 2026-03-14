@@ -262,12 +262,37 @@ export async function setupXSearch(
     return config;
   }
 
-  // Quickstart: if key is already available, just enable with defaults
+  // Model selection — always prompt so the user can choose regardless of quickstart/secret-ref mode
+  const defaultModel =
+    existingModel && GROK_MODEL_OPTIONS.some((m) => m.value === existingModel)
+      ? existingModel
+      : DEFAULT_X_SEARCH_MODEL;
+
+  const modelPick = await prompter.select<string>({
+    message: "Grok model for x_search",
+    options: [
+      ...GROK_MODEL_OPTIONS.map((m) => ({ ...m })),
+      { value: "__custom__", label: "Enter custom model name", hint: "" },
+    ],
+    initialValue: defaultModel,
+  });
+
+  if (modelPick === "__custom__") {
+    const customModel = await prompter.text({
+      message: "Custom Grok model name",
+      placeholder: DEFAULT_X_SEARCH_MODEL,
+    });
+    resolvedModel = customModel?.trim() || DEFAULT_X_SEARCH_MODEL;
+  }
+
+  const finalModel = resolvedModel ?? DEFAULT_X_SEARCH_MODEL;
+
+  // Quickstart: key already available — skip key prompt
   if (opts?.quickstartDefaults && alreadyConfigured) {
     return applyXSearchConfig(config, {
       enabled: true,
       ...(existingKey ? { apiKey: existingKey } : {}),
-      model: existingModel ?? DEFAULT_X_SEARCH_MODEL,
+      model: finalModel,
     });
   }
 
@@ -289,11 +314,7 @@ export async function setupXSearch(
         "X search",
       );
     }
-    return applyXSearchConfig(config, {
-      enabled: true,
-      apiKey: ref,
-      model: existingModel ?? DEFAULT_X_SEARCH_MODEL,
-    });
+    return applyXSearchConfig(config, { enabled: true, apiKey: ref, model: finalModel });
   }
 
   // Prompt for API key
@@ -321,32 +342,10 @@ export async function setupXSearch(
     return config;
   }
 
-  // Model selection
-  const modelOptions = GROK_MODEL_OPTIONS.map((m) => ({ ...m }));
-  const defaultModel =
-    existingModel && GROK_MODEL_OPTIONS.some((m) => m.value === existingModel)
-      ? existingModel
-      : DEFAULT_X_SEARCH_MODEL;
-
-  const model = await prompter.select<string>({
-    message: "Grok model for x_search",
-    options: [...modelOptions, { value: "__custom__", label: "Enter custom model name", hint: "" }],
-    initialValue: defaultModel,
-  });
-
-  let resolvedModel = model === "__custom__" ? undefined : model;
-  if (model === "__custom__") {
-    const customModel = await prompter.text({
-      message: "Custom Grok model name",
-      placeholder: DEFAULT_X_SEARCH_MODEL,
-    });
-    resolvedModel = customModel?.trim() || DEFAULT_X_SEARCH_MODEL;
-  }
-
   return applyXSearchConfig(config, {
     enabled: true,
     ...(resolvedKey ? { apiKey: resolvedKey } : {}),
-    model: resolvedModel ?? DEFAULT_X_SEARCH_MODEL,
+    model: finalModel,
   });
 }
 
