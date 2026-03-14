@@ -139,7 +139,7 @@ const routeConfigGet: RouteSpec = {
   run: async (argv) => {
     const positionals = getCommandPositionalsWithRootOptions(argv, {
       commandPath: ["config", "get"],
-      booleanFlags: ["--json"],
+      booleanFlags: ["--json", "--no-redact"],
     });
     if (!positionals || positionals.length !== 1) {
       return false;
@@ -149,8 +149,9 @@ const routeConfigGet: RouteSpec = {
       return false;
     }
     const json = hasFlag(argv, "--json");
+    const noRedact = hasFlag(argv, "--no-redact");
     const { runConfigGet } = await import("../config-cli.js");
-    await runConfigGet({ path: pathArg, json });
+    await runConfigGet({ path: pathArg, json, noRedact });
     return true;
   },
 };

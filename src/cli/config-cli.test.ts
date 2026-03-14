@@ -203,7 +203,7 @@ describe("config cli", () => {
   });
 
   describe("config get", () => {
-    it("redacts sensitive values", async () => {
+    it("redacts sensitive values by default", async () => {
       const resolved: OpenClawConfig = {
         gateway: {
           auth: {
@@ -216,6 +216,37 @@ describe("config cli", () => {
       await runConfigCommand(["config", "get", "gateway.auth.token"]);
 
       expect(mockLog).toHaveBeenCalledWith("__OPENCLAW_REDACTED__");
+    });
+
+    it("returns the real value when --no-redact is specified", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          auth: {
+            token: "super-secret-token",
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "get", "gateway.auth.token", "--no-redact"]);
+
+      expect(mockLog).toHaveBeenCalledWith("super-secret-token");
+    });
+
+    it("works with --json alongside --no-redact", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          auth: {
+            token: "super-secret-token",
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "get", "gateway.auth.token", "--no-redact", "--json"]);
+
+      const output = mockLog.mock.calls.at(0)?.[0];
+      expect(output).toBe(JSON.stringify("super-secret-token", null, 2));
     });
   });
 
