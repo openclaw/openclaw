@@ -101,7 +101,7 @@ public enum WakeWordGate {
     }
 
     public static func commandText(
-        transcript: String,
+        transcript _: String,
         segments: [WakeWordSegment],
         triggerEndTime: TimeInterval)
     -> String {
