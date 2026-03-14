@@ -833,8 +833,10 @@ export abstract class MemoryManagerSyncOps {
     }
 
     // Bulk-load existing session file hashes to avoid per-file queries (N+1 → 1).
+    // Skip bulk preload for targeted syncs (small file sets) where per-file lookup is cheaper.
+    const usePerFileLookup = !params.needsFullReindex && targetSessionFiles !== null;
     const existingRecords = new Map<string, string>();
-    if (!params.needsFullReindex) {
+    if (!params.needsFullReindex && !usePerFileLookup) {
       const rows = this.db
         .prepare(`SELECT path, hash FROM files WHERE source = ?`)
         .all("sessions") as Array<{ path: string; hash: string }>;
@@ -865,7 +867,14 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      if (!params.needsFullReindex && existingRecords.get(entry.path) === entry.hash) {
+      const existingHash = usePerFileLookup
+        ? (
+            this.db
+              .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
+              .get(entry.path, "sessions") as { hash: string } | undefined
+          )?.hash
+        : existingRecords.get(entry.path);
+      if (!params.needsFullReindex && existingHash === entry.hash) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
