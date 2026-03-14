@@ -1,1 +1,1 @@
-export { makeProxyFetch } from "../infra/net/proxy-fetch.js";
+export * from "../../extensions/telegram/src/proxy.js";
