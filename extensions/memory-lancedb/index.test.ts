@@ -139,7 +139,8 @@ describe("memory plugin e2e", () => {
       data: [{ embedding: [0.1, 0.2, 0.3] }],
     }));
     const toArray = vi.fn(async () => []);
-    const limit = vi.fn(() => ({ toArray }));
+    const where = vi.fn(() => ({ toArray }));
+    const limit = vi.fn(() => ({ toArray, where }));
     const vectorSearch = vi.fn(() => ({ limit }));
 
     vi.resetModules();
@@ -152,6 +153,7 @@ describe("memory plugin e2e", () => {
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
         openTable: vi.fn(async () => ({
+          schema: vi.fn(async () => ({ fields: [{ name: "agentId" }] })),
           vectorSearch,
           countRows: vi.fn(async () => 0),
           add: vi.fn(async () => undefined),
@@ -201,8 +203,12 @@ describe("memory plugin e2e", () => {
 
       // oxlint-disable-next-line typescript/no-explicit-any
       memoryPlugin.register(mockApi as any);
-      const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
-      expect(recallTool).toBeDefined();
+      const recallToolEntry = registeredTools.find((t) => t.opts?.name === "memory_recall");
+      expect(recallToolEntry).toBeDefined();
+      const recallTool =
+        typeof recallToolEntry.tool === "function"
+          ? recallToolEntry.tool({})
+          : recallToolEntry.tool;
       await recallTool.execute("test-call-dims", { query: "hello dimensions" });
 
       expect(embeddingsCreate).toHaveBeenCalledWith({
