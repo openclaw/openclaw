@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 
 const mocks = vi.hoisted(() => ({
   getDefaultMediaLocalRoots: vi.fn(() => []),
@@ -44,6 +45,47 @@ describe("executeSendAction", () => {
       model: "gpt-5.2",
       usage: {},
     };
+  }
+
+  function expectMirrorWrite(
+    expected: Partial<{
+      agentId: string;
+      sessionKey: string;
+      text: string;
+      idempotencyKey: string;
+      mediaUrls: string[];
+    }>,
+  ) {
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining(expected),
+    );
+  }
+
+  async function executePluginMirroredSend(params: {
+    mirror?: Partial<{
+      sessionKey: string;
+      agentId?: string;
+      idempotencyKey?: string;
+    }>;
+    mediaUrls?: string[];
+  }) {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+        mirror: {
+          sessionKey: "agent:main:discord:channel:123",
+          ...params.mirror,
+        },
+      },
+      to: "channel:123",
+      message: "hello",
+      mediaUrls: params.mediaUrls,
+    });
   }
 
   beforeEach(() => {
@@ -130,28 +172,74 @@ describe("executeSendAction", () => {
   });
 
   it("passes mirror idempotency keys through plugin-handled sends", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+    await executePluginMirroredSend({
+      mirror: {
+        idempotencyKey: "idem-plugin-send-1",
+      },
+    });
+
+    expectMirrorWrite({
+      sessionKey: "agent:main:discord:channel:123",
+      text: "hello",
+      idempotencyKey: "idem-plugin-send-1",
+    });
+  });
+
+  it("falls back to message and media params for plugin-handled mirror writes", async () => {
+    await executePluginMirroredSend({
+      mirror: {
+        agentId: "agent-9",
+      },
+      mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+    });
+
+    expectMirrorWrite({
+      agentId: "agent-9",
+      sessionKey: "agent:main:discord:channel:123",
+      text: "hello",
+      mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+    });
+  });
+
+  it("skips plugin dispatch during dry-run sends and forwards gateway + silent to sendMessage", async () => {
+    mocks.sendMessage.mockResolvedValue({
+      channel: "discord",
+      to: "channel:123",
+      via: "gateway",
+      mediaUrl: null,
+    });
 
     await executeSendAction({
       ctx: {
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", message: "hello" },
-        dryRun: false,
-        mirror: {
-          sessionKey: "agent:main:discord:channel:123",
-          idempotencyKey: "idem-plugin-send-1",
+        dryRun: true,
+        silent: true,
+        gateway: {
+          url: "http://127.0.0.1:18789",
+          token: "tok",
+          timeoutMs: 5000,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
       },
       to: "channel:123",
       message: "hello",
     });
 
-    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:discord:channel:123",
-        text: "hello",
-        idempotencyKey: "idem-plugin-send-1",
+        to: "channel:123",
+        content: "hello",
+        dryRun: true,
+        silent: true,
+        gateway: expect.objectContaining({
+          url: "http://127.0.0.1:18789",
+          token: "tok",
+          timeoutMs: 5000,
+        }),
       }),
     );
   });
@@ -197,6 +285,57 @@ describe("executeSendAction", () => {
         durationSeconds: 300,
         threadId: "thread-1",
         isAnonymous: true,
+      }),
+    );
+  });
+
+  it("skips plugin dispatch during dry-run polls and forwards durationHours + silent", async () => {
+    mocks.sendPoll.mockResolvedValue({
+      channel: "discord",
+      to: "channel:123",
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      maxSelections: 1,
+      durationSeconds: null,
+      durationHours: 6,
+      via: "gateway",
+    });
+
+    await executePollAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: {},
+        dryRun: true,
+        silent: true,
+        gateway: {
+          url: "http://127.0.0.1:18789",
+          token: "tok",
+          timeoutMs: 5000,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+      },
+      to: "channel:123",
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      maxSelections: 1,
+      durationHours: 6,
+    });
+
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.sendPoll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "channel:123",
+        question: "Lunch?",
+        durationHours: 6,
+        dryRun: true,
+        silent: true,
+        gateway: expect.objectContaining({
+          url: "http://127.0.0.1:18789",
+          token: "tok",
+          timeoutMs: 5000,
+        }),
       }),
     );
   });
