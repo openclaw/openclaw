@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { PluginHttpRouteRegistration } from "./registry.js";
 import { setActivePluginRegistry, getActivePluginRegistry } from "./runtime.js";
@@ -11,6 +11,10 @@ const makeRoute = (path: string): PluginHttpRouteRegistration => ({
 });
 
 describe("setActivePluginRegistry", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
   it("carries forward httpRoutes when new registry has none", () => {
     const oldRegistry = createEmptyPluginRegistry();
     const fakeRoute = makeRoute("/test");
