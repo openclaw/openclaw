@@ -148,7 +148,7 @@ Homebrew-installed helper to list/inspect/watch local OpenAI Codex sessions (CLI
 <Card title="ClawMonitor" icon="terminal" href="https://github.com/openclawq/clawmonitor">
   **@openclawq** • `devtools` `monitoring` `tui`
 
-Real-time TUI/CLI to monitor OpenClaw sessions: last user/assistant messages, run state (locks), delivery failures, and Telegram thread-binding routing.
+Real-time TUI/CLI to monitor OpenClaw sessions: last user/assistant, run state (locks), last tool call/result, silent-gap ages (internal vs outbound), delivery failures, and Telegram thread-binding routing.
 
   <img src="/assets/showcase/clawmonitor.png" alt="ClawMonitor TUI screenshot" />
 </Card>
