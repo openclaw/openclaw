@@ -98,6 +98,30 @@ function resolveBindingIdsForTargetSession(params: {
   });
 }
 
+function updateBindingsForTargetSession(
+  ids: string[],
+  update: (existing: ThreadBindingRecord, now: number) => ThreadBindingRecord,
+) {
+  if (ids.length === 0) {
+    return [];
+  }
+  const now = Date.now();
+  const updated: ThreadBindingRecord[] = [];
+  for (const bindingKey of ids) {
+    const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
+    if (!existing) {
+      continue;
+    }
+    const nextRecord = update(existing, now);
+    setBindingRecord(nextRecord);
+    updated.push(nextRecord);
+  }
+  if (updated.length > 0 && shouldPersistBindingMutations()) {
+    saveBindingsToDisk({ force: true });
+  }
+  return updated;
+}
+
 export function listThreadBindingsForAccount(accountId?: string): ThreadBindingRecord[] {
   const manager = getThreadBindingManager(accountId);
   if (!manager) {
@@ -249,29 +273,12 @@ export function setThreadBindingIdleTimeoutBySessionKey(params: {
   idleTimeoutMs: number;
 }): ThreadBindingRecord[] {
   const ids = resolveBindingIdsForTargetSession(params);
-  if (ids.length === 0) {
-    return [];
-  }
   const idleTimeoutMs = normalizeNonNegativeMs(params.idleTimeoutMs);
-  const now = Date.now();
-  const updated: ThreadBindingRecord[] = [];
-  for (const bindingKey of ids) {
-    const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
-    if (!existing) {
-      continue;
-    }
-    const nextRecord: ThreadBindingRecord = {
-      ...existing,
-      idleTimeoutMs,
-      lastActivityAt: now,
-    };
-    setBindingRecord(nextRecord);
-    updated.push(nextRecord);
-  }
-  if (updated.length > 0 && shouldPersistBindingMutations()) {
-    saveBindingsToDisk({ force: true });
-  }
-  return updated;
+  return updateBindingsForTargetSession(ids, (existing, now) => ({
+    ...existing,
+    idleTimeoutMs,
+    lastActivityAt: now,
+  }));
 }
 
 export function setThreadBindingMaxAgeBySessionKey(params: {
@@ -280,30 +287,13 @@ export function setThreadBindingMaxAgeBySessionKey(params: {
   maxAgeMs: number;
 }): ThreadBindingRecord[] {
   const ids = resolveBindingIdsForTargetSession(params);
-  if (ids.length === 0) {
-    return [];
-  }
   const maxAgeMs = normalizeNonNegativeMs(params.maxAgeMs);
-  const now = Date.now();
-  const updated: ThreadBindingRecord[] = [];
-  for (const bindingKey of ids) {
-    const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
-    if (!existing) {
-      continue;
-    }
-    const nextRecord: ThreadBindingRecord = {
-      ...existing,
-      maxAgeMs,
-      boundAt: now,
-      lastActivityAt: now,
-    };
-    setBindingRecord(nextRecord);
-    updated.push(nextRecord);
-  }
-  if (updated.length > 0 && shouldPersistBindingMutations()) {
-    saveBindingsToDisk({ force: true });
-  }
-  return updated;
+  return updateBindingsForTargetSession(ids, (existing, now) => ({
+    ...existing,
+    maxAgeMs,
+    boundAt: now,
+    lastActivityAt: now,
+  }));
 }
 
 function resolveStoredAcpBindingHealth(params: {

@@ -1472,6 +1472,30 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(true);
   });
 
+  it("dedupes the open allowlist warning for repeated loads of the same plugin set", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const plugin = writePlugin({
+      id: "warn-open-allow-once",
+      body: `module.exports = { id: "warn-open-allow-once", register() {} };`,
+    });
+    const warnings: string[] = [];
+    const options = {
+      cache: false,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+        },
+      },
+    };
+
+    loadOpenClawPlugins(options);
+    loadOpenClawPlugins(options);
+
+    expect(warnings.filter((msg) => msg.includes("plugins.allow is empty"))).toHaveLength(1);
+  });
+
   it("does not auto-load workspace-discovered plugins unless explicitly trusted", () => {
     useNoBundledPlugins();
     const workspaceDir = makeTempDir();
