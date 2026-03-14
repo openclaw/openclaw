@@ -18,6 +18,16 @@ describe("formatRuntimeStatusWithDetails", () => {
     ).toBe("running (pid 1234, state sleeping, healthy, port 18789)");
   });
 
+  it("trims distinct state and detail text before formatting", () => {
+    expect(
+      formatRuntimeStatusWithDetails({
+        status: "running",
+        state: " sleeping ",
+        details: [" healthy ", "  port 18789  "],
+      }),
+    ).toBe("running (state sleeping, healthy, port 18789)");
+  });
+
   it("omits duplicate state text and falsy pid values", () => {
     expect(
       formatRuntimeStatusWithDetails({
@@ -34,5 +44,15 @@ describe("formatRuntimeStatusWithDetails", () => {
         details: [],
       }),
     ).toBe("RUNNING");
+  });
+
+  it("drops whitespace-only state and detail entries", () => {
+    expect(
+      formatRuntimeStatusWithDetails({
+        status: "running",
+        state: "   ",
+        details: ["", "   "],
+      }),
+    ).toBe("running");
   });
 });
