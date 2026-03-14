@@ -48,7 +48,7 @@ echo "  用户 ${USER} [OK]"
 echo "[3/7] 安装文件..."
 
 sudo mkdir -p "$INSTALL_DIR"
-sudo cp watchdog.js monitor.js hive-watchdog.service hive-monitor.service "$INSTALL_DIR/"
+sudo cp watchdog.js monitor.js doctor.js hive-watchdog.service hive-monitor.service "$INSTALL_DIR/"
 sudo cp config.example.json "$INSTALL_DIR/config.json"
 sudo chown -R "$USER:$USER" "$INSTALL_DIR"
 echo "  文件已复制到 ${INSTALL_DIR} [OK]"
