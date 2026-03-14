@@ -85,10 +85,11 @@ Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
 ## Steer and partial streaming
 
-When `channels.<provider>.streaming` is set to `partial` (or `block`), the agent emits intermediate draft messages as it works. This can make `steer` look like it is not working when it is:
+When `channels.<provider>.streaming` is set to `partial` or `block`, steer can produce visible intermediate replies that may look like sequential turns rather than a single redirected response:
 
-- Each steered message is picked up quickly between partial-stream flushes and triggers a small status reply immediately, so several short responses appear in sequence.
-- Without partial streaming the same behavior produces a single final response — the steer still fired, it just wasn't visible mid-run.
+- With `streaming: partial`, the agent continuously updates a single preview message in place. A steer injection causes that preview to be committed early and a new preview started for the injected turn, so you see several short finalized replies in sequence rather than one final response.
+- With `streaming: block`, the agent emits multiple draft-sized chunks directly, producing the same sequential appearance by a different mechanism.
+- Without streaming the same steer behavior produces a single final response — the steer still fired, it just wasn't visible mid-run.
 
 `steer` is not a hard abort. It injects the incoming message at the next tool boundary, but any tool call already in flight (e.g. a subprocess or network request) will run to completion before the injected message takes effect. If you need to stop an in-flight tool immediately, use `interrupt` mode instead (legacy, aborts the active run).
 
