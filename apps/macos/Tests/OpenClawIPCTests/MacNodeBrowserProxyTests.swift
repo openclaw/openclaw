@@ -140,9 +140,10 @@ struct MacNodeBrowserProxyTests {
         #expect(parsed["c"] as? Bool == true)
     }
 
-    // Regression: a POST request whose body produces non-JSON-serializable
-    // foundation values must NOT crash with SIGABRT.
-    @Test func postRequestWithNonSerializableBodyDoesNotCrash() async throws {
+    // Regression: POST request body is correctly serialized end-to-end.
+    // The sanitizer fast-path handles valid JSON; non-serializable values
+    // are exercised at unit level in sanitizeForJSONConvertsNonSerializableValuesToStrings.
+    @Test func postRequestSanitizesBodyDuringSerialization() async throws {
         actor BodyCapture {
             private var body: Data?
             func set(_ body: Data?) { self.body = body }
