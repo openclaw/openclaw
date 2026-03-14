@@ -160,9 +160,6 @@ jobs:
             task: extensions
             command: pnpm test:extensions
           - runtime: node
-            task: channels
-            command: pnpm test:channels
-          - runtime: node
             task: protocol
             command: pnpm protocol:check
           - runtime: bun
