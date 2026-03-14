@@ -15,4 +15,8 @@ export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDeliver
     payload: TPayload;
     delivery?: TDelivery;
     failureAlert?: TFailureAlert;
+    /** Job ID to trigger immediately when this job finishes with status "ok". */
+    onSuccessJobId?: string;
+    /** Job ID to trigger immediately when this job finishes with status "error". */
+    onFailureJobId?: string;
   };

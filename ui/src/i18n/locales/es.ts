@@ -293,6 +293,12 @@ export const es: TranslationMap = {
       saveChanges: "Guardar cambios",
       addJob: "Agregar tarea",
       cancel: "Cancelar",
+      pipeline: "Pipeline",
+      pipelineSub: "Encadena tareas — activa otra tarea cuando esta finaliza con éxito o falla.",
+      onSuccessJobId: "En éxito: activar ID de tarea",
+      onFailureJobId: "En fallo: activar ID de tarea",
+      pipelinePlaceholder: "Ingresa el ID de tarea",
+      pipelineHelp: "Deja en blanco para no ejecutar ninguna tarea encadenada para este resultado.",
     },
     jobList: {
       allJobs: "todas las tareas",

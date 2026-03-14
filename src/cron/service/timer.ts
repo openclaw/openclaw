@@ -1,6 +1,8 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
@@ -473,6 +475,54 @@ export function applyJobResult(
   return shouldDelete;
 }
 
+/**
+ * Enqueue a chained job (onSuccessJobId / onFailureJobId) in the cron lane.
+ * Guards against self-loops and missing job IDs.
+ */
+function triggerChainedJob(
+  state: CronServiceState,
+  sourceJobId: string,
+  targetJobId: string,
+): void {
+  if (targetJobId === sourceJobId) {
+    state.deps.log.warn(
+      { sourceJobId, targetJobId },
+      "cron: chain trigger ignored — job references itself",
+    );
+    return;
+  }
+  const chainRunId = `chain:${sourceJobId}->${targetJobId}:${state.deps.nowMs()}`;
+  void enqueueCommandInLane(
+    CommandLane.Cron,
+    async () => {
+      // Lazy-import run to avoid circular dependency (ops → timer → ops).
+      const { run } = await import("./ops.js");
+      const result = await run(state, targetJobId, "force");
+      if (!result.ok) {
+        state.deps.log.warn(
+          { sourceJobId, targetJobId, chainRunId, result },
+          "cron: chained job run returned not-ok",
+        );
+      }
+      return result;
+    },
+    {
+      warnAfterMs: 5_000,
+      onWait: (waitMs, queuedAhead) => {
+        state.deps.log.warn(
+          { sourceJobId, targetJobId, chainRunId, waitMs, queuedAhead },
+          "cron: chained job waiting for execution slot",
+        );
+      },
+    },
+  ).catch((err) => {
+    state.deps.log.error(
+      { sourceJobId, targetJobId, chainRunId, err: String(err) },
+      "cron: chained job execution failed",
+    );
+  });
+}
+
 function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
   const store = state.store;
   if (!store) {
@@ -497,6 +547,14 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   });
 
   emitJobFinished(state, job, result, result.startedAt);
+
+  if (!shouldDelete) {
+    if (result.status === "ok" && job.onSuccessJobId) {
+      triggerChainedJob(state, job.id, job.onSuccessJobId);
+    } else if (result.status === "error" && job.onFailureJobId) {
+      triggerChainedJob(state, job.id, job.onFailureJobId);
+    }
+  }
 
   if (shouldDelete) {
     store.jobs = jobs.filter((entry) => entry.id !== job.id);
@@ -1193,6 +1251,14 @@ export async function executeJob(
   });
 
   emitJobFinished(state, job, coreResult, startedAt);
+
+  if (!shouldDelete) {
+    if (coreResult.status === "ok" && job.onSuccessJobId) {
+      triggerChainedJob(state, job.id, job.onSuccessJobId);
+    } else if (coreResult.status === "error" && job.onFailureJobId) {
+      triggerChainedJob(state, job.id, job.onFailureJobId);
+    }
+  }
 
   if (shouldDelete && state.store) {
     state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
