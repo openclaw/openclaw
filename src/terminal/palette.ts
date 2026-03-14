@@ -4,6 +4,7 @@ export const LOBSTER_PALETTE = {
   accent: "#FF5A2D",
   accentBright: "#FF7A3D",
   accentDim: "#D14A22",
+  body: "#F5EFE8",
   info: "#FF8A5B",
   success: "#2FBF71",
   warn: "#FFB020",

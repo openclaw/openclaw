@@ -14,6 +14,7 @@ export const theme = {
   accent: hex(LOBSTER_PALETTE.accent),
   accentBright: hex(LOBSTER_PALETTE.accentBright),
   accentDim: hex(LOBSTER_PALETTE.accentDim),
+  body: hex(LOBSTER_PALETTE.body),
   info: hex(LOBSTER_PALETTE.info),
   success: hex(LOBSTER_PALETTE.success),
   warn: hex(LOBSTER_PALETTE.warn),
