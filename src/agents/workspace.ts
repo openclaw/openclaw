@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
@@ -520,6 +521,14 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     entries.push(memoryEntry);
   }
 
+  // Check onboarding state once so we can suppress missing BOOTSTRAP.md noise.
+  let onboardingCompleted = false;
+  try {
+    onboardingCompleted = await isWorkspaceOnboardingCompleted(resolvedDir);
+  } catch {
+    // If state cannot be read, default to showing BOOTSTRAP.md as before.
+  }
+
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
     const loaded = await readWorkspaceFileWithGuards({
@@ -533,6 +542,16 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
         content: loaded.content,
         missing: false,
       });
+    } else if (
+      entry.name === DEFAULT_BOOTSTRAP_FILENAME &&
+      onboardingCompleted &&
+      loaded.reason === "path" &&
+      hasErrnoCode(loaded.error, "ENOENT")
+    ) {
+      // BOOTSTRAP.md is a one-time file deleted after onboarding; don't report
+      // it as missing once onboarding is complete.  Only suppress genuine
+      // ENOENT; keep other path errors (ENOTDIR, ELOOP) visible.
+      continue;
     } else {
       result.push({ name: entry.name, path: entry.filePath, missing: true });
     }
