@@ -96,6 +96,13 @@ export function handleMessageUpdate(
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
 
+  if (evtType === "text_end" || evtType === "done" || evtType === "error") {
+    ctx.recordAssistantUsage(assistantRecord);
+    if (evtType === "done" || evtType === "error") {
+      ctx.commitAssistantUsage();
+    }
+  }
+
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (evtType === "thinking_start" || evtType === "thinking_delta") {
       ctx.state.reasoningStreamOpen = true;
@@ -264,6 +271,7 @@ export function handleMessageEnd(
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  ctx.commitAssistantUsage();
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }

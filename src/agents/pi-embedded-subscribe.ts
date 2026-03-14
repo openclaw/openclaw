@@ -64,6 +64,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTextBaseline: 0,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
+    pendingAssistantUsage: undefined,
+    assistantUsageCommitted: false,
     compactionInFlight: false,
     pendingCompactionRetry: 0,
     compactionRetryResolve: undefined,
@@ -134,6 +136,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
+    state.pendingAssistantUsage = undefined;
+    state.assistantUsageCommitted = false;
     state.assistantMessageIndex += 1;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
@@ -269,11 +273,42 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       state.compactionRetryPromise = null;
     }
   };
-  const recordAssistantUsage = (usageLike: unknown) => {
-    const usage = normalizeUsage((usageLike ?? undefined) as UsageLike | undefined);
-    if (!hasNonzeroUsage(usage)) {
+  const resolveAssistantUsage = (usageLike: unknown) => {
+    const candidates: unknown[] = [usageLike];
+    if (usageLike && typeof usageLike === "object") {
+      const record = usageLike as Record<string, unknown>;
+      const partial =
+        record.partial && typeof record.partial === "object"
+          ? (record.partial as Record<string, unknown>)
+          : undefined;
+      const message =
+        record.message && typeof record.message === "object"
+          ? (record.message as Record<string, unknown>)
+          : undefined;
+      candidates.push(
+        record.usage,
+        record.timings,
+        record.partial,
+        record.message,
+        partial?.usage,
+        partial?.timings,
+        message?.usage,
+        message?.timings,
+      );
+    }
+    for (const candidate of candidates) {
+      const usage = normalizeUsage((candidate ?? undefined) as UsageLike | undefined);
+      if (hasNonzeroUsage(usage)) {
+        return usage;
+      }
+    }
+    return undefined;
+  };
+  const commitAssistantUsage = () => {
+    if (state.assistantUsageCommitted || !state.pendingAssistantUsage) {
       return;
     }
+    const usage = state.pendingAssistantUsage;
     usageTotals.input += usage.input ?? 0;
     usageTotals.output += usage.output ?? 0;
     usageTotals.cacheRead += usage.cacheRead ?? 0;
@@ -282,6 +317,17 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       usage.total ??
       (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
     usageTotals.total += usageTotal;
+    state.assistantUsageCommitted = true;
+  };
+  const recordAssistantUsage = (usageLike: unknown) => {
+    if (state.assistantUsageCommitted) {
+      return;
+    }
+    const usage = resolveAssistantUsage(usageLike);
+    if (!usage) {
+      return;
+    }
+    state.pendingAssistantUsage = usage;
   };
   const getUsageTotals = () => {
     const hasUsage =
@@ -636,6 +682,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     resolveCompactionRetry,
     maybeResolveCompactionWait,
     recordAssistantUsage,
+    commitAssistantUsage,
     incrementCompactionCount,
     getUsageTotals,
     getCompactionCount: () => compactionCount,

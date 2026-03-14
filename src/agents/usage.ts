@@ -24,6 +24,13 @@ export type UsageLike = {
   total_tokens?: number;
   cache_read?: number;
   cache_write?: number;
+  // llama.cpp-style streamed completion metadata.
+  prompt_n?: number;
+  predicted_n?: number;
+  timings?: {
+    prompt_n?: number;
+    predicted_n?: number;
+  };
 };
 
 export type NormalizedUsage = {
@@ -76,6 +83,17 @@ const asFiniteNumber = (value: unknown): number | undefined => {
   return value;
 };
 
+const normalizeTokenCount = (value: unknown): number | undefined => {
+  const numeric = asFiniteNumber(value);
+  if (numeric === undefined) {
+    return undefined;
+  }
+  if (numeric <= 0) {
+    return 0;
+  }
+  return Math.min(Math.trunc(numeric), Number.MAX_SAFE_INTEGER);
+};
+
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
   if (!usage) {
     return false;
@@ -90,31 +108,35 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     return undefined;
   }
 
-  // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
-  // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
-  // negative, which is nonsensical.  Clamp to 0.
-  const rawInput = asFiniteNumber(
-    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
+  const input = normalizeTokenCount(
+    raw.input ??
+      raw.inputTokens ??
+      raw.input_tokens ??
+      raw.promptTokens ??
+      raw.prompt_tokens ??
+      raw.prompt_n ??
+      raw.timings?.prompt_n,
   );
-  const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
-  const output = asFiniteNumber(
+  const output = normalizeTokenCount(
     raw.output ??
       raw.outputTokens ??
       raw.output_tokens ??
       raw.completionTokens ??
-      raw.completion_tokens,
+      raw.completion_tokens ??
+      raw.predicted_n ??
+      raw.timings?.predicted_n,
   );
-  const cacheRead = asFiniteNumber(
+  const cacheRead = normalizeTokenCount(
     raw.cacheRead ??
       raw.cache_read ??
       raw.cache_read_input_tokens ??
       raw.cached_tokens ??
       raw.prompt_tokens_details?.cached_tokens,
   );
-  const cacheWrite = asFiniteNumber(
+  const cacheWrite = normalizeTokenCount(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
-  const total = asFiniteNumber(raw.total ?? raw.totalTokens ?? raw.total_tokens);
+  const total = normalizeTokenCount(raw.total ?? raw.totalTokens ?? raw.total_tokens);
 
   if (
     input === undefined &&
