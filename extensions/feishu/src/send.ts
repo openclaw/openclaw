@@ -146,35 +146,216 @@ async function sendReplyOrFallbackDirect(
   return toFeishuSendResult(response, params.directParams.receiveId);
 }
 
+const CARD_MAX_NODES = 500;
+const CARD_MAX_OUTPUT_CHARS = 8000;
+const CARD_MAX_PARAGRAPHS = 64;
+const CARD_MAX_CHILDREN_PER_EXPANSION = 100;
+const CARD_LEGACY_MAX_INLINE_NODES = 500;
+
+function sanitizeCardText(raw: string): string {
+  // Strip ANSI escape sequences and control characters (CWE-117)
+  // eslint-disable-next-line no-control-regex
+  return raw.replace(/\x1B\[[0-9;]*[A-Za-z]/g, "").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+}
+
+/**
+ * Extract text from a single card element node.
+ * Returns extracted text fragments for the node.
+ */
+function extractCardTextFromElement(item: Record<string, unknown>): string[] {
+  const tag = item.tag;
+  if (typeof tag !== "string") return [];
+
+  const fragments: string[] = [];
+
+  // div: text.content
+  if (tag === "div") {
+    const text = item.text as { content?: string } | undefined;
+    if (typeof text?.content === "string") fragments.push(text.content);
+    return fragments;
+  }
+
+  // markdown / lark_md: content string
+  if ((tag === "markdown" || tag === "lark_md") && typeof item.content === "string") {
+    fragments.push(item.content);
+    return fragments;
+  }
+
+  // plain_text: content string
+  if (tag === "plain_text" && typeof item.content === "string") {
+    fragments.push(item.content);
+    return fragments;
+  }
+
+  // header: title (string or object with content)
+  if (tag === "header") {
+    const title = item.title;
+    if (typeof title === "string") {
+      fragments.push(title);
+    } else if (
+      title &&
+      typeof title === "object" &&
+      typeof (title as Record<string, unknown>).content === "string"
+    ) {
+      fragments.push((title as Record<string, unknown>).content as string);
+    }
+    const subtitle = item.subtitle;
+    if (typeof subtitle === "string") {
+      fragments.push(subtitle);
+    } else if (
+      subtitle &&
+      typeof subtitle === "object" &&
+      typeof (subtitle as Record<string, unknown>).content === "string"
+    ) {
+      fragments.push((subtitle as Record<string, unknown>).content as string);
+    }
+    return fragments;
+  }
+
+  return fragments;
+}
+
+/**
+ * Extract text from legacy rich-text content (array-of-arrays format).
+ * Each paragraph is an array of inline tag objects like {tag:"text",text:"..."}.
+ */
+function extractLegacyContentText(content: unknown, maxChars: number): string[] {
+  if (!Array.isArray(content)) return [];
+  const fragments: string[] = [];
+  let totalChars = 0;
+  let queuedArrays = 0;
+  let nodesScanned = 0;
+
+  for (const paragraph of content) {
+    if (++queuedArrays > CARD_MAX_PARAGRAPHS) break;
+    if (!Array.isArray(paragraph)) continue;
+
+    for (const inline of paragraph) {
+      if (totalChars >= maxChars) return fragments;
+      if (++nodesScanned > CARD_LEGACY_MAX_INLINE_NODES) return fragments;
+      if (!inline || typeof inline !== "object") continue;
+      const node = inline as Record<string, unknown>;
+      const nodeTag = node.tag;
+      if (typeof nodeTag !== "string") continue;
+
+      let text: string | undefined;
+      if (nodeTag === "text" && typeof node.text === "string") {
+        text = node.text;
+      } else if (nodeTag === "a" && typeof node.text === "string") {
+        text = node.text;
+      } else if (nodeTag === "at") {
+        const name = node.user_name ?? node.user_id ?? node.open_id;
+        if (typeof name === "string") text = `@${name}`;
+      } else if (nodeTag === "code_block" && typeof node.text === "string") {
+        text = node.text;
+      }
+
+      if (text) {
+        const remaining = maxChars - totalChars;
+        const clamped = text.length > remaining ? text.slice(0, remaining) : text;
+        fragments.push(clamped);
+        totalChars += clamped.length;
+      }
+    }
+  }
+  return fragments;
+}
+
 function parseInteractiveCardContent(parsed: unknown): string {
   if (!parsed || typeof parsed !== "object") {
     return "[Interactive Card]";
   }
 
-  const candidate = parsed as { elements?: unknown };
-  if (!Array.isArray(candidate.elements)) {
-    return "[Interactive Card]";
+  const card = parsed as Record<string, unknown>;
+  const texts: string[] = [];
+  let totalChars = 0;
+
+  // Extract top-level title (some legacy formats)
+  if (typeof card.title === "string" && card.title.trim()) {
+    const remaining = CARD_MAX_OUTPUT_CHARS - totalChars;
+    if (remaining > 0) {
+      const clamped = card.title.length > remaining ? card.title.slice(0, remaining) : card.title;
+      texts.push(clamped);
+      totalChars += clamped.length;
+    }
   }
 
-  const texts: string[] = [];
-  for (const element of candidate.elements) {
-    if (!element || typeof element !== "object") {
-      continue;
-    }
-    const item = element as {
-      tag?: string;
-      content?: string;
-      text?: { content?: string };
-    };
-    if (item.tag === "div" && typeof item.text?.content === "string") {
-      texts.push(item.text.content);
-      continue;
-    }
-    if (item.tag === "markdown" && typeof item.content === "string") {
-      texts.push(item.content);
+  // Extract legacy rich-text content (array-of-arrays)
+  if (Array.isArray(card.content)) {
+    const legacyTexts = extractLegacyContentText(card.content, CARD_MAX_OUTPUT_CHARS - totalChars);
+    for (const t of legacyTexts) {
+      texts.push(t);
+      totalChars += t.length;
     }
   }
-  return texts.join("\n").trim() || "[Interactive Card]";
+
+  // Collect elements from schema 1.0 (card.elements) and 2.0 (card.body.elements)
+  const elementSources: unknown[] = [];
+  if (Array.isArray(card.elements)) {
+    elementSources.push(...card.elements);
+  }
+  const body = card.body as Record<string, unknown> | undefined;
+  if (body && typeof body === "object" && Array.isArray(body.elements)) {
+    elementSources.push(...body.elements);
+  }
+
+  // DFS traversal with bounds
+  const stack: unknown[] = [];
+  const maxInitialElements = CARD_MAX_NODES;
+  const pushLimit = Math.min(elementSources.length, maxInitialElements);
+  // Push in reverse so first element is processed first
+  for (let i = pushLimit - 1; i >= 0; i--) {
+    stack.push(elementSources[i]);
+  }
+
+  const stackSizeLimit = CARD_MAX_NODES * 4;
+  let nodesVisited = 0;
+  while (stack.length > 0 && nodesVisited < CARD_MAX_NODES && totalChars < CARD_MAX_OUTPUT_CHARS) {
+    if (stack.length > stackSizeLimit) break;
+    const current = stack.pop();
+    if (!current || typeof current !== "object") continue;
+    nodesVisited++;
+
+    const item = current as Record<string, unknown>;
+    const tag = item.tag;
+
+    // Recurse into container tags: note, column_set -> columns -> elements
+    if (typeof tag === "string") {
+      if (tag === "note" && Array.isArray(item.elements)) {
+        const elems = (item.elements as unknown[]).slice(0, CARD_MAX_CHILDREN_PER_EXPANSION);
+        for (let i = elems.length - 1; i >= 0; i--) {
+          stack.push(elems[i]);
+        }
+        continue;
+      }
+      if (tag === "column_set" && Array.isArray(item.columns)) {
+        const cols = (item.columns as unknown[]).slice(0, CARD_MAX_CHILDREN_PER_EXPANSION);
+        for (let ci = cols.length - 1; ci >= 0; ci--) {
+          const col = cols[ci] as Record<string, unknown> | undefined;
+          if (col && Array.isArray(col.elements)) {
+            const colElems = (col.elements as unknown[]).slice(0, CARD_MAX_CHILDREN_PER_EXPANSION);
+            for (let ei = colElems.length - 1; ei >= 0; ei--) {
+              stack.push(colElems[ei]);
+            }
+          }
+        }
+        continue;
+      }
+    }
+
+    // Extract text from leaf elements
+    const fragments = extractCardTextFromElement(item);
+    for (const fragment of fragments) {
+      const remaining = CARD_MAX_OUTPUT_CHARS - totalChars;
+      if (remaining <= 0) break;
+      const clamped = fragment.length > remaining ? fragment.slice(0, remaining) : fragment;
+      texts.push(clamped);
+      totalChars += clamped.length;
+    }
+  }
+
+  const raw = texts.join("\n").trim();
+  return raw ? sanitizeCardText(raw) : "[Interactive Card]";
 }
 
 function parseQuotedMessageContent(rawContent: string, msgType: string): string {
