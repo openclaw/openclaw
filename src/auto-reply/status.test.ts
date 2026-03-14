@@ -681,6 +681,53 @@ describe("buildStatusMessage", () => {
       { prefix: "openclaw-status-" },
     );
   });
+
+  it("does not infer context usage from input/output when totalTokens is stale", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "stale-total",
+        updatedAt: 0,
+        inputTokens: 298_437,
+        outputTokens: 147,
+        totalTokensFresh: false,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      includeTranscriptUsage: false,
+      modelAuth: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("Context: ?/32k");
+  });
+
+  it("ignores explicit totalTokens when marked stale", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "stale-explicit-total",
+        updatedAt: 0,
+        totalTokens: 180_000,
+        totalTokensFresh: false,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      includeTranscriptUsage: false,
+      modelAuth: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("Context: ?/32k");
+  });
 });
 
 describe("buildCommandsMessage", () => {

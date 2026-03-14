@@ -460,7 +460,12 @@ export function buildStatusMessage(args: StatusArgs): string {
   let outputTokens = entry?.outputTokens;
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
-  let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
+  // Never synthesize context usage from input/output when the stored total is
+  // explicitly marked stale. That overstates context and confuses compaction status.
+  let totalTokens =
+    typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
+      ? entry.totalTokens
+      : undefined;
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
