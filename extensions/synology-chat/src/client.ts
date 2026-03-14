@@ -6,8 +6,70 @@
 import * as http from "node:http";
 import * as https from "node:https";
 
+/** Extract pathname from URL without leaking tokens in query strings. */
+function safePathname(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return "<invalid-url>";
+  }
+}
+
 const MIN_SEND_INTERVAL_MS = 500;
-let lastSendTime = 0;
+// Per-URL send timestamps to avoid cross-account throttling.
+// Without this, sending to account A delays account B unnecessarily.
+const lastSendTimes = new Map<string, number>();
+
+/**
+ * Maximum text length per message to Synology Chat.
+ * The API silently truncates around 2000 chars; we use 1800 for safety margin.
+ */
+export const SYNOLOGY_CHUNK_LIMIT = 1800;
+
+/**
+ * Split text into chunks that fit within Synology Chat's message size limit.
+ * Prefers splitting at newlines, then spaces, then hard-cuts as a last resort.
+ */
+export function splitTextForSynology(text: string, limit = SYNOLOGY_CHUNK_LIMIT): string[] {
+  if (text.length <= limit) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+  const minChunkSize = Math.floor(limit * 0.3);
+
+  while (remaining.length > 0) {
+    if (remaining.length <= limit) {
+      chunks.push(remaining);
+      break;
+    }
+
+    let splitAt = -1;
+
+    // Prefer splitting at a newline
+    const newlineIdx = remaining.lastIndexOf("\n", limit);
+    if (newlineIdx >= minChunkSize) {
+      splitAt = newlineIdx + 1;
+    }
+
+    // Fall back to splitting at a space
+    if (splitAt === -1) {
+      const spaceIdx = remaining.lastIndexOf(" ", limit);
+      if (spaceIdx >= minChunkSize) {
+        splitAt = spaceIdx + 1;
+      }
+    }
+
+    // Hard cut as last resort
+    if (splitAt === -1) {
+      splitAt = limit;
+    }
+
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt);
+  }
+
+  return chunks;
+}
 
 // --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
@@ -27,37 +89,25 @@ type ChatUserCacheEntry = {
   cachedAt: number;
 };
 
-type ChatWebhookPayload = {
-  text?: string;
-  file_url?: string;
-  user_ids?: number[];
-};
-
 // Cache user lists per bot endpoint to avoid cross-account bleed.
 const chatUserCache = new Map<string, ChatUserCacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-/**
- * Send a text message to Synology Chat via the incoming webhook.
- *
- * @param incomingUrl - Synology Chat incoming webhook URL
- * @param text - Message text to send
- * @param userId - Optional user ID to mention with @
- * @returns true if sent successfully
- */
-export async function sendMessage(
-  incomingUrl: string,
-  text: string,
-  userId?: string | number,
-  allowInsecureSsl = true,
-): Promise<boolean> {
-  // Synology Chat API requires user_ids (numeric) to specify the recipient
-  // The @mention is optional but user_ids is mandatory
-  const body = buildWebhookBody({ text }, userId);
+type Logger = { warn: (...args: unknown[]) => void };
 
-  // Internal rate limit: min 500ms between sends
+/**
+ * Send an encoded body to Synology Chat with rate limiting and retry.
+ */
+async function sendWithRetry(
+  url: string,
+  body: string,
+  allowInsecureSsl: boolean,
+  log?: Logger,
+): Promise<boolean> {
+  // Per-URL rate limit: min 500ms between sends to the same endpoint
   const now = Date.now();
-  const elapsed = now - lastSendTime;
+  const lastSend = lastSendTimes.get(url) ?? 0;
+  const elapsed = now - lastSend;
   if (elapsed < MIN_SEND_INTERVAL_MS) {
     await sleep(MIN_SEND_INTERVAL_MS - elapsed);
   }
@@ -65,14 +115,22 @@ export async function sendMessage(
   // Retry with exponential backoff (3 attempts, 300ms base)
   const maxRetries = 3;
   const baseDelay = 300;
+  const safePath = safePathname(url);
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const ok = await doPost(incomingUrl, body, allowInsecureSsl);
-      lastSendTime = Date.now();
-      if (ok) return true;
-    } catch {
-      // will retry
+      const result = await doPost(url, body, allowInsecureSsl);
+      lastSendTimes.set(url, Date.now());
+      if (result.ok) return true;
+      // Log non-200 responses (Synology can return {"success":false} with HTTP 200,
+      // or 401/403/500 for auth/server errors)
+      log?.warn(
+        `POST ${safePath} returned HTTP ${result.statusCode}` +
+          (result.body ? `: ${result.body.slice(0, 200)}` : ""),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log?.warn(`POST ${safePath} attempt ${attempt + 1}/${maxRetries} failed: ${msg}`);
     }
 
     if (attempt < maxRetries - 1) {
@@ -80,7 +138,76 @@ export async function sendMessage(
     }
   }
 
+  log?.warn(`POST ${safePath} failed after ${maxRetries} attempts`);
   return false;
+}
+
+/**
+ * Send a text message to Synology Chat via the incoming webhook (DM).
+ * Long messages are automatically split into chunks to prevent silent truncation.
+ *
+ * @param incomingUrl - Synology Chat incoming webhook URL
+ * @param text - Message text to send
+ * @param userId - Optional user ID to mention with @
+ * @returns true if all chunks sent successfully
+ */
+export async function sendMessage(
+  incomingUrl: string,
+  text: string,
+  userId?: string | number,
+  allowInsecureSsl = true,
+  log?: Logger,
+): Promise<boolean> {
+  const chunks = splitTextForSynology(text);
+  for (const chunk of chunks) {
+    const ok = await sendSingleDm(incomingUrl, chunk, userId, allowInsecureSsl, log);
+    if (!ok) return false;
+  }
+  return true;
+}
+
+async function sendSingleDm(
+  incomingUrl: string,
+  text: string,
+  userId?: string | number,
+  allowInsecureSsl = true,
+  log?: Logger,
+): Promise<boolean> {
+  const payloadObj: Record<string, any> = { text };
+  if (userId) {
+    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+    if (!isNaN(numericId)) {
+      payloadObj.user_ids = [numericId];
+    }
+  }
+  const payload = JSON.stringify(payloadObj);
+  const body = `payload=${encodeURIComponent(payload)}`;
+  return sendWithRetry(incomingUrl, body, allowInsecureSsl, log);
+}
+
+/**
+ * Send a text message to a Synology Chat channel via its incoming webhook.
+ * Long messages are automatically split into chunks to prevent silent truncation.
+ * Channel incoming webhooks don't support user_ids — the message appears as the bot.
+ *
+ * @param channelIncomingUrl - Channel-specific incoming webhook URL
+ * @param text - Message text to send
+ * @returns true if all chunks sent successfully
+ */
+export async function sendToChannel(
+  channelIncomingUrl: string,
+  text: string,
+  allowInsecureSsl = true,
+  log?: Logger,
+): Promise<boolean> {
+  const chunks = splitTextForSynology(text);
+  for (const chunk of chunks) {
+    const payload = JSON.stringify({ text: chunk });
+    const body = `payload=${encodeURIComponent(payload)}`;
+    const ok = await sendWithRetry(channelIncomingUrl, body, allowInsecureSsl, log);
+    if (!ok) return false;
+  }
+  return true;
 }
 
 /**
@@ -91,14 +218,31 @@ export async function sendFileUrl(
   fileUrl: string,
   userId?: string | number,
   allowInsecureSsl = true,
+  log?: Logger,
 ): Promise<boolean> {
-  const body = buildWebhookBody({ file_url: fileUrl }, userId);
+  const payloadObj: Record<string, any> = { file_url: fileUrl };
+  if (userId) {
+    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+    if (!isNaN(numericId)) {
+      payloadObj.user_ids = [numericId];
+    }
+  }
+  const payload = JSON.stringify(payloadObj);
+  const body = `payload=${encodeURIComponent(payload)}`;
 
   try {
-    const ok = await doPost(incomingUrl, body, allowInsecureSsl);
-    lastSendTime = Date.now();
-    return ok;
-  } catch {
+    const result = await doPost(incomingUrl, body, allowInsecureSsl);
+    lastSendTimes.set(incomingUrl, Date.now());
+    if (!result.ok) {
+      log?.warn(
+        `sendFileUrl POST ${safePathname(incomingUrl)} returned HTTP ${result.statusCode}` +
+          (result.body ? `: ${result.body.slice(0, 200)}` : ""),
+      );
+    }
+    return result.ok;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log?.warn(`sendFileUrl POST ${safePathname(incomingUrl)} failed: ${msg}`);
     return false;
   }
 }
@@ -204,23 +348,13 @@ export async function resolveChatUserId(
   return undefined;
 }
 
-function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number): string {
-  const numericId = parseNumericUserId(userId);
-  if (numericId !== undefined) {
-    payload.user_ids = [numericId];
-  }
-  return `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+interface PostResult {
+  ok: boolean;
+  statusCode: number;
+  body: string;
 }
 
-function parseNumericUserId(userId?: string | number): number | undefined {
-  if (userId === undefined) {
-    return undefined;
-  }
-  const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
-  return Number.isNaN(numericId) ? undefined : numericId;
-}
-
-function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boolean> {
+function doPost(url: string, body: string, allowInsecureSsl = true): Promise<PostResult> {
   return new Promise((resolve, reject) => {
     let parsedUrl: URL;
     try {
@@ -250,7 +384,11 @@ function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boo
           data += chunk.toString();
         });
         res.on("end", () => {
-          resolve(res.statusCode === 200);
+          resolve({
+            ok: res.statusCode === 200,
+            statusCode: res.statusCode ?? 0,
+            body: data,
+          });
         });
       },
     );
