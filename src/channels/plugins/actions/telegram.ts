@@ -8,7 +8,6 @@ import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js"
 import type { TelegramActionConfig } from "../../../config/types.telegram.js";
 import { readBooleanParam } from "../../../plugin-sdk/boolean-param.js";
 import { extractToolSend } from "../../../plugin-sdk/tool-send.js";
-import { resolveTelegramPollVisibility } from "../../../poll-params.js";
 import {
   createTelegramActionGate,
   listEnabledTelegramAccounts,
@@ -104,7 +103,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       actions.add("sticker");
       actions.add("sticker-search");
     }
-    if (isEnabled("createForumTopic")) {
+    if (gate("createForumTopic")) {
       actions.add("topic-create");
     }
     return Array.from(actions);
@@ -154,41 +153,38 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "poll") {
-      const to = readStringParam(params, "to", { required: true });
-      const question = readStringParam(params, "pollQuestion", { required: true });
-      const answers = readStringArrayParam(params, "pollOption", { required: true });
-      const durationHours = readNumberParam(params, "pollDurationHours", {
-        integer: true,
-        strict: true,
-      });
-      const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
-        integer: true,
-        strict: true,
-      });
-      const replyToMessageId = readNumberParam(params, "replyTo", { integer: true });
-      const messageThreadId = readNumberParam(params, "threadId", { integer: true });
-      const allowMultiselect = readBooleanParam(params, "pollMulti");
+      const to =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringParam(params, "target") ??
+        readStringParam(params, "to", { required: true });
+      const question =
+        readStringParam(params, "pollQuestion") ??
+        readStringParam(params, "question", { required: true });
+      const options =
+        readStringArrayParam(params, "pollOption") ?? (params.options as string[] | undefined);
+      const pollMulti = readBooleanParam(params, "pollMulti");
+      const durationSeconds = readNumberParam(params, "pollDurationSeconds", { integer: true });
+      const silent = readBooleanParam(params, "silent");
       const pollAnonymous = readBooleanParam(params, "pollAnonymous");
       const pollPublic = readBooleanParam(params, "pollPublic");
-      const isAnonymous = resolveTelegramPollVisibility({ pollAnonymous, pollPublic });
-      const silent = readBooleanParam(params, "silent");
+      const threadId = readStringOrNumberParam(params, "threadId");
+      const isAnonymous =
+        pollAnonymous != null ? pollAnonymous : pollPublic != null ? !pollPublic : undefined;
       return await handleTelegramAction(
         {
-          action: "poll",
-          to,
+          action: "sendPoll",
+          to: String(to),
           question,
-          answers,
-          allowMultiselect,
-          durationHours: durationHours ?? undefined,
+          options,
+          maxSelections: pollMulti ? (options?.length ?? 10) : undefined,
           durationSeconds: durationSeconds ?? undefined,
-          replyToMessageId: replyToMessageId ?? undefined,
-          messageThreadId: messageThreadId ?? undefined,
           isAnonymous,
           silent,
+          messageThreadId: threadId != null ? String(threadId) : undefined,
           accountId: accountId ?? undefined,
         },
         cfg,
-        { mediaLocalRoots },
       );
     }
 

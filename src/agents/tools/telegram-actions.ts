@@ -474,5 +474,55 @@ export async function handleTelegramAction(
     });
   }
 
+  if (action === "sendPoll") {
+    const pollActionState = resolveTelegramPollActionGateState(isActionEnabled);
+    if (!pollActionState.sendMessageEnabled) {
+      throw new Error("Telegram sendMessage is disabled.");
+    }
+    if (!pollActionState.pollEnabled) {
+      throw new Error("Telegram polls are disabled.");
+    }
+    const to = readStringParam(params, "to", { required: true });
+    const question = readStringParam(params, "question", { required: true });
+    const options = params.options as string[] | undefined;
+    if (!Array.isArray(options) || options.length < 2) {
+      throw new Error("Poll requires at least 2 options.");
+    }
+    const maxSelections = readNumberParam(params, "maxSelections", { integer: true });
+    const durationSeconds = readNumberParam(params, "durationSeconds", { integer: true });
+    const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
+    const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+    const messageThreadId = readStringOrNumberParam(params, "messageThreadId");
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await sendPollTelegram(
+      to,
+      {
+        question,
+        options,
+        maxSelections: maxSelections ?? undefined,
+        durationSeconds: durationSeconds ?? undefined,
+      },
+      {
+        cfg,
+        token,
+        accountId: accountId ?? undefined,
+        isAnonymous,
+        silent,
+        messageThreadId: messageThreadId != null ? Number(messageThreadId) : undefined,
+      },
+    );
+    return jsonResult({
+      ok: true,
+      messageId: result.messageId,
+      chatId: result.chatId,
+      pollId: result.pollId,
+    });
+  }
+
   throw new Error(`Unsupported Telegram action: ${action}`);
 }
