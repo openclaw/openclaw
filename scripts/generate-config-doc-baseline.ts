@@ -26,10 +26,11 @@ if (checkOnly) {
   }
   console.error(
     [
-      "Config doc baseline artifacts are out of date.",
+      "Config baseline drift detected.",
       `Expected current: ${path.relative(repoRoot, result.jsonPath)}`,
       `Expected current: ${path.relative(repoRoot, result.statefilePath)}`,
-      "Run: node --import tsx scripts/generate-config-doc-baseline.ts --write",
+      "If this config-surface change is intentional, run `pnpm config:docs:gen` and commit the updated baseline files.",
+      "If not intentional, treat this as docs drift or a possible breaking config change and fix the schema/help changes first.",
     ].join("\n"),
   );
   process.exit(1);
