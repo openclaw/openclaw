@@ -385,6 +385,99 @@ export async function runExecProcess(opts: {
       ? Math.floor(opts.timeoutSec * 1000)
       : undefined;
 
+  // ---------------------------------------------------------------------------
+  // OpenSandbox backend: bypass process supervisor entirely and call execd API.
+  // ---------------------------------------------------------------------------
+  if (opts.sandbox?.backendKind === "opensandbox" && opts.sandbox.backend) {
+    const backend = opts.sandbox.backend;
+    const containerWorkdir = opts.containerWorkdir ?? opts.sandbox.containerWorkdir;
+
+    const promise = (async (): Promise<ExecProcessOutcome> => {
+      try {
+        const result = await backend.exec({
+          command: execCommand,
+          workdir: containerWorkdir,
+          env: shellRuntimeEnv,
+          timeoutMs,
+        });
+
+        // Feed output through the same chunked pipeline as Docker/host paths.
+        if (result.stdout) {
+          handleStdout(result.stdout);
+        }
+        if (result.stderr) {
+          handleStderr(result.stderr);
+        }
+
+        const durationMs = Date.now() - startedAt;
+        const exitCode = result.exitCode;
+        const isShellFailure = exitCode === 126 || exitCode === 127;
+        const status: "completed" | "failed" = isShellFailure ? "failed" : "completed";
+
+        markExited(session, exitCode, null, status);
+        maybeNotifyOnExit(session, status);
+
+        if (status === "completed") {
+          const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
+          return {
+            status: "completed",
+            exitCode,
+            exitSignal: null,
+            durationMs,
+            aggregated: session.aggregated.trim() + exitMsg,
+            timedOut: false,
+          };
+        }
+        const reason = isShellFailure
+          ? exitCode === 127
+            ? "Command not found"
+            : "Command not executable (permission denied)"
+          : `Command failed with exit code ${exitCode}`;
+        const aggregated = session.aggregated.trim();
+        return {
+          status: "failed",
+          exitCode,
+          exitSignal: null,
+          durationMs,
+          aggregated,
+          timedOut: false,
+          reason: aggregated ? `${aggregated}\n\n${reason}` : reason,
+        };
+      } catch (err) {
+        const durationMs = Date.now() - startedAt;
+        markExited(session, null, null, "failed");
+        maybeNotifyOnExit(session, "failed");
+        const aggregated = session.aggregated.trim();
+        const timedOut = err instanceof Error && err.message.includes("timed out");
+        const message = aggregated ? `${aggregated}\n\n${String(err)}` : String(err);
+        return {
+          status: "failed",
+          exitCode: null,
+          exitSignal: null,
+          durationMs,
+          aggregated,
+          timedOut,
+          reason: message,
+        };
+      }
+    })();
+
+    return {
+      session,
+      startedAt,
+      pid: undefined,
+      promise,
+      kill: () => {
+        // OpenSandbox sync exec cannot be cancelled mid-flight; the abort
+        // signal on the fetch request is the only cancellation mechanism.
+        logWarn("exec: kill requested for OpenSandbox sync exec (no-op)");
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Docker / host spawn spec construction (existing logic).
+  // ---------------------------------------------------------------------------
   const spawnSpec:
     | {
         mode: "child";
