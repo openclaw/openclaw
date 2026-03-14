@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtml, splitTelegramHtmlChunks } from "./format.js";
+import {
+  markdownToTelegramChunks,
+  markdownToTelegramHtml,
+  markdownToTelegramHtmlChunks,
+  splitTelegramHtmlChunks,
+} from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
@@ -133,5 +138,55 @@ describe("markdownToTelegramHtml", () => {
 
   it("fails loudly when tag overhead leaves no room for text", () => {
     expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
+  });
+});
+
+describe("markdownToTelegramHtmlChunks word-boundary splitting", () => {
+  it("splits at whitespace boundaries instead of mid-word", () => {
+    const text = "Regulatory overhang lifts beta for UK banks and more text padding here";
+    const chunks = markdownToTelegramHtmlChunks(text, 35);
+    expect(chunks.length).toBeGreaterThan(1);
+
+    // No word from the original should be split across chunk boundaries.
+    const words = text.split(/\s+/);
+    const joined = chunks.join("");
+    for (const word of words) {
+      expect(joined).toContain(word);
+    }
+
+    // Specifically ensure "beta" does not get split across a chunk boundary.
+    for (let i = 0; i < chunks.length - 1; i += 1) {
+      expect(chunks[i]?.endsWith("b") && chunks[i + 1]?.startsWith("eta")).toBe(false);
+      expect(chunks[i]?.endsWith("be") && chunks[i + 1]?.startsWith("ta")).toBe(false);
+      expect(chunks[i]?.endsWith("bet") && chunks[i + 1]?.startsWith("a")).toBe(false);
+    }
+  });
+
+  it("handles non-breaking spaces by splitting on \u00A0 when possible", () => {
+    const text = `hello\u00A0beta\u00A0world`;
+    const chunks = markdownToTelegramHtmlChunks(text, 6);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+    // Ensure we don't split "beta" across chunks.
+    for (let i = 0; i < chunks.length - 1; i += 1) {
+      expect(chunks[i]?.endsWith("b") && chunks[i + 1]?.startsWith("eta")).toBe(false);
+      expect(chunks[i]?.endsWith("be") && chunks[i + 1]?.startsWith("ta")).toBe(false);
+      expect(chunks[i]?.endsWith("bet") && chunks[i + 1]?.startsWith("a")).toBe(false);
+    }
+  });
+
+  it("handles newlines by splitting on \n when possible", () => {
+    const text = "first line\nsecond line with beta token\nthird line";
+    const chunks = markdownToTelegramChunks(text, 25);
+    expect(chunks.length).toBeGreaterThan(1);
+    // Preserve all characters (no loss) on the plain-text side.
+    expect(chunks.map((c) => c.text).join("")).toBe(text);
+  });
+
+  it("falls back to hard split when there is no whitespace", () => {
+    const text = "abcdefghijklmnopqrstuvwxyz";
+    const chunks = markdownToTelegramHtmlChunks(text, 10);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
   });
 });

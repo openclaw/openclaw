@@ -1,10 +1,5 @@
 import type { MarkdownTableMode } from "../config/types.base.js";
-import {
-  chunkMarkdownIR,
-  markdownToIR,
-  type MarkdownLinkSpan,
-  type MarkdownIR,
-} from "../markdown/ir.js";
+import { markdownToIR, type MarkdownLinkSpan, type MarkdownIR } from "../markdown/ir.js";
 import { renderMarkdownWithMarkers } from "../markdown/render.js";
 
 export type TelegramFormattedChunk = {
@@ -520,10 +515,43 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   if (normalizedLimit <= 0 || ir.text.length <= normalizedLimit) {
     return [ir];
   }
+
   const chunks: MarkdownIR[] = [];
   let cursor = 0;
+
+  // Use unicode-aware whitespace detection (e.g. includes non-breaking space \u00A0).
+  // This keeps chunk splitting behavior consistent across localized inputs.
+  const isWhitespace = (ch: string) => !!ch && /\s/u.test(ch);
+
   while (cursor < ir.text.length) {
-    const end = Math.min(ir.text.length, cursor + normalizedLimit);
+    const hardEnd = Math.min(ir.text.length, cursor + normalizedLimit);
+    let end = hardEnd;
+
+    // If we are not at the very end of the text, try to split at a whitespace
+    // boundary within the window so we avoid breaking words mid-token.
+    if (end < ir.text.length) {
+      // Scan backward from (hardEnd - 1) to cursor, looking for the last
+      // whitespace in-range. We keep the whitespace on the left chunk when
+      // possible so the next chunk doesn't start with it.
+      let splitAt: number | null = null;
+      for (let i = hardEnd - 1; i > cursor; i -= 1) {
+        if (isWhitespace(ir.text[i] ?? "")) {
+          splitAt = i;
+          break;
+        }
+      }
+      if (splitAt != null) {
+        // Keep the whitespace on the left chunk when possible so the next chunk
+        // doesn't start with it.
+        end = splitAt + 1;
+      }
+    }
+
+    // Safety: ensure forward progress.
+    if (end <= cursor) {
+      end = Math.min(ir.text.length, cursor + 1);
+    }
+
     chunks.push({
       text: ir.text.slice(cursor, end),
       styles: sliceStyleSpans(ir.styles, cursor, end),
@@ -531,6 +559,7 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
     });
     cursor = end;
   }
+
   return chunks;
 }
 
@@ -539,7 +568,10 @@ function renderTelegramChunksWithinHtmlLimit(
   limit: number,
 ): TelegramFormattedChunk[] {
   const normalizedLimit = Math.max(1, Math.floor(limit));
-  const pending = chunkMarkdownIR(ir, normalizedLimit);
+  // NOTE: chunkMarkdownIR may drop boundary whitespace, which breaks Telegram chunk joins
+  // (e.g. "line\nnext" becoming "linenext"). For Telegram we must preserve all
+  // original whitespace exactly.
+  const pending = splitMarkdownIRPreserveWhitespace(ir, normalizedLimit);
   const rendered: TelegramFormattedChunk[] = [];
   while (pending.length > 0) {
     const chunk = pending.shift();
