@@ -85,7 +85,9 @@ export function renderDashboard(
   if (!template.html || !template.css) return null;
 
   const safeJson = JSON.stringify(data).replace(/<\//g, "<\\/");
-  return template.html.replace(cssPlaceholder, template.css).replace(dataPlaceholder, safeJson);
+  return template.html
+    .replace(cssPlaceholder, template.css)
+    .replace(dataPlaceholder, () => safeJson);
 }
 
 /** Render a unified dashboard page with shared + page-specific CSS. */
@@ -96,5 +98,5 @@ export function renderUnifiedDashboard(template: UnifiedTemplate, data: unknown)
   return template.html
     .replace("/*__SHARED_CSS__*/", template.sharedCss)
     .replace("/*__PAGE_CSS__*/", template.css || "")
-    .replace(/\/\*__PAGE_DATA__\*\/\s*\{\}/, safeJson);
+    .replace(/\/\*__PAGE_DATA__\*\/\s*\{\}/, () => safeJson);
 }
