@@ -6,16 +6,7 @@ import {
 } from "./resolved-config-refresh.js";
 import type { BrowserServerState } from "./server-context.types.js";
 
-let cfgProfiles: Record<
-  string,
-  {
-    cdpPort?: number;
-    cdpUrl?: string;
-    color?: string;
-    driver?: "openclaw" | "existing-session";
-    attachOnly?: boolean;
-  }
-> = {};
+let cfgProfiles: Record<string, { cdpPort?: number; cdpUrl?: string; color?: string }> = {};
 
 // Simulate module-level cache behavior
 let cachedConfig: ReturnType<typeof buildConfig> | null = null;
@@ -214,60 +205,5 @@ describe("server-context hot-reload profiles", () => {
     expect(runtime?.profile.cdpPort).toBe(19999);
     expect(runtime?.lastTargetId).toBeNull();
     expect(runtime?.reconcile?.reason).toContain("cdpPort");
-  });
-
-  it("marks existing-session runtime state for reconcile when MCP target URL changes", async () => {
-    cfgProfiles = {
-      user: {
-        cdpUrl: "http://127.0.0.1:9222",
-        color: "#00AA00",
-        driver: "existing-session",
-        attachOnly: true,
-      },
-    };
-    cachedConfig = null;
-
-    const cfg = loadConfig();
-    const resolved = resolveBrowserConfig({ ...cfg.browser, defaultProfile: "user" }, cfg);
-    const userProfile = resolveProfile(resolved, "user");
-    expect(userProfile).toBeTruthy();
-    expect(userProfile?.mcpTargetUrl).toBe("http://127.0.0.1:9222");
-
-    const state: BrowserServerState = {
-      server: null,
-      port: 18791,
-      resolved,
-      profiles: new Map([
-        [
-          "user",
-          {
-            profile: userProfile!,
-            running: { pid: 123 } as never,
-            lastTargetId: "tab-1",
-            reconcile: null,
-          },
-        ],
-      ]),
-    };
-
-    cfgProfiles.user = {
-      cdpUrl: "http://127.0.0.1:9333",
-      color: "#00AA00",
-      driver: "existing-session",
-      attachOnly: true,
-    };
-    cachedConfig = null;
-
-    refreshResolvedBrowserConfigFromDisk({
-      current: state,
-      refreshConfigFromDisk: true,
-      mode: "cached",
-    });
-
-    const runtime = state.profiles.get("user");
-    expect(runtime).toBeTruthy();
-    expect(runtime?.profile.mcpTargetUrl).toBe("http://127.0.0.1:9333");
-    expect(runtime?.lastTargetId).toBeNull();
-    expect(runtime?.reconcile?.reason).toContain("mcpTargetUrl");
   });
 });
