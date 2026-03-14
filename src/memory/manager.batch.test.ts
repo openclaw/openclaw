@@ -10,6 +10,7 @@ import "./test-runtime-mocks.js";
 
 const embedBatch = vi.fn(async (_texts: string[]) => [] as number[][]);
 const embedQuery = vi.fn(async () => [0.5, 0.5, 0.5]);
+const withRemoteHttpResponseMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () =>
@@ -17,6 +18,10 @@ vi.mock("./embeddings.js", () => ({
       embedQuery,
       embedBatch,
     }),
+}));
+
+vi.mock("./remote-http.js", () => ({
+  withRemoteHttpResponse: (...args: unknown[]) => withRemoteHttpResponseMock(...args),
 }));
 
 describe("memory indexing with OpenAI batches", () => {
@@ -42,59 +47,73 @@ describe("memory indexing with OpenAI batches", () => {
     return uploadedRequests;
   }
 
-  function createOpenAIBatchFetchMock(options?: {
+  function createOpenAIBatchRemoteHttpMock(options?: {
     onCreateBatch?: (ctx: { batchCreates: number }) => Response | Promise<Response>;
   }) {
     let uploadedRequests: Array<{ custom_id?: string }> = [];
     const state = { batchCreates: 0 };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.endsWith("/files")) {
-        const body = init?.body;
-        if (!(body instanceof FormData)) {
-          throw new Error("expected FormData upload");
+    withRemoteHttpResponseMock.mockImplementation(
+      async (params: {
+        url: string;
+        init?: RequestInit;
+        onResponse: (response: Response) => Promise<unknown>;
+      }) => {
+        if (params.url.endsWith("/files")) {
+          const body = params.init?.body;
+          if (!(body instanceof FormData)) {
+            throw new Error("expected FormData upload");
+          }
+          uploadedRequests = await readOpenAIBatchUploadRequests(body);
+          return await params.onResponse(
+            new Response(JSON.stringify({ id: "file_1" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          );
         }
-        uploadedRequests = await readOpenAIBatchUploadRequests(body);
-        return new Response(JSON.stringify({ id: "file_1" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url.endsWith("/batches")) {
-        state.batchCreates += 1;
-        if (options?.onCreateBatch) {
-          return await options.onCreateBatch({ batchCreates: state.batchCreates });
+        if (params.url.endsWith("/batches")) {
+          state.batchCreates += 1;
+          const response = options?.onCreateBatch
+            ? await options.onCreateBatch({ batchCreates: state.batchCreates })
+            : new Response(JSON.stringify({ id: "batch_1", status: "in_progress" }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              });
+          return await params.onResponse(response);
         }
-        return new Response(JSON.stringify({ id: "batch_1", status: "in_progress" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url.endsWith("/batches/batch_1")) {
-        return new Response(
-          JSON.stringify({ id: "batch_1", status: "completed", output_file_id: "file_out" }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      if (url.endsWith("/files/file_out/content")) {
-        const lines = uploadedRequests.map((request, index) =>
-          JSON.stringify({
-            custom_id: request.custom_id,
-            response: {
-              status_code: 200,
-              body: { data: [{ embedding: [index + 1, 0, 0], index: 0 }] },
-            },
-          }),
-        );
-        return new Response(lines.join("\n"), {
-          status: 200,
-          headers: { "Content-Type": "application/jsonl" },
-        });
-      }
-      throw new Error(`unexpected fetch ${url}`);
-    });
-    return { fetchMock, state };
+        if (params.url.endsWith("/batches/batch_1")) {
+          return await params.onResponse(
+            new Response(
+              JSON.stringify({
+                id: "batch_1",
+                status: "completed",
+                output_file_id: "file_out",
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        if (params.url.endsWith("/files/file_out/content")) {
+          const lines = uploadedRequests.map((request, index) =>
+            JSON.stringify({
+              custom_id: request.custom_id,
+              response: {
+                status_code: 200,
+                body: { data: [{ embedding: [index + 1, 0, 0], index: 0 }] },
+              },
+            }),
+          );
+          return await params.onResponse(
+            new Response(lines.join("\n"), {
+              status: 200,
+              headers: { "Content-Type": "application/jsonl" },
+            }),
+          );
+        }
+        throw new Error(`unexpected request ${params.url}`);
+      },
+    );
+    return { remoteHttpMock: withRemoteHttpResponseMock, state };
   }
 
   function createBatchCfg(): OpenClawConfig {
@@ -140,6 +159,7 @@ describe("memory indexing with OpenAI batches", () => {
   });
 
   beforeEach(async () => {
+    withRemoteHttpResponseMock.mockReset();
     embedBatch.mockClear();
     embedQuery.mockClear();
     embedBatch.mockImplementation(async (texts: string[]) =>
@@ -163,7 +183,7 @@ describe("memory indexing with OpenAI batches", () => {
   });
 
   afterEach(async () => {
-    vi.unstubAllGlobals();
+    withRemoteHttpResponseMock.mockReset();
   });
 
   it("uses OpenAI batch uploads when enabled", async () => {
@@ -171,9 +191,7 @@ describe("memory indexing with OpenAI batches", () => {
     const content = ["hello", "from", "batch"].join("\n\n");
     await fs.writeFile(path.join(memoryDir, "2026-01-07.md"), content);
 
-    const { fetchMock } = createOpenAIBatchFetchMock();
-
-    vi.stubGlobal("fetch", fetchMock);
+    const { remoteHttpMock } = createOpenAIBatchRemoteHttpMock();
 
     try {
       if (!manager) {
@@ -191,7 +209,7 @@ describe("memory indexing with OpenAI batches", () => {
       const status = manager.status();
       expect(status.chunks).toBeGreaterThan(0);
       expect(embedBatch).not.toHaveBeenCalled();
-      expect(fetchMock).toHaveBeenCalled();
+      expect(remoteHttpMock).toHaveBeenCalled();
       expect(labels.some((label) => label.toLowerCase().includes("batch"))).toBe(true);
     } finally {
       restoreTimeouts();
@@ -203,7 +221,7 @@ describe("memory indexing with OpenAI batches", () => {
     const content = ["retry", "the", "batch"].join("\n\n");
     await fs.writeFile(path.join(memoryDir, "2026-01-08.md"), content);
 
-    const { fetchMock, state } = createOpenAIBatchFetchMock({
+    const { state } = createOpenAIBatchRemoteHttpMock({
       onCreateBatch: ({ batchCreates }) => {
         if (batchCreates === 1) {
           return new Response("upstream connect error", { status: 503 });
@@ -214,8 +232,6 @@ describe("memory indexing with OpenAI batches", () => {
         });
       },
     });
-
-    vi.stubGlobal("fetch", fetchMock);
 
     try {
       if (!manager) {
@@ -244,7 +260,7 @@ describe("memory indexing with OpenAI batches", () => {
     await touch();
 
     let mode: "fail" | "ok" = "fail";
-    const { fetchMock } = createOpenAIBatchFetchMock({
+    const { remoteHttpMock } = createOpenAIBatchRemoteHttpMock({
       onCreateBatch: () =>
         mode === "fail"
           ? new Response("batch failed", { status: 400 })
@@ -253,8 +269,6 @@ describe("memory indexing with OpenAI batches", () => {
               headers: { "Content-Type": "application/json" },
             }),
     });
-
-    vi.stubGlobal("fetch", fetchMock);
 
     try {
       if (!manager) {
@@ -306,13 +320,13 @@ describe("memory indexing with OpenAI batches", () => {
       expect(status.batch?.failures).toBeGreaterThanOrEqual(2);
 
       // Once disabled, batch endpoints are skipped and fallback embeddings run directly.
-      const fetchCalls = fetchMock.mock.calls.length;
+      const remoteHttpCalls = remoteHttpMock.mock.calls.length;
       embedBatch.mockClear();
       await fs.writeFile(memoryFile, ["flaky", "batch", "fallback"].join("\n\n"));
       await touch();
       (manager as unknown as { dirty: boolean }).dirty = true;
       await manager.sync({ reason: "test" });
-      expect(fetchMock.mock.calls.length).toBe(fetchCalls);
+      expect(remoteHttpMock.mock.calls.length).toBe(remoteHttpCalls);
       expect(embedBatch).toHaveBeenCalled();
     } finally {
       restoreTimeouts();
