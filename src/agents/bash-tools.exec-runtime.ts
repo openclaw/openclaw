@@ -218,12 +218,12 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     return;
   }
   const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  enqueueSystemEvent(summary, { sessionKey });
-  requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: `exec:${session.id}:exit` }),
-  );
+    ? `exec finished: ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
+    : `exec finished: ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+  emitExecSystemEvent(summary, {
+    sessionKey,
+    contextKey: `exec:${session.id}:exit`,
+  });
 }
 
 export function createApprovalSlug(id: string) {
