@@ -16,9 +16,16 @@ class I18nManager {
   private locale: Locale = DEFAULT_LOCALE;
   private translations: Partial<Record<Locale, TranslationMap>> = { [DEFAULT_LOCALE]: en };
   private subscribers: Set<Subscriber> = new Set();
+  /** Monotonic counter to discard superseded setLocale() calls. */
+  private localeSeq = 0;
+  /** Tracks the most recent setLocale() call so `ready` can wait for it. */
+  private _latestSetLocale: Promise<void> = Promise.resolve();
+
+  /** Resolves once the initial (persisted / navigator-derived) locale is loaded. */
+  public readonly ready: Promise<void>;
 
   constructor() {
-    this.loadLocale();
+    this.ready = this.loadLocale();
   }
 
   private readStoredLocale(): string | null {
@@ -55,7 +62,7 @@ class I18nManager {
     return resolveNavigatorLocale(language ?? "");
   }
 
-  private loadLocale() {
+  private async loadLocale(): Promise<void> {
     const initialLocale = this.resolveInitialLocale();
     if (initialLocale === DEFAULT_LOCALE) {
       this.locale = DEFAULT_LOCALE;
@@ -63,7 +70,10 @@ class I18nManager {
     }
     // Use the normal locale setter so startup locale loading follows the same
     // translation-loading + notify path as manual locale changes.
-    void this.setLocale(initialLocale);
+    await this.setLocale(initialLocale);
+    // If a concurrent setLocale() superseded the initial load, wait for the
+    // winning request so `ready` does not resolve before a locale is active.
+    await this._latestSetLocale;
   }
 
   public getLocale(): Locale {
@@ -71,14 +81,24 @@ class I18nManager {
   }
 
   public async setLocale(locale: Locale) {
+    const p = this._setLocaleCore(locale);
+    this._latestSetLocale = p;
+    await p;
+  }
+
+  private async _setLocaleCore(locale: Locale) {
     const needsTranslationLoad = locale !== DEFAULT_LOCALE && !this.translations[locale];
     if (this.locale === locale && !needsTranslationLoad) {
       return;
     }
+    const seq = ++this.localeSeq;
 
     if (needsTranslationLoad) {
       try {
         const translation = await loadLazyLocaleTranslation(locale);
+        if (seq !== this.localeSeq) {
+          return;
+        }
         if (!translation) {
           return;
         }
@@ -89,6 +109,9 @@ class I18nManager {
       }
     }
 
+    if (seq !== this.localeSeq) {
+      return;
+    }
     this.locale = locale;
     this.persistLocale(locale);
     this.notify();
