@@ -39,11 +39,13 @@ const hoisted = vi.hoisted(() => {
   const resolveStorePathMock = vi.fn();
   const resolveSessionTranscriptFileMock = vi.fn();
   const areHeartbeatsEnabledMock = vi.fn();
+  const registerSubagentRunMock = vi.fn();
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
   return {
     callGatewayMock,
+    registerSubagentRunMock,
     sessionBindingCapabilitiesMock,
     sessionBindingBindMock,
     sessionBindingUnbindMock,
@@ -138,6 +140,10 @@ vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./subagent-registry.js", () => ({
+  registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
+}));
+
 vi.mock("./acp-spawn-parent-stream.js", () => ({
   startAcpSpawnParentStreamRelay: (...args: unknown[]) =>
     hoisted.startAcpSpawnParentStreamRelayMock(...args),
@@ -201,6 +207,7 @@ function expectResolvedIntroTextInBindMetadata(): void {
 
 describe("spawnAcpDirect", () => {
   beforeEach(() => {
+    hoisted.registerSubagentRunMock.mockReset();
     hoisted.state.cfg = createDefaultSpawnConfig();
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
 
@@ -1040,5 +1047,56 @@ describe("spawnAcpDirect", () => {
     expect(result.error).toContain('streamTo="parent"');
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
+  it("registers the ACP run in the subagent registry after successful dispatch", async () => {
+    await spawnAcpDirect(
+      {
+        task: "Run analysis",
+        agentId: "codex",
+        mode: "run",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
+        requesterSessionKey: "main",
+        task: "Run analysis",
+        cleanup: "keep",
+      }),
+    );
+  });
+
+  it("still returns success when registerSubagentRun throws", async () => {
+    hoisted.registerSubagentRunMock.mockImplementation(() => {
+      throw new Error("registry unavailable");
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Run analysis",
+        agentId: "codex",
+        mode: "run",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.childSessionKey).toMatch(/^agent:codex:acp:/);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 });
