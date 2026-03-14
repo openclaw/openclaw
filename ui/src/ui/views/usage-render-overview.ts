@@ -416,12 +416,24 @@ function renderUsageInsights(
     stats.durationCount > 0
       ? (formatDurationCompact(stats.avgDurationMs, { spaced: true }) ?? "—")
       : "—";
-  const cacheHint = tr("usageOverview.hintCacheHitRate", "Cache hit rate = cache read / (input + cache read). Higher is better.");
-  const errorHint = tr("usageOverview.hintErrorRate", "Error rate = errors / total messages. Lower is better.");
-  const throughputHint = tr("usageOverview.hintThroughput", "Throughput shows tokens per minute over active time. Higher is better.");
+  const cacheHint = tr(
+    "usageOverview.hintCacheHitRate",
+    "Cache hit rate = cache read / (input + cache read). Higher is better.",
+  );
+  const errorHint = tr(
+    "usageOverview.hintErrorRate",
+    "Error rate = errors / total messages. Lower is better.",
+  );
+  const throughputHint = tr(
+    "usageOverview.hintThroughput",
+    "Throughput shows tokens per minute over active time. Higher is better.",
+  );
   const tokensHint = tr("usageOverview.hintAvgTokens", "Average tokens per message in this range.");
   const costHint = showCostHint
-    ? tr("usageOverview.hintAvgCostPartial", "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range.")
+    ? tr(
+        "usageOverview.hintAvgCostPartial",
+        "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range.",
+      )
     : tr("usageOverview.hintAvgCost", "Average cost per message when providers report costs.");
 
   const errorDays = aggregates.daily
