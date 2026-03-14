@@ -360,13 +360,9 @@ Notes:
 
 ## Chrome existing-session via MCP
 
-OpenClaw can also use the official Chrome DevTools MCP server for two different
-flows:
-
-- desktop attach via `--autoConnect`, which reuses a running Chrome profile and
-  its existing tabs/login state
-- headless or remote attach, where MCP either launches headless Chrome itself
-  or connects to a running debuggable browser URL/WS endpoint
+OpenClaw can also attach to a running Chrome profile through the official
+Chrome DevTools MCP server. This reuses the tabs and login state already open in
+that Chrome profile.
 
 Official background and setup references:
 
@@ -380,7 +376,7 @@ Built-in profile:
 Optional: create your own custom existing-session profile if you want a
 different name or color.
 
-Desktop attach flow:
+Then in Chrome:
 
 1. Open `chrome://inspect/#remote-debugging`
 2. Enable remote debugging
@@ -403,46 +399,11 @@ What success looks like:
 - `tabs` lists your already-open Chrome tabs
 - `snapshot` returns refs from the selected live tab
 
-What to check if desktop attach does not work:
+What to check if attach does not work:
 
 - Chrome is version `144+`
 - remote debugging is enabled at `chrome://inspect/#remote-debugging`
 - Chrome showed and you accepted the attach consent prompt
-
-Headless / Linux / VPS flow:
-
-- Set `browser.headless: true`
-- Set `browser.noSandbox: true` when running as root or in common container/VPS setups
-- Optional: set `browser.executablePath` to a stable Chrome/Chromium binary path
-- Optional: set `browser.profiles.<name>.cdpUrl` on an `existing-session` profile to an
-  MCP target like `http://127.0.0.1:9222` or
-  `ws://127.0.0.1:9222/devtools/browser/<id>`
-
-Example:
-
-```json5
-{
-  browser: {
-    headless: true,
-    noSandbox: true,
-    executablePath: "/usr/bin/google-chrome-stable",
-    defaultProfile: "user",
-    profiles: {
-      user: {
-        driver: "existing-session",
-        cdpUrl: "http://127.0.0.1:9222",
-        color: "#00AA00",
-      },
-    },
-  },
-}
-```
-
-Behavior:
-
-- without `browser.profiles.<name>.cdpUrl`, headless `existing-session` launches Chrome through MCP
-- with `browser.profiles.<name>.cdpUrl`, MCP connects to that running browser URL
-- non-headless `existing-session` keeps using the interactive `--autoConnect` flow
 
 Agent use:
 
@@ -450,19 +411,18 @@ Agent use:
 - If you use a custom existing-session profile, pass that explicit profile name.
 - Prefer `profile="user"` over `profile="chrome-relay"` unless the user
   explicitly wants the extension / attach-tab flow.
-- On desktop `--autoConnect`, only choose this mode when the user is at the
-  computer to approve the attach prompt.
-- The Gateway or node host can spawn `npx chrome-devtools-mcp@latest --autoConnect`
-  for desktop attach, or use MCP headless/browserUrl/wsEndpoint modes for Linux/VPS paths.
+- Only choose this mode when the user is at the computer to approve the attach
+  prompt.
+- the Gateway or node host can spawn `npx chrome-devtools-mcp@latest --autoConnect`
 
 Notes:
 
 - This path is higher-risk than the isolated `openclaw` profile because it can
   act inside your signed-in browser session.
-- OpenClaw uses the official Chrome DevTools MCP server for this driver.
-- On desktop, OpenClaw uses MCP `--autoConnect`.
-- In headless mode, OpenClaw can launch Chrome through MCP or connect MCP to a
-  configured browser URL/WS endpoint.
+- OpenClaw does not launch Chrome for this driver; it attaches to an existing
+  session only.
+- OpenClaw uses the official Chrome DevTools MCP `--autoConnect` flow here, not
+  the legacy default-profile remote debugging port workflow.
 - Existing-session screenshots support page captures and `--ref` element
   captures from snapshots, but not CSS `--element` selectors.
 - Existing-session `wait --url` supports exact, substring, and glob patterns
