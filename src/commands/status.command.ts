@@ -289,7 +289,7 @@ export async function statusCommand(
     const pending =
       agentStatus.bootstrapPendingCount > 0
         ? `${agentStatus.bootstrapPendingCount} bootstrap file${agentStatus.bootstrapPendingCount === 1 ? "" : "s"} present`
-        : "no bootstrap files";
+        : "no workspaces bootstrapping";
     const def = agentStatus.agents.find((a) => a.id === agentStatus.defaultId);
     const defActive = def?.lastActiveAgeMs != null ? formatTimeAgo(def.lastActiveAgeMs) : "unknown";
     const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
