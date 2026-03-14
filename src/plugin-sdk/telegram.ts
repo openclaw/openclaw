@@ -7,8 +7,9 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
-export type { ResolvedTelegramAccount } from "../telegram/accounts.js";
-export type { TelegramProbe } from "../telegram/probe.js";
+export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
+export type { ResolvedTelegramAccount } from "../../extensions/telegram/src/accounts.js";
+export type { TelegramProbe } from "../../extensions/telegram/src/probe.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 
@@ -21,6 +22,7 @@ export {
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
   deleteAccountFromConfigSection,
+  clearAccountEntryFields,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
@@ -32,7 +34,12 @@ export {
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
-} from "../telegram/accounts.js";
+} from "../../extensions/telegram/src/accounts.js";
+export { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
+export {
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromCredentialStatuses,
+} from "../channels/account-snapshot-fields.js";
 export {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
@@ -44,8 +51,9 @@ export {
 export {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
-} from "../telegram/outbound-params.js";
+} from "../../extensions/telegram/src/outbound-params.js";
 export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
+export { sendTelegramPayloadMessages } from "../channels/plugins/outbound/telegram.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,

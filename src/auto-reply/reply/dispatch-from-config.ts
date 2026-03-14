@@ -1,6 +1,13 @@
+import { shouldSuppressLocalDiscordExecApprovalPrompt } from "../../../extensions/discord/src/exec-approvals.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadSessionStore, resolveStorePath, type SessionEntry } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  parseSessionThreadInfo,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -65,7 +72,7 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   return AUDIO_HEADER_RE.test(trimmed);
 };
 
-const resolveSessionStoreEntry = (
+const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
 ): {
@@ -84,7 +91,7 @@ const resolveSessionStoreEntry = (
     const store = loadSessionStore(storePath);
     return {
       sessionKey,
-      entry: store[sessionKey.toLowerCase()] ?? store[sessionKey],
+      entry: resolveSessionStoreEntry({ store, sessionKey }).existing,
     };
   } catch {
     return {
@@ -164,8 +171,14 @@ export async function dispatchReplyFromConfig(params: {
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
-  const sessionStoreEntry = resolveSessionStoreEntry(ctx, cfg);
+  const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+  // Restore route thread context only from the active turn or the thread-scoped session key.
+  // Do not read thread ids from the normalised session store here: `origin.threadId` can be
+  // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
+  // stale route after thread delivery was intentionally cleared.
+  const routeThreadId =
+    ctx.MessageThreadId ?? parseSessionThreadInfo(acpDispatchSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
@@ -215,8 +228,15 @@ export async function dispatchReplyFromConfig(params: {
   const surfaceChannel = normalizeMessageChannel(ctx.Surface);
   // Prefer provider channel because surface may carry origin metadata in relayed flows.
   const currentSurface = providerChannel ?? surfaceChannel;
+  const isInternalWebchatTurn =
+    currentSurface === INTERNAL_MESSAGE_CHANNEL &&
+    (surfaceChannel === INTERNAL_MESSAGE_CHANNEL || !surfaceChannel) &&
+    ctx.ExplicitDeliverRoute !== true;
   const shouldRouteToOriginating = Boolean(
-    isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface,
+    !isInternalWebchatTurn &&
+    isRoutableChannel(originatingChannel) &&
+    originatingTo &&
+    originatingChannel !== currentSurface,
   );
   const shouldSuppressTyping =
     shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
@@ -247,7 +267,7 @@ export async function dispatchReplyFromConfig(params: {
       to: originatingTo,
       sessionKey: ctx.SessionKey,
       accountId: ctx.AccountId,
-      threadId: ctx.MessageThreadId,
+      threadId: routeThreadId,
       cfg,
       abortSignal,
       mirror,
@@ -276,7 +296,7 @@ export async function dispatchReplyFromConfig(params: {
           to: originatingTo,
           sessionKey: ctx.SessionKey,
           accountId: ctx.AccountId,
-          threadId: ctx.MessageThreadId,
+          threadId: routeThreadId,
           cfg,
           isGroup,
           groupId,
@@ -353,7 +373,26 @@ export async function dispatchReplyFromConfig(params: {
     let blockCount = 0;
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
+      if (
+        normalizeMessageChannel(ctx.Surface ?? ctx.Provider) === "discord" &&
+        shouldSuppressLocalDiscordExecApprovalPrompt({
+          cfg,
+          accountId: ctx.AccountId,
+          payload,
+        })
+      ) {
+        return null;
+      }
       if (shouldSendToolSummaries) {
+        return payload;
+      }
+      const execApproval =
+        payload.channelData &&
+        typeof payload.channelData === "object" &&
+        !Array.isArray(payload.channelData)
+          ? payload.channelData.execApproval
+          : undefined;
+      if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
         return payload;
       }
       // Group/native flows intentionally suppress tool summary text, but media-only
@@ -487,7 +526,7 @@ export async function dispatchReplyFromConfig(params: {
           to: originatingTo,
           sessionKey: ctx.SessionKey,
           accountId: ctx.AccountId,
-          threadId: ctx.MessageThreadId,
+          threadId: routeThreadId,
           cfg,
           isGroup,
           groupId,
@@ -539,7 +578,7 @@ export async function dispatchReplyFromConfig(params: {
               to: originatingTo,
               sessionKey: ctx.SessionKey,
               accountId: ctx.AccountId,
-              threadId: ctx.MessageThreadId,
+              threadId: routeThreadId,
               cfg,
               isGroup,
               groupId,

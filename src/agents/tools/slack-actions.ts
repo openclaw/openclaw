@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSlackAccount } from "../../slack/accounts.js";
+import { resolveSlackAccount } from "../../../extensions/slack/src/accounts.js";
 import {
   deleteSlackMessage,
   downloadSlackFile,
@@ -16,10 +15,11 @@ import {
   removeSlackReaction,
   sendSlackMessage,
   unpinSlackMessage,
-} from "../../slack/actions.js";
-import { parseSlackBlocksInput } from "../../slack/blocks-input.js";
-import { recordSlackThreadParticipation } from "../../slack/sent-thread-cache.js";
-import { parseSlackTarget, resolveSlackChannelId } from "../../slack/targets.js";
+} from "../../../extensions/slack/src/actions.js";
+import { parseSlackBlocksInput } from "../../../extensions/slack/src/blocks-input.js";
+import { recordSlackThreadParticipation } from "../../../extensions/slack/src/sent-thread-cache.js";
+import { parseSlackTarget, resolveSlackChannelId } from "../../../extensions/slack/src/targets.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { withNormalizedTimestamp } from "../date-time.js";
 import {
   createActionGate,
@@ -50,6 +50,8 @@ export type SlackActionContext = {
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  /** Allowed local media directories for file uploads. */
+  mediaLocalRoots?: readonly string[];
 };
 
 /**
@@ -209,6 +211,7 @@ export async function handleSlackAction(
         const result = await sendSlackMessage(to, content ?? "", {
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
+          mediaLocalRoots: context?.mediaLocalRoots,
           threadTs: threadTs ?? undefined,
           blocks,
         });

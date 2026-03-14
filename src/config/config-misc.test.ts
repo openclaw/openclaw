@@ -31,6 +31,19 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
+describe("plugins.slots.contextEngine", () => {
+  it("accepts a contextEngine slot id", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        slots: {
+          contextEngine: "my-context-engine",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
@@ -45,6 +58,38 @@ describe("ui.seamColor", () => {
   it("rejects invalid hex length", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500FF" } });
     expect(res.ok).toBe(false);
+  });
+});
+
+describe("plugins.entries.*.hooks.allowPromptInjection", () => {
+  it("accepts boolean values", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowPromptInjection: false,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects non-boolean values", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowPromptInjection: "no",
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
   });
 });
 
@@ -213,7 +258,7 @@ describe("cron webhook schema", () => {
         retry: {
           maxAttempts: 5,
           backoffMs: [60000, 120000, 300000],
-          retryOn: ["rate_limit", "network"],
+          retryOn: ["rate_limit", "overloaded", "network"],
         },
       },
     });
@@ -270,6 +315,7 @@ describe("model compat config schema", () => {
                   requiresAssistantAfterToolResult: false,
                   requiresThinkingAsText: false,
                   requiresMistralToolIds: false,
+                  requiresOpenAiAnthropicToolPayload: true,
                 },
               },
             ],
@@ -313,6 +359,33 @@ describe("config strict validation", () => {
       customUnknownField: { nested: "value" },
     });
     expect(res.ok).toBe(false);
+  });
+
+  it("accepts documented agents.list[].params overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            model: "anthropic/claude-opus-4-6",
+            params: {
+              cacheRetention: "none",
+              temperature: 0.4,
+              maxTokens: 8192,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.list?.[0]?.params).toEqual({
+        cacheRetention: "none",
+        temperature: 0.4,
+        maxTokens: 8192,
+      });
+    }
   });
 
   it("flags legacy config entries without auto-migrating", async () => {

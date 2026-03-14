@@ -16,8 +16,14 @@ export type {
   ChannelOnboardingDmPolicy,
 } from "../channels/plugins/onboarding-types.js";
 export {
+  buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
+  mergeAllowFromEntries,
   promptSingleChannelSecretInput,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+  setTopLevelChannelGroupPolicy,
+  splitOnboardingEntries,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type {
@@ -43,8 +49,9 @@ export {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+export { buildSecretInputSchema } from "./secret-input-schema.js";
 export { createDedupeCache } from "../infra/dedupe.js";
-export { installRequestBodyLimitGuard } from "../infra/http-body.js";
+export { installRequestBodyLimitGuard, readJsonBodyWithLimit } from "../infra/http-body.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -52,13 +59,17 @@ export type { AnyAgentTool, OpenClawPluginApi } from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
+export { evaluateSenderGroupAccessForPolicy } from "./group-access.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { readJsonFileWithFallback } from "./json-store.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 export { createPersistentDedupe } from "./persistent-dedupe.js";
 export {
   buildBaseChannelStatusSummary,
+  buildProbeChannelStatusSummary,
+  buildRuntimeAccountStatusSnapshot,
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 export { withTempDownloadPath } from "./temp-path.js";

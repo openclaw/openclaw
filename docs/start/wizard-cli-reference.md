@@ -16,7 +16,7 @@ For the short guide, see [Onboarding Wizard (CLI)](/start/wizard).
 
 Local mode (default) walks you through:
 
-- Model and auth setup (OpenAI Code subscription OAuth, Anthropic API key or setup token, plus MiniMax, GLM, Moonshot, and AI Gateway options)
+- Model and auth setup (OpenAI Code subscription OAuth, Anthropic API key or setup token, plus MiniMax, GLM, Ollama, Moonshot, and AI Gateway options)
 - Workspace location and bootstrap files
 - Gateway settings (port, bind, auth, tailscale)
 - Channels and providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost plugin, Signal)
@@ -51,6 +51,13 @@ It does not install or modify anything on the remote host.
   <Step title="Gateway">
     - Prompts for port, bind, auth mode, and tailscale exposure.
     - Recommended: keep token auth enabled even for loopback so local WS clients must authenticate.
+    - In token mode, interactive onboarding offers:
+      - **Generate/store plaintext token** (default)
+      - **Use SecretRef** (opt-in)
+    - In password mode, interactive onboarding also supports plaintext or SecretRef storage.
+    - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
+      - Requires a non-empty env var in the onboarding process environment.
+      - Cannot be combined with `--gateway-token`.
     - Disable auth only if you fully trust every local process.
     - Non-loopback binds still require auth.
   </Step>
@@ -136,7 +143,7 @@ What you set:
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
 
-    Sets `agents.defaults.model` to `openai-codex/gpt-5.3-codex` when model is unset or `openai/*`.
+    Sets `agents.defaults.model` to `openai-codex/gpt-5.4` when model is unset or `openai/*`.
 
   </Accordion>
   <Accordion title="OpenAI API key">
@@ -148,8 +155,8 @@ What you set:
   <Accordion title="xAI (Grok) API key">
     Prompts for `XAI_API_KEY` and configures xAI as a model provider.
   </Accordion>
-  <Accordion title="OpenCode Zen">
-    Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`).
+  <Accordion title="OpenCode">
+    Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`) and lets you choose the Zen or Go catalog.
     Setup URL: [opencode.ai/auth](https://opencode.ai/auth).
   </Accordion>
   <Accordion title="API key (generic)">
@@ -170,6 +177,11 @@ What you set:
   <Accordion title="Synthetic (Anthropic-compatible)">
     Prompts for `SYNTHETIC_API_KEY`.
     More detail: [Synthetic](/providers/synthetic).
+  </Accordion>
+  <Accordion title="Ollama (Cloud and local open models)">
+    Prompts for base URL (default `http://127.0.0.1:11434`), then offers Cloud + Local or Local mode.
+    Discovers available models and suggests defaults.
+    More detail: [Ollama](/providers/ollama).
   </Accordion>
   <Accordion title="Moonshot and Kimi Coding">
     Moonshot (Kimi K2) and Kimi Coding configs are auto-written.
@@ -206,7 +218,7 @@ Credential and profile paths:
 - OAuth credentials: `~/.openclaw/credentials/oauth.json`
 - Auth profiles (API keys + OAuth): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 
-API key storage mode:
+Credential storage mode:
 
 - Default onboarding behavior persists API keys as plaintext values in auth profiles.
 - `--secret-input-mode ref` enables reference mode instead of plaintext key storage.
@@ -222,6 +234,10 @@ API key storage mode:
   - Inline key flags (for example `--openai-api-key`) require that env var to be set; otherwise onboarding fails fast.
   - For custom providers, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
   - In that custom-provider case, `--custom-api-key` requires `CUSTOM_API_KEY` to be set; otherwise onboarding fails fast.
+- Gateway auth credentials support plaintext and SecretRef choices in interactive onboarding:
+  - Token mode: **Generate/store plaintext token** (default) or **Use SecretRef**.
+  - Password mode: plaintext or SecretRef.
+- Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
 - Existing plaintext setups continue to work unchanged.
 
 <Note>
@@ -236,7 +252,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 
 - `agents.defaults.workspace`
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
-- `tools.profile` (local onboarding defaults to `"messaging"` when unset; existing explicit values are preserved)
+- `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
 - `session.dmScope` (local onboarding defaults this to `per-channel-peer` when unset; existing explicit values are preserved)
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`

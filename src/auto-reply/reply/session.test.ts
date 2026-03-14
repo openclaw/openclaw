@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -850,11 +851,18 @@ describe("initSessionState RawBody", () => {
 });
 
 describe("initSessionState reset policy", () => {
+  let clearBootstrapSnapshotOnSessionRolloverSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     vi.useFakeTimers();
+    clearBootstrapSnapshotOnSessionRolloverSpy = vi.spyOn(
+      bootstrapCache,
+      "clearBootstrapSnapshotOnSessionRollover",
+    );
   });
 
   afterEach(() => {
+    clearBootstrapSnapshotOnSessionRolloverSpy.mockRestore();
     vi.useRealTimers();
   });
 
@@ -881,6 +889,10 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: existingSessionId,
+    });
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -1057,6 +1069,10 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: undefined,
+    });
   });
 });
 
@@ -1455,6 +1471,61 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       }),
     );
     archiveSpy.mockRestore();
+  });
+
+  it("archives the old session transcript on daily/scheduled reset (stale session)", async () => {
+    // Daily resets occur when the session becomes stale (not via /new or /reset command).
+    // Previously, previousSessionEntry was only set when resetTriggered=true, leaving
+    // old transcript files orphaned on disk. Refs #35481.
+    vi.useFakeTimers();
+    try {
+      // Simulate: it is 5am, session was last active at 3am (before 4am daily boundary)
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-stale-archive-");
+      const sessionKey = "agent:main:telegram:dm:archive-stale-user";
+      const existingSessionId = "stale-session-to-be-archived";
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+
+      const sessionUtils = await import("../../gateway/session-utils.fs.js");
+      const archiveSpy = vi.spyOn(sessionUtils, "archiveSessionTranscripts");
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          From: "user-stale",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(archiveSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: existingSessionId,
+          storePath,
+          reason: "reset",
+        }),
+      );
+      archiveSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {
@@ -1869,6 +1940,43 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.lastTo).toBe("group:12345");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("telegram");
     expect(result.sessionEntry.deliveryContext?.to).toBe("group:12345");
+  });
+
+  it("lets direct webchat turns override persisted external routes for per-channel-peer sessions", async () => {
+    const storePath = await createStorePath("webchat-direct-route-override-");
+    const sessionKey = "agent:main:imessage:direct:+1555";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-webchat-direct",
+        updatedAt: Date.now(),
+        lastChannel: "imessage",
+        lastTo: "+1555",
+        deliveryContext: {
+          channel: "imessage",
+          to: "+1555",
+        },
+      },
+    });
+    const cfg = {
+      session: { store: storePath, dmScope: "per-channel-peer" },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "reply from control ui",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+        OriginatingTo: "session:dashboard",
+        Surface: "webchat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("webchat");
+    expect(result.sessionEntry.lastTo).toBe("session:dashboard");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("session:dashboard");
   });
 
   it("keeps persisted external route when OriginatingChannel is non-deliverable", async () => {

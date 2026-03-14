@@ -37,7 +37,7 @@ describe("auth profile runtime snapshot persistence", () => {
 
       const snapshot = await prepareSecretsRuntimeSnapshot({
         config: {},
-        env: { OPENAI_API_KEY: "sk-runtime-openai" },
+        env: { OPENAI_API_KEY: "sk-runtime-openai" }, // pragma: allowlist secret
         agentDirs: [agentDir],
       });
       activateSecretsRuntimeSnapshot(snapshot);

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
-import { postMultipartFormData } from "./multipart.js";
+import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
@@ -30,6 +30,34 @@ function resolvePartIndex(partIndex: number | undefined): number {
   return typeof partIndex === "number" ? partIndex : 0;
 }
 
+async function sendBlueBubblesChatEndpointRequest(params: {
+  chatGuid: string;
+  opts: BlueBubblesChatOpts;
+  endpoint: "read" | "typing";
+  method: "POST" | "DELETE";
+  action: "read" | "typing";
+}): Promise<void> {
+  const trimmed = params.chatGuid.trim();
+  if (!trimmed) {
+    return;
+  }
+  const { baseUrl, password, accountId } = resolveAccount(params.opts);
+  if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
+    return;
+  }
+  const url = buildBlueBubblesApiUrl({
+    baseUrl,
+    path: `/api/v1/chat/${encodeURIComponent(trimmed)}/${params.endpoint}`,
+    password,
+  });
+  const res = await blueBubblesFetchWithTimeout(
+    url,
+    { method: params.method },
+    params.opts.timeoutMs,
+  );
+  await assertMultipartActionOk(res, params.action);
+}
+
 async function sendPrivateApiJsonRequest(params: {
   opts: BlueBubblesChatOpts;
   feature: string;
@@ -53,36 +81,20 @@ async function sendPrivateApiJsonRequest(params: {
   }
 
   const res = await blueBubblesFetchWithTimeout(url, request, params.opts.timeoutMs);
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(
-      `BlueBubbles ${params.action} failed (${res.status}): ${errorText || "unknown"}`,
-    );
-  }
+  await assertMultipartActionOk(res, params.action);
 }
 
 export async function markBlueBubblesChatRead(
   chatGuid: string,
   opts: BlueBubblesChatOpts = {},
 ): Promise<void> {
-  const trimmed = chatGuid.trim();
-  if (!trimmed) {
-    return;
-  }
-  const { baseUrl, password, accountId } = resolveAccount(opts);
-  if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
-    return;
-  }
-  const url = buildBlueBubblesApiUrl({
-    baseUrl,
-    path: `/api/v1/chat/${encodeURIComponent(trimmed)}/read`,
-    password,
+  await sendBlueBubblesChatEndpointRequest({
+    chatGuid,
+    opts,
+    endpoint: "read",
+    method: "POST",
+    action: "read",
   });
-  const res = await blueBubblesFetchWithTimeout(url, { method: "POST" }, opts.timeoutMs);
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(`BlueBubbles read failed (${res.status}): ${errorText || "unknown"}`);
-  }
 }
 
 export async function sendBlueBubblesTyping(
@@ -90,28 +102,13 @@ export async function sendBlueBubblesTyping(
   typing: boolean,
   opts: BlueBubblesChatOpts = {},
 ): Promise<void> {
-  const trimmed = chatGuid.trim();
-  if (!trimmed) {
-    return;
-  }
-  const { baseUrl, password, accountId } = resolveAccount(opts);
-  if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
-    return;
-  }
-  const url = buildBlueBubblesApiUrl({
-    baseUrl,
-    path: `/api/v1/chat/${encodeURIComponent(trimmed)}/typing`,
-    password,
+  await sendBlueBubblesChatEndpointRequest({
+    chatGuid,
+    opts,
+    endpoint: "typing",
+    method: typing ? "POST" : "DELETE",
+    action: "typing",
   });
-  const res = await blueBubblesFetchWithTimeout(
-    url,
-    { method: typing ? "POST" : "DELETE" },
-    opts.timeoutMs,
-  );
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(`BlueBubbles typing failed (${res.status}): ${errorText || "unknown"}`);
-  }
 }
 
 /**
@@ -322,8 +319,5 @@ export async function setGroupIconBlueBubbles(
     timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
   });
 
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(`BlueBubbles setGroupIcon failed (${res.status}): ${errorText || "unknown"}`);
-  }
+  await assertMultipartActionOk(res, "setGroupIcon");
 }
