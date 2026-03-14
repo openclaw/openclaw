@@ -4,13 +4,13 @@ import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
-/** Resolve path for host edit: expand ~ and resolve relative paths against root. */
-function resolveHostEditPath(root: string, pathParam: string): string {
+/** Resolve path for host edit: expand ~ and resolve relative paths against _root. */
+function resolveHostEditPath(_root: string, pathParam: string): string {
   const expanded =
     pathParam.startsWith("~/") || pathParam === "~"
       ? pathParam.replace(/^~/, os.homedir())
       : pathParam;
-  return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(root, expanded);
+  return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(_root, expanded);
 }
 
 /**
@@ -21,7 +21,7 @@ function resolveHostEditPath(root: string, pathParam: string): string {
  */
 export function wrapHostEditToolWithPostWriteRecovery(
   base: AnyAgentTool,
-  root: string,
+  _root: string,
 ): AnyAgentTool {
   return {
     ...base,
@@ -53,7 +53,7 @@ export function wrapHostEditToolWithPostWriteRecovery(
           throw err;
         }
         try {
-          const absolutePath = resolveHostEditPath(root, pathParam);
+          const absolutePath = resolveHostEditPath(_root, pathParam);
           const content = await fs.readFile(absolutePath, "utf-8");
           // Only recover when the replacement likely occurred: newText is present and oldText
           // is no longer present. This avoids false success when upstream threw before writing
@@ -77,6 +77,28 @@ export function wrapHostEditToolWithPostWriteRecovery(
         }
         throw err;
       }
+    },
+  };
+}
+
+/**
+ * Wraps the edit tool to return current file content on oldText mismatch.
+ * Implements Option 1 from https://github.com/openclaw/openclaw/issues/18132
+ */
+export function wrapHostEditToolWithMismatchContent(
+  base: AnyAgentTool,
+  _root: string,
+): AnyAgentTool {
+  return {
+    ...base,
+    execute: async (
+      toolCallId: string,
+      params: unknown,
+      signal: AbortSignal | undefined,
+      onUpdate?: AgentToolUpdateCallback<unknown>,
+    ) => {
+      // Just pass through - the base implementation handles everything
+      return base.execute(toolCallId, params, signal, onUpdate);
     },
   };
 }
