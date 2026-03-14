@@ -122,6 +122,27 @@ async function renderChromeMcpLabels(params: {
   return { labels, skipped };
 }
 
+async function saveNormalizedScreenshotResponse(params: {
+  res: BrowserResponse;
+  buffer: Buffer;
+  type: "png" | "jpeg";
+  targetId: string;
+  url: string;
+}) {
+  const normalized = await normalizeBrowserScreenshot(params.buffer, {
+    maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
+    maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+  });
+  await saveBrowserMediaResponse({
+    res: params.res,
+    buffer: normalized.buffer,
+    contentType: normalized.contentType ?? `image/${params.type}`,
+    maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+    targetId: params.targetId,
+    url: params.url,
+  });
+}
+
 async function saveBrowserMediaResponse(params: {
   res: BrowserResponse;
   buffer: Buffer;
@@ -305,15 +326,10 @@ export function registerBrowserAgentSnapshotRoutes(
             fullPage,
             format: type,
           });
-          const normalized = await normalizeBrowserScreenshot(buffer, {
-            maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-            maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-          });
-          await saveBrowserMediaResponse({
+          await saveNormalizedScreenshotResponse({
             res,
-            buffer: normalized.buffer,
-            contentType: normalized.contentType ?? `image/${type}`,
-            maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+            buffer,
+            type,
             targetId: tab.targetId,
             url: tab.url,
           });
@@ -350,15 +366,10 @@ export function registerBrowserAgentSnapshotRoutes(
           });
         }
 
-        const normalized = await normalizeBrowserScreenshot(buffer, {
-          maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-          maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-        });
-        await saveBrowserMediaResponse({
+        await saveNormalizedScreenshotResponse({
           res,
-          buffer: normalized.buffer,
-          contentType: normalized.contentType ?? `image/${type}`,
-          maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+          buffer,
+          type,
           targetId: tab.targetId,
           url: tab.url,
         });

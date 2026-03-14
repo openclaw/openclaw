@@ -53,6 +53,22 @@ function expectDmMessagePreviewViaSendMessage(
   expect(api.editMessageText).not.toHaveBeenCalled();
 }
 
+async function createDmDraftTransportStream(params: {
+  api?: ReturnType<typeof createMockDraftApi>;
+  previewTransport?: "draft" | "message";
+  warn?: ReturnType<typeof vi.fn>;
+}) {
+  const api = params.api ?? createMockDraftApi();
+  const stream = createDraftStream(api, {
+    thread: { id: 42, scope: "dm" },
+    previewTransport: params.previewTransport ?? "draft",
+    ...(params.warn ? { warn: params.warn } : {}),
+  });
+  stream.update("Hello");
+  await stream.flush();
+  return { api, stream };
+}
+
 function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
   const api = createMockDraftApi();
   api.sendMessage
@@ -139,14 +155,7 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("supports forcing message transport in dm threads", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, {
-      thread: { id: 42, scope: "dm" },
-      previewTransport: "message",
-    });
-
-    stream.update("Hello");
-    await stream.flush();
+    const { api } = await createDmDraftTransportStream({ previewTransport: "message" });
 
     expectDmMessagePreviewViaSendMessage(api);
     expect(api.sendMessageDraft).not.toHaveBeenCalled();
@@ -156,14 +165,7 @@ describe("createTelegramDraftStream", () => {
     const api = createMockDraftApi();
     delete (api as { sendMessageDraft?: unknown }).sendMessageDraft;
     const warn = vi.fn();
-    const stream = createDraftStream(api, {
-      thread: { id: 42, scope: "dm" },
-      previewTransport: "draft",
-      warn,
-    });
-
-    stream.update("Hello");
-    await stream.flush();
+    await createDmDraftTransportStream({ api, warn });
 
     expectDmMessagePreviewViaSendMessage(api);
     expect(warn).toHaveBeenCalledWith(
@@ -179,14 +181,7 @@ describe("createTelegramDraftStream", () => {
       ),
     );
     const warn = vi.fn();
-    const stream = createDraftStream(api, {
-      thread: { id: 42, scope: "dm" },
-      previewTransport: "draft",
-      warn,
-    });
-
-    stream.update("Hello");
-    await stream.flush();
+    const { stream } = await createDmDraftTransportStream({ api, warn });
 
     expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
     expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
@@ -492,32 +487,30 @@ describe("createTelegramDraftStream", () => {
     expect(stream.sendMayHaveLanded?.()).toBe(true);
   });
 
-  it("clears sendMayHaveLanded on pre-connect first preview send failures", async () => {
+  async function expectSendMayHaveLandedStateAfterFirstFailure(error: Error, expected: boolean) {
     const api = createMockDraftApi();
-    api.sendMessage.mockRejectedValueOnce(
-      Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
-    );
+    api.sendMessage.mockRejectedValueOnce(error);
     const stream = createDraftStream(api);
 
     stream.update("Hello");
     await stream.flush();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(stream.sendMayHaveLanded?.()).toBe(false);
+    expect(stream.sendMayHaveLanded?.()).toBe(expected);
+  }
+
+  it("clears sendMayHaveLanded on pre-connect first preview send failures", async () => {
+    await expectSendMayHaveLandedStateAfterFirstFailure(
+      Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+      false,
+    );
   });
 
   it("clears sendMayHaveLanded on Telegram 4xx client rejections", async () => {
-    const api = createMockDraftApi();
-    api.sendMessage.mockRejectedValueOnce(
+    await expectSendMayHaveLandedStateAfterFirstFailure(
       Object.assign(new Error("403: Forbidden"), { error_code: 403 }),
+      false,
     );
-    const stream = createDraftStream(api);
-
-    stream.update("Hello");
-    await stream.flush();
-
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(stream.sendMayHaveLanded?.()).toBe(false);
   });
 
   it("supports rendered previews with parse_mode", async () => {

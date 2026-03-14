@@ -27,6 +27,28 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
 
+function setConfigSnapshot(params: {
+  exists: boolean;
+  valid: boolean;
+  issues?: Array<{ path: string; message: string }>;
+}) {
+  readConfigFileSnapshotMock.mockResolvedValue({
+    exists: params.exists,
+    valid: params.valid,
+    config: {},
+    issues: params.issues ?? [],
+  });
+}
+
+function createServiceRunArgs() {
+  return {
+    serviceNoun: "Gateway",
+    service,
+    renderStartHints: () => [],
+    opts: { json: true },
+  };
+}
+
 describe("runServiceRestart config pre-flight (#35862)", () => {
   let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
 
@@ -37,12 +59,7 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
   beforeEach(() => {
     resetLifecycleRuntimeLogs();
     readConfigFileSnapshotMock.mockReset();
-    readConfigFileSnapshotMock.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {},
-      issues: [],
-    });
+    setConfigSnapshot({ exists: true, valid: true });
     loadConfig.mockReset();
     loadConfig.mockReturnValue({});
     resetLifecycleServiceMocks();
@@ -50,58 +67,30 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
   });
 
   it("aborts restart when config is invalid", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
+    setConfigSnapshot({
       exists: true,
       valid: false,
-      config: {},
       issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
     });
 
-    await expect(
-      runServiceRestart({
-        serviceNoun: "Gateway",
-        service,
-        renderStartHints: () => [],
-        opts: { json: true },
-      }),
-    ).rejects.toThrow("__exit__:1");
+    await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
     expect(service.restart).not.toHaveBeenCalled();
   });
 
   it("proceeds with restart when config is valid", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {},
-      issues: [],
-    });
+    setConfigSnapshot({ exists: true, valid: true });
 
-    const result = await runServiceRestart({
-      serviceNoun: "Gateway",
-      service,
-      renderStartHints: () => [],
-      opts: { json: true },
-    });
+    const result = await runServiceRestart(createServiceRunArgs());
 
     expect(result).toBe(true);
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
   it("proceeds with restart when config file does not exist", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      exists: false,
-      valid: true,
-      config: {},
-      issues: [],
-    });
+    setConfigSnapshot({ exists: false, valid: true });
 
-    const result = await runServiceRestart({
-      serviceNoun: "Gateway",
-      service,
-      renderStartHints: () => [],
-      opts: { json: true },
-    });
+    const result = await runServiceRestart(createServiceRunArgs());
 
     expect(result).toBe(true);
     expect(service.restart).toHaveBeenCalledTimes(1);
@@ -110,12 +99,7 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
   it("proceeds with restart when snapshot read throws", async () => {
     readConfigFileSnapshotMock.mockRejectedValue(new Error("read failed"));
 
-    const result = await runServiceRestart({
-      serviceNoun: "Gateway",
-      service,
-      renderStartHints: () => [],
-      opts: { json: true },
-    });
+    const result = await runServiceRestart(createServiceRunArgs());
 
     expect(result).toBe(true);
     expect(service.restart).toHaveBeenCalledTimes(1);
@@ -132,49 +116,26 @@ describe("runServiceStart config pre-flight (#35862)", () => {
   beforeEach(() => {
     resetLifecycleRuntimeLogs();
     readConfigFileSnapshotMock.mockReset();
-    readConfigFileSnapshotMock.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {},
-      issues: [],
-    });
+    setConfigSnapshot({ exists: true, valid: true });
     resetLifecycleServiceMocks();
   });
 
   it("aborts start when config is invalid", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
+    setConfigSnapshot({
       exists: true,
       valid: false,
-      config: {},
       issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
     });
 
-    await expect(
-      runServiceStart({
-        serviceNoun: "Gateway",
-        service,
-        renderStartHints: () => [],
-        opts: { json: true },
-      }),
-    ).rejects.toThrow("__exit__:1");
+    await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
     expect(service.restart).not.toHaveBeenCalled();
   });
 
   it("proceeds with start when config is valid", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {},
-      issues: [],
-    });
+    setConfigSnapshot({ exists: true, valid: true });
 
-    await runServiceStart({
-      serviceNoun: "Gateway",
-      service,
-      renderStartHints: () => [],
-      opts: { json: true },
-    });
+    await runServiceStart(createServiceRunArgs());
 
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
