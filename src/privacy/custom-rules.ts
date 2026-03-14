@@ -89,7 +89,11 @@ export function processCustomRulesConfig(config: CustomRulesConfig): CustomRules
   }
 
   // 2. Apply disable list.
-  const disableSet = new Set(config.disable ?? []);
+  const disableEntries = Array.isArray(config.disable) ? config.disable : [];
+  if (config.disable !== undefined && !Array.isArray(config.disable)) {
+    warnings.push("custom privacy rules: disable must be an array of rule type strings; ignoring.");
+  }
+  const disableSet = new Set(disableEntries);
   if (disableSet.size > 0) {
     baseRules = baseRules.map((r) => (disableSet.has(r.type) ? { ...r, enabled: false } : r));
   }
@@ -200,6 +204,47 @@ export function validateUserRule(rule: UserDefinedRule, index: number): RuleVali
       field: "validateFn",
       message: `unknown validator "${rule.validateFn}". Available: ${Object.keys(NAMED_VALIDATORS).join(", ")}`,
     });
+  }
+
+  if (rule.context) {
+    const { mustContain, mustNotContain } = rule.context;
+    if (mustContain !== undefined && !Array.isArray(mustContain)) {
+      errors.push({
+        ruleIndex: index,
+        type,
+        field: "context.mustContain",
+        message: "context.mustContain must be an array of strings",
+      });
+    } else if (Array.isArray(mustContain)) {
+      const badIdx = mustContain.findIndex((kw) => typeof kw !== "string");
+      if (badIdx !== -1) {
+        errors.push({
+          ruleIndex: index,
+          type,
+          field: "context.mustContain",
+          message: `context.mustContain[${badIdx}] must be a string (got ${typeof mustContain[badIdx]})`,
+        });
+      }
+    }
+
+    if (mustNotContain !== undefined && !Array.isArray(mustNotContain)) {
+      errors.push({
+        ruleIndex: index,
+        type,
+        field: "context.mustNotContain",
+        message: "context.mustNotContain must be an array of strings",
+      });
+    } else if (Array.isArray(mustNotContain)) {
+      const badIdx = mustNotContain.findIndex((kw) => typeof kw !== "string");
+      if (badIdx !== -1) {
+        errors.push({
+          ruleIndex: index,
+          type,
+          field: "context.mustNotContain",
+          message: `context.mustNotContain[${badIdx}] must be a string (got ${typeof mustNotContain[badIdx]})`,
+        });
+      }
+    }
   }
 
   return errors;

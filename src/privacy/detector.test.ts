@@ -132,6 +132,22 @@ describe("PrivacyDetector", () => {
       const bankMatches2 = result2.matches.filter((m) => m.type === "bank_account_cn");
       expect(bankMatches2.length).toBeGreaterThanOrEqual(1);
     });
+
+    it("does not throw when context fields are malformed", () => {
+      const malformedContextRules = [
+        {
+          type: "ctx_malformed",
+          description: "Malformed context rule",
+          enabled: true,
+          riskLevel: "medium",
+          pattern: "password",
+          context: { mustContain: "password", mustNotContain: { nope: true } },
+        },
+      ] as unknown as ConstructorParameters<typeof PrivacyDetector>[0];
+
+      const customDetector = new PrivacyDetector(malformedContextRules);
+      expect(() => customDetector.detect("password=secret")).not.toThrow();
+    });
   });
 
   describe("risk levels", () => {
