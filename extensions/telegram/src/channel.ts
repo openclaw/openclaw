@@ -19,6 +19,7 @@ import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
   looksLikeTelegramTargetId,
+  markdownToTelegramHtmlChunks,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   normalizeTelegramMessagingTarget,
@@ -99,6 +100,7 @@ function buildTelegramSendOptions(params: {
 }): TelegramSendOptions {
   return {
     verbose: false,
+    textMode: "html",
     cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
@@ -372,7 +374,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) => getTelegramRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunker: markdownToTelegramHtmlChunks,
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     pollMaxOptions: 10,
