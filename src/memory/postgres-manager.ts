@@ -273,6 +273,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
     }
 
     // Create embedding provider using the same pattern as MemoryIndexManager
+    // Honor postgres-specific embedding overrides when configured
     let provider: EmbeddingProvider | null = null;
     try {
       const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
@@ -280,9 +281,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
         const providerResult = await createEmbeddingProvider({
           config: params.cfg,
           agentDir: resolveAgentDir(params.cfg, params.agentId),
-          provider: settings.provider,
+          provider: pgConfig.embeddingProvider ?? settings.provider,
           remote: settings.remote,
-          model: settings.model,
+          model: pgConfig.embeddingModel ?? settings.model,
           fallback: settings.fallback,
           local: settings.local,
         });
@@ -378,6 +379,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
     query: string,
     opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
   ): Promise<MemorySearchResult[]> {
+    // Sync before search to ensure index is up-to-date (matches builtin/QMD pattern)
+    await this.sync({ reason: "search" });
+
     const maxResults = opts?.maxResults ?? 6;
     const minScore = opts?.minScore ?? this.minSimilarity;
 
@@ -496,9 +500,37 @@ export class PostgresMemoryManager implements MemorySearchManager {
       throw new Error(`Path traversal denied: ${params.relPath}`);
     }
 
-    // Only allow reading memory paths (MEMORY.md, memory/*)
+    // Only allow reading memory paths (MEMORY.md, memory/*) or configured extra paths
     const relNormalized = path.relative(this.workspaceDir, fullPath).replace(/\\/g, "/");
-    if (!isMemoryPath(relNormalized)) {
+    let allowed = isMemoryPath(relNormalized);
+
+    if (!allowed) {
+      const settings = resolveMemorySearchConfig(this.cfg, this.agentId);
+      const extraPaths = normalizeExtraMemoryPaths(this.workspaceDir, settings?.extraPaths);
+      for (const extraPath of extraPaths) {
+        try {
+          const stat = await fs.lstat(extraPath);
+          if (stat.isSymbolicLink()) {
+            continue;
+          }
+          if (stat.isDirectory()) {
+            if (fullPath === extraPath || fullPath.startsWith(`${extraPath}${path.sep}`)) {
+              allowed = true;
+              break;
+            }
+          } else if (stat.isFile()) {
+            if (fullPath === extraPath && fullPath.endsWith(".md")) {
+              allowed = true;
+              break;
+            }
+          }
+        } catch {
+          // skip inaccessible
+        }
+      }
+    }
+
+    if (!allowed) {
       throw new Error(`Access denied: ${params.relPath} is not a memory path`);
     }
 
@@ -547,16 +579,18 @@ export class PostgresMemoryManager implements MemorySearchManager {
     log.info(`Syncing memory files (reason: ${params?.reason ?? "manual"})...`);
 
     const memoryDir = path.join(this.workspaceDir, "memory");
-    const memoryMd = path.join(this.workspaceDir, "MEMORY.md");
 
     const filesToSync: Array<{ fullPath: string; relPath: string; source: MemorySource }> = [];
 
-    // MEMORY.md
-    try {
-      await fs.access(memoryMd);
-      filesToSync.push({ fullPath: memoryMd, relPath: "MEMORY.md", source: "memory" });
-    } catch {
-      // No MEMORY.md, that's fine
+    // MEMORY.md / memory.md (case-insensitive)
+    for (const variant of ["MEMORY.md", "memory.md"]) {
+      const memoryMdPath = path.join(this.workspaceDir, variant);
+      try {
+        await fs.access(memoryMdPath);
+        filesToSync.push({ fullPath: memoryMdPath, relPath: variant, source: "memory" });
+      } catch {
+        // Not present, that's fine
+      }
     }
 
     // memory/*.md
