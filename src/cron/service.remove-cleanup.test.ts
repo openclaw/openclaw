@@ -46,14 +46,25 @@ describe("CronService.remove cleanup (#46369)", () => {
         payload: { kind: "systemEvent", text: "ping" },
       });
 
-      // Seed sessions.json with cron session entries for this job and another job.
+      // Seed sessions.json with canonical + run keys for this job, and another job.
       await updateSessionStore(sessionStorePath, (store) => {
+        // Canonical key (no :run: suffix).
+        store[`agent:main:cron:${job.id}`] = {
+          sessionId: "sess-canonical",
+          updatedAt: Date.now(),
+        } as never;
+        // Run-specific keys.
         store[`agent:main:cron:${job.id}:run:run-1`] = {
           sessionId: "sess-1",
           updatedAt: Date.now(),
         } as never;
         store[`agent:main:cron:${job.id}:run:run-2`] = {
           sessionId: "sess-2",
+          updatedAt: Date.now(),
+        } as never;
+        // Another job's sessions — should survive.
+        store["agent:main:cron:other-job"] = {
+          sessionId: "sess-other-canonical",
           updatedAt: Date.now(),
         } as never;
         store["agent:main:cron:other-job:run:run-3"] = {
@@ -70,10 +81,12 @@ describe("CronService.remove cleanup (#46369)", () => {
       await vi.waitFor(async () => {
         const storeContent = await fs.readFile(sessionStorePath, "utf-8");
         const store = JSON.parse(storeContent);
-        // Sessions for the deleted job should be gone.
+        // All sessions for the deleted job should be gone (canonical + run keys).
+        expect(store[`agent:main:cron:${job.id}`]).toBeUndefined();
         expect(store[`agent:main:cron:${job.id}:run:run-1`]).toBeUndefined();
         expect(store[`agent:main:cron:${job.id}:run:run-2`]).toBeUndefined();
-        // Sessions for other jobs should remain.
+        // Other job's sessions should remain.
+        expect(store["agent:main:cron:other-job"]).toBeDefined();
         expect(store["agent:main:cron:other-job:run:run-3"]).toBeDefined();
       });
     } finally {

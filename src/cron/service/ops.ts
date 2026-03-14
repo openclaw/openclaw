@@ -378,15 +378,20 @@ async function cleanupSessionEntries(
   jobId: string,
   agentId?: string,
 ): Promise<void> {
+  // Prefer resolveSessionStorePath with the job's agentId so multi-agent
+  // deployments clean the correct per-agent sessions.json.
   const sessionStorePath =
-    state.deps.sessionStorePath ?? state.deps.resolveSessionStorePath?.(agentId);
+    state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
   if (!sessionStorePath) {
     return;
   }
-  const cronKeyFragment = `cron:${jobId}:`;
+  // Match both the canonical key (cron:{jobId}) and run-specific keys
+  // (cron:{jobId}:run:{runId}).
+  const canonicalSuffix = `cron:${jobId}`;
+  const runPrefix = `cron:${jobId}:`;
   await updateSessionStore(sessionStorePath, (store) => {
     for (const key of Object.keys(store)) {
-      if (key.includes(cronKeyFragment)) {
+      if (key.endsWith(canonicalSuffix) || key.includes(runPrefix)) {
         delete store[key];
       }
     }
