@@ -60,6 +60,7 @@ class WearReplyNotifier(
         replyPendingIntent,
       )
         .addRemoteInput(remoteInput)
+        .setAllowGeneratedReplies(true)
         .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
         .build()
 
@@ -75,6 +76,10 @@ class WearReplyNotifier(
         .setCategory(NotificationCompat.CATEGORY_MESSAGE)
         .setDefaults(NotificationCompat.DEFAULT_ALL)
         .addAction(replyAction)
+        .extend(
+          NotificationCompat.WearableExtender()
+            .addAction(replyAction),
+        )
         .build()
 
     NotificationManagerCompat.from(context).notify(REPLY_NOTIFICATION_ID, notification)
