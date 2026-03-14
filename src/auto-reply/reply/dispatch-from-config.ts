@@ -29,15 +29,41 @@ import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { GetReplyOptions, ModelSelectedContext, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
-import { extractShortModelName, type ResponsePrefixContext } from "./response-prefix-template.js";
+import {
+  extractShortModelName,
+  stripModelSuffixes,
+  type ResponsePrefixContext,
+} from "./response-prefix-template.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
+
+/**
+ * Resolve provider from explicit override or by extracting the prefix before
+ * the first "/" in the model string. Falls back to "unknown" when neither is
+ * available.
+ */
+function resolveProviderFallback(rawProvider: string | undefined, rawModel: string): string {
+  return rawProvider || (rawModel.includes("/") ? rawModel.split("/")[0] : "unknown");
+}
+
+/**
+ * Strip the provider-prefix segment from a model string only when it matches
+ * the resolved provider. Preserves internal path segments for nested model
+ * IDs like "hf:moonshotai/Kimi-K2.5".
+ */
+function stripMatchingProviderPrefix(rawModel: string, provider: string): string {
+  const firstSlash = rawModel.indexOf("/");
+  if (firstSlash >= 0 && rawModel.slice(0, firstSlash) === provider) {
+    return rawModel.slice(firstSlash + 1);
+  }
+  return rawModel;
+}
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
@@ -107,12 +133,28 @@ export type DispatchFromConfigResult = {
 };
 
 /**
- * Build a ResponsePrefixContext for an abort reply from the session entry and
- * config. Template variables like `{model}` and `{thinkingLevel}` in
- * responsePrefix are resolved from the session's persisted overrides so the
- * abort message is prefixed consistently with normal replies.
+ * Apply model-selected context onto a ResponsePrefixContext.
+ * Used by both the streaming (trackedOnModelSelected) and final prefix
+ * context paths to ensure consistent provider/model/modelFull/thinkingLevel
+ * derivation from the actual model chosen for a turn.
  */
-function buildAbortPrefixContext(params: {
+function applyModelSelectedContext(ctx: ResponsePrefixContext, mctx: ModelSelectedContext): void {
+  ctx.provider = mctx.provider;
+  ctx.model = extractShortModelName(mctx.model);
+  // Use extractShortModelName for modelFull too — consistent with ctx.model
+  // and avoids asymmetry when mctx.model has a provider prefix that doesn't
+  // match mctx.provider (e.g. "azure/gpt-4o" with provider "openai").
+  ctx.modelFull = `${mctx.provider}/${ctx.model}`;
+  ctx.thinkingLevel = mctx.thinkLevel ?? "off";
+}
+
+/**
+ * Build a ResponsePrefixContext from the session entry and config.
+ * Template variables like `{model}` and `{thinkingLevel}` in responsePrefix
+ * are resolved from the session's persisted overrides so abort messages and
+ * routed replies are prefixed consistently with normal replies.
+ */
+function buildSessionPrefixContext(params: {
   cfg: OpenClawConfig;
   sessionKey: string | undefined;
   sessionEntry: SessionEntry | undefined;
@@ -125,12 +167,24 @@ function buildAbortPrefixContext(params: {
 
   const rawModel = sessionEntry?.modelOverride?.trim();
   const rawProvider = sessionEntry?.providerOverride?.trim();
+  const provider = rawModel ? resolveProviderFallback(rawProvider, rawModel) : rawProvider;
+  const shortModel = rawModel ? extractShortModelName(rawModel) : undefined;
+
+  // Build the model segment for modelFull. Strip the first "/" segment only
+  // when it matches the resolved provider to avoid duplication (e.g.
+  // "openai/gpt-5.2" → "gpt-5.2"). Otherwise keep the full rawModel so
+  // nested model IDs like "hf:moonshotai/Kimi-K2.5" are preserved intact.
+  // Uses shared stripModelSuffixes to stay aligned with extractShortModelName.
+  const modelSegmentForFull =
+    rawModel && provider
+      ? stripModelSuffixes(stripMatchingProviderPrefix(rawModel, provider))
+      : undefined;
 
   return {
     identityName,
-    model: rawModel ? extractShortModelName(rawModel) : undefined,
-    modelFull: rawModel && rawProvider ? `${rawProvider}/${rawModel}` : undefined,
-    provider: rawProvider,
+    model: shortModel,
+    modelFull: provider && modelSegmentForFull ? `${provider}/${modelSegmentForFull}` : undefined,
+    provider,
     thinkingLevel: sessionEntry?.thinkingLevel ?? "off",
   };
 }
@@ -205,6 +259,18 @@ export async function dispatchReplyFromConfig(params: {
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
+
+  // Mutable prefix context for streaming payloads (block/tool results routed
+  // via sendPayloadAsync). Initialized from session overrides; updated by
+  // onModelSelected with the actual model used for this turn.
+  // NOTE: intentional asymmetry — this uses the pre-run session entry so it's
+  // available immediately for streaming, while finalPrefixContext (below) uses
+  // a fresh session re-read after the run to pick up command-mutated overrides.
+  const streamingPrefixContext: ResponsePrefixContext = buildSessionPrefixContext({
+    cfg,
+    sessionKey: ctx.SessionKey,
+    sessionEntry: sessionStoreEntry.entry,
+  });
   const hookRunner = getGlobalHookRunner();
 
   // Extract message context for hooks (plugin and internal)
@@ -297,6 +363,7 @@ export async function dispatchReplyFromConfig(params: {
       mirror,
       isGroup,
       groupId,
+      responsePrefixContext: streamingPrefixContext,
     });
     if (!result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
@@ -312,9 +379,13 @@ export async function dispatchReplyFromConfig(params: {
       // from session overrides so responsePrefix templates like {model} can interpolate.
       const rawModel = sessionStoreEntry.entry?.modelOverride?.trim();
       if (rawModel && params.replyOptions?.onModelSelected) {
+        const rawProvider = sessionStoreEntry.entry?.providerOverride?.trim();
+        const provider = resolveProviderFallback(rawProvider, rawModel);
+        // Strip date/latest suffixes so downstream modelFull is consistent
+        // with buildSessionPrefixContext (both use stripModelSuffixes).
         params.replyOptions.onModelSelected({
-          provider: sessionStoreEntry.entry?.providerOverride?.trim() ?? "unknown",
-          model: rawModel,
+          provider,
+          model: stripModelSuffixes(stripMatchingProviderPrefix(rawModel, provider)),
           thinkLevel: sessionStoreEntry.entry?.thinkingLevel ?? "off",
         });
       }
@@ -335,7 +406,7 @@ export async function dispatchReplyFromConfig(params: {
           cfg,
           isGroup,
           groupId,
-          responsePrefixContext: buildAbortPrefixContext({
+          responsePrefixContext: buildSessionPrefixContext({
             cfg,
             sessionKey: ctx.SessionKey,
             sessionEntry: sessionStoreEntry.entry,
@@ -454,8 +525,13 @@ export async function dispatchReplyFromConfig(params: {
     // If it didn't (e.g. commands like /stop or /status), we provide a fallback
     // so responsePrefix templates like {model} still resolve.
     let modelSelected = false;
-    const trackedOnModelSelected = (mctx: import("../types.js").ModelSelectedContext) => {
+    let capturedModelCtx: ModelSelectedContext | undefined;
+    const trackedOnModelSelected = (mctx: ModelSelectedContext) => {
       modelSelected = true;
+      capturedModelCtx = mctx;
+      // Update streaming prefix context with actual model so block/tool
+      // payloads routed via sendPayloadAsync interpolate correctly.
+      applyModelSelectedContext(streamingPrefixContext, mctx);
       params.replyOptions?.onModelSelected?.(mctx);
     };
 
@@ -550,18 +626,39 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
+    // Re-read session entry — commands like /think and /model mutate session fields during
+    // directive handling, so the entry captured before replyResolver may be stale.
+    const freshEntry = resolveSessionStoreLookup(ctx, cfg).entry ?? sessionStoreEntry.entry;
+
     if (!modelSelected && params.replyOptions?.onModelSelected) {
-      const rawModel = sessionStoreEntry.entry?.modelOverride?.trim();
+      const rawModel = freshEntry?.modelOverride?.trim();
       if (rawModel) {
+        const rawProvider = freshEntry?.providerOverride?.trim();
+        const provider = resolveProviderFallback(rawProvider, rawModel);
+        // Strip date/latest suffixes so downstream modelFull is consistent
+        // with buildSessionPrefixContext (both use stripModelSuffixes).
         params.replyOptions.onModelSelected({
-          provider: sessionStoreEntry.entry?.providerOverride?.trim() ?? "unknown",
-          model: rawModel,
-          thinkLevel: sessionStoreEntry.entry?.thinkingLevel ?? "off",
+          provider,
+          model: stripModelSuffixes(stripMatchingProviderPrefix(rawModel, provider)),
+          thinkLevel: freshEntry?.thinkingLevel ?? "off",
         });
       }
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+
+    // Build final prefix context from fresh session entry, overlaying with
+    // the actual model selected during this turn when available. This ensures
+    // routed replies use the real model (from onModelSelected) rather than
+    // stale session overrides when model fallback/select happened.
+    const finalPrefixContext = buildSessionPrefixContext({
+      cfg,
+      sessionKey: ctx.SessionKey,
+      sessionEntry: freshEntry,
+    });
+    if (capturedModelCtx) {
+      applyModelSelectedContext(finalPrefixContext, capturedModelCtx);
+    }
 
     let queuedFinal = false;
     let routedFinalCount = 0;
@@ -591,13 +688,7 @@ export async function dispatchReplyFromConfig(params: {
           cfg,
           isGroup,
           groupId,
-          // Ensure we provide prefix context for replies bypassing the dispatcher
-          // (like /stop command aborts) so {model} templates interpolate correctly
-          responsePrefixContext: buildAbortPrefixContext({
-            cfg,
-            sessionKey: ctx.SessionKey,
-            sessionEntry: sessionStoreEntry.entry,
-          }),
+          responsePrefixContext: finalPrefixContext,
         });
         if (!result.ok) {
           logVerbose(

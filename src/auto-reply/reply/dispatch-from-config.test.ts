@@ -1954,4 +1954,992 @@ describe("Response Prefix Template Interpolation", () => {
       thinkLevel: "off",
     });
   });
+
+  it("calls onModelSelected for fast-abort path", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({
+      handled: true,
+      aborted: true,
+      stoppedSubagents: 0,
+    });
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValueOnce({
+      "test-session-key": {
+        sessionId: "sid",
+        createdAt: 123,
+        modelOverride: "openai/gpt-5.2-20260205",
+        providerOverride: "openai",
+        thinkingLevel: "high",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx(),
+      SessionKey: "test-session-key",
+    };
+
+    const onModelSelected = vi.fn();
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyOptions: { onModelSelected },
+    });
+
+    // Date suffix stripped via stripModelSuffixes for consistent modelFull downstream
+    expect(onModelSelected).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-5.2",
+      thinkLevel: "high",
+    });
+  });
+
+  it("resolves provider from model string when providerOverride is absent (fast-abort path)", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({
+      handled: true,
+      aborted: true,
+      stoppedSubagents: 0,
+    });
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValueOnce({
+      "test-session-key": {
+        sessionId: "sid",
+        updatedAt: 123,
+        modelOverride: "openai/gpt-5.2-20260205",
+        // providerOverride intentionally absent
+        thinkingLevel: "off",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx(),
+      SessionKey: "test-session-key",
+    };
+
+    const onModelSelected = vi.fn();
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyOptions: { onModelSelected },
+    });
+
+    // Provider should be extracted from the model string prefix, not fall back to "unknown".
+    // Date suffix stripped via stripModelSuffixes for consistent modelFull downstream.
+    expect(onModelSelected).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-5.2",
+      thinkLevel: "off",
+    });
+  });
+
+  it("falls back to 'unknown' provider when model has no slash and providerOverride is absent (fast-abort path)", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({
+      handled: true,
+      aborted: true,
+      stoppedSubagents: 0,
+    });
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValueOnce({
+      "test-session-key": {
+        sessionId: "sid",
+        updatedAt: 123,
+        modelOverride: "gpt-5.2",
+        // providerOverride intentionally absent; model has no slash prefix
+        thinkingLevel: "low",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx(),
+      SessionKey: "test-session-key",
+    };
+
+    const onModelSelected = vi.fn();
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyOptions: { onModelSelected },
+    });
+
+    // No slash in model string and no providerOverride → provider should be "unknown"
+    expect(onModelSelected).toHaveBeenCalledWith({
+      provider: "unknown",
+      model: "gpt-5.2",
+      thinkLevel: "low",
+    });
+  });
+
+  it("resolves provider from model string and uses fresh session entry in !modelSelected fallback", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+
+    // First load (captured before replyResolver): stale — no providerOverride, old thinkingLevel
+    vi.spyOn(sessionStore, "loadSessionStore")
+      .mockReturnValueOnce({
+        "test-session-key": {
+          sessionId: "sid",
+          updatedAt: 123,
+          modelOverride: "anthropic/claude-sonnet-4-6",
+          thinkingLevel: "off",
+        },
+      })
+      // Second load (re-read after replyResolver): fresh — /think changed thinkingLevel to "high"
+      .mockReturnValueOnce({
+        "test-session-key": {
+          sessionId: "sid",
+          updatedAt: 456,
+          modelOverride: "anthropic/claude-sonnet-4-6",
+          thinkingLevel: "high",
+        },
+      });
+
+    const ctx = {
+      ...buildTestCtx(),
+      SessionKey: "test-session-key",
+    };
+
+    // Simulate a command reply (/think) that does not trigger onModelSelected itself
+    const replyResolver = vi.fn().mockResolvedValue([{ text: "Thinking mode: high" }]);
+    const onModelSelected = vi.fn();
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+      replyOptions: { onModelSelected },
+    });
+
+    // Should use fresh entry (thinkingLevel "high") and extracted provider, not stale entry
+    expect(onModelSelected).toHaveBeenCalledWith({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      thinkLevel: "high",
+    });
+  });
+
+  it("passes correct responsePrefixContext to routeReply for routed final replies", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+    mocks.routeReply.mockClear();
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValueOnce({
+      "test-session-key": {
+        sessionId: "sid",
+        createdAt: 123,
+        modelOverride: "openai/gpt-5.2-20260205",
+        providerOverride: "openai",
+        thinkingLevel: "high",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx({
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      SessionKey: "test-session-key",
+    };
+
+    // Simulate a command reply (no onModelSelected trigger) that routes to originating
+    const replyResolver = vi.fn().mockResolvedValue([{ text: "Done." }]);
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+    });
+
+    // Should route to originating channel, not use dispatcher
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:999",
+        responsePrefixContext: expect.objectContaining({
+          provider: "openai",
+          model: "gpt-5.2",
+          modelFull: "openai/gpt-5.2",
+          thinkingLevel: "high",
+        }),
+      }),
+    );
+  });
+
+  it("passes fresh session entry to routeReply responsePrefixContext after command mutations", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+    mocks.routeReply.mockClear();
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+
+    // First load (before replyResolver): stale thinkingLevel
+    vi.spyOn(sessionStore, "loadSessionStore")
+      .mockReturnValueOnce({
+        "test-session-key": {
+          sessionId: "sid",
+          updatedAt: 123,
+          modelOverride: "anthropic/claude-sonnet-4-6",
+          providerOverride: "anthropic",
+          thinkingLevel: "off",
+        },
+      })
+      // Second load (after replyResolver): /think changed thinkingLevel to "high"
+      .mockReturnValueOnce({
+        "test-session-key": {
+          sessionId: "sid",
+          updatedAt: 456,
+          modelOverride: "anthropic/claude-sonnet-4-6",
+          providerOverride: "anthropic",
+          thinkingLevel: "high",
+        },
+      });
+
+    const ctx = {
+      ...buildTestCtx({
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      SessionKey: "test-session-key",
+    };
+
+    const replyResolver = vi.fn().mockResolvedValue([{ text: "Thinking mode: high" }]);
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+    });
+
+    // Should use fresh entry with thinkingLevel "high", not stale "off"
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        responsePrefixContext: expect.objectContaining({
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          modelFull: "anthropic/claude-sonnet-4-6",
+          thinkingLevel: "high",
+        }),
+      }),
+    );
+  });
+
+  // Exercises the !modelSelected fallback (~line 591 in dispatch-from-config.ts)
+  // where the reply resolver never triggered onModelSelected (e.g. /stop, /status).
+  it("preserves nested model IDs in onModelSelected fallback for command replies", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValueOnce({
+      "test-session-key": {
+        sessionId: "sid",
+        createdAt: 123,
+        modelOverride: "hf:moonshotai/Kimi-K2.5",
+        providerOverride: "synthetic",
+        thinkingLevel: "off",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx(),
+      SessionKey: "test-session-key",
+    };
+
+    const replyResolver = vi.fn().mockResolvedValue([{ text: "Done." }]);
+    const onModelSelected = vi.fn();
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+      replyOptions: { onModelSelected },
+    });
+
+    // Full path "hf:moonshotai/Kimi-K2.5" preserved so downstream
+    // createReplyPrefixContext can build correct modelFull
+    expect(onModelSelected).toHaveBeenCalledWith({
+      provider: "synthetic",
+      model: "hf:moonshotai/Kimi-K2.5",
+      thinkLevel: "off",
+    });
+  });
+
+  it("preserves nested model IDs in modelFull for routed replies", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+    mocks.routeReply.mockClear();
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValueOnce({
+      "test-session-key": {
+        sessionId: "sid",
+        createdAt: 123,
+        modelOverride: "hf:moonshotai/Kimi-K2.5",
+        providerOverride: "synthetic",
+        thinkingLevel: "off",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx({
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      SessionKey: "test-session-key",
+    };
+
+    const replyResolver = vi.fn().mockResolvedValue([{ text: "Done." }]);
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+    });
+
+    // modelFull should preserve the nested path "hf:moonshotai/Kimi-K2.5"
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        responsePrefixContext: expect.objectContaining({
+          provider: "synthetic",
+          model: "Kimi-K2.5",
+          modelFull: "synthetic/hf:moonshotai/Kimi-K2.5",
+          thinkingLevel: "off",
+        }),
+      }),
+    );
+  });
+
+  it("infers provider from nested model string when providerOverride is absent", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+    mocks.routeReply.mockClear();
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValueOnce({
+      "test-session-key": {
+        sessionId: "sid",
+        updatedAt: 123,
+        modelOverride: "hf:moonshotai/Kimi-K2.5",
+        // providerOverride intentionally absent — provider inferred from model prefix
+        thinkingLevel: "off",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx({
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      SessionKey: "test-session-key",
+    };
+
+    const replyResolver = vi.fn().mockResolvedValue([{ text: "Done." }]);
+    const onModelSelected = vi.fn();
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+      replyOptions: { onModelSelected },
+    });
+
+    // Provider inferred as "hf:moonshotai" from model prefix; matching prefix
+    // stripped by stripMatchingProviderPrefix, leaving "Kimi-K2.5".
+    expect(onModelSelected).toHaveBeenCalledWith({
+      provider: "hf:moonshotai",
+      model: "Kimi-K2.5",
+      thinkLevel: "off",
+    });
+
+    // Routed reply should have consistent modelFull
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        responsePrefixContext: expect.objectContaining({
+          provider: "hf:moonshotai",
+          model: "Kimi-K2.5",
+          modelFull: "hf:moonshotai/Kimi-K2.5",
+        }),
+      }),
+    );
+  });
+
+  it("routed final reply uses captured model from onModelSelected over session overrides", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+    mocks.routeReply.mockClear();
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValue({
+      "test-session-key": {
+        sessionId: "sid",
+        updatedAt: 123,
+        modelOverride: "openai/gpt-5.2",
+        providerOverride: "openai",
+        thinkingLevel: "off",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx({
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      SessionKey: "test-session-key",
+    };
+
+    // Simulate the run selecting a different model (fallback/override)
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        opts?.onModelSelected?.({
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          thinkLevel: "high",
+        });
+        return [{ text: "Hi from Claude." }] satisfies ReplyPayload[];
+      },
+    );
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+      replyOptions: { onModelSelected: vi.fn() },
+    });
+
+    // Should use the actual model selected during the run, not session overrides
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        responsePrefixContext: expect.objectContaining({
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          modelFull: "anthropic/claude-sonnet-4-6",
+          thinkingLevel: "high",
+        }),
+      }),
+    );
+  });
+
+  it("routed block/tool payloads include responsePrefixContext from onModelSelected", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+    mocks.routeReply.mockClear();
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValue({
+      "test-session-key": {
+        sessionId: "sid",
+        updatedAt: 123,
+        modelOverride: "openai/gpt-5.2",
+        providerOverride: "openai",
+        thinkingLevel: "off",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx({
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      SessionKey: "test-session-key",
+    };
+
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        opts?.onModelSelected?.({
+          provider: "openai",
+          model: "gpt-5.2",
+          thinkLevel: "low",
+        });
+        await opts?.onToolResult?.({ text: "🔧 ran tool" });
+        await opts?.onBlockReply?.({ text: "block content" });
+        return undefined;
+      },
+    );
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+      replyOptions: { onModelSelected: vi.fn() },
+    });
+
+    // Both tool result and block reply should include responsePrefixContext
+    expect(mocks.routeReply).toHaveBeenCalledTimes(2);
+    for (const call of mocks.routeReply.mock.calls) {
+      const params = call[0] as { responsePrefixContext?: Record<string, unknown> };
+      expect(params.responsePrefixContext).toEqual(
+        expect.objectContaining({
+          provider: "openai",
+          model: "gpt-5.2",
+          modelFull: "openai/gpt-5.2",
+          thinkingLevel: "low",
+        }),
+      );
+    }
+  });
+
+  it("routed block payloads use session prefix context when onModelSelected never fires", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+    mocks.routeReply.mockClear();
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValue({
+      "test-session-key": {
+        sessionId: "sid",
+        updatedAt: 123,
+        modelOverride: "anthropic/claude-opus-4-6",
+        providerOverride: "anthropic",
+        thinkingLevel: "high",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx({
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      SessionKey: "test-session-key",
+    };
+
+    // No onModelSelected call — simulates command-only path
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        await opts?.onBlockReply?.({ text: "streaming block" });
+        return undefined;
+      },
+    );
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+    });
+
+    // Falls back to session-based prefix context
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    const params = mocks.routeReply.mock.calls[0]?.[0] as {
+      responsePrefixContext?: Record<string, unknown>;
+    };
+    expect(params.responsePrefixContext).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        modelFull: "anthropic/claude-opus-4-6",
+        thinkingLevel: "high",
+      }),
+    );
+  });
+
+  it("routed modelFull avoids double-prefix when mctx.model is fully-qualified", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+    mocks.routeReply.mockClear();
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValue({
+      "test-session-key": {
+        sessionId: "sid",
+        updatedAt: 123,
+        modelOverride: "openai/gpt-5.2",
+        providerOverride: "openai",
+        thinkingLevel: "off",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx({
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      SessionKey: "test-session-key",
+    };
+
+    // Simulate onModelSelected with a fully-qualified model string
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        opts?.onModelSelected?.({
+          provider: "anthropic",
+          model: "anthropic/claude-sonnet-4-6",
+          thinkLevel: "high",
+        });
+        return [{ text: "response" }] satisfies ReplyPayload[];
+      },
+    );
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+      replyOptions: { onModelSelected: vi.fn() },
+    });
+
+    // modelFull must NOT be "anthropic/anthropic/claude-sonnet-4-6"
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        responsePrefixContext: expect.objectContaining({
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          modelFull: "anthropic/claude-sonnet-4-6",
+          thinkingLevel: "high",
+        }),
+      }),
+    );
+  });
+
+  it("routed block payloads before onModelSelected use session-fallback context", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+    mocks.routeReply.mockClear();
+
+    // Capture deep-copied snapshots of responsePrefixContext at each call,
+    // since the mutable streamingPrefixContext object is passed by reference.
+    const capturedContexts: Record<string, unknown>[] = [];
+    mocks.routeReply.mockImplementation(async (params: unknown) => {
+      const p = params as Record<string, unknown>;
+      if (p.responsePrefixContext && typeof p.responsePrefixContext === "object") {
+        capturedContexts.push({ ...p.responsePrefixContext } as Record<string, unknown>);
+      }
+      return { ok: true as boolean, messageId: "mock" };
+    });
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValue({
+      "test-session-key": {
+        sessionId: "sid",
+        updatedAt: 123,
+        modelOverride: "openai/gpt-5.2",
+        providerOverride: "openai",
+        thinkingLevel: "low",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx({
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      SessionKey: "test-session-key",
+    };
+
+    // Simulate block/tool arriving BEFORE onModelSelected fires
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        // Block fires first — no model selected yet
+        await opts?.onBlockReply?.({ text: "early block" });
+        // Then model is selected
+        opts?.onModelSelected?.({
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          thinkLevel: "high",
+        });
+        // Another block fires after model selection
+        await opts?.onBlockReply?.({ text: "late block" });
+        return undefined;
+      },
+    );
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+      replyOptions: { onModelSelected: vi.fn() },
+    });
+
+    // Two block payloads routed
+    expect(capturedContexts).toHaveLength(2);
+
+    // First block (before onModelSelected) should use session-fallback context
+    expect(capturedContexts[0]).toEqual(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.2",
+        modelFull: "openai/gpt-5.2",
+        thinkingLevel: "low",
+      }),
+    );
+
+    // Second block (after onModelSelected) should use updated model context
+    expect(capturedContexts[1]).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        modelFull: "anthropic/claude-sonnet-4-6",
+        thinkingLevel: "high",
+      }),
+    );
+  });
+
+  it("fast-abort routed reply has correct responsePrefixContext without modelFull double-prefix", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({
+      handled: true,
+      aborted: true,
+      stoppedSubagents: 0,
+    });
+    mocks.routeReply.mockClear();
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValueOnce({
+      "test-session-key": {
+        sessionId: "sid",
+        createdAt: 123,
+        modelOverride: "openai/gpt-5.2-20260205",
+        providerOverride: "openai",
+        thinkingLevel: "off",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx({
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      SessionKey: "test-session-key",
+    };
+
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+    });
+
+    // Should route to originating channel with correct prefix context
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:999",
+        responsePrefixContext: expect.objectContaining({
+          provider: "openai",
+          // model should be short (no provider prefix) — no double "openai/openai/gpt-5.2"
+          model: "gpt-5.2",
+          modelFull: "openai/gpt-5.2",
+          thinkingLevel: "off",
+        }),
+      }),
+    );
+  });
+
+  it("cross-provider model prefix does not produce triple-segment modelFull", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+    mocks.routeReply.mockClear();
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValue({
+      "test-session-key": {
+        sessionId: "sid",
+        updatedAt: 123,
+        modelOverride: "openai/gpt-5.2",
+        providerOverride: "openai",
+        thinkingLevel: "off",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx({
+        Provider: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      SessionKey: "test-session-key",
+    };
+
+    // Simulate onModelSelected with a model whose prefix differs from provider
+    // (e.g. provider="openai" but model="azure/gpt-4o")
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        opts?.onModelSelected?.({
+          provider: "openai",
+          model: "azure/gpt-4o",
+          thinkLevel: "off",
+        });
+        return [{ text: "response" }] satisfies ReplyPayload[];
+      },
+    );
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+      replyOptions: { onModelSelected: vi.fn() },
+    });
+
+    // modelFull must be "openai/gpt-4o", NOT "openai/azure/gpt-4o"
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        responsePrefixContext: expect.objectContaining({
+          provider: "openai",
+          model: "gpt-4o",
+          modelFull: "openai/gpt-4o",
+          thinkingLevel: "off",
+        }),
+      }),
+    );
+  });
 });

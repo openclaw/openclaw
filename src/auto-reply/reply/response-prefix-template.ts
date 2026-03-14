@@ -67,6 +67,15 @@ export function resolveResponsePrefixTemplate(
 }
 
 /**
+ * Strip date-stamp (`-YYYYMMDD`) and `-latest` suffixes from a model name.
+ * Shared by {@link extractShortModelName} and callers that need suffix
+ * stripping without provider-prefix removal.
+ */
+export function stripModelSuffixes(model: string): string {
+  return model.replace(/-\d{8}$/, "").replace(/-latest$/, "");
+}
+
+/**
  * Extract short model name from a full model string.
  *
  * Strips:
@@ -84,8 +93,7 @@ export function extractShortModelName(fullModel: string): string {
   const slash = fullModel.lastIndexOf("/");
   const modelPart = slash >= 0 ? fullModel.slice(slash + 1) : fullModel;
 
-  // Strip date suffixes (YYYYMMDD format)
-  return modelPart.replace(/-\d{8}$/, "").replace(/-latest$/, "");
+  return stripModelSuffixes(modelPart);
 }
 
 /**
