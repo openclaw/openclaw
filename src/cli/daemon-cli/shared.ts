@@ -1,3 +1,4 @@
+import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -12,9 +13,29 @@ import { getResolvedLoggerSettings } from "../../logging.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
+import { createDaemonActionContext } from "./response.js";
 
 export { formatRuntimeStatus };
 export { parsePort };
+
+export function createDaemonInstallActionContext(jsonFlag: unknown) {
+  const json = Boolean(jsonFlag);
+  return {
+    json,
+    ...createDaemonActionContext({ action: "install", json }),
+  };
+}
+
+export function failIfNixDaemonInstallMode(
+  fail: (message: string, hints?: string[]) => void,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!resolveIsNixMode(env)) {
+    return false;
+  }
+  fail("Nix mode detected; service install is disabled.");
+  return true;
+}
 
 export function createCliStatusTextStyles() {
   const rich = isRich();
