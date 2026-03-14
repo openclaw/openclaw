@@ -34,14 +34,19 @@ export function createGuildEvent(params: {
   guildId: string;
   author: import("@buape/carbon").Message["author"];
   message: import("@buape/carbon").Message;
+  includeGuildObject?: boolean;
 }): DiscordMessageEvent {
   return {
     channel_id: params.channelId,
     guild_id: params.guildId,
-    guild: {
-      id: params.guildId,
-      name: "Guild One",
-    },
+    ...(params.includeGuildObject === false
+      ? {}
+      : {
+          guild: {
+            id: params.guildId,
+            name: "Guild One",
+          },
+        }),
     author: params.author,
     message: params.message,
   } as unknown as DiscordMessageEvent;

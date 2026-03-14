@@ -359,6 +359,7 @@ async function ensureAgentComponentInteractionAllowed(params: {
 }): Promise<{ parentId: string | undefined } | null> {
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
+    guildId: params.rawGuildId,
     guildEntries: params.ctx.guildEntries,
   });
   const channelCtx = resolveDiscordChannelContext(params.interaction);
@@ -1089,6 +1090,7 @@ async function handleDiscordComponentEvent(params: {
   const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
+    guildId: rawGuildId,
     guildEntries: params.ctx.guildEntries,
   });
   const channelCtx = resolveDiscordChannelContext(params.interaction);
@@ -1241,6 +1243,7 @@ async function handleDiscordModalTrigger(params: {
   const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
+    guildId: rawGuildId,
     guildEntries: params.ctx.guildEntries,
   });
   const channelCtx = resolveDiscordChannelContext(params.interaction);
@@ -1691,6 +1694,7 @@ class DiscordComponentModal extends Modal {
     const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
     const guildInfo = resolveDiscordGuildEntry({
       guild: interaction.guild ?? undefined,
+      guildId: rawGuildId,
       guildEntries: this.ctx.guildEntries,
     });
     const channelCtx = resolveDiscordChannelContext(interaction);

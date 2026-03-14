@@ -1354,6 +1354,7 @@ async function dispatchDiscordCommandInteraction(params: {
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
+    guildId: interaction.guild?.id ?? undefined,
     guildEntries: discordConfig?.guilds,
   });
   let threadParentId: string | undefined;
