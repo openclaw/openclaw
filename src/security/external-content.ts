@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 
+import { detectSafety, getOnUnsafePolicy, isUnsafe } from "./pi-client.js";
+
 /**
  * Security utilities for handling untrusted external content.
  *
@@ -350,4 +352,69 @@ export function wrapWebContent(
   const includeWarning = source === "web_fetch";
   // Marker sanitization happens in wrapExternalContent
   return wrapExternalContent(content, { source, includeWarning });
+}
+
+// ─── Prompt Inspector ML detection layer (P0-2) ───────────────────────────────
+
+/**
+ * Run both the existing rule-based check and the Prompt Inspector ML detection
+ * on external content.
+ *
+ * Designed to be called **after** wrapExternalContent() has already wrapped the
+ * raw content – detection is performed on the original unwrapped text so that
+ * the boundary markers do not skew the ML model's input.
+ *
+ * This function is always fail-open: errors from the detection API are logged
+ * at debug level and do not throw.
+ *
+ * @param content - Raw (unwrapped) external content to analyse.
+ * @param source  - Source label used in log messages.
+ * @returns true if content is safe (or unchecked), false if ML flagged it.
+ */
+export async function checkExternalContentSafety(
+  content: string,
+  source: ExternalContentSource,
+): Promise<boolean> {
+  // ML-based detection via Prompt Inspector API.
+  // The existing rule-based detectSuspiciousPatterns() is intentionally NOT
+  // called here to avoid double-checking; callers that already invoke it can
+  // optionally call this function for a deeper ML scan on the same content.
+  const result = await detectSafety(content, `external-content/${source}`);
+
+  if (isUnsafe(result) && result.checked) {
+    const policy = getOnUnsafePolicy();
+    if (policy === "block") {
+      throw new Error(
+        `Prompt injection detected in external ${source} content ` +
+          `(score=${result.score ?? "n/a"}, category=${result.category.join(",")})`,
+      );
+    }
+    // "warn" and "log" both continue processing; the calling code decides
+    // whether to surface additional context to the LLM.
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Async variant of buildSafeExternalPrompt() that also runs Prompt Inspector
+ * ML detection on the raw content before wrapping it.
+ *
+ * Falls back gracefully if detection is unavailable (fail-open).
+ */
+export async function buildSafeExternalPromptAsync(params: {
+  content: string;
+  source: ExternalContentSource;
+  sender?: string;
+  subject?: string;
+  jobName?: string;
+  jobId?: string;
+  timestamp?: string;
+}): Promise<{ prompt: string; safe: boolean }> {
+  // Run detection on raw content (non-blocking on error).
+  const safe = await checkExternalContentSafety(params.content, params.source);
+
+  const prompt = buildSafeExternalPrompt(params);
+  return { prompt, safe };
 }
