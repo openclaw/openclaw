@@ -178,10 +178,11 @@ describe("BrowserProfilesService", () => {
       driver: "existing-session",
     });
 
-    expect(result.cdpPort).toBe(18801);
+    expect(result.transport).toBe("chrome-mcp");
+    expect(result.cdpPort).toBeNull();
+    expect(result.cdpUrl).toBeNull();
     expect(result.isRemote).toBe(false);
     expect(state.resolved.profiles["chrome-live"]).toEqual({
-      cdpPort: 18801,
       driver: "existing-session",
       attachOnly: true,
       color: expect.any(String),
@@ -191,7 +192,6 @@ describe("BrowserProfilesService", () => {
         browser: expect.objectContaining({
           profiles: expect.objectContaining({
             "chrome-live": expect.objectContaining({
-              cdpPort: 18801,
               driver: "existing-session",
               attachOnly: true,
             }),
@@ -201,20 +201,27 @@ describe("BrowserProfilesService", () => {
     );
   });
 
-  it("rejects driver=existing-session when cdpUrl is provided", async () => {
+  it("allows driver=existing-session when cdpUrl is provided as an MCP target", async () => {
     const resolved = resolveBrowserConfig({});
-    const { ctx } = createCtx(resolved);
+    const { ctx, state } = createCtx(resolved);
     vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
 
     const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({
+      name: "chrome-live",
+      driver: "existing-session",
+      cdpUrl: "http://127.0.0.1:9222",
+    });
 
-    await expect(
-      service.createProfile({
-        name: "chrome-live",
-        driver: "existing-session",
-        cdpUrl: "http://127.0.0.1:9222",
-      }),
-    ).rejects.toThrow(/does not accept cdpUrl/i);
+    expect(result.transport).toBe("chrome-mcp");
+    expect(result.cdpUrl).toBeNull();
+    expect(result.isRemote).toBe(false);
+    expect(state.resolved.profiles["chrome-live"]).toEqual({
+      cdpUrl: "http://127.0.0.1:9222",
+      driver: "existing-session",
+      attachOnly: true,
+      color: expect.any(String),
+    });
   });
 
   it("deletes remote profiles without stopping or removing local data", async () => {

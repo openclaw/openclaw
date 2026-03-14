@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isSafeScpRemoteHost, normalizeScpRemoteHost } from "./scp-host.js";
+import {
+  isSafeScpRemoteHost,
+  isSafeScpRemotePath,
+  normalizeScpRemoteHost,
+  normalizeScpRemotePath,
+} from "./scp-host.js";
 
 describe("scp remote host", () => {
   it.each([
@@ -31,5 +36,42 @@ describe("scp remote host", () => {
   ])("rejects unsafe host tokens: %j", (value) => {
     expect(normalizeScpRemoteHost(value)).toBeUndefined();
     expect(isSafeScpRemoteHost(value)).toBe(false);
+  });
+});
+
+describe("scp remote path", () => {
+  it.each([
+    {
+      value: "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg",
+      expected: "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg",
+    },
+    {
+      value: " /Users/demo/Library/Messages/Attachments/ab/cd/IMG 1234 (1).jpg ",
+      expected: "/Users/demo/Library/Messages/Attachments/ab/cd/IMG 1234 (1).jpg",
+    },
+  ])("normalizes safe paths for %j", ({ value, expected }) => {
+    expect(normalizeScpRemotePath(value)).toBe(expected);
+    expect(isSafeScpRemotePath(value)).toBe(true);
+  });
+
+  it.each([
+    null,
+    undefined,
+    "",
+    "   ",
+    "relative/path.jpg",
+    "/Users/demo/Library/Messages/Attachments/ab/cd/bad$path.jpg",
+    "/Users/demo/Library/Messages/Attachments/ab/cd/bad`path`.jpg",
+    "/Users/demo/Library/Messages/Attachments/ab/cd/bad;path.jpg",
+    "/Users/demo/Library/Messages/Attachments/ab/cd/bad|path.jpg",
+    "/Users/demo/Library/Messages/Attachments/ab/cd/bad&path.jpg",
+    "/Users/demo/Library/Messages/Attachments/ab/cd/bad<path.jpg",
+    "/Users/demo/Library/Messages/Attachments/ab/cd/bad>path.jpg",
+    '/Users/demo/Library/Messages/Attachments/ab/cd/bad"path.jpg',
+    "/Users/demo/Library/Messages/Attachments/ab/cd/bad'path.jpg",
+    "/Users/demo/Library/Messages/Attachments/ab/cd/bad\\path.jpg",
+  ])("rejects unsafe path tokens: %j", (value) => {
+    expect(normalizeScpRemotePath(value)).toBeUndefined();
+    expect(isSafeScpRemotePath(value)).toBe(false);
   });
 });

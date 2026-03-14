@@ -55,6 +55,14 @@ function expectMessageMatches(
   }
 }
 
+function expectTimeoutFailoverSamples(samples: readonly string[]) {
+  for (const sample of samples) {
+    expect(isTimeoutErrorMessage(sample)).toBe(true);
+    expect(classifyFailoverReason(sample)).toBe("timeout");
+    expect(isFailoverErrorMessage(sample)).toBe(true);
+  }
+}
+
 describe("isAuthPermanentErrorMessage", () => {
   it.each([
     {
@@ -567,36 +575,26 @@ describe("isFailoverErrorMessage", () => {
   });
 
   it("matches abort stop-reason timeout variants", () => {
-    const samples = [
+    expectTimeoutFailoverSamples([
       "Unhandled stop reason: abort",
       "Unhandled stop reason: error",
       "stop reason: abort",
       "stop reason: error",
       "reason: abort",
       "reason: error",
-    ];
-    for (const sample of samples) {
-      expect(isTimeoutErrorMessage(sample)).toBe(true);
-      expect(classifyFailoverReason(sample)).toBe("timeout");
-      expect(isFailoverErrorMessage(sample)).toBe(true);
-    }
+    ]);
   });
 
   it("matches Gemini MALFORMED_RESPONSE stop reason as timeout (#42149)", () => {
-    const samples = [
+    expectTimeoutFailoverSamples([
       "Unhandled stop reason: MALFORMED_RESPONSE",
       "Unhandled stop reason: malformed_response",
       "stop reason: MALFORMED_RESPONSE",
-    ];
-    for (const sample of samples) {
-      expect(isTimeoutErrorMessage(sample)).toBe(true);
-      expect(classifyFailoverReason(sample)).toBe("timeout");
-      expect(isFailoverErrorMessage(sample)).toBe(true);
-    }
+    ]);
   });
 
   it("matches network errno codes in serialized error messages", () => {
-    const samples = [
+    expectTimeoutFailoverSamples([
       "Error: connect ETIMEDOUT 10.0.0.1:443",
       "Error: connect ESOCKETTIMEDOUT 10.0.0.1:443",
       "Error: connect EHOSTUNREACH 10.0.0.1:443",
@@ -604,25 +602,15 @@ describe("isFailoverErrorMessage", () => {
       "Error: write EPIPE",
       "Error: read ENETRESET",
       "Error: connect EHOSTDOWN 192.168.1.1:443",
-    ];
-    for (const sample of samples) {
-      expect(isTimeoutErrorMessage(sample)).toBe(true);
-      expect(classifyFailoverReason(sample)).toBe("timeout");
-      expect(isFailoverErrorMessage(sample)).toBe(true);
-    }
+    ]);
   });
 
   it("matches z.ai network_error stop reason as timeout", () => {
-    const samples = [
+    expectTimeoutFailoverSamples([
       "Unhandled stop reason: network_error",
       "stop reason: network_error",
       "reason: network_error",
-    ];
-    for (const sample of samples) {
-      expect(isTimeoutErrorMessage(sample)).toBe(true);
-      expect(classifyFailoverReason(sample)).toBe("timeout");
-      expect(isFailoverErrorMessage(sample)).toBe(true);
-    }
+    ]);
   });
 
   it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {

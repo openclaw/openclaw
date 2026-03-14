@@ -97,3 +97,33 @@ describe("google-antigravity provider normalization", () => {
     expect(normalized).toBe(providers);
   });
 });
+
+describe("google-vertex provider normalization", () => {
+  it("normalizes gemini flash-lite IDs for google-vertex providers", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const providers = {
+      "google-vertex": buildProvider(["gemini-3.1-flash-lite", "gemini-3-flash-preview"]),
+      openai: buildProvider(["gpt-5"]),
+    };
+
+    const normalized = normalizeProviders({ providers, agentDir });
+
+    expect(normalized).not.toBe(providers);
+    expect(normalized?.["google-vertex"]?.models.map((model) => model.id)).toEqual([
+      "gemini-3.1-flash-lite-preview",
+      "gemini-3-flash-preview",
+    ]);
+    expect(normalized?.openai).toBe(providers.openai);
+  });
+
+  it("returns original providers object when no google-vertex IDs need normalization", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const providers = {
+      "google-vertex": buildProvider(["gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"]),
+    };
+
+    const normalized = normalizeProviders({ providers, agentDir });
+
+    expect(normalized).toBe(providers);
+  });
+});

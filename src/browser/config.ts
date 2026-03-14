@@ -45,6 +45,7 @@ export type ResolvedBrowserProfile = {
   cdpUrl: string;
   cdpHost: string;
   cdpIsLoopback: boolean;
+  mcpTargetUrl?: string;
   color: string;
   driver: "openclaw" | "extension" | "existing-session";
   attachOnly: boolean;
@@ -180,17 +181,35 @@ function ensureDefaultProfile(
 }
 
 /**
- * Ensure a built-in "chrome" profile exists for the Chrome extension relay.
+ * Ensure a built-in "user" profile exists for Chrome's existing-session attach flow.
+ */
+function ensureDefaultUserBrowserProfile(
+  profiles: Record<string, BrowserProfileConfig>,
+): Record<string, BrowserProfileConfig> {
+  const result = { ...profiles };
+  if (result.user) {
+    return result;
+  }
+  result.user = {
+    driver: "existing-session",
+    attachOnly: true,
+    color: "#00AA00",
+  };
+  return result;
+}
+
+/**
+ * Ensure a built-in "chrome-relay" profile exists for the Chrome extension relay.
  *
  * Note: this is an OpenClaw browser profile (routing config), not a Chrome user profile.
  * It points at the local relay CDP endpoint (controlPort + 1).
  */
-function ensureDefaultChromeExtensionProfile(
+function ensureDefaultChromeRelayProfile(
   profiles: Record<string, BrowserProfileConfig>,
   controlPort: number,
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
-  if (result.chrome) {
+  if (result["chrome-relay"]) {
     return result;
   }
   const relayPort = controlPort + 1;
@@ -202,7 +221,7 @@ function ensureDefaultChromeExtensionProfile(
   if (getUsedPorts(result).has(relayPort)) {
     return result;
   }
-  result.chrome = {
+  result["chrome-relay"] = {
     driver: "extension",
     cdpUrl: `http://127.0.0.1:${relayPort}`,
     color: "#00AA00",
@@ -268,13 +287,15 @@ export function resolveBrowserConfig(
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
-  const profiles = ensureDefaultChromeExtensionProfile(
-    ensureDefaultProfile(
-      cfg?.profiles,
-      defaultColor,
-      legacyCdpPort,
-      cdpPortRangeStart,
-      legacyCdpUrl,
+  const profiles = ensureDefaultChromeRelayProfile(
+    ensureDefaultUserBrowserProfile(
+      ensureDefaultProfile(
+        cfg?.profiles,
+        defaultColor,
+        legacyCdpPort,
+        cdpPortRangeStart,
+        legacyCdpUrl,
+      ),
     ),
     controlPort,
   );
@@ -286,7 +307,7 @@ export function resolveBrowserConfig(
       ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
       : profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
         ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
-        : "chrome");
+        : "user");
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
@@ -342,6 +363,25 @@ export function resolveProfile(
         ? "existing-session"
         : "openclaw";
 
+  if (driver === "existing-session") {
+    const parsed = rawProfileUrl
+      ? parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`)
+      : null;
+    // existing-session uses Chrome MCP. It can either auto-connect to a local desktop
+    // session or connect to a debuggable browser URL/WS endpoint when explicitly configured.
+    return {
+      name: profileName,
+      cdpPort: 0,
+      cdpUrl: "",
+      cdpHost: parsed?.parsed.hostname ?? "",
+      cdpIsLoopback: parsed ? isLoopbackHost(parsed.parsed.hostname) : true,
+      ...(parsed ? { mcpTargetUrl: parsed.normalized } : {}),
+      color: profile.color,
+      driver,
+      attachOnly: true,
+    };
+  }
+
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
     cdpHost = parsed.parsed.hostname;
@@ -361,7 +401,7 @@ export function resolveProfile(
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
     driver,
-    attachOnly: driver === "existing-session" ? true : (profile.attachOnly ?? resolved.attachOnly),
+    attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };
 }
 

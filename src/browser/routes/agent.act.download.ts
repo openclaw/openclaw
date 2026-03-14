@@ -1,3 +1,4 @@
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   readBody,
@@ -34,7 +35,7 @@ export function registerBrowserAgentActDownloadRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, cdpUrl, tab }) => {
-        if (profileCtx.profile.driver === "existing-session") {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           return jsonError(
             res,
             501,
@@ -88,7 +89,7 @@ export function registerBrowserAgentActDownloadRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, cdpUrl, tab }) => {
-        if (profileCtx.profile.driver === "existing-session") {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           return jsonError(
             res,
             501,

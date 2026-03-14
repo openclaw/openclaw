@@ -30,6 +30,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/googlechat";
 import { GoogleChatConfigSchema } from "openclaw/plugin-sdk/googlechat";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
@@ -473,20 +474,14 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         }
         return issues;
       }),
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      credentialSource: snapshot.credentialSource ?? "none",
-      audienceType: snapshot.audienceType ?? null,
-      audience: snapshot.audience ?? null,
-      webhookPath: snapshot.webhookPath ?? null,
-      webhookUrl: snapshot.webhookUrl ?? null,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildPassiveProbedChannelStatusSummary(snapshot, {
+        credentialSource: snapshot.credentialSource ?? "none",
+        audienceType: snapshot.audienceType ?? null,
+        audience: snapshot.audience ?? null,
+        webhookPath: snapshot.webhookPath ?? null,
+        webhookUrl: snapshot.webhookUrl ?? null,
+      }),
     probeAccount: async ({ account }) => probeGoogleChat(account),
     buildAccountSnapshot: ({ account, runtime, probe }) => {
       const base = buildComputedAccountStatusSnapshot({

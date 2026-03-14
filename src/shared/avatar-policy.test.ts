@@ -39,11 +39,13 @@ describe("avatar policy", () => {
     expect(isPathWithinRoot(root, root)).toBe(true);
     expect(isPathWithinRoot(root, path.resolve("/tmp/root/avatars/a.png"))).toBe(true);
     expect(isPathWithinRoot(root, path.resolve("/tmp/root/../outside.png"))).toBe(false);
+    expect(isPathWithinRoot(root, path.resolve("/tmp/root-sibling/avatar.png"))).toBe(false);
   });
 
   it("detects avatar-like path strings", () => {
     expect(looksLikeAvatarPath("avatars/openclaw.svg")).toBe(true);
     expect(looksLikeAvatarPath("openclaw.webp")).toBe(true);
+    expect(looksLikeAvatarPath("avatar.ico")).toBe(true);
     expect(looksLikeAvatarPath("A")).toBe(false);
   });
 

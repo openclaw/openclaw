@@ -27,13 +27,25 @@ describe("shared/text/code-regions", () => {
     expect(text.slice(regions[1].start, regions[1].end)).toBe("```\nunterminated");
   });
 
+  it("keeps adjacent inline code outside fenced regions", () => {
+    const text = ["```ts", "const a = 1;", "```", "after `inline` tail"].join("\n");
+
+    const regions = findCodeRegions(text);
+
+    expect(regions).toHaveLength(2);
+    expect(text.slice(regions[0].start, regions[0].end)).toContain("```ts");
+    expect(text.slice(regions[1].start, regions[1].end)).toBe("`inline`");
+  });
+
   it("reports whether positions are inside discovered regions", () => {
     const text = "plain `code` done";
     const regions = findCodeRegions(text);
     const codeStart = text.indexOf("code");
     const plainStart = text.indexOf("plain");
+    const regionEnd = regions[0]?.end ?? -1;
 
     expect(isInsideCode(codeStart, regions)).toBe(true);
     expect(isInsideCode(plainStart, regions)).toBe(false);
+    expect(isInsideCode(regionEnd, regions)).toBe(false);
   });
 });

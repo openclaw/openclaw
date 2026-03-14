@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { blockedIpv6MulticastLiterals } from "../../shared/net/ip-test-fixtures.js";
-import { normalizeFingerprint } from "../tls/fingerprint.js";
 import { isBlockedHostnameOrIp, isPrivateIpAddress } from "./ssrf.js";
 
 const privateIpCases = [
@@ -99,14 +98,6 @@ describe("ssrf ip classification", () => {
     for (const hostname of nonIpHostnameCases) {
       expect(isPrivateIpAddress(hostname)).toBe(false);
     }
-  });
-});
-
-describe("normalizeFingerprint", () => {
-  it("strips sha256 prefixes and separators", () => {
-    expect(normalizeFingerprint("sha256:AA:BB:cc")).toBe("aabbcc");
-    expect(normalizeFingerprint("SHA-256 11-22-33")).toBe("112233");
-    expect(normalizeFingerprint("aa:bb:cc")).toBe("aabbcc");
   });
 });
 

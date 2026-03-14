@@ -7,6 +7,25 @@ import {
   formatPluginInstallPathIssue,
 } from "./plugin-install-path-warnings.js";
 
+async function detectMatrixCustomPathIssue(sourcePath: string | ((pluginPath: string) => string)) {
+  return withTempHome(async (home) => {
+    const pluginPath = path.join(home, "matrix-plugin");
+    await fs.mkdir(pluginPath, { recursive: true });
+    const resolvedSourcePath =
+      typeof sourcePath === "function" ? sourcePath(pluginPath) : sourcePath;
+    const issue = await detectPluginInstallPathIssue({
+      pluginId: "matrix",
+      install: {
+        source: "path",
+        sourcePath: resolvedSourcePath,
+        installPath: pluginPath,
+      },
+    });
+
+    return { issue, pluginPath };
+  });
+}
+
 describe("plugin install path warnings", () => {
   it("ignores non-path installs and blank path candidates", async () => {
     expect(
@@ -57,46 +76,22 @@ describe("plugin install path warnings", () => {
   });
 
   it("uses the second candidate path when the first one is stale", async () => {
-    await withTempHome(async (home) => {
-      const pluginPath = path.join(home, "matrix-plugin");
-      await fs.mkdir(pluginPath, { recursive: true });
-
-      const issue = await detectPluginInstallPathIssue({
-        pluginId: "matrix",
-        install: {
-          source: "path",
-          sourcePath: "/tmp/openclaw-matrix-missing",
-          installPath: pluginPath,
-        },
-      });
-
-      expect(issue).toEqual({
-        kind: "custom-path",
-        pluginId: "matrix",
-        path: pluginPath,
-      });
+    const { issue, pluginPath } = await detectMatrixCustomPathIssue("/tmp/openclaw-matrix-missing");
+    expect(issue).toEqual({
+      kind: "custom-path",
+      pluginId: "matrix",
+      path: pluginPath,
     });
   });
 
   it("detects active custom plugin install paths", async () => {
-    await withTempHome(async (home) => {
-      const pluginPath = path.join(home, "matrix-plugin");
-      await fs.mkdir(pluginPath, { recursive: true });
-
-      const issue = await detectPluginInstallPathIssue({
-        pluginId: "matrix",
-        install: {
-          source: "path",
-          sourcePath: pluginPath,
-          installPath: pluginPath,
-        },
-      });
-
-      expect(issue).toEqual({
-        kind: "custom-path",
-        pluginId: "matrix",
-        path: pluginPath,
-      });
+    const { issue, pluginPath } = await detectMatrixCustomPathIssue(
+      (resolvedPluginPath) => resolvedPluginPath,
+    );
+    expect(issue).toEqual({
+      kind: "custom-path",
+      pluginId: "matrix",
+      path: pluginPath,
     });
   });
 

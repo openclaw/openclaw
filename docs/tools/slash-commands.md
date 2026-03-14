@@ -82,6 +82,7 @@ Text + native (when enabled):
   - `/cortex continuity` explains which shared graph backs the current conversation so you can verify cross-channel continuity.
   - `/cortex conflicts` lists memory conflicts and suggests the exact `/cortex resolve ...` command to run next.
   - `/cortex sync coding` pushes the current graph into coding-tool context files (default: Claude Code, Cursor, Copilot).
+- `/btw <question>` (ask an ephemeral side question about the current session without changing future session context; see [/tools/btw](/tools/btw))
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
 - `/session idle <duration|off>` (manage inactivity auto-unfocus for focused thread bindings)
@@ -231,3 +232,27 @@ Notes:
 - **`/stop`** targets the active chat session so it can abort the current run.
 - **Slack:** `channels.slack.slashCommand` is still supported for a single `/openclaw`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`). Command argument menus for Slack are delivered as ephemeral Block Kit buttons.
   - Slack native exception: register `/agentstatus` (not `/status`) because Slack reserves `/status`. Text `/status` still works in Slack messages.
+
+## BTW side questions
+
+`/btw` is a quick **side question** about the current session.
+
+Unlike normal chat:
+
+- it uses the current session as background context,
+- it runs as a separate **tool-less** one-shot call,
+- it does not change future session context,
+- it is not written to transcript history,
+- it is delivered as a live side result instead of a normal assistant message.
+
+That makes `/btw` useful when you want a temporary clarification while the main
+task keeps going.
+
+Example:
+
+```text
+/btw what are we doing right now?
+```
+
+See [BTW Side Questions](/tools/btw) for the full behavior and client UX
+details.

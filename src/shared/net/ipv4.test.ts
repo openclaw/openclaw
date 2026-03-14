@@ -13,12 +13,16 @@ describe("shared/net/ipv4", () => {
   });
 
   it("accepts canonical dotted-decimal ipv4 only", () => {
+    expect(validateDottedDecimalIPv4Input("0.0.0.0")).toBeUndefined();
     expect(validateDottedDecimalIPv4Input("192.168.1.100")).toBeUndefined();
     expect(validateDottedDecimalIPv4Input(" 192.168.1.100 ")).toBeUndefined();
     expect(validateDottedDecimalIPv4Input("0177.0.0.1")).toBe(
       "Invalid IPv4 address (e.g., 192.168.1.100)",
     );
     expect(validateDottedDecimalIPv4Input("[192.168.1.100]")).toBeUndefined();
+    expect(validateDottedDecimalIPv4Input("127.1")).toBe(
+      "Invalid IPv4 address (e.g., 192.168.1.100)",
+    );
     expect(validateDottedDecimalIPv4Input("example.com")).toBe(
       "Invalid IPv4 address (e.g., 192.168.1.100)",
     );

@@ -4,9 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (for example v2026.3.14, v2026.3.14-beta.1, or fallback v2026.3.14-1)
+        required: true
+        type: string
 
 concurrency:
-  group: openclaw-npm-release-${{ github.ref }}
+  group: openclaw-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -15,12 +21,11 @@ env:
   PNPM_VERSION: "10.23.0"
 
 jobs:
-  publish_openclaw_npm:
-    # npm trusted publishing + provenance requires a GitHub-hosted runner.
+  preview_openclaw_npm:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -35,13 +40,131 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "false"
 
+      - name: Print release plan
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          RELEASE_SHA=$(git rev-parse HEAD)
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          if [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*-[1-9][0-9]*$ ]]; then
+            TAG_KIND="fallback correction"
+          else
+            TAG_KIND="standard"
+          fi
+          echo "Release plan for ${RELEASE_TAG}:"
+          echo "Resolved release SHA: ${RELEASE_SHA}"
+          echo "Resolved package version: ${PACKAGE_VERSION}"
+          echo "Resolved tag kind: ${TAG_KIND}"
+          if [[ "${TAG_KIND}" == "fallback correction" ]]; then
+            echo "Correction tag note: npm version remains ${PACKAGE_VERSION}"
+          fi
+          echo "Would run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"
+          echo "Would run with env: RELEASE_SHA=${RELEASE_SHA} RELEASE_TAG=${RELEASE_TAG} RELEASE_MAIN_REF=origin/main pnpm release:openclaw:npm:check"
+          echo "Would run: npm view openclaw@${PACKAGE_VERSION} version"
+          echo "Would run: pnpm check"
+          echo "Would run: pnpm build"
+          echo "Would run: pnpm release:check"
+
       - name: Validate release tag and package metadata
         env:
-          RELEASE_SHA: ${{ github.sha }}
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_MAIN_REF: origin/main
         run: |
+          set -euxo pipefail
+          RELEASE_SHA=$(git rev-parse HEAD)
+          export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
+          # Fetch the full main ref so merge-base ancestry checks keep working
+          # for older tagged commits that are still contained in main.
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          pnpm release:openclaw:npm:check
+
+      - name: Ensure version is not already published
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euxo pipefail
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          IS_CORRECTION_TAG=0
+          if [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*-[1-9][0-9]*$ ]]; then
+            IS_CORRECTION_TAG=1
+          fi
+
+          if npm view "openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            if [[ "${IS_CORRECTION_TAG}" == "1" ]]; then
+              echo "openclaw@${PACKAGE_VERSION} is already published on npm."
+              echo "Correction tag ${RELEASE_TAG} is allowed as a fallback release tag, so preview will continue without treating this as an error."
+              exit 0
+            fi
+            echo "openclaw@${PACKAGE_VERSION} is already published on npm."
+            exit 1
+          fi
+
+          if [[ "${IS_CORRECTION_TAG}" == "1" ]]; then
+            echo "Previewing fallback correction tag ${RELEASE_TAG} for npm version openclaw@${PACKAGE_VERSION}"
+          else
+            echo "Previewing openclaw@${PACKAGE_VERSION}"
+          fi
+
+      - name: Check
+        run: |
+          set -euxo pipefail
+          pnpm check
+
+      - name: Build
+        run: |
+          set -euxo pipefail
+          pnpm build
+
+      - name: Verify release contents
+        run: |
+          set -euxo pipefail
+          pnpm release:check
+
+      - name: Preview publish command
+        run: bash scripts/openclaw-npm-publish.sh --dry-run
+
+  publish_openclaw_npm:
+    if: github.event_name == 'workflow_dispatch'
+    # npm trusted publishing + provenance requires a GitHub-hosted runner.
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Validate tag input format
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
           set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
+            echo "Invalid release tag format: ${RELEASE_TAG}"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Validate release tag and package metadata
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_MAIN_REF: origin/main
+        run: |
+          set -euo pipefail
+          RELEASE_SHA=$(git rev-parse HEAD)
+          export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
           # Fetch the full main ref so merge-base ancestry checks keep working
           # for older tagged commits that are still contained in main.
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -69,12 +192,4 @@ jobs:
         run: pnpm release:check
 
       - name: Publish
-        run: |
-          set -euo pipefail
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-
-          if [[ "$PACKAGE_VERSION" == *-beta.* ]]; then
-            npm publish --access public --tag beta --provenance
-          else
-            npm publish --access public --provenance
-          fi
+        run: bash scripts/openclaw-npm-publish.sh --publish

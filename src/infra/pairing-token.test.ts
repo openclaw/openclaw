@@ -27,4 +27,9 @@ describe("verifyPairingToken", () => {
     expect(verifyPairingToken("secret-token", "secret-token")).toBe(true);
     expect(verifyPairingToken("secret-token", "secret-tokEn")).toBe(false);
   });
+
+  it("rejects blank tokens even when both sides match", () => {
+    expect(verifyPairingToken("", "")).toBe(false);
+    expect(verifyPairingToken("   ", "   ")).toBe(false);
+  });
 });

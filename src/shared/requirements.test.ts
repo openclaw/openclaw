@@ -24,6 +24,12 @@ describe("requirements helpers", () => {
   it("resolveMissingAnyBins requires at least one", () => {
     expect(
       resolveMissingAnyBins({
+        required: [],
+        hasLocalBin: () => false,
+      }),
+    ).toEqual([]);
+    expect(
+      resolveMissingAnyBins({
         required: ["a", "b"],
         hasLocalBin: () => false,
         hasRemoteAnyBin: () => false,
@@ -38,6 +44,8 @@ describe("requirements helpers", () => {
   });
 
   it("resolveMissingOs allows remote platform", () => {
+    expect(resolveMissingOs({ required: [], localPlatform: "linux" })).toEqual([]);
+    expect(resolveMissingOs({ required: ["linux"], localPlatform: "linux" })).toEqual([]);
     expect(
       resolveMissingOs({
         required: ["darwin"],
@@ -162,6 +170,33 @@ describe("requirements helpers", () => {
       os: ["darwin"],
     });
     expect(res.missing).toEqual({ bins: [], anyBins: [], env: [], config: [], os: [] });
+    expect(res.eligible).toBe(true);
+  });
+
+  it("evaluateRequirementsFromMetadata defaults missing metadata to empty requirements", () => {
+    const res = evaluateRequirementsFromMetadata({
+      always: false,
+      hasLocalBin: () => false,
+      localPlatform: "linux",
+      isEnvSatisfied: () => false,
+      isConfigSatisfied: () => false,
+    });
+
+    expect(res.required).toEqual({
+      bins: [],
+      anyBins: [],
+      env: [],
+      config: [],
+      os: [],
+    });
+    expect(res.missing).toEqual({
+      bins: [],
+      anyBins: [],
+      env: [],
+      config: [],
+      os: [],
+    });
+    expect(res.configChecks).toEqual([]);
     expect(res.eligible).toBe(true);
   });
 });

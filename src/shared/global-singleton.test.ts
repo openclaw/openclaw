@@ -52,4 +52,14 @@ describe("resolveGlobalMap", () => {
 
     expect(resolveGlobalMap<string, number>(TEST_MAP_KEY).get("a")).toBe(1);
   });
+
+  it("reuses a prepopulated global map without creating a new one", () => {
+    const existing = new Map<string, number>([["a", 1]]);
+    (globalThis as Record<PropertyKey, unknown>)[TEST_MAP_KEY] = existing;
+
+    const resolved = resolveGlobalMap<string, number>(TEST_MAP_KEY);
+
+    expect(resolved).toBe(existing);
+    expect(resolved.get("a")).toBe(1);
+  });
 });
