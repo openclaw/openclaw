@@ -169,6 +169,43 @@ function makeSignalSummaryPlugin(params: { enabled: boolean; configured: boolean
   };
 }
 
+function makeFallbackSummaryPlugin(params: {
+  configured: boolean;
+  enabled: boolean;
+  accountIds?: string[];
+  defaultAccountId?: string;
+}): ChannelPlugin {
+  return {
+    id: "fallback-plugin",
+    meta: {
+      id: "fallback-plugin",
+      selectionLabel: "Fallback",
+      docsPath: "/channels/fallback",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => params.accountIds ?? [],
+      defaultAccountId: () => params.defaultAccountId ?? "default",
+      inspectAccount: (_cfg, accountId) => ({
+        accountId,
+        enabled: params.enabled,
+        configured: params.configured,
+      }),
+      resolveAccount: (_cfg, accountId) => ({
+        accountId,
+        enabled: params.enabled,
+        configured: params.configured,
+      }),
+      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      isEnabled: (account) => Boolean((account as { enabled?: boolean }).enabled),
+    },
+    actions: {
+      listActions: () => ["send"],
+    },
+  };
+}
+
 describe("buildChannelSummary", () => {
   it("preserves Slack HTTP signing-secret unavailable state from source config", async () => {
     vi.mocked(listChannelPlugins).mockReturnValue([makeSlackHttpSummaryPlugin()]);
@@ -250,5 +287,40 @@ describe("buildChannelSummary", () => {
       "Signal: disabled",
       "  - desktop (Desktop) (disabled, app:env, https://signal.example.test, port:31337, cli:/usr/local/bin/signal-cli, db:/tmp/signal.db)",
     ]);
+  });
+
+  it("falls back to plugin id and default account id when no label or accounts exist", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([
+      makeFallbackSummaryPlugin({
+        enabled: true,
+        configured: true,
+        accountIds: [],
+        defaultAccountId: "fallback-account",
+      }),
+    ]);
+
+    const lines = await buildChannelSummary({ channels: {} } as never, {
+      colorize: false,
+      includeAllowFrom: false,
+    });
+
+    expect(lines).toEqual(["fallback-plugin: configured", "  - fallback-account"]);
+  });
+
+  it("shows not-configured status when enabled accounts exist without configured ones", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([
+      makeFallbackSummaryPlugin({
+        enabled: true,
+        configured: false,
+        accountIds: ["fallback-account"],
+      }),
+    ]);
+
+    const lines = await buildChannelSummary({ channels: {} } as never, {
+      colorize: false,
+      includeAllowFrom: false,
+    });
+
+    expect(lines).toEqual(["fallback-plugin: not configured"]);
   });
 });
