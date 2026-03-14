@@ -381,6 +381,13 @@ function generateZshCompletion(program: Command): string {
   const script = `
 #compdef ${rootCmd}
 
+# Ensure compinit is loaded (required for compdef to be available)
+# See: https://github.com/openclaw/openclaw/issues/14289
+if ! type compdef &>/dev/null; then
+  autoload -Uz compinit
+  compinit -C  # -C skips security check for faster startup
+fi
+
 _${rootCmd}_root_completion() {
   local -a commands
   local -a options
