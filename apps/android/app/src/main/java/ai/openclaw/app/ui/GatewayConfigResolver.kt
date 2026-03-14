@@ -1,8 +1,8 @@
 package ai.openclaw.app.ui
 
-import androidx.core.net.toUri
 import java.util.Base64
 import java.util.Locale
+import java.net.URI
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -18,6 +18,7 @@ internal data class GatewayEndpointConfig(
 
 internal data class GatewaySetupCode(
   val url: String,
+  val bootstrapToken: String?,
   val token: String?,
   val password: String?,
 )
@@ -26,6 +27,7 @@ internal data class GatewayConnectConfig(
   val host: String,
   val port: Int,
   val tls: Boolean,
+  val bootstrapToken: String,
   val token: String,
   val password: String,
 )
@@ -44,12 +46,26 @@ internal fun resolveGatewayConnectConfig(
   if (useSetupCode) {
     val setup = decodeGatewaySetupCode(setupCode) ?: return null
     val parsed = parseGatewayEndpoint(setup.url) ?: return null
+    val setupBootstrapToken = setup.bootstrapToken?.trim().orEmpty()
+    val sharedToken =
+      when {
+        !setup.token.isNullOrBlank() -> setup.token.trim()
+        setupBootstrapToken.isNotEmpty() -> ""
+        else -> fallbackToken.trim()
+      }
+    val sharedPassword =
+      when {
+        !setup.password.isNullOrBlank() -> setup.password.trim()
+        setupBootstrapToken.isNotEmpty() -> ""
+        else -> fallbackPassword.trim()
+      }
     return GatewayConnectConfig(
       host = parsed.host,
       port = parsed.port,
       tls = parsed.tls,
-      token = setup.token ?: fallbackToken.trim(),
-      password = setup.password ?: fallbackPassword.trim(),
+      bootstrapToken = setupBootstrapToken,
+      token = sharedToken,
+      password = sharedPassword,
     )
   }
 
@@ -59,6 +75,7 @@ internal fun resolveGatewayConnectConfig(
     host = parsed.host,
     port = parsed.port,
     tls = parsed.tls,
+    bootstrapToken = "",
     token = fallbackToken.trim(),
     password = fallbackPassword.trim(),
   )
@@ -69,7 +86,7 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
   if (raw.isEmpty()) return null
 
   val normalized = if (raw.contains("://")) raw else "https://$raw"
-  val uri = normalized.toUri()
+  val uri = runCatching { URI(normalized) }.getOrNull() ?: return null
   val host = uri.host?.trim().orEmpty()
   if (host.isEmpty()) return null
 
@@ -80,7 +97,7 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
       "wss", "https" -> true
       else -> true
     }
-  val port = uri.port.takeIf { it in 1..65535 } ?: 18789
+  val port = uri.port.takeIf { it in 1..65535 } ?: if (tls) 443 else 18789
   val displayUrl = "${if (tls) "https" else "http"}://$host:$port"
 
   return GatewayEndpointConfig(host = host, port = port, tls = tls, displayUrl = displayUrl)
@@ -104,9 +121,10 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
     val obj = parseJsonObject(decoded) ?: return null
     val url = jsonField(obj, "url").orEmpty()
     if (url.isEmpty()) return null
+    val bootstrapToken = jsonField(obj, "bootstrapToken")
     val token = jsonField(obj, "token")
     val password = jsonField(obj, "password")
-    GatewaySetupCode(url = url, token = token, password = password)
+    GatewaySetupCode(url = url, bootstrapToken = bootstrapToken, token = token, password = password)
   } catch (_: IllegalArgumentException) {
     null
   }

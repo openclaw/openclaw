@@ -10,9 +10,14 @@ import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
+type SessionActionBtwPresenter = {
+  clear: () => void;
+};
+
 type SessionActionContext = {
   client: GatewayChatClient;
   chatLog: ChatLog;
+  btw: SessionActionBtwPresenter;
   tui: TUI;
   opts: TuiOptions;
   state: TuiStateAccess;
@@ -42,6 +47,7 @@ export function createSessionActions(context: SessionActionContext) {
   const {
     client,
     chatLog,
+    btw,
     tui,
     opts,
     state,
@@ -165,6 +171,9 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.thinkingLevel !== undefined) {
       next.thinkingLevel = entry.thinkingLevel;
     }
+    if (entry?.fastMode !== undefined) {
+      next.fastMode = entry.fastMode;
+    }
     if (entry?.verboseLevel !== undefined) {
       next.verboseLevel = entry.verboseLevel;
     }
@@ -286,13 +295,16 @@ export function createSessionActions(context: SessionActionContext) {
         messages?: unknown[];
         sessionId?: string;
         thinkingLevel?: string;
+        fastMode?: boolean;
         verboseLevel?: string;
       };
       state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
       state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
+      state.sessionInfo.fastMode = record.fastMode ?? state.sessionInfo.fastMode;
       state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       chatLog.clearAll();
+      btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
       for (const entry of record.messages ?? []) {
         if (!entry || typeof entry !== "object") {
@@ -362,6 +374,7 @@ export function createSessionActions(context: SessionActionContext) {
     state.sessionInfo.updatedAt = null;
     state.historyLoaded = false;
     clearLocalRunIds?.();
+    btw.clear();
     updateHeader();
     updateFooter();
     await loadHistory();
