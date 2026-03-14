@@ -25,9 +25,18 @@ export type ParsedReleaseVersion = {
   date: Date;
 };
 
+export type ParsedReleaseTag = {
+  version: string;
+  packageVersion: string;
+  channel: "stable" | "beta";
+  correctionNumber?: number;
+  date: Date;
+};
+
 const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)$/;
 const BETA_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
+const CORRECTION_TAG_REGEX = /^(?<base>\d{4}\.[1-9]\d?\.[1-9]\d?)-(?<correction>[1-9]\d*)$/;
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 
@@ -107,6 +116,49 @@ export function parseReleaseVersion(version: string): ParsedReleaseVersion | nul
   return null;
 }
 
+export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null {
+  const trimmed = version.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const parsedVersion = parseReleaseVersion(trimmed);
+  if (parsedVersion !== null) {
+    return {
+      version: trimmed,
+      packageVersion: parsedVersion.version,
+      channel: parsedVersion.channel,
+      date: parsedVersion.date,
+      correctionNumber: undefined,
+    };
+  }
+
+  const correctionMatch = CORRECTION_TAG_REGEX.exec(trimmed);
+  if (!correctionMatch?.groups) {
+    return null;
+  }
+
+  const baseVersion = correctionMatch.groups.base ?? "";
+  const parsedBaseVersion = parseReleaseVersion(baseVersion);
+  const correctionNumber = Number.parseInt(correctionMatch.groups.correction ?? "", 10);
+  if (
+    parsedBaseVersion === null ||
+    parsedBaseVersion.channel !== "stable" ||
+    !Number.isInteger(correctionNumber) ||
+    correctionNumber < 1
+  ) {
+    return null;
+  }
+
+  return {
+    version: trimmed,
+    packageVersion: parsedBaseVersion.version,
+    channel: "stable",
+    correctionNumber,
+    date: parsedBaseVersion.date,
+  };
+}
+
 function startOfUtcDay(date: Date): number {
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
@@ -180,19 +232,25 @@ export function collectReleaseTagErrors(params: {
   }
 
   const tagVersion = releaseTag.startsWith("v") ? releaseTag.slice(1) : releaseTag;
-  const parsedTag = parseReleaseVersion(tagVersion);
+  const parsedTag = parseReleaseTagVersion(tagVersion);
   if (parsedTag === null) {
     errors.push(
-      `Release tag must match vYYYY.M.D or vYYYY.M.D-beta.N; found "${releaseTag || "<missing>"}".`,
+      `Release tag must match vYYYY.M.D, vYYYY.M.D-beta.N, or fallback correction tag vYYYY.M.D-N; found "${releaseTag || "<missing>"}".`,
     );
   }
 
-  const expectedTag = packageVersion ? `v${packageVersion}` : "";
-  if (releaseTag !== expectedTag) {
+  const expectedTag = packageVersion ? `v${packageVersion}` : "<missing>";
+  const expectedCorrectionTag = parsedVersion?.channel === "stable" ? `${expectedTag}-N` : null;
+  const matchesExpectedTag =
+    parsedTag !== null &&
+    parsedVersion !== null &&
+    parsedTag.packageVersion === parsedVersion.version &&
+    parsedTag.channel === parsedVersion.channel;
+  if (!matchesExpectedTag) {
     errors.push(
       `Release tag ${releaseTag || "<missing>"} does not match package.json version ${
         packageVersion || "<missing>"
-      }; expected ${expectedTag || "<missing>"}.`,
+      }; expected ${expectedCorrectionTag ? `${expectedTag} or ${expectedCorrectionTag}` : expectedTag}.`,
     );
   }
 
