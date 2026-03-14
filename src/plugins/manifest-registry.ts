@@ -218,10 +218,17 @@ export function loadPluginManifestRegistry(params: {
         const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
         return Boolean(existingReal && candidateReal && existingReal === candidateReal);
       })();
-      if (samePlugin) {
-        // Prefer higher-precedence origins even if candidates are passed in
-        // an unexpected order (config > workspace > global > bundled).
-        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+
+      const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
+
+      if (samePlugin || existingRank !== candidateRank) {
+        // Either the same physical directory or different origin precedence.
+        // Silently keep the higher-precedence candidate without warning.
+        // This covers the common case where plugins.installs places a plugin
+        // into the extensions dir and auto-discovery finds it again with a
+        // different origin (e.g. config vs global).
+        if (candidateRank < existingRank) {
           records[existing.recordIndex] = buildRecord({
             manifest,
             candidate,

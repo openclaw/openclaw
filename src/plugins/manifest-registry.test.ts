@@ -137,7 +137,7 @@ afterAll(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("emits duplicate warning for truly distinct plugins with same id and same origin rank", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -148,7 +148,7 @@ describe("loadPluginManifestRegistry", () => {
       createPluginCandidate({
         idHint: "test-plugin",
         rootDir: dirA,
-        origin: "bundled",
+        origin: "global",
       }),
       createPluginCandidate({
         idHint: "test-plugin",
@@ -158,6 +158,32 @@ describe("loadPluginManifestRegistry", () => {
     ];
 
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+  });
+
+  it("suppresses duplicate warning when candidates have different origin precedence (config vs global)", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirA,
+        origin: "config",
+      }),
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirB,
+        origin: "global",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins.length).toBe(1);
+    expect(registry.plugins[0]?.origin).toBe("config");
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
