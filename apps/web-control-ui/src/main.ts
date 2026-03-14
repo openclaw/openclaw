@@ -394,6 +394,7 @@ class WebControlUiApp extends LitElement {
   @state() preferenceSavedAt: string | null = null;
   @state() recommendations: FeatureRecommendation[] = defaultRecommendations;
   @state() promptDraft = defaultFrontendPrompt;
+  @state() safeEditMode = true;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -565,7 +566,9 @@ class WebControlUiApp extends LitElement {
     }
     const runId = crypto.randomUUID();
     this.chatMessages = [...this.chatMessages, { role: "user", text, timestamp: Date.now() }];
-    const outbound = buildFrontendPrompt(this.preferenceMemory, text).replace(defaultFrontendPrompt.trim(), this.promptDraft.trim());
+    const outbound = buildFrontendPrompt(this.preferenceMemory, text, {
+      safeMode: this.safeEditMode,
+    }).replace(defaultFrontendPrompt.trim(), this.promptDraft.trim());
     this.chatInput = "";
     this.chatRunId = runId;
     this.chatStream = "";
@@ -711,8 +714,24 @@ class WebControlUiApp extends LitElement {
               ></textarea>
             </div>
             <div class="prompt-block" style="margin-top: 12px;">
+              <span class="label">改动安全模式</span>
+              <label style="display:flex;align-items:center;gap:10px;color:#dbeafe;">
+                <input
+                  type="checkbox"
+                  .checked=${this.safeEditMode}
+                  @change=${(event: Event) => {
+                    this.safeEditMode = (event.target as HTMLInputElement).checked;
+                  }}
+                  style="width:auto;"
+                />
+                默认先 checkpoint，再调用 OpenClaw 原生能力改代码，并在改后执行 build 验证
+              </label>
+            </div>
+            <div class="prompt-block" style="margin-top: 12px;">
               <span class="label">带入偏好记忆后的本轮最终提示词预览</span>
-              <pre>${buildFrontendPrompt(this.preferenceMemory, this.chatInput || "（等待用户输入本轮页面需求）").replace(defaultFrontendPrompt.trim(), this.promptDraft.trim())}</pre>
+              <pre>${buildFrontendPrompt(this.preferenceMemory, this.chatInput || "（等待用户输入本轮页面需求）", {
+                safeMode: this.safeEditMode,
+              }).replace(defaultFrontendPrompt.trim(), this.promptDraft.trim())}</pre>
             </div>
           </section>
 
