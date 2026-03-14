@@ -73,7 +73,7 @@ export async function dispatchGatewayMethod<T>(
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(
-      `Plugin subagent dispatch requires a gateway request scope (method: ${method}). No scope set and no fallback context available.`,
+      `Plugin gateway dispatch requires a gateway request scope (method: ${method}). No scope set and no fallback context available.`,
     );
   }
 
