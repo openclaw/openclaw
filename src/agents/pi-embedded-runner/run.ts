@@ -829,6 +829,51 @@ export async function runEmbeddedPiAgent(
       ensureContextEnginesInitialized();
       const contextEngine = await resolveContextEngine(params.config);
       try {
+        // When the engine owns compaction, compactEmbeddedPiSessionDirect is
+        // bypassed. Fire lifecycle hooks here so recovery paths still notify
+        // subscribers like memory extensions and usage trackers.
+        const runOwnsCompactionBeforeHook = async (reason: string) => {
+          if (
+            contextEngine.info.ownsCompaction !== true ||
+            !hookRunner?.hasHooks("before_compaction")
+          ) {
+            return;
+          }
+          try {
+            await hookRunner.runBeforeCompaction(
+              { messageCount: -1, sessionFile: params.sessionFile },
+              hookCtx,
+            );
+          } catch (hookErr) {
+            log.warn(`before_compaction hook failed during ${reason}: ${String(hookErr)}`);
+          }
+        };
+        const runOwnsCompactionAfterHook = async (
+          reason: string,
+          compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
+        ) => {
+          if (
+            contextEngine.info.ownsCompaction !== true ||
+            !compactResult.ok ||
+            !compactResult.compacted ||
+            !hookRunner?.hasHooks("after_compaction")
+          ) {
+            return;
+          }
+          try {
+            await hookRunner.runAfterCompaction(
+              {
+                messageCount: -1,
+                compactedCount: -1,
+                tokenCount: compactResult.result?.tokensAfter,
+                sessionFile: params.sessionFile,
+              },
+              hookCtx,
+            );
+          } catch (hookErr) {
+            log.warn(`after_compaction hook failed during ${reason}: ${String(hookErr)}`);
+          }
+        };
         let authRetryPending = false;
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
@@ -1002,16 +1047,14 @@ export async function runEmbeddedPiAgent(
           if (timedOut && !aborted && !timedOutDuringCompaction) {
             const tokenUsedRatio =
               lastTurnTotal != null && ctxInfo.tokens > 0 ? lastTurnTotal / ctxInfo.tokens : 0;
-            if (
-              tokenUsedRatio > 0.65 ||
-              (overflowCompactionAttempts === 0 && runLoopIterations > 1)
-            ) {
+            if (tokenUsedRatio > 0.65) {
               const timeoutDiagId = createCompactionDiagId();
               log.warn(
                 `[timeout-compaction] LLM timed out with high context usage (${Math.round(tokenUsedRatio * 100)}%); ` +
                   `attempting compaction before retry diagId=${timeoutDiagId}`,
               );
               let timeoutCompactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
+              await runOwnsCompactionBeforeHook("timeout recovery");
               try {
                 timeoutCompactResult = await contextEngine.compact({
                   sessionId: params.sessionId,
@@ -1051,6 +1094,7 @@ export async function runEmbeddedPiAgent(
                 );
                 timeoutCompactResult = { ok: false, compacted: false, reason: String(compactErr) };
               }
+              await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
               if (timeoutCompactResult.compacted) {
                 autoCompactionCount += 1;
                 log.info(
@@ -1130,24 +1174,7 @@ export async function runEmbeddedPiAgent(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
               let compactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
-              // When the engine owns compaction, hooks are not fired inside
-              // compactEmbeddedPiSessionDirect (which is bypassed).  Fire them
-              // here so subscribers (memory extensions, usage trackers) are
-              // notified even on overflow-recovery compactions.
-              const overflowEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
-              const overflowHookRunner = overflowEngineOwnsCompaction ? hookRunner : null;
-              if (overflowHookRunner?.hasHooks("before_compaction")) {
-                try {
-                  await overflowHookRunner.runBeforeCompaction(
-                    { messageCount: -1, sessionFile: params.sessionFile },
-                    hookCtx,
-                  );
-                } catch (hookErr) {
-                  log.warn(
-                    `before_compaction hook failed during overflow recovery: ${String(hookErr)}`,
-                  );
-                }
-              }
+              await runOwnsCompactionBeforeHook("overflow recovery");
               try {
                 const overflowCompactionRuntimeContext = {
                   ...buildEmbeddedCompactionRuntimeContext({
@@ -1210,27 +1237,7 @@ export async function runEmbeddedPiAgent(
                 );
                 compactResult = { ok: false, compacted: false, reason: String(compactErr) };
               }
-              if (
-                compactResult.ok &&
-                compactResult.compacted &&
-                overflowHookRunner?.hasHooks("after_compaction")
-              ) {
-                try {
-                  await overflowHookRunner.runAfterCompaction(
-                    {
-                      messageCount: -1,
-                      compactedCount: -1,
-                      tokenCount: compactResult.result?.tokensAfter,
-                      sessionFile: params.sessionFile,
-                    },
-                    hookCtx,
-                  );
-                } catch (hookErr) {
-                  log.warn(
-                    `after_compaction hook failed during overflow recovery: ${String(hookErr)}`,
-                  );
-                }
-              }
+              await runOwnsCompactionAfterHook("overflow recovery", compactResult);
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
