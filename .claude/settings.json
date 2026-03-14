@@ -1,0 +1,8 @@
+{
+  "_authored": "cc (Claude Code) | 2026-03-14",
+  "model": "sonnet",
+  "project": {
+    "name": "openclaw-dev",
+    "description": "Arry8 fork of openclaw/openclaw for development contributions"
+  }
+}
