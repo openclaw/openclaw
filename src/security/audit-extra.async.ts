@@ -575,15 +575,19 @@ export async function collectPluginsTrustFindings(params: {
       const slackConfigured =
         hasSecretInput(params.cfg.channels?.slack?.botToken) ||
         hasSecretInput(params.cfg.channels?.slack?.appToken) ||
+        hasSecretInput(params.cfg.channels?.slack?.userToken) ||
         Boolean(
           params.cfg.channels?.slack?.accounts &&
           Object.values(params.cfg.channels.slack.accounts).some(
             (a) =>
-              hasAccountSecretInputKey(a, "botToken") || hasAccountSecretInputKey(a, "appToken"),
+              hasAccountSecretInputKey(a, "botToken") ||
+              hasAccountSecretInputKey(a, "appToken") ||
+              hasAccountSecretInputKey(a, "userToken"),
           ),
         ) ||
         hasString(process.env.SLACK_BOT_TOKEN) ||
-        hasString(process.env.SLACK_APP_TOKEN);
+        hasString(process.env.SLACK_APP_TOKEN) ||
+        hasString(process.env.SLACK_USER_TOKEN);
 
       const skillCommandsLikelyExposed =
         (discordConfigured &&
