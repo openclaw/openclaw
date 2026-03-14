@@ -94,7 +94,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
   function expectGatewayTermination(pid: number) {
     if (process.platform === "win32") {
       expect(spawnSync).toHaveBeenCalledWith(
-        "C:\\Windows\\System32\\taskkill.exe",
+        expect.stringMatching(/^c:\\windows\\system32\\taskkill\.exe$/i),
         ["/T", "/PID", String(pid)],
         expect.objectContaining({ stdio: "ignore", timeout: 5_000, windowsHide: true }),
       );
@@ -136,13 +136,13 @@ describe("Scheduled Task stop/restart cleanup", () => {
       if (process.platform === "win32") {
         expect(spawnSync).toHaveBeenNthCalledWith(
           1,
-          "C:\\Windows\\System32\\taskkill.exe",
+          expect.stringMatching(/^c:\\windows\\system32\\taskkill\.exe$/i),
           ["/T", "/PID", "4242"],
           expect.objectContaining({ stdio: "ignore", timeout: 5_000, windowsHide: true }),
         );
         expect(spawnSync).toHaveBeenNthCalledWith(
           2,
-          "C:\\Windows\\System32\\taskkill.exe",
+          expect.stringMatching(/^c:\\windows\\system32\\taskkill\.exe$/i),
           ["/T", "/PID", expect.any(String)],
           expect.objectContaining({ stdio: "ignore", timeout: 5_000, windowsHide: true }),
         );

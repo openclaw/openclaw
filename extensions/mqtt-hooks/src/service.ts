@@ -258,6 +258,14 @@ export function createMqttHooksService(params: {
               return;
             }
 
+            const payloadSize = normalizedPacket.payload.byteLength;
+            if (payloadSize > params.pluginConfig.runtime.maxPayloadBytes) {
+              ctx.logger.warn(
+                `mqtt-hooks: failed to process topic ${topic} for ${subscription.id}: payload too large for subscription ${subscription.id}: ${payloadSize} bytes exceeds ${params.pluginConfig.runtime.maxPayloadBytes}`,
+              );
+              return;
+            }
+
             const dedupeKey = buildMqttDedupeKey({
               subscriptionId: subscription.id,
               topic: normalizedPacket.topic,

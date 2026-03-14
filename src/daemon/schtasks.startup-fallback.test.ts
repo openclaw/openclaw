@@ -72,7 +72,7 @@ function expectStartupFallbackSpawn(env: Record<string, string>) {
 function expectGatewayTermination(pid: number) {
   if (process.platform === "win32") {
     expect(spawnSync).toHaveBeenCalledWith(
-      "C:\\Windows\\System32\\taskkill.exe",
+      expect.stringMatching(/^c:\\windows\\system32\\taskkill\.exe$/i),
       ["/T", "/PID", String(pid)],
       expect.objectContaining({ stdio: "ignore", timeout: 5_000, windowsHide: true }),
     );

@@ -227,6 +227,56 @@ describe("createMqttHooksService", () => {
     });
   });
 
+  it("drops oversized payloads before computing dedupe hashes", async () => {
+    const fakeClient = new FakeMqttClient();
+    const logger = createLogger();
+    const payloadHasher = vi.fn(() => "oversized-hash");
+    const service = createMqttHooksService({
+      pluginConfig: resolveMqttHooksPluginConfig({
+        broker: { url: "mqtt://broker.local:1883" },
+        runtime: {
+          maxPayloadBytes: 4,
+        },
+        subscriptions: [
+          {
+            id: "alerts",
+            topic: "home/alerts/#",
+            qos: 1,
+            action: "wake",
+            ignoreRetainedOnStartup: false,
+          },
+        ],
+      }),
+      clientFactory: () => fakeClient as never,
+      payloadHasher,
+    });
+
+    await service.start({
+      config: {},
+      stateDir: "/tmp/openclaw-state",
+      logger,
+    });
+
+    fakeClient.emit("connect");
+    fakeClient.emit("message", "home/alerts/kitchen", Buffer.from("oversized"), {
+      qos: 1,
+      retain: false,
+      dup: false,
+    });
+
+    await vi.waitFor(() => {
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("payload too large"));
+    });
+    expect(payloadHasher).not.toHaveBeenCalled();
+    expect(sharedMocks.dispatchWakeIngressAction).not.toHaveBeenCalled();
+
+    await service.stop?.({
+      config: {},
+      stateDir: "/tmp/openclaw-state",
+      logger,
+    });
+  });
+
   it("stops idempotently and closes the mqtt client", async () => {
     const fakeClient = new FakeMqttClient();
     const service = createMqttHooksService({
