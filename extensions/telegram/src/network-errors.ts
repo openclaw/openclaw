@@ -166,6 +166,20 @@ export function isSafeToRetrySendError(err: unknown): boolean {
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
       return true;
     }
+    const message = formatErrorMessage(candidate).trim().toLowerCase();
+    if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
+      return true;
+    }
+    if (
+      candidate &&
+      typeof candidate === "object" &&
+      "parameters" in candidate &&
+      candidate.parameters &&
+      typeof candidate.parameters === "object" &&
+      typeof (candidate.parameters as { retry_after?: unknown }).retry_after === "number"
+    ) {
+      return true;
+    }
   }
   return false;
 }

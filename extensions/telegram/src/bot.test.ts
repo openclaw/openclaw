@@ -905,7 +905,7 @@ describe("createTelegramBot", () => {
         }),
     );
     try {
-      createTelegramBot({ token: "tok" });
+      createTelegramBot({ token: "tok", proxyFetch: globalThis.fetch });
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
       await handler({
@@ -1424,7 +1424,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks control commands from unauthorized senders in per-group open groups", async () => {
+  it("drops control commands from unauthorized senders in per-group open groups", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
     loadConfig.mockReturnValue({
@@ -1457,6 +1457,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 
   it("routes plugin-owned callback namespaces before synthetic command fallback", async () => {
