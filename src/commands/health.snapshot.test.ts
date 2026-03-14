@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channels.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -287,6 +288,63 @@ describe("getHealthSnapshot", () => {
     expect(telegram.accounts?.default?.lastStartAt).toBe(startedAt);
     expect(telegram.accounts?.default?.mode).toBe("polling");
     expect(telegram.accounts?.default?.tokenSource).toBe("config");
+  });
+
+  it("preserves probe results when plugin snapshot builders omit probe fields", async () => {
+    const probeOnlyPlugin: ChannelPlugin<{ accountId: string; enabled: boolean }> = {
+      id: "zalo",
+      meta: {
+        id: "zalo",
+        label: "Zalo",
+        selectionLabel: "Zalo",
+        docsPath: "/channels/zalo",
+        blurb: "test stub.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ accountId: "default", enabled: true }),
+        defaultAccountId: () => "default",
+        isConfigured: () => true,
+      },
+      status: {
+        probeAccount: async () => ({
+          ok: false,
+          status: 401,
+          error: "unauthorized",
+        }),
+        buildAccountSnapshot: async ({ account, runtime }) => ({
+          accountId: account.accountId,
+          enabled: account.enabled,
+          configured: true,
+          running: runtime?.running ?? false,
+        }),
+      },
+    };
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "zalo", plugin: probeOnlyPlugin, source: "test" }]),
+    );
+    testConfig = { channels: { zalo: { botToken: "z-1" } } };
+    testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+
+    const snap = await getHealthSnapshot({ timeoutMs: 25 });
+    const zalo = snap.channels.zalo as {
+      probe?: { ok?: boolean; status?: number; error?: string };
+      accounts?: Record<string, { probe?: { ok?: boolean; status?: number; error?: string } }>;
+    };
+
+    expect(zalo.probe).toMatchObject({
+      ok: false,
+      status: 401,
+      error: "unauthorized",
+    });
+    expect(zalo.accounts?.default?.probe).toMatchObject({
+      ok: false,
+      status: 401,
+      error: "unauthorized",
+    });
   });
 
   it("disables heartbeat for agents without heartbeat blocks", async () => {

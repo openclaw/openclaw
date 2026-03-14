@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 
 const getHealthSnapshotMock = vi.fn();
@@ -29,6 +29,11 @@ describe("refreshGatewayHealthSnapshot", () => {
     });
   });
 
+  afterEach(async () => {
+    const mod = await import("./health-state.js");
+    mod.setHealthRuntimeSnapshotProvider(null);
+  });
+
   it("passes the live runtime snapshot into health snapshot refreshes", async () => {
     const mod = await import("./health-state.js");
     const runtimeSnapshot: ChannelRuntimeSnapshot = {
@@ -57,6 +62,5 @@ describe("refreshGatewayHealthSnapshot", () => {
       probe: false,
       runtimeSnapshot,
     });
-    mod.setHealthRuntimeSnapshotProvider(null);
   });
 });
