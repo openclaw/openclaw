@@ -213,6 +213,7 @@ export async function runCronIsolatedAgentTurn(params: {
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
+  const laneTag = (params.lane ?? "cron").toLowerCase().replace(/[^a-z0-9]/g, "") || "cron";
   const abortReason = () => {
     const reason = abortSignal?.reason;
     return typeof reason === "string" && reason.trim()
@@ -420,7 +421,7 @@ export async function runCronIsolatedAgentTurn(params: {
   }
   if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
     logWarn(
-      `[cron:${params.job.id}] Thinking level "xhigh" is not supported for ${provider}/${model}; downgrading to "high".`,
+      `[${laneTag}:${params.job.id}] Thinking level "xhigh" is not supported for ${provider}/${model}; downgrading to "high".`,
     );
     thinkLevel = "high";
   }
@@ -440,7 +441,7 @@ export async function runCronIsolatedAgentTurn(params: {
   });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
-  const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
+  const base = `[${laneTag}:${params.job.id} ${params.job.name}] ${params.message}`.trim();
 
   // SECURITY: Wrap external hook content with security boundaries to prevent prompt injection
   // unless explicitly allowed via a dangerous config override.
@@ -507,7 +508,9 @@ export async function runCronIsolatedAgentTurn(params: {
   try {
     await persistSessionEntry();
   } catch (err) {
-    logWarn(`[cron:${params.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
+    logWarn(
+      `[${laneTag}:${params.job.id}] Failed to persist pre-run session entry: ${String(err)}`,
+    );
   }
 
   // Resolve auth profile for the session, mirroring the inbound auto-reply path
