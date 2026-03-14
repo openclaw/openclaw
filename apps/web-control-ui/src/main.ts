@@ -26,10 +26,13 @@ import { loadPreferenceMemory, savePreferenceMemory } from "./product/storage";
 
 type ConnectionState = "idle" | "connecting" | "connected" | "disconnected" | "error";
 
+type ChatMessageKind = "reply" | "status" | "build" | "command";
+
 type ChatMessage = {
   role: "user" | "assistant" | "system";
   text: string;
   timestamp: number;
+  kind?: ChatMessageKind;
 };
 
 const CHAT_COLLAPSE_THRESHOLD = 600;
@@ -76,6 +79,40 @@ function extractText(message: unknown): string {
     }
   }
   return "";
+}
+
+function inferMessageKind(text: string, role: ChatMessage["role"]): ChatMessageKind {
+  const normalized = text.toLowerCase();
+  if (role === "user") {
+    return "reply";
+  }
+  if (
+    normalized.includes("vite v") ||
+    normalized.includes("built in") ||
+    normalized.includes("gzip size") ||
+    normalized.includes("build")
+  ) {
+    return "build";
+  }
+  if (
+    normalized.includes("pwsh ") ||
+    normalized.includes("node .\\node_modules") ||
+    normalized.includes("git ") ||
+    normalized.includes("checkpoint")
+  ) {
+    return "command";
+  }
+  if (
+    normalized.includes("connected") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("status") ||
+    normalized.includes("success") ||
+    normalized.includes("失败") ||
+    normalized.includes("成功")
+  ) {
+    return "status";
+  }
+  return "reply";
 }
 
 @customElement("web-control-ui-app")
@@ -343,6 +380,18 @@ class WebControlUiApp extends LitElement {
       background: rgba(120, 53, 15, 0.3);
     }
 
+    .bubble.kind-status {
+      border-left: 3px solid #38bdf8;
+    }
+
+    .bubble.kind-build {
+      border-left: 3px solid #22c55e;
+    }
+
+    .bubble.kind-command {
+      border-left: 3px solid #f59e0b;
+    }
+
     .chat-compose {
       display: grid;
       gap: 12px;
@@ -479,10 +528,12 @@ class WebControlUiApp extends LitElement {
           if (!text.trim()) {
             return null;
           }
+          const normalizedRole = role === "user" || role === "assistant" || role === "system" ? role : "assistant";
           return {
-            role: role === "user" || role === "assistant" || role === "system" ? role : "assistant",
+            role: normalizedRole,
             text,
             timestamp: Date.now(),
+            kind: inferMessageKind(text, normalizedRole),
           } as ChatMessage;
         })
         .filter((item): item is ChatMessage => item !== null);
@@ -511,7 +562,7 @@ class WebControlUiApp extends LitElement {
       if (text.trim()) {
         this.chatMessages = [
           ...this.chatMessages,
-          { role: "assistant", text, timestamp: Date.now() },
+          { role: "assistant", text, timestamp: Date.now(), kind: inferMessageKind(text, "assistant") },
         ];
       }
       this.chatStream = "";
@@ -524,7 +575,12 @@ class WebControlUiApp extends LitElement {
       if (this.chatStream.trim()) {
         this.chatMessages = [
           ...this.chatMessages,
-          { role: "assistant", text: this.chatStream, timestamp: Date.now() },
+          {
+            role: "assistant",
+            text: this.chatStream,
+            timestamp: Date.now(),
+            kind: inferMessageKind(this.chatStream, "assistant"),
+          },
         ];
       }
       this.chatStream = "";
@@ -595,7 +651,10 @@ class WebControlUiApp extends LitElement {
       return;
     }
     const runId = crypto.randomUUID();
-    this.chatMessages = [...this.chatMessages, { role: "user", text: userText, timestamp: Date.now() }];
+    this.chatMessages = [
+      ...this.chatMessages,
+      { role: "user", text: userText, timestamp: Date.now(), kind: "reply" },
+    ];
     this.chatRunId = runId;
     this.chatStream = "";
     this.chatSending = true;
@@ -612,7 +671,12 @@ class WebControlUiApp extends LitElement {
       this.errorMessage = `发送失败：${String(error)}`;
       this.chatMessages = [
         ...this.chatMessages,
-        { role: "system", text: `发送失败：${String(error)}`, timestamp: Date.now() },
+        {
+          role: "system",
+          text: `发送失败：${String(error)}`,
+          timestamp: Date.now(),
+          kind: "status",
+        },
       ];
     }
   }
@@ -713,10 +777,11 @@ class WebControlUiApp extends LitElement {
     const expanded = this.expandedMessages[key] === true;
     const isLong = message.text.length > CHAT_COLLAPSE_THRESHOLD;
     const visibleText = isLong && !expanded ? `${message.text.slice(0, CHAT_COLLAPSE_THRESHOLD)}\n\n…` : message.text;
-    const label = message.role === "system" ? "system / tool" : message.role;
+    const kind = message.kind ?? inferMessageKind(message.text, message.role);
+    const label = message.role === "system" ? `system / ${kind}` : kind === "reply" ? message.role : `${message.role} / ${kind}`;
 
     return html`
-      <div class="bubble ${message.role}">
+      <div class="bubble ${message.role} kind-${kind}">
         <div class="bubble-meta">
           <span>${label}</span>
           ${isLong
@@ -912,7 +977,12 @@ class WebControlUiApp extends LitElement {
                 ${this.chatLoading ? html`<div class="bubble system">加载聊天记录中…</div>` : null}
                 ${this.chatStream
                   ? this.renderBubble(
-                      { role: "assistant", text: this.chatStream, timestamp: Date.now() },
+                      {
+                        role: "assistant",
+                        text: this.chatStream,
+                        timestamp: Date.now(),
+                        kind: inferMessageKind(this.chatStream, "assistant"),
+                      },
                       -1,
                     )
                   : null}
