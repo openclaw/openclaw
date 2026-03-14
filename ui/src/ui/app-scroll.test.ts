@@ -46,6 +46,7 @@ function createScrollHost(
     chatScrollTimeout: null as number | null,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
+    chatFollowLocked: false,
     chatLastScrollTop: scrollTop,
     chatNewMessagesBelow: false,
     logsScrollFrame: null as number | null,
@@ -148,6 +149,7 @@ describe("handleChatWheelIntent", () => {
     handleChatWheelIntent(host, { deltaY: -120 } as WheelEvent);
 
     expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
     expect(host.chatScrollFrame).toBeNull();
     expect(host.chatScrollTimeout).toBeNull();
   });
@@ -159,6 +161,7 @@ describe("handleChatWheelIntent", () => {
     handleChatWheelIntent(host, { deltaY: 120 } as WheelEvent);
 
     expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
   });
 });
 
@@ -278,6 +281,41 @@ describe("scheduleChatScroll", () => {
     expect(container.scrollTop).toBe(originalScrollTop);
     expect(host.chatNewMessagesBelow).toBe(true);
   });
+
+  it("does NOT re-enable follow just because a post-wheel scroll event is still near bottom", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 2000,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatFollowLocked = false;
+    host.chatLastScrollTop = 2000;
+
+    handleChatWheelIntent(host, { deltaY: -120 } as WheelEvent);
+    handleChatScroll(host, createScrollEvent(2000, 1540, 400));
+
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+  });
+
+  it("re-enables follow once the user actually returns to the bottom", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1576,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
+    host.chatLastScrollTop = 1540;
+    host.chatNewMessagesBelow = true;
+
+    handleChatScroll(host, createScrollEvent(2000, 1576, 400));
+
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatNewMessagesBelow).toBe(false);
+  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -343,12 +381,14 @@ describe("resetChatScroll", () => {
     const { host } = createScrollHost({});
     host.chatHasAutoScrolled = true;
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     host.chatLastScrollTop = 1234;
 
     resetChatScroll(host);
 
     expect(host.chatHasAutoScrolled).toBe(false);
     expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
     expect(host.chatLastScrollTop).toBe(0);
   });
 });
