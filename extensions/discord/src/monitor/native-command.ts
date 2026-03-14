@@ -55,7 +55,7 @@ import { executePluginCommand, matchPluginCommand } from "../../../../src/plugin
 import type { ResolvedAgentRoute } from "../../../../src/routing/resolve-route.js";
 import { chunkItems } from "../../../../src/utils/chunk-items.js";
 import { withTimeout } from "../../../../src/utils/with-timeout.js";
-import { loadWebMedia } from "../../../../src/web/media.js";
+import { loadWebMedia } from "../../../whatsapp/src/media.js";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {

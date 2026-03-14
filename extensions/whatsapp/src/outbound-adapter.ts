@@ -2,8 +2,9 @@ import { chunkText } from "../../../src/auto-reply/chunk.js";
 import { sendTextMediaPayload } from "../../../src/channels/plugins/outbound/direct-text-media.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
 import { shouldLogVerbose } from "../../../src/globals.js";
+import { resolveOutboundSendDep } from "../../../src/infra/outbound/deliver.js";
 import { resolveWhatsAppOutboundTarget } from "../../../src/whatsapp/resolve-outbound-target.js";
-import { sendPollWhatsApp } from "./send.js";
+import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
 function trimLeadingWhitespace(text: string | undefined): string {
   return text?.trimStart() ?? "";
@@ -40,7 +41,9 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
     if (!normalizedText) {
       return { channel: "whatsapp", messageId: "" };
     }
-    const send = deps?.sendWhatsApp ?? (await import("./send.js")).sendMessageWhatsApp;
+    const send =
+      resolveOutboundSendDep<typeof sendMessageWhatsApp>(deps, "whatsapp") ??
+      (await import("./send.js")).sendMessageWhatsApp;
     const result = await send(to, normalizedText, {
       verbose: false,
       cfg,
@@ -51,7 +54,9 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, gifPlayback }) => {
     const normalizedText = trimLeadingWhitespace(text);
-    const send = deps?.sendWhatsApp ?? (await import("./send.js")).sendMessageWhatsApp;
+    const send =
+      resolveOutboundSendDep<typeof sendMessageWhatsApp>(deps, "whatsapp") ??
+      (await import("./send.js")).sendMessageWhatsApp;
     const result = await send(to, normalizedText, {
       verbose: false,
       cfg,

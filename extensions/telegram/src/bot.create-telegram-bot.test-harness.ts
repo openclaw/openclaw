@@ -20,7 +20,7 @@ export function getLoadWebMediaMock(): AnyMock {
   return loadWebMedia;
 }
 
-vi.mock("../../../src/web/media.js", () => ({
+vi.mock("../../whatsapp/src/media.js", () => ({
   loadWebMedia,
 }));
 

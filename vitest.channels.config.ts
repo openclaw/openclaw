@@ -9,12 +9,12 @@ export default defineConfig({
   test: {
     ...baseTest,
     include: [
-      "src/telegram/**/*.test.ts",
-      "src/discord/**/*.test.ts",
-      "src/web/**/*.test.ts",
+      "extensions/telegram/**/*.test.ts",
+      "extensions/discord/**/*.test.ts",
+      "extensions/whatsapp/**/*.test.ts",
       "src/browser/**/*.test.ts",
       "src/line/**/*.test.ts",
     ],
-    exclude: [...(baseTest.exclude ?? []), "src/gateway/**", "extensions/**"],
+    exclude: [...(baseTest.exclude ?? []), "src/gateway/**"],
   },
 });
