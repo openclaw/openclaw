@@ -87,13 +87,6 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): 
   expect(supportsDeveloperRole(normalized)).toBe(false);
 }
 
-function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
-  const model = { ...baseModel(), ...overrides };
-  delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model<Api>);
-  expect(supportsUsageInStreaming(normalized)).toBe(false);
-}
-
 function expectResolvedForwardCompat(
   model: Model<Api> | undefined,
   expected: { provider: string; id: string },
@@ -220,10 +213,14 @@ describe("normalizeModelCompat", () => {
   });
 
   it("forces supportsUsageInStreaming off for generic custom openai-completions provider", () => {
-    expectSupportsUsageInStreamingForcedOff({
+    const model = {
+      ...baseModel(),
       provider: "custom-cpa",
       baseUrl: "https://cpa.example.com/v1",
-    });
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model as Model<Api>);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
   it("forces supportsDeveloperRole off for Qwen proxy via openai-completions", () => {
