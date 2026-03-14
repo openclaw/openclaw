@@ -678,8 +678,10 @@ final class GatewayConnectionController {
         return components.url
     }
 
-    private func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
-        useTLS || self.shouldRequireTLS(host: host)
+    // Manual gateway connections carry an explicit TLS choice from the user or setup code.
+    // Do not silently upgrade based on the host, or ws:// LAN gateways become unreachable.
+    private func resolveManualUseTLS(host _: String, useTLS: Bool) -> Bool {
+        return useTLS
     }
 
     private func shouldRequireTLS(host: String) -> Bool {

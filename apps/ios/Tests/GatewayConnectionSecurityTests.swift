@@ -5,6 +5,7 @@ import Testing
 @testable import OpenClaw
 
 @Suite(.serialized) struct GatewayConnectionSecurityTests {
+    @MainActor
     private func makeController() -> GatewayConnectionController {
         GatewayConnectionController(appModel: NodeAppModel(), startDiscovery: false)
     }
@@ -103,12 +104,13 @@ import Testing
         #expect(controller._test_didAutoConnect() == false)
     }
 
-    @Test @MainActor func manualConnectionsForceTLSForNonLoopbackHosts() async {
+    @Test @MainActor func manualConnectionsRespectExplicitTLSChoice() async {
         let controller = makeController()
 
-        #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: false) == true)
-        #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == true)
-        #expect(controller._test_resolveManualUseTLS(host: "127.attacker.example", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "127.attacker.example", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: true) == true)
 
         #expect(controller._test_resolveManualUseTLS(host: "localhost", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "127.0.0.1", useTLS: false) == false)
