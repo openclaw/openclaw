@@ -62,19 +62,14 @@ After upgrading OpenClaw:
 
 ## Use it (set gateway token once)
 
-OpenClaw ships with a built-in browser profile named `chrome-relay` that targets the extension relay on the default port.
+To use the extension relay, create a browser profile for it:
 
 Before first attach, open extension Options and set:
 
 - `Port` (default `18792`)
 - `Gateway token` (must match `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN`)
 
-Use it:
-
-- CLI: `openclaw browser --browser-profile chrome-relay tabs`
-- Agent tool: `browser` with `profile="chrome-relay"`
-
-If you want a different name or a different relay port, create your own profile:
+Then create a profile:
 
 ```bash
 openclaw browser create-profile \
@@ -83,6 +78,11 @@ openclaw browser create-profile \
   --cdp-url http://127.0.0.1:18792 \
   --color "#00AA00"
 ```
+
+Use it:
+
+- CLI: `openclaw browser --browser-profile my-chrome tabs`
+- Agent tool: `browser` with `profile="my-chrome"`
 
 ### Custom Gateway ports
 
