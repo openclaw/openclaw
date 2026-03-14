@@ -295,12 +295,11 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "topic-edit") {
       const chatId = readTelegramChatIdParam(params);
-      const messageThreadId = readNumberParam(params, "messageThreadId", {
-        required: true,
-        integer: true,
-      });
+      const messageThreadId =
+        readNumberParam(params, "messageThreadId", { integer: true }) ??
+        readNumberParam(params, "threadId", { integer: true });
       if (typeof messageThreadId !== "number") {
-        throw new Error("messageThreadId is required.");
+        throw new Error("messageThreadId or threadId is required.");
       }
       const name = readStringParam(params, "name");
       const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");

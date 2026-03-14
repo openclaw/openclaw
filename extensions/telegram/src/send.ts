@@ -1563,11 +1563,14 @@ export async function editForumTopicTelegram(
   const name = opts.name?.trim();
   const iconCustomEmojiId = opts.iconCustomEmojiId?.trim();
 
-  if (!name && !iconCustomEmojiId) {
-    throw new Error("At least one of name or iconCustomEmojiId must be provided");
-  }
   if (name != null && name.length === 0) {
     throw new Error("Forum topic name cannot be empty");
+  }
+  if (iconCustomEmojiId != null && iconCustomEmojiId.length === 0) {
+    throw new Error("Forum topic icon custom emoji ID cannot be empty");
+  }
+  if (!name && !iconCustomEmojiId) {
+    throw new Error("At least one of name or iconCustomEmojiId must be provided");
   }
   if (name != null && name.length > 128) {
     throw new Error("Forum topic name must be 128 characters or fewer");

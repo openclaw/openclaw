@@ -2086,4 +2086,22 @@ describe("editForumTopicTelegram", () => {
       }),
     ).rejects.toThrow("Forum topic name must be 128 characters or fewer");
   });
+
+  it("throws when name is whitespace-only", async () => {
+    const api = {} as unknown as Bot["api"];
+    await expect(
+      editForumTopicTelegram("-1001234567890", 42, { token: "tok", api, name: "   " }),
+    ).rejects.toThrow("Forum topic name cannot be empty");
+  });
+
+  it("throws when iconCustomEmojiId is whitespace-only", async () => {
+    const api = {} as unknown as Bot["api"];
+    await expect(
+      editForumTopicTelegram("-1001234567890", 42, {
+        token: "tok",
+        api,
+        iconCustomEmojiId: "   ",
+      }),
+    ).rejects.toThrow("Forum topic icon custom emoji ID cannot be empty");
+  });
 });
