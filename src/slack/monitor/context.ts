@@ -14,6 +14,7 @@ import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from 
 import type { SlackChannelConfigEntries } from "./channel-config.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { normalizeSlackChannelType } from "./channel-type.js";
+import type { ResolvedSlackSlashCommandConfig } from "./commands.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 
 export { inferSlackChannelType, normalizeSlackChannelType } from "./channel-type.js";
@@ -50,7 +51,7 @@ export type SlackMonitorContext = {
   replyToMode: "off" | "first" | "all";
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
-  slashCommand: Required<import("../../config/config.js").SlackSlashCommandConfig>;
+  slashCommand: ResolvedSlackSlashCommandConfig;
   textLimit: number;
   ackReactionScope: string;
   typingReaction: string;

@@ -130,9 +130,17 @@ const NATIVE_NAME_OVERRIDES: Record<string, Record<string, string>> = {
   },
 };
 
-function resolveNativeName(command: ChatCommandDefinition, provider?: string): string | undefined {
+function resolveNativeName(
+  command: ChatCommandDefinition,
+  provider?: string,
+  nativeNames?: Record<string, string>,
+): string | undefined {
   if (!command.nativeName) {
     return undefined;
+  }
+  const mapped = nativeNames?.[command.key]?.trim();
+  if (mapped) {
+    return mapped;
   }
   if (provider) {
     const override = NATIVE_NAME_OVERRIDES[provider]?.[command.key];
@@ -143,9 +151,13 @@ function resolveNativeName(command: ChatCommandDefinition, provider?: string): s
   return command.nativeName;
 }
 
-function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string): NativeCommandSpec {
+function toNativeCommandSpec(
+  command: ChatCommandDefinition,
+  provider?: string,
+  nativeNames?: Record<string, string>,
+): NativeCommandSpec {
   return {
-    name: resolveNativeName(command, provider) ?? command.key,
+    name: resolveNativeName(command, provider, nativeNames) ?? command.key,
     description: command.description,
     acceptsArgs: Boolean(command.acceptsArgs),
     args: command.args,
@@ -155,39 +167,74 @@ function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string):
 function listNativeSpecsFromCommands(
   commands: ChatCommandDefinition[],
   provider?: string,
+  nativeNames?: Record<string, string>,
 ): NativeCommandSpec[] {
   return commands
     .filter((command) => command.scope !== "text" && command.nativeName)
-    .map((command) => toNativeCommandSpec(command, provider));
+    .map((command) => toNativeCommandSpec(command, provider, nativeNames));
 }
 
 export function listNativeCommandSpecs(params?: {
   skillCommands?: SkillCommandSpec[];
   provider?: string;
+  nativeNames?: Record<string, string>;
 }): NativeCommandSpec[] {
   return listNativeSpecsFromCommands(
     listChatCommands({ skillCommands: params?.skillCommands }),
     params?.provider,
+    params?.nativeNames,
   );
 }
 
 export function listNativeCommandSpecsForConfig(
   cfg: OpenClawConfig,
-  params?: { skillCommands?: SkillCommandSpec[]; provider?: string },
+  params?: {
+    skillCommands?: SkillCommandSpec[];
+    provider?: string;
+    nativeNames?: Record<string, string>;
+  },
 ): NativeCommandSpec[] {
-  return listNativeSpecsFromCommands(listChatCommandsForConfig(cfg, params), params?.provider);
+  const commands = listChatCommandsForConfig(cfg, params).filter(
+    (command) => command.scope !== "text" && command.nativeName,
+  );
+  const resolvedByName = new Map<string, string>();
+
+  for (const command of commands) {
+    const resolved = resolveNativeName(command, params?.provider, params?.nativeNames);
+    if (!resolved) {
+      continue;
+    }
+    const normalized = resolved.toLowerCase();
+    const existingCommandKey = resolvedByName.get(normalized);
+    if (existingCommandKey && existingCommandKey !== command.key) {
+      throw new Error(
+        `Duplicate native command name '${resolved}' resolved for '${command.key}' and '${existingCommandKey}'`,
+      );
+    }
+    resolvedByName.set(normalized, command.key);
+  }
+
+  return commands.map((command) =>
+    toNativeCommandSpec(command, params?.provider, params?.nativeNames),
+  );
 }
 
 export function findCommandByNativeName(
   name: string,
   provider?: string,
+  params?: {
+    nativeNames?: Record<string, string>;
+  },
 ): ChatCommandDefinition | undefined {
   const normalized = name.trim().toLowerCase();
-  return getChatCommands().find(
-    (command) =>
-      command.scope !== "text" &&
-      resolveNativeName(command, provider)?.toLowerCase() === normalized,
-  );
+
+  return getChatCommands().find((command) => {
+    if (command.scope === "text") {
+      return false;
+    }
+    const resolved = resolveNativeName(command, provider, params?.nativeNames)?.toLowerCase();
+    return Boolean(resolved && resolved === normalized);
+  });
 }
 
 export function buildCommandText(commandName: string, args?: string): string {

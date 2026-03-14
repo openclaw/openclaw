@@ -296,6 +296,7 @@ export async function registerSlackMonitorSlashCommands(params: {
   const slashCommand = resolveSlackSlashCommandConfig(
     ctx.slashCommand ?? account.config.slashCommand,
   );
+  const nativeNames = account.config.slashCommand?.nativeNames ?? slashCommand.nativeNames;
 
   const handleSlashCommand = async (p: {
     command: SlackCommandMiddlewareArgs["command"];
@@ -495,7 +496,11 @@ export async function registerSlackMonitorSlashCommands(params: {
           cfg,
         });
         if (menu) {
-          const commandLabel = commandDefinition.nativeName ?? commandDefinition.key;
+          const mappedNativeName = nativeNames?.[commandDefinition.key]?.trim();
+          const commandLabel =
+            mappedNativeName && mappedNativeName.length > 0
+              ? mappedNativeName
+              : (commandDefinition.nativeName ?? commandDefinition.key);
           const title =
             menu.title ?? `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
           const blocks = buildSlackCommandArgMenuBlocks({
@@ -677,6 +682,7 @@ export async function registerSlackMonitorSlashCommands(params: {
     nativeCommands = slashCommandsRuntime.listNativeCommandSpecsForConfig(cfg, {
       skillCommands,
       provider: "slack",
+      nativeNames,
     });
   }
 
@@ -691,6 +697,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           const commandDefinition = slashCommandsRuntime.findCommandByNativeName(
             command.name,
             "slack",
+            { nativeNames },
           );
           const rawText = cmd.text?.trim() ?? "";
           const commandArgs = commandDefinition
@@ -845,7 +852,9 @@ export async function registerSlackMonitorSlashCommands(params: {
       }
       const { buildCommandTextFromArgs, findCommandByNativeName } =
         await loadSlashCommandsRuntime();
-      const commandDefinition = findCommandByNativeName(parsed.command, "slack");
+      const commandDefinition = findCommandByNativeName(parsed.command, "slack", {
+        nativeNames,
+      });
       const commandArgs: CommandArgs = {
         values: { [parsed.arg]: parsed.value },
       };

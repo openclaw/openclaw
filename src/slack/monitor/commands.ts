@@ -1,5 +1,12 @@
 import type { SlackSlashCommandConfig } from "../../config/config.js";
 
+export type ResolvedSlackSlashCommandConfig = Omit<
+  Required<SlackSlashCommandConfig>,
+  "nativeNames"
+> & {
+  nativeNames?: Record<string, string>;
+};
+
 /**
  * Strip Slack mentions (<@U123>, <@U123|name>) so command detection works on
  * normalized text. Use in both prepare and debounce gate for consistency.
@@ -17,12 +24,13 @@ export function normalizeSlackSlashCommandName(raw: string) {
 
 export function resolveSlackSlashCommandConfig(
   raw?: SlackSlashCommandConfig,
-): Required<SlackSlashCommandConfig> {
+): ResolvedSlackSlashCommandConfig {
   const normalizedName = normalizeSlackSlashCommandName(raw?.name?.trim() || "openclaw");
   const name = normalizedName || "openclaw";
   return {
     enabled: raw?.enabled === true,
     name,
+    nativeNames: raw?.nativeNames,
     sessionPrefix: raw?.sessionPrefix?.trim() || "slack:slash",
     ephemeral: raw?.ephemeral !== false,
   };

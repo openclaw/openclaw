@@ -100,6 +100,25 @@ describe("registerAgentCommands", () => {
     );
   });
 
+  it("forwards --session-key", async () => {
+    await runCli([
+      "agent",
+      "--message",
+      "hi",
+      "--session-key",
+      "agent:demo:slack:channel:c0123456789",
+    ]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "hi",
+        sessionKey: "agent:demo:slack:channel:c0123456789",
+      }),
+      runtime,
+      { deps: true },
+    );
+  });
+
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
     expect(agentsAddCommandMock).toHaveBeenNthCalledWith(
