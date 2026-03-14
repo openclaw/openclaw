@@ -85,6 +85,22 @@ export async function getMemorySearchManager(params: {
   }
 }
 
+export async function closeAllMemorySearchManagers(): Promise<void> {
+  const managers = Array.from(QMD_MANAGER_CACHE.values());
+  QMD_MANAGER_CACHE.clear();
+  for (const manager of managers) {
+    try {
+      await manager.close?.();
+    } catch (err) {
+      log.warn(`failed to close qmd memory manager: ${String(err)}`);
+    }
+  }
+  if (managerRuntimePromise !== null) {
+    const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
+    await closeAllMemoryIndexManagers();
+  }
+}
+
 class FallbackMemoryManager implements MemorySearchManager {
   private fallback: MemorySearchManager | null = null;
   private primaryFailed = false;
@@ -165,6 +181,7 @@ class FallbackMemoryManager implements MemorySearchManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     if (!this.primaryFailed) {

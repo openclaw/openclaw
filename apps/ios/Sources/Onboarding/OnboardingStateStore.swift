@@ -19,6 +19,7 @@ enum OnboardingConnectionMode: String, CaseIterable {
 
 enum OnboardingStateStore {
     private static let completedDefaultsKey = "onboarding.completed"
+    private static let firstRunIntroSeenDefaultsKey = "onboarding.first_run_intro_seen"
     private static let lastModeDefaultsKey = "onboarding.last_mode"
     private static let lastSuccessTimeDefaultsKey = "onboarding.last_success_time"
 
@@ -39,8 +40,21 @@ enum OnboardingStateStore {
         defaults.set(Int(Date().timeIntervalSince1970), forKey: Self.lastSuccessTimeDefaultsKey)
     }
 
+    static func shouldPresentFirstRunIntro(defaults: UserDefaults = .standard) -> Bool {
+        !defaults.bool(forKey: Self.firstRunIntroSeenDefaultsKey)
+    }
+
+    static func markFirstRunIntroSeen(defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: Self.firstRunIntroSeenDefaultsKey)
+    }
+
     static func markIncomplete(defaults: UserDefaults = .standard) {
         defaults.set(false, forKey: Self.completedDefaultsKey)
+    }
+
+    static func reset(defaults: UserDefaults = .standard) {
+        defaults.set(false, forKey: Self.completedDefaultsKey)
+        defaults.set(false, forKey: Self.firstRunIntroSeenDefaultsKey)
     }
 
     static func lastMode(defaults: UserDefaults = .standard) -> OnboardingConnectionMode? {
