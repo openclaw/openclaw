@@ -3,7 +3,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-const baseTestSuffixes = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
+const baseTestSuffixes = [
+  ".test.ts",
+  ".test-utils.ts",
+  ".test-helpers.ts",
+  ".test-mocks.ts",
+  ".test-harness.ts",
+  ".e2e-harness.ts",
+];
 
 export function resolveRepoRoot(importMetaUrl) {
   let current = path.dirname(fileURLToPath(importMetaUrl));

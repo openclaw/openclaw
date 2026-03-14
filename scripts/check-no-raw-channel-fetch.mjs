@@ -60,10 +60,10 @@ const allowedRawFetchCallsites = new Set([
   "src/discord/send.outbound.ts:363",
   "src/discord/voice-message.ts:264",
   "src/discord/voice-message.ts:308",
-  "src/slack/monitor/media.ts:64",
-  "src/slack/monitor/media.ts:68",
-  "src/slack/monitor/media.ts:82",
-  "src/slack/monitor/media.ts:108",
+  "src/slack/monitor/media.ts:55",
+  "src/slack/monitor/media.ts:59",
+  "src/slack/monitor/media.ts:73",
+  "src/slack/monitor/media.ts:99",
 ]);
 
 function isRawFetchCall(expression) {
