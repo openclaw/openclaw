@@ -153,6 +153,7 @@ export class FeishuStreamingSession {
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
   private updateThrottleMs = 100; // Throttle updates to max 10/sec
+  private closePromise: Promise<void> | null = null; // Track in-flight close to prevent concurrent execution
 
   constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
     this.client = client;
@@ -323,10 +324,23 @@ export class FeishuStreamingSession {
   }
 
   async close(finalText?: string): Promise<void> {
-    if (!this.state || this.closed) {
+    // Prevent concurrent close calls and return existing promise if already closing
+    // This fixes the race condition where multiple close() calls could execute simultaneously
+    if (!this.state) {
       return;
     }
+    if (this.closePromise) {
+      return this.closePromise;
+    }
     this.closed = true;
+    this.closePromise = this._doClose(finalText);
+    return this.closePromise;
+  }
+
+  private async _doClose(finalText?: string): Promise<void> {
+    if (!this.state) {
+      return;
+    }
     await this.queue;
 
     const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
