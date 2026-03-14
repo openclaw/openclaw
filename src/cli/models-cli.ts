@@ -11,6 +11,7 @@ import {
   modelsAuthOrderSetCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
+  modelsAuthStatusCommand,
   modelsFallbacksAddCommand,
   modelsFallbacksClearCommand,
   modelsFallbacksListCommand,
@@ -372,6 +373,39 @@ export function registerModelsCli(program: Command) {
           {
             profileId: opts.profileId as string | undefined,
             yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
+    .command("status")
+    .description("Show auth profiles in a status table")
+    .option("--json", "Output JSON", false)
+    .option("--plain", "Plain output", false)
+    .option("--warn-after-ms <ms>", "Warn window for expiring tokens (default: 24h)")
+    .option("--agent <id>", "Agent id to inspect")
+    .option("--compact", "Compact table view", false)
+    .option("--full", "Full table view", false)
+    .option("--no-color", "Disable colored output", false)
+    .option("--sort-status", "Sort by status (cooldown/expired/expiring first)", false)
+    .option("--provider <name>", "Filter by provider (e.g. openai-codex)")
+    .action(async (opts, command) => {
+      const agent =
+        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+      await runModelsCommand(async () => {
+        await modelsAuthStatusCommand(
+          {
+            json: Boolean(opts.json),
+            plain: Boolean(opts.plain),
+            warnAfterMs: opts.warnAfterMs as string | undefined,
+            agent,
+            compact: Boolean(opts.compact),
+            full: Boolean(opts.full),
+            noColor: Boolean(opts.noColor),
+            sortStatus: Boolean(opts.sortStatus),
+            provider: opts.provider as string | undefined,
           },
           defaultRuntime,
         );
