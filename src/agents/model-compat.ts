@@ -65,23 +65,16 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
 
+  // Return a new object — do not mutate the caller's model reference.
   // Respect explicit user overrides: if the user has set a compat flag to
   // true in their model definition, they know their endpoint supports it.
-  const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
-  const forcedUsageStreaming = compat?.supportsUsageInStreaming === true;
-
-  if (forcedDeveloperRole && forcedUsageStreaming) {
-    return model;
-  }
-
-  // Return a new object — do not mutate the caller's model reference.
   return {
     ...model,
     compat: compat
       ? {
           ...compat,
-          supportsDeveloperRole: forcedDeveloperRole || false,
-          supportsUsageInStreaming: forcedUsageStreaming || false,
+          supportsDeveloperRole: compat.supportsDeveloperRole === true ? true : false,
+          supportsUsageInStreaming: compat.supportsUsageInStreaming === true ? true : false,
         }
       : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
   } as typeof model;
