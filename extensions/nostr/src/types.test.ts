@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { NostrConfigSchema } from "./config-schema.js";
 import { listNostrAccountIds, resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
 
 const TEST_PRIVATE_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -171,5 +172,61 @@ describe("resolveNostrAccount", () => {
       dmPolicy: "allowlist",
       allowFrom: ["pubkey1", "pubkey2"],
     });
+  });
+});
+
+describe("NostrConfigSchema relay URL validation", () => {
+  it("accepts wss:// relay URLs", () => {
+    const result = NostrConfigSchema.safeParse({
+      relays: ["wss://relay.damus.io", "wss://nos.lol"],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts ws:// relay URLs for localhost only", () => {
+    expect(
+      NostrConfigSchema.safeParse({ relays: ["ws://localhost:7777"] }).success,
+    ).toBe(true);
+    expect(
+      NostrConfigSchema.safeParse({ relays: ["ws://127.0.0.1:7777"] }).success,
+    ).toBe(true);
+    expect(
+      NostrConfigSchema.safeParse({ relays: ["ws://[::1]:7777"] }).success,
+    ).toBe(true);
+  });
+
+  it("rejects ws:// relay URLs for non-localhost hosts", () => {
+    const result = NostrConfigSchema.safeParse({
+      relays: ["ws://remote-relay.com:7777"],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects https:// relay URLs", () => {
+    const result = NostrConfigSchema.safeParse({
+      relays: ["https://relay.damus.io"],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects http:// relay URLs", () => {
+    const result = NostrConfigSchema.safeParse({
+      relays: ["http://evil.com"],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects javascript: protocol", () => {
+    const result = NostrConfigSchema.safeParse({
+      relays: ["javascript:alert(1)"],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-URL strings", () => {
+    const result = NostrConfigSchema.safeParse({
+      relays: ["not-a-url"],
+    });
+    expect(result.success).toBe(false);
   });
 });
