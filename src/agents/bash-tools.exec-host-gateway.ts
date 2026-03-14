@@ -250,9 +250,10 @@ export async function processGatewayAllowlist(
       }
 
       if (deniedReason) {
+        const denyMessage = `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`;
         await sendExecApprovalFollowupResult(
           followupTarget,
-          `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`,
+          unresolvedWarning ? unresolvedWarning + denyMessage : denyMessage,
         );
         return;
       }
