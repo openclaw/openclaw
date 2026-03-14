@@ -37,6 +37,10 @@ export interface UsageInfo {
   total_tokens?: number;
   prompt_tokens?: number;
   completion_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cached_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number };
 }
 
 export type OpenAIResponsesAssistantPhase = "commentary" | "final_answer";
