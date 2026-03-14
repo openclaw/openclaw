@@ -120,7 +120,30 @@ export async function resolveSessionAuthProfileOverride(params: {
 
   let next = current;
   if (isNewSession) {
-    next = current ? pickNextAvailable(current) : pickFirstAvailable();
+    if (current) {
+      next = pickNextAvailable(current);
+    } else {
+      // When current is undefined (new session has no authProfileOverride),
+      // consult the store's usageStats to find the most recently used profile
+      // so we can rotate past it instead of always picking the first.
+      let lastUsedInOrder: string | undefined;
+      let lastUsedTime = 0;
+      for (const id of order) {
+        const ts = store.usageStats?.[id]?.lastUsed;
+        if (typeof ts === "number" && ts > lastUsedTime) {
+          lastUsedTime = ts;
+          lastUsedInOrder = id;
+        }
+      }
+      if (lastUsedInOrder) {
+        const candidate = pickNextAvailable(lastUsedInOrder);
+        // If all profiles are in cooldown, prefer order[0] (sorted by earliest
+        // cooldown expiry) over the most-recently-used anchor.
+        next = isProfileInCooldown(store, candidate) ? pickFirstAvailable() : candidate;
+      } else {
+        next = pickFirstAvailable();
+      }
+    }
   } else if (current && compactionCount > storedCompaction) {
     next = pickNextAvailable(current);
   } else if (!current || isProfileInCooldown(store, current)) {
