@@ -307,6 +307,9 @@ const channelPrefixes = [
   "extensions/telegram/",
   "extensions/discord/",
   "extensions/whatsapp/",
+  "extensions/slack/",
+  "extensions/signal/",
+  "extensions/imessage/",
   "src/browser/",
   "src/line/",
 ];
@@ -353,14 +356,14 @@ const inferTarget = (fileFilter) => {
   if (fileFilter.endsWith(".e2e.test.ts")) {
     return { owner: "e2e", isolated };
   }
+  if (channelPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
+    return { owner: "channels", isolated };
+  }
   if (fileFilter.startsWith("extensions/")) {
     return { owner: "extensions", isolated };
   }
   if (fileFilter.startsWith("src/gateway/")) {
     return { owner: "gateway", isolated };
-  }
-  if (channelPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
-    return { owner: "channels", isolated };
   }
   if (baseConfigPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
     return { owner: "base", isolated };
