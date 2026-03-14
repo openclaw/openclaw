@@ -8,6 +8,7 @@ import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 import {
   buildBackupArchiveRoot,
   encodeAbsolutePathForBackupArchive,
+  formatBackupArchiveTimestamp,
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";
 import { backupCreateCommand } from "./backup.js";
@@ -74,6 +75,15 @@ describe("backup commands", () => {
       expect.arrayContaining([expect.objectContaining({ kind: "workspace", reason: "covered" })]),
     );
   }
+
+  it("formats backup archive timestamps in local time with an explicit offset", () => {
+    expect(formatBackupArchiveTimestamp(Date.UTC(2026, 2, 14, 1, 2, 3, 456), 8 * 60)).toBe(
+      "2026-03-14T09-02-03.456+08-00",
+    );
+    expect(formatBackupArchiveTimestamp(Date.UTC(2026, 2, 14, 1, 2, 3, 456), -5 * 60)).toBe(
+      "2026-03-13T20-02-03.456-05-00",
+    );
+  });
 
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
