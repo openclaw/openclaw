@@ -15,10 +15,12 @@ export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string 
   if (!text) {
     return payload.text;
   }
-  if (!payload.btw?.question?.trim()) {
+  const question = payload.btw?.question?.trim();
+  if (!question) {
     return payload.text;
   }
-  return text.startsWith("BTW:") ? text : `BTW: ${text}`;
+  const formatted = `BTW\nQuestion: ${question}\n\n${text}`;
+  return text === formatted || text.startsWith("BTW\nQuestion:") ? text : formatted;
 }
 
 function resolveReplyThreadingForPayload(params: {

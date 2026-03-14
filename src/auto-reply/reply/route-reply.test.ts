@@ -302,7 +302,7 @@ describe("routeReply", () => {
     );
   });
 
-  it("prefixes BTW replies on routed sends", async () => {
+  it("formats BTW replies prominently on routed sends", async () => {
     mocks.sendMessageSlack.mockClear();
     await routeReply({
       payload: { text: "323", btw: { question: "what is 17 * 19?" } },
@@ -312,12 +312,12 @@ describe("routeReply", () => {
     });
     expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
       "channel:C123",
-      "BTW: 323",
+      "BTW\nQuestion: what is 17 * 19?\n\n323",
       expect.any(Object),
     );
   });
 
-  it("prefixes BTW replies on routed discord sends", async () => {
+  it("formats BTW replies prominently on routed discord sends", async () => {
     mocks.sendMessageDiscord.mockClear();
     await routeReply({
       payload: { text: "323", btw: { question: "what is 17 * 19?" } },
@@ -327,7 +327,7 @@ describe("routeReply", () => {
     });
     expect(mocks.sendMessageDiscord).toHaveBeenCalledWith(
       "channel:123456",
-      "BTW: 323",
+      "BTW\nQuestion: what is 17 * 19?\n\n323",
       expect.any(Object),
     );
   });
