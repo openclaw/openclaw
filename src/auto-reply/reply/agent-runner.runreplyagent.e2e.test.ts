@@ -111,6 +111,7 @@ function createMinimalRun(params?: {
   isActive?: boolean;
   shouldFollowup?: boolean;
   resolvedQueueMode?: string;
+  prompt?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
 }) {
   const typing = createMockTypingController();
@@ -124,8 +125,8 @@ function createMinimalRun(params?: {
   } as unknown as QueueSettings;
   const sessionKey = params?.sessionKey ?? "main";
   const followupRun = {
-    prompt: "hello",
-    summaryLine: "hello",
+    prompt: params?.prompt ?? "hello",
+    summaryLine: params?.prompt ?? "hello",
     enqueuedAt: Date.now(),
     run: {
       sessionId: "session",
@@ -318,6 +319,28 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("enqueues transcript-bearing followups when another run is active", async () => {
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "followup",
+      prompt:
+        "[Thread history - for context]\nEarlier message in this thread\n\n[Audio transcript]\nvoice transcript",
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    const enqueueCall = vi.mocked(enqueueFollowupRun).mock.calls[0];
+    expect(enqueueCall?.[0]).toBe("main");
+    expect(enqueueCall?.[1]?.prompt).toContain("voice transcript");
+    expect(enqueueCall?.[1]?.prompt).not.toContain("[User sent media without caption]");
+    expect(enqueueCall?.[2]).toMatchObject({ mode: "followup" });
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
