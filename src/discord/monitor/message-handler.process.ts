@@ -523,8 +523,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     const cleaned = stripLeadingEmptyLines(
       stripReasoningTagsFromText(text, { mode: "strict", trim: "none" }),
     ).trimEnd();
+    const cleanedForGuard = cleaned.trimStart();
     // Skip pure-reasoning messages (e.g. "Reasoning:\n…") that contain no answer text.
-    if (!cleaned.trim() || cleaned.startsWith("Reasoning:\n")) {
+    if (!cleanedForGuard || cleanedForGuard.startsWith("Reasoning:\n")) {
       return;
     }
     if (cleaned === lastPartialText) {

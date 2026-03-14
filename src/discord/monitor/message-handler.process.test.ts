@@ -683,6 +683,21 @@ describe("processDiscordMessage draft streaming", () => {
     }
   });
 
+  it("skips reasoning-only partials even when leading spaces remain after tag stripping", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({
+        text: "<thinking>x</thinking>  Reasoning:\ninternal notes",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    await runInPartialStreamMode();
+
+    expect(draftStream.update).not.toHaveBeenCalled();
+  });
+
   it("preserves indentation in partial stream updates after leading blank lines", async () => {
     const draftStream = createMockDraftStreamForTest();
     const codeBlock = '```json\n  {\n    "ok": true\n  }\n```';
