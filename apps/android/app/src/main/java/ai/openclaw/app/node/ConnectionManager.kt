@@ -1,6 +1,7 @@
 package ai.openclaw.app.node
 
 import android.os.Build
+import ai.openclaw.android.gateway.GatewayClientProfiles
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.gateway.GatewayClientInfo
@@ -107,19 +108,11 @@ class ConnectionManager(
   fun buildCapabilities(): List<String> = InvokeCommandRegistry.advertisedCapabilities(runtimeFlags())
 
   fun resolvedVersionName(): String {
-    val versionName = BuildConfig.VERSION_NAME.trim().ifEmpty { "dev" }
-    return if (BuildConfig.DEBUG && !versionName.contains("dev", ignoreCase = true)) {
-      "$versionName-dev"
-    } else {
-      versionName
-    }
+    return GatewayClientProfiles.resolveVersionName(BuildConfig.VERSION_NAME, BuildConfig.DEBUG)
   }
 
   fun resolveModelIdentifier(): String? {
-    return listOfNotNull(Build.MANUFACTURER, Build.MODEL)
-      .joinToString(" ")
-      .trim()
-      .ifEmpty { null }
+    return GatewayClientProfiles.resolveModelIdentifier()
   }
 
   fun buildUserAgent(): String {
@@ -134,10 +127,10 @@ class ConnectionManager(
       id = clientId,
       displayName = prefs.displayName.value,
       version = resolvedVersionName(),
-      platform = "android",
+      platform = GatewayClientProfiles.AndroidPlatform,
       mode = clientMode,
       instanceId = prefs.instanceId.value,
-      deviceFamily = "Android",
+      deviceFamily = GatewayClientProfiles.AndroidDeviceFamily,
       modelIdentifier = resolveModelIdentifier(),
     )
   }
@@ -149,7 +142,10 @@ class ConnectionManager(
       caps = buildCapabilities(),
       commands = buildInvokeCommands(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
+      client = buildClientInfo(
+        clientId = GatewayClientProfiles.AndroidClientId,
+        clientMode = GatewayClientProfiles.NodeMode,
+      ),
       userAgent = buildUserAgent(),
     )
   }
@@ -161,7 +157,10 @@ class ConnectionManager(
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
+      client = buildClientInfo(
+        clientId = GatewayClientProfiles.AndroidClientId,
+        clientMode = GatewayClientProfiles.UiMode,
+      ),
       userAgent = buildUserAgent(),
     )
   }
