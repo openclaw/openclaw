@@ -70,6 +70,9 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Signal that the reply was intentionally silent (unauthorized command, abort-cutoff drop, etc.).
+   * Used by dispatch to suppress the zero-output fallback for intentional no-reply paths. */
+  onIntentionalSilence?: () => void;
 };
 
 export type ReplyPayload = {

@@ -200,6 +200,7 @@ export async function handleInlineActions(params: {
         `Ignoring /${skillInvocation.command.name} from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
       typing.cleanup();
+      opts?.onIntentionalSilence?.();
       return { kind: "reply", reply: undefined };
     }
 
@@ -284,6 +285,7 @@ export async function handleInlineActions(params: {
       : false;
     if (shouldSkip) {
       typing.cleanup();
+      opts?.onIntentionalSilence?.();
       return { kind: "reply", reply: undefined };
     }
     if (cutoff) {
@@ -412,6 +414,7 @@ export async function handleInlineActions(params: {
     command.from !== command.to
   ) {
     typing.cleanup();
+    opts?.onIntentionalSilence?.();
     return { kind: "reply", reply: undefined };
   }
 
@@ -423,6 +426,9 @@ export async function handleInlineActions(params: {
   const commandResult = await runCommands(command);
   if (!commandResult.shouldContinue) {
     typing.cleanup();
+    if (!commandResult.reply) {
+      opts?.onIntentionalSilence?.();
+    }
     return { kind: "reply", reply: commandResult.reply };
   }
 

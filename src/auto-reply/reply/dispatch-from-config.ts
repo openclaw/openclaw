@@ -372,7 +372,7 @@ export async function dispatchReplyFromConfig(params: {
     let accumulatedBlockText = "";
     let blockCount = 0;
     let toolDeliveryCount = 0;
-
+    // Tracks whether any streaming callback was invoked (before suppression),
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
         normalizeMessageChannel(ctx.Surface ?? ctx.Provider) === "discord" &&
@@ -411,12 +411,17 @@ export async function dispatchReplyFromConfig(params: {
       systemEvent: shouldRouteToOriginating,
     });
 
+    let intentionalSilence = false;
+
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
         ...params.replyOptions,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
+        onIntentionalSilence: () => {
+          intentionalSilence = true;
+        },
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({
@@ -448,13 +453,15 @@ export async function dispatchReplyFromConfig(params: {
             if (shouldSuppressReasoningPayload(payload)) {
               return;
             }
+            // Count all delivered blocks (text and media) so media-only streams
+            // are not mistaken for empty output.
+            blockCount++;
             // Accumulate block text for TTS generation after streaming
             if (payload.text) {
               if (accumulatedBlockText.length > 0) {
                 accumulatedBlockText += "\n";
               }
               accumulatedBlockText += payload.text;
-              blockCount++;
             }
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
@@ -606,9 +613,19 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
-    // Silent completion — agent ran but produced no output and no blocks were
-    // streamed.  Send a fallback so the user is not left without any response.
-    if (!queuedFinal && replies.length === 0 && blockCount === 0 && toolDeliveryCount === 0) {
+    // Silent completion — the reply path returned with no visible output and no
+    // blocks were streamed.  Send a generic fallback so the user is not left
+    // without any response.  This covers zero-output agent runs where the model
+    // genuinely produced nothing.  Intentional silent paths (unauthorized
+    // commands, abort-cutoff drops) signal via onIntentionalSilence and are
+    // excluded so we don't leak command-handling behavior to unauthorized senders.
+    if (
+      !intentionalSilence &&
+      !queuedFinal &&
+      replies.length === 0 &&
+      blockCount === 0 &&
+      toolDeliveryCount === 0
+    ) {
       logVerbose(
         "dispatch-from-config: agent path completed with 0 replies and 0 blocks — sending fallback",
       );

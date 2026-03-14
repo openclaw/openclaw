@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
@@ -1616,6 +1617,9 @@ export async function runEmbeddedPiAgent(
             messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
             messagingToolSentTargets: attempt.messagingToolSentTargets,
             successfulCronAdds: attempt.successfulCronAdds,
+            isSilentReply:
+              !payloads.length &&
+              attempt.assistantTexts.some((t) => isSilentReplyText(t, SILENT_REPLY_TOKEN)),
           };
         }
       } finally {

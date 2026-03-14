@@ -111,7 +111,11 @@ export async function buildReplyPayloads(params: {
   originatingTo?: string;
   accountId?: string;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
-}): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
+}): Promise<{
+  replyPayloads: ReplyPayload[];
+  didLogHeartbeatStrip: boolean;
+  suppressedByMessagingTool: boolean;
+}> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads = params.isHeartbeat
     ? params.payloads
@@ -221,5 +225,6 @@ export async function buildReplyPayloads(params: {
   return {
     replyPayloads,
     didLogHeartbeatStrip,
+    suppressedByMessagingTool: suppressMessagingToolReplies && replyTaggedPayloads.length > 0,
   };
 }

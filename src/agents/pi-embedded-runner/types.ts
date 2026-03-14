@@ -63,6 +63,8 @@ export type EmbeddedPiRunResult = {
     isError?: boolean;
   }>;
   meta: EmbeddedPiRunMeta;
+  // True if the model's reply was exactly NO_REPLY (intentional silence).
+  isSilentReply?: boolean;
   // True if a messaging tool (telegram, whatsapp, discord, slack, sessions_send)
   // successfully sent a message. Used to suppress agent's confirmation text.
   didSendViaMessagingTool?: boolean;

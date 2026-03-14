@@ -2058,9 +2058,9 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
-    ): Promise<ReplyPayload | null> => {
+    ): Promise<ReplyPayload | undefined> => {
       await opts?.onBlockReply?.({ text: "Streaming chunk" });
-      return null as unknown as ReplyPayload;
+      return undefined;
     };
     await dispatchReplyFromConfig({
       ctx,
