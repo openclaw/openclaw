@@ -210,6 +210,27 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents(key)).toEqual(["First event", "Second event"]);
   });
 
+  it("preserves original event order across multiple restored reservations", () => {
+    const key = "agent:main:test-restore-order";
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1);
+    try {
+      enqueueSystemEvent("First event", { sessionKey: key });
+      const firstReservation = reserveSystemEventEntries(key);
+      enqueueSystemEvent("Second event", { sessionKey: key });
+      const secondReservation = reserveSystemEventEntries(key);
+      enqueueSystemEvent("Third event", { sessionKey: key });
+      const thirdReservation = reserveSystemEventEntries(key);
+
+      restoreSystemEventReservation(thirdReservation);
+      restoreSystemEventReservation(firstReservation);
+      restoreSystemEventReservation(secondReservation);
+
+      expect(peekSystemEvents(key)).toEqual(["First event", "Second event", "Third event"]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("reapplies the max queue cap when restoring reserved events", () => {
     const key = "agent:main:test-restore-cap";
     for (let index = 1; index <= 20; index += 1) {

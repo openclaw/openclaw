@@ -2,7 +2,12 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
-export type SystemEvent = { text: string; ts: number; contextKey?: string | null };
+export type SystemEvent = {
+  text: string;
+  ts: number;
+  contextKey?: string | null;
+  order?: number;
+};
 export type SystemEventReservation = {
   sessionKey: string;
   reservationId: string;
@@ -16,6 +21,7 @@ export type SystemEventSummaryReservation = {
 
 const MAX_EVENTS = 20;
 let nextReservationId = 0;
+let nextEventOrder = 0;
 
 type SessionQueue = {
   queue: SystemEvent[];
@@ -58,7 +64,17 @@ function refreshQueueTailState(entry: SessionQueue) {
   entry.lastContextKey = latest?.contextKey ?? null;
 }
 
+function compareSystemEventOrder(left: SystemEvent, right: SystemEvent) {
+  const leftOrder = left.order;
+  const rightOrder = right.order;
+  if (leftOrder !== undefined || rightOrder !== undefined) {
+    return (leftOrder ?? Number.MAX_SAFE_INTEGER) - (rightOrder ?? Number.MAX_SAFE_INTEGER);
+  }
+  return left.ts - right.ts;
+}
+
 function enforceQueuedEventLimit(entry: SessionQueue) {
+  entry.queue.sort(compareSystemEventOrder);
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.splice(0, entry.queue.length - MAX_EVENTS);
   }
@@ -103,6 +119,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
+    order: nextEventOrder++,
   });
   enforceQueuedEventLimit(entry);
   return true;
@@ -265,7 +282,7 @@ export function restoreSystemEventReservation(
     return [];
   }
   entry.reservations.delete(reservation.reservationId);
-  entry.queue.unshift(...reserved);
+  entry.queue.push(...reserved);
   enforceQueuedEventLimit(entry);
   return reserved.map((event) => ({ ...event }));
 }
@@ -307,6 +324,7 @@ export function consumeSystemEventEntries(
     if (
       queued?.text !== target?.text ||
       queued?.ts !== target?.ts ||
+      queued?.order !== target?.order ||
       (queued?.contextKey ?? null) !== (target?.contextKey ?? null)
     ) {
       break;
@@ -345,4 +363,5 @@ export function resetSystemEventsForTest() {
   pendingSummaries.clear();
   summaryReservations.clear();
   nextReservationId = 0;
+  nextEventOrder = 0;
 }
