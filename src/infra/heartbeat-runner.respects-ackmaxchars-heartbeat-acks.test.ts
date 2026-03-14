@@ -230,6 +230,32 @@ describe("runHeartbeatOnce ack handling", () => {
       expectedCalls: 1,
       expectedText: "History check complete",
     },
+    {
+      title: "delivers steered user reply when HEARTBEAT_OK is followed by paragraph break",
+      replyText: "HEARTBEAT_OK\n\nThe answer is 42.",
+      messages: { queue: { mode: "steer" } },
+      expectedCalls: 1,
+      expectedText: "The answer is 42.",
+    },
+    {
+      title: "delivers steered user reply with responsePrefix",
+      replyText: "[openclaw] HEARTBEAT_OK\n\nHere is your answer.",
+      messages: { responsePrefix: "[openclaw]", queue: { mode: "steer" } },
+      expectedCalls: 1,
+      expectedText: "[openclaw] Here is your answer.",
+    },
+    {
+      title: "does not double responsePrefix when model reply already includes it",
+      replyText: "[openclaw] HEARTBEAT_OK\n\n[openclaw] Here is your answer.",
+      messages: { responsePrefix: "[openclaw]", queue: { mode: "steer" } },
+      expectedCalls: 1,
+      expectedText: "[openclaw] Here is your answer.",
+    },
+    {
+      title: "does not recover paragraph-break replies when queue mode is not steer",
+      replyText: "HEARTBEAT_OK\n\nAll clear.",
+      expectedCalls: 0,
+    },
   ])("$title", async ({ replyText, messages, expectedCalls, expectedText }) => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const sendTelegram = await runTelegramHeartbeatWithDefaults({
@@ -244,6 +270,45 @@ describe("runHeartbeatOnce ack handling", () => {
       if (expectedText) {
         expect(sendTelegram).toHaveBeenCalledWith(TELEGRAM_GROUP, expectedText, expect.any(Object));
       }
+    });
+  });
+
+  it("delivers recovered steered reply even when it matches lastHeartbeatText (dedupe bypass)", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const steeredAnswer = "The answer is 42.";
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        heartbeat: { every: "5m", target: "telegram" },
+        channels: {
+          telegram: {
+            token: "test-token",
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+        messages: { queue: { mode: "steer" } },
+      });
+
+      // Seed store with lastHeartbeatText matching the steered answer so the
+      // dedupe gate would normally suppress it as a duplicate.
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        lastHeartbeatText: steeredAnswer,
+        lastHeartbeatSentAt: Date.now() - 60_000, // 1 minute ago, within 24h window
+      } as never);
+
+      replySpy.mockResolvedValue({ text: `HEARTBEAT_OK\n\n${steeredAnswer}` });
+      const sendTelegram = createMessageSendSpy();
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeTelegramDeps({ sendTelegram }),
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram).toHaveBeenCalledWith(TELEGRAM_GROUP, steeredAnswer, expect.any(Object));
     });
   });
 
