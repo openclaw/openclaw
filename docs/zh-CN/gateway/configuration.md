@@ -2699,7 +2699,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
     // 私聊折叠到 agent:<agentId>:<mainKey>（默认："main"）。
     mainKey: "main",
     agentToAgent: {
-      // 请求者/目标之间的最大乒乓回复轮次（0–5）。
+      // 请求者/目标之间的最大乒乓回复轮次（0–20）。
       maxPingPongTurns: 5,
     },
     sendPolicy: {
@@ -2728,7 +2728,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 - `resetByType`：`dm`、`group` 和 `thread` 的每会话覆盖。
   - 如果你只设置了旧版 `session.idleMinutes` 而没有任何 `reset`/`resetByType`，OpenClaw 保持仅空闲模式以向后兼容。
 - `heartbeatIdleMinutes`：可选的心跳检查空闲覆盖（启用时每日重置仍然适用）。
-- `agentToAgent.maxPingPongTurns`：请求者/目标之间的最大回复轮次（0–5，默认 5）。
+- `agentToAgent.maxPingPongTurns`：请求者/目标之间的最大回复轮次（0–20，默认 5）。
 - `sendPolicy.default`：无规则匹配时的 `allow` 或 `deny` 回退。
 - `sendPolicy.rules[]`：按 `channel`、`chatType`（`direct|group|room`）或 `keyPrefix`（例如 `cron:`）匹配。第一个 deny 获胜；否则 allow。
 
