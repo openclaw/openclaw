@@ -130,6 +130,15 @@ export async function sweepCronRunSessions(params: {
           reason: "deleted",
           nowMs: now,
         });
+      } else if (retentionMs > 0) {
+        // Always run cleanup for .deleted files even when no new archives were created
+        // This ensures old .deleted files don't accumulate indefinitely
+        await cleanupArchivedSessionTranscripts({
+          directories: [path.dirname(path.resolve(storePath))],
+          olderThanMs: retentionMs,
+          reason: "deleted",
+          nowMs: now,
+        });
       }
     } catch (err) {
       params.log.warn({ err: String(err) }, "cron-reaper: transcript cleanup failed");
