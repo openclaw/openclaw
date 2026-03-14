@@ -56,7 +56,8 @@ export type InboundDebounceCreateParams<T> = {
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
   const buffers = new Map<string, DebounceBuffer<T>>();
   const defaultDebounceMs = Math.max(0, Math.trunc(params.debounceMs));
-  const maxKeys = Math.max(1, Math.trunc(params.maxKeys ?? DEFAULT_MAX_KEYS));
+  const rawMaxKeys = Math.trunc(params.maxKeys ?? DEFAULT_MAX_KEYS);
+  const maxKeys = Number.isFinite(rawMaxKeys) && rawMaxKeys >= 1 ? rawMaxKeys : DEFAULT_MAX_KEYS;
 
   const resolveDebounceMs = (item: T) => {
     const resolved = params.resolveDebounceMs?.(item);
