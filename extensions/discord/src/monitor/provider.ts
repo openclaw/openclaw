@@ -77,10 +77,7 @@ import {
   registerDiscordListener,
 } from "./listeners.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
-import {
-  reconcileDiscordNativeCommands,
-  snapshotDiscordNativeCommandState,
-} from "./native-command-state.js";
+import { reconcileDiscordNativeCommands } from "./native-command-state.js";
 import {
   createDiscordCommandArgFallbackButton,
   createDiscordModelPickerFallbackButton,
@@ -417,8 +414,31 @@ function resolveDiscordNativeCommandReconcileOnStartup(params: {
   );
 }
 
+function resolveDiscordNativeCommandReconcileFallbackReason(params: {
+  client: Client;
+  commands: BaseCommand[];
+}): string | null {
+  const clientOptions = params.client as unknown as {
+    options?: { devGuilds?: string[] };
+  };
+  if (
+    Array.isArray(clientOptions.options?.devGuilds) &&
+    clientOptions.options.devGuilds.length > 0
+  ) {
+    return "devGuilds are configured";
+  }
+  for (const command of params.commands) {
+    const guildIds = (command as { guildIds?: string[] }).guildIds;
+    if (Array.isArray(guildIds) && guildIds.length > 0) {
+      return `command "/${command.name}" is guild-scoped`;
+    }
+  }
+  return null;
+}
+
 async function deployDiscordCommandsWithOptionalReconcile(params: {
   client: Client;
+  commands: BaseCommand[];
   runtime: RuntimeEnv;
   enabled: boolean;
   reconcileOnStartup: boolean;
@@ -434,30 +454,30 @@ async function deployDiscordCommandsWithOptionalReconcile(params: {
   }
   if (!params.reconcileOnStartup) {
     params.runtime.log?.("discord: native commands using legacy deploy path");
-    const outcome = await deployDiscordCommands({
+    await deployDiscordCommands({
       client: params.client,
       runtime: params.runtime,
       enabled: params.enabled,
       accountId: params.accountId,
       startupStartedAt: params.startupStartedAt,
     });
-    if (outcome === "failed") {
-      return;
-    }
-    try {
-      await snapshotDiscordNativeCommandState({
-        client: params.client,
-        accountId: params.accountId,
-        applicationId: params.applicationId,
-      });
-    } catch (err) {
-      const details = formatDiscordDeployErrorDetails(err);
-      params.runtime.error?.(
-        danger(
-          `discord: failed to snapshot native command state: ${formatErrorMessage(err)}${details}`,
-        ),
-      );
-    }
+    return;
+  }
+  const reconcileFallbackReason = resolveDiscordNativeCommandReconcileFallbackReason({
+    client: params.client,
+    commands: params.commands,
+  });
+  if (reconcileFallbackReason) {
+    params.runtime.log?.(
+      `discord: native command reconcile only supports global commands; falling back to legacy deploy path because ${reconcileFallbackReason}`,
+    );
+    await deployDiscordCommands({
+      client: params.client,
+      runtime: params.runtime,
+      enabled: params.enabled,
+      accountId: params.accountId,
+      startupStartedAt: params.startupStartedAt,
+    });
     return;
   }
   params.runtime.log?.("discord: native commands using reconcile-on-startup path");
@@ -911,6 +931,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     });
     await deployDiscordCommandsWithOptionalReconcile({
       client,
+      commands,
       runtime,
       enabled: nativeEnabled,
       reconcileOnStartup: reconcileNativeCommandsOnStartup,
