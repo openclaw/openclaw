@@ -19,10 +19,9 @@ function createMockListener(overrides?: Partial<ActiveWebListener>): ActiveWebLi
 
 describe("active-listener registry", () => {
   afterEach(() => {
-    // Clean up all listeners after each test.
-    setActiveWebListener(null);
-    setActiveWebListener("work", null);
-    setActiveWebListener("personal", null);
+    // Clean up all listeners after each test – clear the entire store
+    // so newly added account IDs in future tests are covered automatically.
+    globalThis.__openclaw_wa_web_listeners?.clear();
   });
 
   // ------------------------------------------------------------------
