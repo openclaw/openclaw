@@ -1,5 +1,6 @@
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { colorize, theme } from "../../terminal/theme.js";
+import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 
 export type GatewayDiscoverOpts = {
   timeout?: string;
@@ -7,26 +8,7 @@ export type GatewayDiscoverOpts = {
 };
 
 export function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number {
-  if (raw === undefined || raw === null) {
-    return fallbackMs;
-  }
-  const value =
-    typeof raw === "string"
-      ? raw.trim()
-      : typeof raw === "number" || typeof raw === "bigint"
-        ? String(raw)
-        : null;
-  if (value === null) {
-    throw new Error("invalid --timeout");
-  }
-  if (!value) {
-    return fallbackMs;
-  }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`invalid --timeout: ${value}`);
-  }
-  return parsed;
+  return parseTimeoutMsWithFallback(raw, fallbackMs, { invalidType: "error" });
 }
 
 export function pickBeaconHost(beacon: GatewayBonjourBeacon): string | null {

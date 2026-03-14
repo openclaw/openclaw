@@ -1,3 +1,4 @@
+import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
@@ -64,20 +65,7 @@ function parseIntOrNull(value: unknown): number | null {
 }
 
 export function parseTimeoutMs(raw: unknown, fallbackMs: number): number {
-  const value =
-    typeof raw === "string"
-      ? raw.trim()
-      : typeof raw === "number" || typeof raw === "bigint"
-        ? String(raw)
-        : "";
-  if (!value) {
-    return fallbackMs;
-  }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`invalid --timeout: ${value}`);
-  }
-  return parsed;
+  return parseTimeoutMsWithFallback(raw, fallbackMs);
 }
 
 function normalizeWsUrl(value: string): string | null {
