@@ -117,4 +117,26 @@ describe("BoxLite runtime", () => {
     expect(getActiveBoxLiteBoxCount()).toBe(0);
     expect(mockStop).toHaveBeenCalledTimes(2);
   });
+
+  it("cleans up VM when setup command fails", async () => {
+    mockExec.mockRejectedValueOnce(new Error("setup failed"));
+
+    await expect(ensureBoxLiteBox("test-setup-fail", { setupCommand: "bad-cmd" })).rejects.toThrow(
+      "setup failed",
+    );
+
+    // VM should be cleaned up — not left in registry.
+    expect(getActiveBoxLiteBoxCount()).toBe(0);
+    expect(mockStop).toHaveBeenCalledOnce();
+  });
+
+  it("deduplicates concurrent creation for the same scope key", async () => {
+    // Both calls start before either finishes — second should join first's in-flight promise.
+    const p1 = ensureBoxLiteBox("concurrent-key");
+    const p2 = ensureBoxLiteBox("concurrent-key");
+
+    const [h1, h2] = await Promise.all([p1, p2]);
+    expect(h1).toBe(h2);
+    expect(getActiveBoxLiteBoxCount()).toBe(1);
+  });
 });

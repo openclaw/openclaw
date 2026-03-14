@@ -439,7 +439,7 @@ export function createOpenClawCodingTools(options?: {
           containerName: sandbox.containerName,
           workspaceDir: sandbox.workspaceDir,
           containerWorkdir: sandbox.containerWorkdir,
-          env: sandbox.provider === "boxlite" ? sandbox.docker.env : sandbox.docker.env,
+          env: sandbox.docker.env,
         }
       : undefined,
   });

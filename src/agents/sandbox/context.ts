@@ -145,7 +145,8 @@ export async function resolveSandboxContext(params: {
       browserAllowHostControl: cfg.browser.allowHostControl,
     };
 
-    sandboxContext.fsBridge = createSandboxFsBridge({ sandbox: sandboxContext });
+    // Skip fs-bridge for BoxLite — SandboxFsBridgeImpl uses `docker exec` internally.
+    // BoxLite file operations go through the exec runtime instead.
     return sandboxContext;
   }
 

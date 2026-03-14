@@ -26,6 +26,8 @@ const DEFAULT_WORKDIR = "/workspace";
 
 // In-memory registry keyed by scope key.
 const activeBoxes = new Map<string, BoxEntry>();
+// In-flight creation promises to prevent TOCTOU races.
+const inFlightCreations = new Map<string, Promise<BoxHandle>>();
 
 export async function isBoxLiteAvailable(): Promise<boolean> {
   try {
@@ -46,6 +48,20 @@ export async function ensureBoxLiteBox(
     return existing.handle;
   }
 
+  // Deduplicate concurrent creation for the same scope key.
+  const pending = inFlightCreations.get(scopeKey);
+  if (pending) {
+    return pending;
+  }
+
+  const creation = createBox(scopeKey, config).finally(() => {
+    inFlightCreations.delete(scopeKey);
+  });
+  inFlightCreations.set(scopeKey, creation);
+  return creation;
+}
+
+async function createBox(scopeKey: string, config?: BoxLiteSettings): Promise<BoxHandle> {
   const { SimpleBox } = await import("@boxlite-ai/boxlite");
   const image = config?.image ?? DEFAULT_IMAGE;
   const memoryMib = config?.memoryMib ?? DEFAULT_MEMORY_MIB;
@@ -78,16 +94,24 @@ export async function ensureBoxLiteBox(
     },
   };
 
-  // Run setup command if configured.
-  if (config?.setupCommand?.trim()) {
-    await handle.run("sh", "-c", config.setupCommand);
-  }
-
-  activeBoxes.set(scopeKey, {
+  // Register before setup so the VM is always reachable for cleanup.
+  const entry: BoxEntry = {
     handle,
     createdAtMs: Date.now(),
     lastUsedAtMs: Date.now(),
-  });
+  };
+  activeBoxes.set(scopeKey, entry);
+
+  // Run setup command if configured.
+  if (config?.setupCommand?.trim()) {
+    try {
+      await handle.run("sh", "-c", config.setupCommand);
+    } catch (err) {
+      activeBoxes.delete(scopeKey);
+      await handle.stop().catch(() => undefined);
+      throw err;
+    }
+  }
 
   return handle;
 }

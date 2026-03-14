@@ -388,10 +388,26 @@ export async function runExecProcess(opts: {
   // BoxLite provider: run command via BoxLite micro-VM instead of process supervisor.
   if (opts.sandbox?.provider === "boxlite") {
     const boxliteScopeKey = opts.sandbox.containerName;
+    let boxliteAborted = false;
     const boxlitePromise = (async (): Promise<ExecProcessOutcome> => {
       try {
         const { runBoxLiteCommand } = await import("./boxlite/runtime.js");
-        const result = await runBoxLiteCommand(boxliteScopeKey, "sh", ["-c", execCommand]);
+
+        // Wrap with timeout if configured.
+        let resultPromise: Promise<import("./boxlite/runtime.js").BoxLiteExecResult> =
+          runBoxLiteCommand(boxliteScopeKey, "sh", ["-c", execCommand]);
+        if (timeoutMs) {
+          resultPromise = Promise.race([
+            resultPromise,
+            new Promise<never>((_, reject) => {
+              setTimeout(() => {
+                reject(new Error(`BoxLite command timed out after ${timeoutMs}ms`));
+              }, timeoutMs);
+            }),
+          ]);
+        }
+
+        const result = await resultPromise;
         if (result.stdout) {
           handleStdout(result.stdout);
         }
@@ -416,6 +432,22 @@ export async function runExecProcess(opts: {
           timedOut: false,
         };
       } catch (err) {
+        const durationMs = Date.now() - startedAt;
+        const wasTimedOut = err instanceof Error && err.message.includes("timed out");
+        if (wasTimedOut || boxliteAborted) {
+          markExited(session, null, null, "failed");
+          maybeNotifyOnExit(session, "failed");
+          const aggregated = session.aggregated.trim();
+          const suffix = wasTimedOut ? "\n\n(Command timed out)" : "\n\n(Command aborted)";
+          return {
+            status: "failed",
+            exitCode: null,
+            exitSignal: null,
+            durationMs,
+            aggregated: aggregated + suffix,
+            timedOut: wasTimedOut,
+          };
+        }
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");
         throw err;
@@ -428,7 +460,7 @@ export async function runExecProcess(opts: {
       pid: undefined,
       promise: boxlitePromise,
       kill: () => {
-        // BoxLite commands are async calls, not child processes; no kill needed.
+        boxliteAborted = true;
       },
     };
   }
