@@ -169,6 +169,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "tunnel",
+    description: "Manage persistent SSH port-forward tunnels to a remote gateway",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../tunnel-cli.js");
+      mod.registerTunnelCli(program);
+    },
+  },
+  {
     name: "docs",
     description: "Search the live OpenClaw docs",
     hasSubcommands: false,
