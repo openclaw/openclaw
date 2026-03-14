@@ -267,9 +267,32 @@ export class GatewayChatClient {
   }
 }
 
+/**
+ * Best-effort: read the daemon service definition and apply
+ * OPENCLAW_GATEWAY_PORT to the current process so that
+ * resolveGatewayPort() picks up the actual runtime port.
+ */
+async function applyGatewayRuntimePortEnvOverride(): Promise<void> {
+  if (process.env.OPENCLAW_GATEWAY_PORT) {
+    return;
+  }
+  try {
+    const { resolveGatewayService } = await import("../daemon/service.js");
+    const service = resolveGatewayService();
+    const command = await service.readCommand(process.env);
+    const port = command?.environment?.OPENCLAW_GATEWAY_PORT;
+    if (port) {
+      process.env.OPENCLAW_GATEWAY_PORT = port;
+    }
+  } catch {
+    // Daemon may not be installed or platform unsupported — fall through.
+  }
+}
+
 export async function resolveGatewayConnection(
   opts: GatewayConnectionOptions,
 ): Promise<ResolvedGatewayConnection> {
+  await applyGatewayRuntimePortEnvOverride();
   const config = loadConfig();
   const env = process.env;
   const gatewayAuthMode = config.gateway?.auth?.mode;

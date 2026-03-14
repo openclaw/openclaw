@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadConfigMock as loadConfig,
   resolveGatewayPortMock as resolveGatewayPort,
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+
+const readCommandMock = vi.fn(async () => null);
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => ({ readCommand: readCommandMock }),
+}));
 
 const { resolveGatewayConnection } = await import("./gateway-chat.js");
 
@@ -88,14 +93,17 @@ describe("resolveGatewayConnection", () => {
       "OPENCLAW_GATEWAY_URL",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_GATEWAY_PORT",
       "CLAWDBOT_GATEWAY_URL",
     ]);
     loadConfig.mockClear();
     resolveGatewayPort.mockClear();
     resolveGatewayPort.mockReturnValue(18789);
+    readCommandMock.mockReset().mockResolvedValue(null);
     delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.CLAWDBOT_GATEWAY_URL;
   });
 
@@ -350,5 +358,50 @@ describe("resolveGatewayConnection", () => {
         expect(await fileExists(passwordMarker)).toBe(true);
       },
     );
+  });
+
+  it("applies daemon service runtime port when OPENCLAW_GATEWAY_PORT is unset", async () => {
+    readCommandMock.mockResolvedValue({
+      programArguments: [],
+      environment: { OPENCLAW_GATEWAY_PORT: "48789" },
+    });
+    resolveGatewayPort.mockImplementation(() => {
+      const raw = process.env.OPENCLAW_GATEWAY_PORT;
+      if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          return parsed;
+        }
+      }
+      return 18789;
+    });
+    loadConfig.mockReturnValue({ gateway: { auth: { mode: "none" } } });
+
+    const result = await resolveGatewayConnection({});
+    expect(result.url).toContain("48789");
+    expect(process.env.OPENCLAW_GATEWAY_PORT).toBe("48789");
+  });
+
+  it("does not override OPENCLAW_GATEWAY_PORT when already set", async () => {
+    process.env.OPENCLAW_GATEWAY_PORT = "29000";
+    readCommandMock.mockResolvedValue({
+      programArguments: [],
+      environment: { OPENCLAW_GATEWAY_PORT: "48789" },
+    });
+    resolveGatewayPort.mockImplementation(() => {
+      const raw = process.env.OPENCLAW_GATEWAY_PORT;
+      if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          return parsed;
+        }
+      }
+      return 18789;
+    });
+    loadConfig.mockReturnValue({ gateway: { auth: { mode: "none" } } });
+
+    const result = await resolveGatewayConnection({});
+    expect(result.url).toContain("29000");
+    expect(process.env.OPENCLAW_GATEWAY_PORT).toBe("29000");
   });
 });
