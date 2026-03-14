@@ -1,5 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
+import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.js";
@@ -27,17 +28,6 @@ export type ChannelsAddOptions = {
   groupChannels?: string;
   dmAllowlist?: string;
 } & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
-
-function parseList(value: string | undefined): string[] | undefined {
-  if (!value?.trim()) {
-    return undefined;
-  }
-  const parsed = value
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  return parsed.length > 0 ? parsed : undefined;
-}
 
 function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = raw.trim().toLowerCase();
@@ -225,8 +215,8 @@ export async function channelsAddCommand(
       : typeof opts.initialSyncLimit === "string" && opts.initialSyncLimit.trim()
         ? Number.parseInt(opts.initialSyncLimit, 10)
         : undefined;
-  const groupChannels = parseList(opts.groupChannels);
-  const dmAllowlist = parseList(opts.dmAllowlist);
+  const groupChannels = parseOptionalDelimitedEntries(opts.groupChannels);
+  const dmAllowlist = parseOptionalDelimitedEntries(opts.dmAllowlist);
 
   const input: ChannelSetupInput = {
     name: opts.name,
