@@ -14,7 +14,9 @@
  */
 
 import { describe, expect, it } from "vitest";
-
+import { resolveAllowlistMatchSimple, compileAllowlist } from "../src/channels/allowlist-match.js";
+import type { OpenClawConfig } from "../src/config/config.js";
+import { normalizeAccountId, normalizeOptionalAccountId } from "../src/routing/account-id.js";
 // ---------------------------------------------------------------------------
 // 1. Multi-platform agent routing
 // ---------------------------------------------------------------------------
@@ -23,9 +25,6 @@ import {
   buildAgentSessionKey,
   pickFirstExistingAgentId,
 } from "../src/routing/resolve-route.js";
-import type { OpenClawConfig } from "../src/config/config.js";
-import { resolveAllowlistMatchSimple, compileAllowlist } from "../src/channels/allowlist-match.js";
-import { normalizeAccountId, normalizeOptionalAccountId } from "../src/routing/account-id.js";
 
 describe("validate: multi-platform agent routing", () => {
   it("routes to default agent when no config exists (WhatsApp)", () => {
@@ -104,7 +103,7 @@ describe("validate: multi-platform agent routing", () => {
   });
 
   it("falls back to main when named agent does not exist in config", () => {
-    const cfg: OpenClawConfig = { agents: { main: { model: "gpt-4o" } } };
+    const cfg: OpenClawConfig = { agents: { list: [{ id: "main", model: "gpt-4o" }] } };
     const resolved = pickFirstExistingAgentId(cfg, "nonexistent");
     expect(resolved).toBe("main");
   });
@@ -329,6 +328,7 @@ export function add(a: number, b: number): number {
   });
 });
 
+import { vi } from "vitest";
 // ---------------------------------------------------------------------------
 // 7. Runtime environment guard (error-handling / recovery)
 // ---------------------------------------------------------------------------
@@ -339,7 +339,6 @@ import {
   assertSupportedRuntime,
   type RuntimeDetails,
 } from "../src/infra/runtime-guard.js";
-import { vi } from "vitest";
 
 describe("validate: runtime environment guard", () => {
   it("parses semver with leading v", () => {
