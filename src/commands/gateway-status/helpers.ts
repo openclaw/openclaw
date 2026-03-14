@@ -5,6 +5,7 @@ import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../../gateway/credentials.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
+import { isBlockedHostname } from "../../infra/net/ssrf.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { pickGatewaySelfPresence } from "../gateway-presence.js";
@@ -70,12 +71,34 @@ export function parseTimeoutMs(raw: unknown, fallbackMs: number): number {
   return parseTimeoutMsWithFallback(raw, fallbackMs);
 }
 
+// Cloud metadata / link-local IPs that are never legitimate gateway probe targets.
+const BLOCKED_GATEWAY_URL_PREFIXES = ["169.254."];
+const BLOCKED_GATEWAY_URL_IPS = new Set(["0.0.0.0"]);
+
 function normalizeWsUrl(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
     return null;
   }
   if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
+    return null;
+  }
+  // CWE-918: Validate hostname to block cloud metadata and dangerous endpoints.
+  try {
+    const parsed = new URL(trimmed);
+    const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (BLOCKED_GATEWAY_URL_IPS.has(hostname)) {
+      return null;
+    }
+    for (const prefix of BLOCKED_GATEWAY_URL_PREFIXES) {
+      if (hostname.startsWith(prefix)) {
+        return null;
+      }
+    }
+    if (hostname !== "localhost" && isBlockedHostname(hostname)) {
+      return null;
+    }
+  } catch {
     return null;
   }
   return trimmed;
