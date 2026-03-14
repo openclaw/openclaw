@@ -35,7 +35,9 @@ export const resolveTelegramUpdateId = (ctx: TelegramUpdateKeyContext) =>
 export const buildTelegramUpdateKey = (ctx: TelegramUpdateKeyContext) => {
   const updateId = resolveTelegramUpdateId(ctx);
   if (typeof updateId === "number") {
-    return `update:${updateId}`;
+    // Only use update_id for uniqueness if we don't have a message ID.
+    // Message ID is generally more robust for duplicate detection across
+    // different update types (like edited_message vs message).
   }
   const callbackId = ctx.callbackQuery?.id;
   if (callbackId) {
@@ -54,6 +56,10 @@ export const buildTelegramUpdateKey = (ctx: TelegramUpdateKeyContext) => {
   const messageId = msg?.message_id;
   if (typeof chatId !== "undefined" && typeof messageId === "number") {
     return `message:${chatId}:${messageId}`;
+  }
+  // Fallback to update_id if no message ID is available.
+  if (typeof updateId === "number") {
+    return `update:${updateId}`;
   }
   return undefined;
 };
