@@ -25,6 +25,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/home/testuser/.fnm/current/bin");
     expect(result).toContain("/home/testuser/.volta/bin");
     expect(result).toContain("/home/testuser/.asdf/shims");
+    expect(result).toContain("/home/testuser/.nix-profile/bin");
     expect(result).toContain("/home/testuser/.local/share/pnpm");
     expect(result).toContain("/home/testuser/.bun/bin");
   });
@@ -114,6 +115,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/Users/testuser/.fnm/aliases/default/bin"); // fnm if customized to ~/.fnm
     expect(result).toContain("/Users/testuser/.volta/bin");
     expect(result).toContain("/Users/testuser/.asdf/shims");
+    expect(result).toContain("/Users/testuser/.nix-profile/bin");
     expect(result).toContain("/Users/testuser/Library/pnpm"); // pnpm default on macOS
     expect(result).toContain("/Users/testuser/.local/share/pnpm"); // pnpm XDG fallback
     expect(result).toContain("/Users/testuser/.bun/bin");

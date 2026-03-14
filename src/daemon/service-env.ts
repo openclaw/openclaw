@@ -84,6 +84,7 @@ function addCommonUserBinDirs(dirs: string[], home: string): void {
   dirs.push(`${home}/bin`);
   dirs.push(`${home}/.volta/bin`);
   dirs.push(`${home}/.asdf/shims`);
+  dirs.push(`${home}/.nix-profile/bin`);
   dirs.push(`${home}/.bun/bin`);
 }
 
