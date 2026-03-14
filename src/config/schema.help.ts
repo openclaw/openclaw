@@ -741,7 +741,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Fallback max-token value applied to discovered models without explicit output token limits. Use conservative defaults to reduce truncation surprises and unexpected token spend.",
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
   "channels.slack.allowBots":
-    "Allow bot-authored messages to trigger Slack replies (default: false).",
+    'Allow bot-authored messages to trigger Slack replies. Set to true to allow all bot messages, "mentions" to only allow bot messages that @mention this bot, or false to ignore all bot messages (default: false).',
   "channels.slack.thread.historyScope":
     'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
   "channels.slack.thread.inheritParent":

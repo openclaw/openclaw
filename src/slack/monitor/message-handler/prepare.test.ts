@@ -297,6 +297,112 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.RawBody).toContain("Readiness probe failed");
   });
 
+  it("drops bot messages without mention when allowBots=mentions", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Bot" }) as any;
+
+    const account = createSlackAccount({ allowBots: "mentions" });
+    const message = createSlackMessage({
+      channel: "C123",
+      channel_type: "channel",
+      text: "hello from another bot",
+      bot_id: "B_OTHER",
+      user: "U_OTHER",
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, account, message);
+    expect(prepared).toBeNull();
+  });
+
+  it("allows bot messages with explicit mention when allowBots=mentions", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Bot" }) as any;
+
+    const account = createSlackAccount({ allowBots: "mentions" });
+    const message = createSlackMessage({
+      channel: "C123",
+      channel_type: "channel",
+      text: "hey <@B1> can you help?",
+      bot_id: "B_OTHER",
+      user: "U_OTHER",
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, account, message);
+    expect(prepared).toBeTruthy();
+  });
+
+  it("allows bot DM messages when allowBots=mentions", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Bot" }) as any;
+
+    const account = createSlackAccount({ allowBots: "mentions" });
+    const message = createSlackMessage({
+      channel: "D123",
+      channel_type: "im",
+      text: "hello from a bot DM",
+      bot_id: "B_OTHER",
+      user: "U_OTHER",
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, account, message);
+    expect(prepared).toBeTruthy();
+  });
+
+  it("allows bot messages with implicit mention (thread participation) when allowBots=mentions", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Bot" }) as any;
+
+    const { recordSlackThreadParticipation, clearSlackThreadParticipationCache } =
+      await import("../../sent-thread-cache.js");
+    recordSlackThreadParticipation("default", "C123", "1.000");
+
+    const account = createSlackAccount({ allowBots: "mentions" });
+    const message = createSlackMessage({
+      channel: "C123",
+      channel_type: "channel",
+      text: "follow-up from another bot",
+      bot_id: "B_OTHER",
+      user: "U_OTHER",
+      thread_ts: "1.000",
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, account, message);
+    expect(prepared).toBeTruthy();
+    clearSlackThreadParticipationCache();
+  });
+
   it("keeps channel metadata out of GroupSystemPrompt", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
