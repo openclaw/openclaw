@@ -34,6 +34,14 @@ const getCore = () => getMatrixRuntime();
 export type { MatrixSendOpts, MatrixSendResult } from "./send/types.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
 
+function isMatrixClientLike(value: unknown): value is MatrixClient {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    typeof (value as { setTyping?: unknown }).setTyping === "function",
+  );
+}
+
 export async function sendMessageMatrix(
   to: string,
   message: string,
@@ -199,13 +207,18 @@ export async function sendPollMatrix(
 export async function sendTypingMatrix(
   roomId: string,
   typing: boolean,
-  opts?: number | { typingTimeoutMs?: number; clientTimeoutMs?: number },
+  opts?: number | { typingTimeoutMs?: number; clientTimeoutMs?: number } | MatrixClient,
   client?: MatrixClient,
 ): Promise<void> {
+  const resolvedClient = client ?? (isMatrixClientLike(opts) ? opts : undefined);
   const resolvedOpts =
-    typeof opts === "number" ? { typingTimeoutMs: opts, clientTimeoutMs: opts } : opts;
+    typeof opts === "number"
+      ? { typingTimeoutMs: opts, clientTimeoutMs: opts }
+      : isMatrixClientLike(opts)
+        ? undefined
+        : opts;
   const { client: resolved, stopOnDone } = await resolveMatrixClient({
-    client,
+    client: resolvedClient,
     timeoutMs: resolvedOpts?.clientTimeoutMs,
   });
   try {

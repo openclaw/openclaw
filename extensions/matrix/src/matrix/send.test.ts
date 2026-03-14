@@ -395,6 +395,19 @@ describe("sendTypingMatrix", () => {
     expect(setTyping).toHaveBeenCalledWith("!room:example.org", true, 5_000);
   });
 
+  it("accepts a Matrix client as the third argument", async () => {
+    const setTyping = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      setTyping,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    await sendTypingMatrix("!room:example.org", true, client);
+
+    expect(setTyping).toHaveBeenCalledTimes(1);
+    expect(setTyping).toHaveBeenCalledWith("!room:example.org", true, 30_000);
+  });
+
   it("preserves legacy numeric timeout semantics when resolving the client internally", async () => {
     const setTyping = vi.fn().mockResolvedValue(undefined);
     resolveMatrixClientMock.mockImplementationOnce(async (opts) => {
