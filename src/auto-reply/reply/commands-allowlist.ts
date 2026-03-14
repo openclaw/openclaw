@@ -29,7 +29,11 @@ import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
-import { rejectUnauthorizedCommand, requireCommandFlagEnabled } from "./command-gates.js";
+import {
+  rejectUnauthorizedCommand,
+  requireCommandFlagEnabled,
+  requireGatewayClientScopeForInternalChannel,
+} from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 
@@ -404,6 +408,17 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   const unauthorized = rejectUnauthorizedCommand(params, "/allowlist");
   if (unauthorized) {
     return unauthorized;
+  }
+
+  if (parsed.action === "add" || parsed.action === "remove") {
+    const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
+      label: "/allowlist write",
+      allowedScopes: ["operator.admin"],
+      missingText: "❌ /allowlist add|remove requires operator.admin for gateway clients.",
+    });
+    if (missingAdminScope) {
+      return missingAdminScope;
+    }
   }
 
   const channelId =
