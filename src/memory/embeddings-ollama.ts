@@ -19,6 +19,43 @@ export type OllamaEmbeddingClient = {
 type OllamaEmbeddingClientConfig = Omit<OllamaEmbeddingClient, "embedBatch">;
 
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
+const OLLAMA_EMBED_BATCH_CONCURRENCY = 4;
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const capped = Number.isFinite(concurrency) ? Math.max(1, Math.floor(concurrency)) : 1;
+  const workers = Math.min(capped, items.length);
+  const out: R[] = [];
+  const filled = Array.from({ length: items.length }, () => false);
+  let index = 0;
+  await Promise.all(
+    Array.from({ length: workers }, async () => {
+      while (true) {
+        const current = index;
+        index += 1;
+        if (current >= items.length) {
+          return;
+        }
+        out[current] = await mapper(items[current], current);
+        filled[current] = true;
+      }
+    }),
+  );
+  const finalized: R[] = [];
+  for (let i = 0; i < filled.length; i += 1) {
+    if (!filled[i]) {
+      throw new Error("Ollama embedding batch mapping did not fill all results");
+    }
+    finalized.push(out[i]);
+  }
+  return finalized;
+}
 
 function normalizeOllamaModel(model: string): string {
   return normalizeEmbeddingModelWithPrefixes({
@@ -103,7 +140,7 @@ export async function createOllamaEmbeddingProvider(
     embedQuery: embedOne,
     embedBatch: async (texts: string[]) => {
       // Ollama /api/embeddings accepts one prompt per request.
-      return await Promise.all(texts.map(embedOne));
+      return await mapWithConcurrency(texts, OLLAMA_EMBED_BATCH_CONCURRENCY, embedOne);
     },
   };
 
