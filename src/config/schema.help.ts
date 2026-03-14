@@ -261,7 +261,7 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.profiles.*.cdpPort":
     "Per-profile local CDP port used when connecting to browser instances by port instead of URL. Use unique ports per profile to avoid connection collisions.",
   "browser.profiles.*.cdpUrl":
-    "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
+    "Per-profile browser endpoint URL. For openclaw/extension drivers this is the CDP URL; for existing-session it is passed to Chrome DevTools MCP as browserUrl/wsEndpoint so headless or remote MCP attach can target a running debuggable browser.",
   "browser.profiles.*.driver":
     'Per-profile browser driver mode: "openclaw" (or legacy "clawd") or "extension" depending on connection/runtime strategy. Use the driver that matches your browser control stack to avoid protocol mismatches.',
   "browser.profiles.*.attachOnly":

@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - Feishu/streaming: add `onReasoningStream` and `onReasoningEnd` support to streaming cards, so `/reasoning stream` renders thinking tokens as markdown blockquotes in the same card — matching the Telegram channel's reasoning lane behavior. (#46029)
 - Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) thanks @scoootscooob.
 - Android/nodes: add `callLog.search` plus shared Call Log permission wiring so Android nodes can search recent call history through the gateway. (#44073) Thanks @lxk7280.
+- Browser/existing-session: add headless Chrome DevTools MCP support for Linux, Docker, and VPS setups, including explicit browser URL and WebSocket endpoint attach modes for `existing-session`. Thanks @vincentkoc.
 
 ### Fixes
 
