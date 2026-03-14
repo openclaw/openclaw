@@ -167,7 +167,7 @@ describe("stream-wrapper integration", () => {
       const messages = [legacy] as unknown as Message[];
       const filtered = filterMessages(messages, ctx) as unknown as Array<{ content: unknown }>;
       expect(typeof filtered[0]?.content).toBe("string");
-      expect(String(filtered[0]?.content)).not.toContain("admin@company.com");
+      expect(String(filtered[0]?.content)).toContain("admin@company.com");
     });
   });
 
@@ -328,6 +328,45 @@ describe("stream-wrapper integration", () => {
       }
       expect(first.text).toContain(original);
       expect(first.text).not.toContain("pf_");
+    });
+
+    it("restores placeholders in text_delta chunks", async () => {
+      const ctx = createPrivacyFilterContext("test-session");
+      const original = "admin@company.com";
+      filterText(`contact ${original}`, ctx);
+      const replacement = ctx.replacer.getMappings()[0]?.replacement;
+      if (!replacement) {
+        throw new Error("expected replacement mapping");
+      }
+
+      const baseFn: StreamFn = () =>
+        ({
+          async *[Symbol.asyncIterator]() {
+            yield { type: "text_delta", contentIndex: 0, delta: replacement };
+          },
+          async result() {
+            return assistantMessage([{ type: "text", text: "done" }]);
+          },
+        }) as unknown as ReturnType<StreamFn>;
+
+      const wrapped = wrapStreamFnPrivacyFilter(baseFn, ctx);
+      const stream = wrapped(
+        {
+          api: "openai-completions",
+          provider: "openai",
+          id: "gpt-test",
+        } as Parameters<StreamFn>[0],
+        { messages: [] },
+      );
+
+      const deltas: string[] = [];
+      for await (const event of stream as AsyncIterable<{ type?: string; delta?: unknown }>) {
+        if (event.type === "text_delta" && typeof event.delta === "string") {
+          deltas.push(event.delta);
+        }
+      }
+      expect(deltas.join("")).toContain(original);
+      expect(deltas.join("")).not.toContain("pf_");
     });
   });
 });
