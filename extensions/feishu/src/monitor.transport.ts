@@ -7,6 +7,7 @@ import {
   type RuntimeEnv,
   installRequestBodyLimitGuard,
 } from "openclaw/plugin-sdk/feishu";
+import { scheduleGatewaySigusr1Restart } from "../../../src/infra/restart.js";
 import { createFeishuWSClient } from "./client.js";
 import {
   botNames,
@@ -80,6 +81,7 @@ export async function monitorWebSocket({
   eventDispatcher,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
+  const errLog = runtime?.error ?? console.error;
   log(`feishu[${accountId}]: starting WebSocket connection...`);
 
   const wsClient = createFeishuWSClient(account);
@@ -107,7 +109,18 @@ export async function monitorWebSocket({
     abortSignal?.addEventListener("abort", handleAbort, { once: true });
 
     try {
-      wsClient.start({ eventDispatcher });
+      Promise.resolve(wsClient.start({ eventDispatcher })).catch((err: any) => {
+        errLog(`[lark-ws] WS connect/reconnect unhandled exception: ${err.message}`);
+        cleanup();
+        abortSignal?.removeEventListener("abort", handleAbort);
+        if (!abortSignal?.aborted) {
+          reject(err);
+          scheduleGatewaySigusr1Restart({
+            reason: "feishu_websocket_zombie_timeout_recovered",
+            delayMs: 15000,
+          }); // Instruct gateway daemon to auto-restart (throttled)
+        }
+      });
       log(`feishu[${accountId}]: WebSocket client started`);
     } catch (err) {
       cleanup();
