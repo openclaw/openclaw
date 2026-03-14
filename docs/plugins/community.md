@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Gossip** — Connect OpenClaw to the Gossip decentralized messaging network for peer-to-peer chat.
+  npm: `@massalabs/openclaw-gossip-plugin`
+  repo: `https://github.com/massalabs/openclaw-gossip-plugin`
+  install: `openclaw plugins install @massalabs/openclaw-gossip-plugin`
