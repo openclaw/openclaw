@@ -340,36 +340,47 @@ export async function modelsStatusCommand(
     error?: string;
   }> | null = null;
 
-  if (opts.json && oauthUsageProviders.length > 0) {
-    try {
-      const usageSummary = await loadProviderUsageSummary({
-        providers: oauthUsageProviders,
-        agentDir,
-        timeoutMs: 3500,
-      });
-      const snapshots = Array.isArray(usageSummary?.providers) ? usageSummary.providers : [];
-      oauthUsageSnapshots = snapshots;
-      for (const snapshot of snapshots) {
-        const formatted = formatUsageWindowSummary(snapshot, {
-          now: Date.now(),
-          maxWindows: 2,
-          includeResets: true,
-        });
-        if (formatted) {
-          oauthUsageByProvider.set(snapshot.provider, formatted);
+  // Fetch usage data for non-plain output (both regular status and --json)
+  // This preserves OAuth usage visibility in non-JSON status while avoiding
+  // unnecessary fetches for --plain output
+  let openrouterUsage: ReturnType<typeof loadOpenRouterMeteredUsage> | null = null;
+  if (!opts.plain) {
+    // Run OAuth and OpenRouter fetches in parallel for better performance
+    // (fixes sequential fetch latency issue flagged by bot review)
+    await Promise.all([
+      (async () => {
+        if (oauthUsageProviders.length > 0) {
+          try {
+            const usageSummary = await loadProviderUsageSummary({
+              providers: oauthUsageProviders,
+              agentDir,
+              timeoutMs: 3500,
+            });
+            const snapshots = Array.isArray(usageSummary?.providers) ? usageSummary.providers : [];
+            oauthUsageSnapshots = snapshots;
+            for (const snapshot of snapshots) {
+              const formatted = formatUsageWindowSummary(snapshot, {
+                now: Date.now(),
+                maxWindows: 2,
+                includeResets: true,
+              });
+              if (formatted) {
+                oauthUsageByProvider.set(snapshot.provider, formatted);
+              }
+            }
+          } catch {
+            // ignore usage failures
+          }
         }
-      }
-    } catch {
-      // ignore usage failures
-    }
+      })(),
+      (async () => {
+        openrouterUsage = await loadOpenRouterMeteredUsage({
+          agentDir,
+          timeoutMs: 3500,
+        }).catch(() => null);
+      })(),
+    ]);
   }
-
-  const openrouterUsage = opts.json
-    ? await loadOpenRouterMeteredUsage({
-        agentDir,
-        timeoutMs: 3500,
-      }).catch(() => null)
-    : null;
 
   if (opts.json) {
     runtime.log(
