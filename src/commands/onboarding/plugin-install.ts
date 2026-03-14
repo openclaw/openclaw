@@ -15,6 +15,8 @@ import { installPluginFromNpmSpec } from "../../plugins/install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../../plugins/installs.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createPluginLoaderLogger } from "../../plugins/logger.js";
+import type { PluginRegistry } from "../../plugins/registry.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 
@@ -225,14 +227,55 @@ export function reloadOnboardingPluginRegistry(params: {
   runtime: RuntimeEnv;
   workspaceDir?: string;
 }): void {
+  loadOnboardingPluginRegistry(params);
+}
+
+function loadOnboardingPluginRegistry(params: {
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  workspaceDir?: string;
+  onlyPluginIds?: string[];
+  activate?: boolean;
+}): PluginRegistry {
   clearPluginDiscoveryCache();
   const workspaceDir =
     params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   const log = createSubsystemLogger("plugins");
-  loadOpenClawPlugins({
+  return loadOpenClawPlugins({
     config: params.cfg,
     workspaceDir,
     cache: false,
     logger: createPluginLoaderLogger(log),
+    onlyPluginIds: params.onlyPluginIds,
+    activate: params.activate,
+  });
+}
+
+export function reloadOnboardingPluginRegistryForChannel(params: {
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  channel: string;
+  workspaceDir?: string;
+}): void {
+  const activeRegistry = getActivePluginRegistry();
+  // On low-memory hosts, the empty-registry fallback should only recover the selected
+  // plugin instead of importing every bundled extension during onboarding.
+  const onlyPluginIds = activeRegistry?.plugins.length ? undefined : [params.channel];
+  loadOnboardingPluginRegistry({
+    ...params,
+    onlyPluginIds,
+  });
+}
+
+export function loadOnboardingPluginRegistrySnapshotForChannel(params: {
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  channel: string;
+  workspaceDir?: string;
+}): PluginRegistry {
+  return loadOnboardingPluginRegistry({
+    ...params,
+    onlyPluginIds: [params.channel],
+    activate: false,
   });
 }

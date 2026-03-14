@@ -14,15 +14,19 @@ async function importFreshPluginTestModules() {
   vi.unmock("./hooks.js");
   vi.unmock("./loader.js");
   vi.unmock("jiti");
-  const [loader, hookRunnerGlobal, hooks] = await Promise.all([
+  const [loader, hookRunnerGlobal, hooks, runtime, registry] = await Promise.all([
     import("./loader.js"),
     import("./hook-runner-global.js"),
     import("./hooks.js"),
+    import("./runtime.js"),
+    import("./registry.js"),
   ]);
   return {
     ...loader,
     ...hookRunnerGlobal,
     ...hooks,
+    ...runtime,
+    ...registry,
   };
 }
 
@@ -30,9 +34,13 @@ const {
   __testing,
   clearPluginLoaderCache,
   createHookRunner,
+  createEmptyPluginRegistry,
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
   getGlobalHookRunner,
   loadOpenClawPlugins,
   resetGlobalHookRunner,
+  setActivePluginRegistry,
 } = await importFreshPluginTestModules();
 
 type TempPlugin = { dir: string; file: string; id: string };
@@ -437,6 +445,103 @@ describe("loadOpenClawPlugins", () => {
     const loaded = registry.plugins.find((entry) => entry.id === "allowed");
     expect(loaded?.status).toBe("loaded");
     expect(Object.keys(registry.gatewayHandlers)).toContain("allowed.ping");
+  });
+
+  it("limits imports to the requested plugin ids", () => {
+    useNoBundledPlugins();
+    const allowed = writePlugin({
+      id: "allowed",
+      filename: "allowed.cjs",
+      body: `module.exports = { id: "allowed", register() {} };`,
+    });
+    const skippedMarker = path.join(makeTempDir(), "skipped-loaded.txt");
+    const skipped = writePlugin({
+      id: "skipped",
+      filename: "skipped.cjs",
+      body: `require("node:fs").writeFileSync(${JSON.stringify(skippedMarker)}, "loaded", "utf-8");
+module.exports = { id: "skipped", register() { throw new Error("skipped plugin should not load"); } };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [allowed.file, skipped.file] },
+          allow: ["allowed", "skipped"],
+        },
+      },
+      onlyPluginIds: ["allowed"],
+    });
+
+    expect(registry.plugins.map((entry) => entry.id)).toEqual(["allowed"]);
+    expect(fs.existsSync(skippedMarker)).toBe(false);
+  });
+
+  it("keeps scoped plugin loads in a separate cache entry", () => {
+    useNoBundledPlugins();
+    const allowed = writePlugin({
+      id: "allowed",
+      filename: "allowed.cjs",
+      body: `module.exports = { id: "allowed", register() {} };`,
+    });
+    const extra = writePlugin({
+      id: "extra",
+      filename: "extra.cjs",
+      body: `module.exports = { id: "extra", register() {} };`,
+    });
+    const options = {
+      config: {
+        plugins: {
+          load: { paths: [allowed.file, extra.file] },
+          allow: ["allowed", "extra"],
+        },
+      },
+    };
+
+    const full = loadOpenClawPlugins(options);
+    const scoped = loadOpenClawPlugins({
+      ...options,
+      onlyPluginIds: ["allowed"],
+    });
+    const scopedAgain = loadOpenClawPlugins({
+      ...options,
+      onlyPluginIds: ["allowed"],
+    });
+
+    expect(full.plugins.map((entry) => entry.id).toSorted()).toEqual(["allowed", "extra"]);
+    expect(scoped).not.toBe(full);
+    expect(scoped.plugins.map((entry) => entry.id)).toEqual(["allowed"]);
+    expect(scopedAgain).toBe(scoped);
+  });
+
+  it("can load a scoped registry without replacing the active global registry", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "allowed",
+      filename: "allowed.cjs",
+      body: `module.exports = { id: "allowed", register() {} };`,
+    });
+    const previousRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(previousRegistry, "existing-registry");
+    resetGlobalHookRunner();
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["allowed"],
+        },
+      },
+      onlyPluginIds: ["allowed"],
+    });
+
+    expect(scoped.plugins.map((entry) => entry.id)).toEqual(["allowed"]);
+    expect(getActivePluginRegistry()).toBe(previousRegistry);
+    expect(getActivePluginRegistryKey()).toBe("existing-registry");
+    expect(getGlobalHookRunner()).toBeNull();
   });
 
   it("re-initializes global hook runner when serving registry from cache", () => {
