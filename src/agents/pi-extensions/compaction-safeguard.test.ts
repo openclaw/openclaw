@@ -330,6 +330,16 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).not.toMatch(/None\.## Tool Failures/);
   });
 
+  it("keeps body prefix when truncation marker cannot fit (tiny budget)", () => {
+    const body = "## Decisions\nKeep flow.\n## Constraints\nFollow rules.";
+    const tinyBudget = 10; // Smaller than SUMMARY_TRUNCATED_MARKER.length
+    const capped = capCompactionSummary(body, tinyBudget);
+
+    expect(capped.length).toBeLessThanOrEqual(tinyBudget);
+    expect(capped).toContain("## Decis");
+    expect(capped).not.toContain("[Compaction summary truncated");
+  });
+
   it("preserves tail sections when suffix exceeds cap (workspace rules, diagnostics over preserved turns)", () => {
     const criticalTail =
       "\n\n## Tool Failures\n- exec: failed\n\n<read-files>\nfoo.ts\n</read-files>\n\n" +
