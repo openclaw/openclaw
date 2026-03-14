@@ -1,0 +1,177 @@
+# repotype.yaml - Repository structure enforcement for OpenClaw 🦞
+# Ensures skills, packages, and docs follow consistent structure
+# https://supernalintelligence.github.io/repotype/
+
+version: "1"
+
+defaults:
+  # Start permissive - tighten to 'deny' once repo fully conforms
+  unmatchedFiles: allow
+
+# File rules
+files:
+  # Every skill must have SKILL.md with proper frontmatter
+  # Per AgentSkills spec: https://agentskills.io/specification
+  - id: skill-readme
+    glob: "skills/*/SKILL.md"
+    schema:
+      kind: frontmatter
+      schema: schemas/skill.frontmatter.schema.json
+    requiredSections:
+      - "#"  # Must have at least one heading
+
+  # Package files
+  - id: package-json
+    glob: "packages/*/package.json"
+
+  # Package READMEs - commented out until packages have READMEs
+  # - id: package-readme
+  #   glob: "packages/*/README.md"
+
+  # Extension manifests (OpenClaw uses openclaw.plugin.json, not manifest.json)
+  - id: extension-manifest
+    glob: "extensions/*/openclaw.plugin.json"
+
+  # Core documentation
+  - id: root-docs
+    glob: "{README,CONTRIBUTING,VISION,CHANGELOG,SECURITY,LICENSE,AGENTS}.md"
+
+  - id: agents-symlink
+    glob: "CLAUDE.md"
+
+  # Docs folder
+  - id: docs-folder
+    glob: "docs/**/*.md"
+
+  - id: docs-assets
+    glob: "docs/assets/**/*"
+
+  # Source code
+  - id: typescript-source
+    glob: "src/**/*.ts"
+
+  - id: packages-source
+    glob: "packages/*/src/**/*.ts"
+
+  # Test files
+  - id: test-files
+    glob: "test/**/*.ts"
+
+  # Scripts
+  - id: scripts
+    glob: "scripts/**/*.{sh,mjs,js,ts}"
+
+  # UI
+  - id: ui-files
+    glob: "ui/**/*.{ts,tsx,css,html}"
+
+  # Config files
+  - id: root-configs
+    glob: "*.{json,yaml,yml,mjs,ts,toml,xml}"
+
+  - id: vitest-configs
+    glob: "vitest.*.ts"
+
+  - id: docker-files
+    glob: "{Dockerfile,docker-compose}*"
+
+  - id: knip-config
+    glob: "knip.config.ts"
+
+  - id: tsdown-config
+    glob: "tsdown.config.ts"
+
+  # GitHub
+  - id: github-workflows
+    glob: ".github/**/*.{yml,yaml}"
+
+  - id: github-md
+    glob: ".github/**/*.md"
+
+  # Hidden configs (linters, etc)
+  - id: linter-configs
+    glob: ".{markdownlint,oxlintrc,oxfmtrc,swiftlint,swiftformat,shellcheckrc}*"
+
+  - id: pre-commit
+    glob: ".pre-commit-config.yaml"
+
+  - id: detect-secrets
+    glob: ".{detect-secrets,secrets}*"
+
+  - id: dotfiles
+    glob: ".{gitignore,dockerignore,npmrc,mailmap,gitattributes,env.example}"
+
+  - id: vscode
+    glob: ".vscode/**/*.json"
+
+  # Apps
+  - id: apps
+    glob: "apps/**/*"
+
+  # Assets
+  - id: assets
+    glob: "assets/**/*"
+
+  # Vendor
+  - id: vendor
+    glob: "vendor/**/*"
+
+  # Patches
+  - id: patches
+    glob: "patches/**/*"
+
+  # Git hooks
+  - id: git-hooks
+    glob: "git-hooks/**/*"
+
+  # Skills (all files)
+  - id: skills-all
+    glob: "skills/**/*"
+
+  # Extensions (all files)
+  - id: extensions-all
+    glob: "extensions/**/*"
+
+  # Packages (all files)
+  - id: packages-all
+    glob: "packages/**/*"
+
+  # Agent dirs
+  - id: agent-dirs
+    glob: ".agent*/**/*"
+
+  # Pi dir
+  - id: pi-dir
+    glob: ".pi/**/*"
+
+  # Swabble
+  - id: swabble
+    glob: "Swabble/**/*"
+
+  # Zizmor
+  - id: zizmor
+    glob: "zizmor.yml"
+
+  # Render
+  - id: render
+    glob: "render.yaml"
+
+  # Fly
+  - id: fly
+    glob: "fly*.toml"
+
+  # Setup scripts
+  - id: setup-scripts
+    glob: "*.sh"
+
+  # OpenClaw entry
+  - id: openclaw-entry
+    glob: "openclaw.{mjs,podman.env}"
+
+  # Pyproject
+  - id: pyproject
+    glob: "pyproject.toml"
+
+  # Repotype schemas
+  - id: schemas
+    glob: "schemas/**/*.json"
