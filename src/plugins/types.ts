@@ -432,6 +432,7 @@ export type PluginHookName =
   | "after_compaction"
   | "before_reset"
   | "message_received"
+  | "before_dispatch"
   | "message_sending"
   | "message_sent"
   | "before_tool_call"
@@ -458,6 +459,7 @@ export const PLUGIN_HOOK_NAMES = [
   "after_compaction",
   "before_reset",
   "message_received",
+  "before_dispatch",
   "message_sending",
   "message_sent",
   "before_tool_call",
@@ -671,6 +673,19 @@ export type PluginHookMessageReceivedEvent = {
   content: string;
   timestamp?: number;
   metadata?: Record<string, unknown>;
+};
+
+// before_dispatch hook
+export type PluginHookBeforeDispatchEvent = {
+  from: string;
+  content: string;
+  timestamp?: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type PluginHookBeforeDispatchResult = {
+  content?: string;
+  cancel?: boolean;
 };
 
 // message_sending hook
@@ -925,6 +940,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
   ) => Promise<void> | void;
+  before_dispatch: (
+    event: PluginHookBeforeDispatchEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<PluginHookBeforeDispatchResult | void> | PluginHookBeforeDispatchResult | void;
   message_sending: (
     event: PluginHookMessageSendingEvent,
     ctx: PluginHookMessageContext,
