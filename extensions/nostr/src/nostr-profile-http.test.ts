@@ -115,6 +115,13 @@ function createMockContext(overrides?: Partial<NostrProfileHttpContext>): NostrP
   };
 }
 
+function expectOkResponse(res: ReturnType<typeof createMockResponse>) {
+  expect(res._getStatusCode()).toBe(200);
+  const data = JSON.parse(res._getData());
+  expect(data.ok).toBe(true);
+  return data;
+}
+
 function mockSuccessfulProfileImport() {
   vi.mocked(importProfileFromRelays).mockResolvedValue({
     ok: true,
@@ -215,13 +222,6 @@ describe("nostr-profile-http", () => {
         successes: ["wss://relay.damus.io"],
         failures: [],
       });
-    }
-
-    function expectOkResponse(res: ReturnType<typeof createMockResponse>) {
-      expect(res._getStatusCode()).toBe(200);
-      const data = JSON.parse(res._getData());
-      expect(data.ok).toBe(true);
-      return data;
     }
 
     function expectBadRequestResponse(res: ReturnType<typeof createMockResponse>) {

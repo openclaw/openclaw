@@ -8,6 +8,12 @@ describe("formatBonjourError", () => {
     expect(formatBonjourError(err)).toBe("AbortError: timed out");
   });
 
+  it("avoids duplicating named errors with blank messages", () => {
+    const err = new Error("");
+    err.name = "AbortError";
+    expect(formatBonjourError(err)).toBe("AbortError");
+  });
+
   it("falls back to plain error strings and non-error values", () => {
     expect(formatBonjourError(new Error(""))).toBe("Error");
     expect(formatBonjourError("boom")).toBe("boom");
