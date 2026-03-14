@@ -11,6 +11,7 @@ import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
+import { sleep } from "../../../utils.js";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
@@ -26,6 +27,12 @@ import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
 import type { PreparedSlackMessage } from "./types.js";
+
+const SLACK_NO_FINAL_STATUS_DELAY_MS = 2500;
+const SLACK_NO_FINAL_KEEPALIVE_TEXT =
+  "I am still here. I could not complete that reply yet; retrying now in this same thread.";
+const SLACK_NO_FINAL_STATUS_TEXT =
+  "Status update: still waiting on a complete final reply for this turn. Please retry your last message if it does not arrive shortly.";
 
 function hasMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
@@ -223,6 +230,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
+  let sawIntentionalSilentFinalSkip = false;
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
@@ -356,6 +364,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
       typingCallbacks.onIdle?.();
     },
+    onSkip: (_payload, info) => {
+      if (info.kind === "final" && info.reason === "silent") {
+        sawIntentionalSilentFinalSkip = true;
+      }
+    },
   });
 
   const draftStream = createSlackDraftStream({
@@ -468,7 +481,50 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+  const hasUnfinalizedPreviewOnly =
+    hasStreamedMessage && (counts.block ?? 0) === 0 && (counts.tool ?? 0) === 0;
+  const shouldSendNoFinalFallback =
+    !queuedFinal &&
+    (counts.final ?? 0) === 0 &&
+    hasUnfinalizedPreviewOnly &&
+    !sawIntentionalSilentFinalSkip;
+  let sentEmptyFallback = false;
+  if (shouldSendNoFinalFallback) {
+    const resolveFallbackThreadTs = () => usedReplyThreadTs ?? statusThreadTs;
+    try {
+      await deliverNormally(
+        {
+          text: SLACK_NO_FINAL_KEEPALIVE_TEXT,
+        },
+        resolveFallbackThreadTs(),
+      );
+      sentEmptyFallback = true;
+      void (async () => {
+        await sleep(SLACK_NO_FINAL_STATUS_DELAY_MS);
+        try {
+          await deliverNormally(
+            {
+              text: SLACK_NO_FINAL_STATUS_TEXT,
+            },
+            resolveFallbackThreadTs(),
+          );
+        } catch (err) {
+          runtime.error?.(danger(`slack delayed fallback status failed: ${String(err)}`));
+        }
+      })();
+    } catch (err) {
+      runtime.error?.(danger(`slack final fallback failed: ${String(err)}`));
+    }
+  }
+
+  // Clear draft preview before sending no-final fallback to avoid leaving stale
+  // partial content visible alongside the fallback status message.
+  if (sentEmptyFallback) {
+    await draftStream.clear();
+  }
+
+  const anyReplyDelivered =
+    queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0 || sentEmptyFallback;
 
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,

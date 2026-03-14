@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedPiRunResult } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -39,10 +40,33 @@ describe("deliverAgentCommandResult", () => {
     } as unknown as RuntimeEnv;
   }
 
-  function createResult(text = "hi") {
+  function createResult(
+    text = "hi",
+    options?: {
+      usageTotal?: number;
+      didSendViaMessagingTool?: boolean;
+      messagingToolSentTexts?: string[];
+      messagingToolSentMediaUrls?: string[];
+    },
+  ): EmbeddedPiRunResult {
     return {
-      payloads: [{ text }],
-      meta: { durationMs: 1 },
+      payloads: text ? [{ text }] : [],
+      meta: {
+        durationMs: 1,
+        ...(options?.usageTotal !== undefined
+          ? {
+              agentMeta: {
+                sessionId: "test-session",
+                provider: "test",
+                model: "test-model",
+                usage: { total: options.usageTotal },
+              },
+            }
+          : {}),
+      },
+      didSendViaMessagingTool: options?.didSendViaMessagingTool,
+      messagingToolSentTexts: options?.messagingToolSentTexts,
+      messagingToolSentMediaUrls: options?.messagingToolSentMediaUrls,
     };
   }
 
@@ -52,11 +76,17 @@ describe("deliverAgentCommandResult", () => {
     sessionEntry?: SessionEntry;
     runtime?: RuntimeEnv;
     resultText?: string;
+    resultOptions?: {
+      usageTotal?: number;
+      didSendViaMessagingTool?: boolean;
+      messagingToolSentTexts?: string[];
+      messagingToolSentMediaUrls?: string[];
+    };
   }) {
     const cfg = {} as OpenClawConfig;
     const deps = {} as CliDeps;
     const runtime = params.runtime ?? createRuntime();
-    const result = createResult(params.resultText);
+    const result = createResult(params.resultText, params.resultOptions);
 
     await deliverAgentCommandResult({
       cfg,
@@ -258,6 +288,99 @@ describe("deliverAgentCommandResult", () => {
         }),
       }),
     );
+  });
+
+  it("treats normalized-empty payload output as no reply", async () => {
+    await runDelivery({
+      resultText: "   ",
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "whatsapp",
+        to: "+15551234567",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          {
+            text: "I hit an execution hiccup while composing the reply, but I am still here. Please resend that request and I will continue in this thread.",
+            mediaUrls: [],
+          },
+        ],
+      }),
+    );
+  });
+
+  it("keeps explicit silent payload behavior for normalized-empty output", async () => {
+    const runtime = createRuntime();
+    await runDelivery({
+      runtime,
+      resultText: "NO_REPLY",
+      opts: {
+        message: "hello",
+        deliver: false,
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("No reply from agent.");
+  });
+
+  it("keeps explicit silent behavior for NO_REPLY with inline directives", async () => {
+    const runtime = createRuntime();
+    await runDelivery({
+      runtime,
+      resultText: "NO_REPLY [[reply_to_current]]",
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "whatsapp",
+        to: "+15551234567",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("No reply from agent.");
+  });
+
+  it("does not send hiccup fallback when run succeeded but had no deliverable output", async () => {
+    const runtime = createRuntime();
+    await runDelivery({
+      runtime,
+      resultText: "",
+      resultOptions: { didSendViaMessagingTool: true },
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "whatsapp",
+        to: "+15551234567",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("No reply from agent.");
+  });
+
+  it("treats messaging-tool sent text metadata as intentional silence for empty payload runs", async () => {
+    const runtime = createRuntime();
+    await runDelivery({
+      runtime,
+      resultText: "",
+      resultOptions: {
+        messagingToolSentTexts: ["sent externally"],
+      },
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "whatsapp",
+        to: "+15551234567",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("No reply from agent.");
   });
 
   it("prefixes nested agent outputs with context", async () => {

@@ -1,4 +1,6 @@
 import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -26,6 +28,8 @@ type RunResult = Awaited<
 >;
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
+const NORMALIZED_EMPTY_FALLBACK_TEXT =
+  "I hit an execution hiccup while composing the reply, but I am still here. Please resend that request and I will continue in this thread.";
 
 function formatNestedLogPrefix(opts: AgentCommandOpts, sessionKey?: string): string {
   const parts = [NESTED_LOG_PREFIX];
@@ -192,12 +196,86 @@ export async function deliverAgentCommandResult(params: {
     }
   }
 
-  if (!payloads || payloads.length === 0) {
-    runtime.log("No reply from agent.");
-    return { payloads: [], meta: result.meta };
+  const hasExplicitSilentPayload = (payloads ?? []).some((payload) => {
+    const parsed = parseReplyDirectives(payload.text ?? "", {
+      silentToken: SILENT_REPLY_TOKEN,
+    });
+    if (!parsed.isSilent) {
+      return false;
+    }
+    const hasMedia =
+      Boolean(payload.mediaUrl?.trim() || parsed.mediaUrl?.trim()) ||
+      (payload.mediaUrls?.some((url) => Boolean(url?.trim())) ?? false) ||
+      (parsed.mediaUrls?.some((url) => Boolean(url?.trim())) ?? false);
+    return !hasMedia;
+  });
+  const deliveryPayloads = normalizeOutboundPayloads(payloads ?? []);
+  if (deliveryPayloads.length === 0) {
+    if (hasExplicitSilentPayload) {
+      runtime.log("No reply from agent.");
+      return { payloads: normalizedPayloads, meta: result.meta };
+    }
+    // Treat upstream-suppressed empty runs as intentional silence when the run
+    // succeeded but produced no payloads at all (e.g., tool-only success where
+    // messaging-tool delivered the response directly). This only applies when
+    // there were truly no payloads upstream, not when payloads normalized to empty.
+    const meta = result.meta;
+    const hadNoUpstreamPayloads = (payloads ?? []).length === 0;
+    const toolSentWithoutFinalPayload =
+      result.didSendViaMessagingTool === true ||
+      (result.messagingToolSentTexts?.length ?? 0) > 0 ||
+      (result.messagingToolSentMediaUrls?.length ?? 0) > 0;
+    const succeededWithoutDeliverableOutput =
+      hadNoUpstreamPayloads && !meta.aborted && !meta.error && toolSentWithoutFinalPayload;
+    if (succeededWithoutDeliverableOutput) {
+      runtime.log("No reply from agent.");
+      return { payloads: normalizedPayloads, meta: result.meta };
+    }
+    const fallbackPayloads = normalizeOutboundPayloads([{ text: NORMALIZED_EMPTY_FALLBACK_TEXT }]);
+    const fallbackPayloadsJson = normalizeOutboundPayloadsForJson([
+      { text: NORMALIZED_EMPTY_FALLBACK_TEXT },
+    ]);
+    if (!deliver) {
+      if (opts.lane === AGENT_LANE_NESTED) {
+        logNestedOutput(runtime, opts, NORMALIZED_EMPTY_FALLBACK_TEXT, effectiveSessionKey);
+      } else {
+        runtime.log(NORMALIZED_EMPTY_FALLBACK_TEXT);
+      }
+      return { payloads: fallbackPayloadsJson, meta: result.meta };
+    }
+    if (deliveryChannel && !isInternalMessageChannel(deliveryChannel) && deliveryTarget) {
+      await deliverOutboundPayloads({
+        cfg,
+        channel: deliveryChannel,
+        to: deliveryTarget,
+        accountId: resolvedAccountId,
+        payloads: fallbackPayloads,
+        session: outboundSession,
+        replyToId: resolvedReplyToId ?? null,
+        threadId: resolvedThreadTarget ?? null,
+        bestEffort: bestEffortDeliver,
+        onError: (err) => logDeliveryError(err),
+        onPayload: (payload) => {
+          if (opts.json) {
+            return;
+          }
+          const output = formatOutboundPayloadLog(payload);
+          if (!output) {
+            return;
+          }
+          if (opts.lane === AGENT_LANE_NESTED) {
+            logNestedOutput(runtime, opts, output, effectiveSessionKey);
+            return;
+          }
+          runtime.log(output);
+        },
+        deps: createOutboundSendDeps(deps),
+      });
+      return { payloads: fallbackPayloadsJson, meta: result.meta };
+    }
+    runtime.log(NORMALIZED_EMPTY_FALLBACK_TEXT);
+    return { payloads: normalizedPayloads, meta: result.meta };
   }
-
-  const deliveryPayloads = normalizeOutboundPayloads(payloads);
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;
