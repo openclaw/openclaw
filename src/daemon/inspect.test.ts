@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { findExtraGatewayServices } from "./inspect.js";
 
@@ -10,26 +10,32 @@ vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: (...args: unknown[]) => execSchtasksMock(...args),
 }));
 
-function pathLikeToString(p: unknown): string {
-  if (typeof p === "string") {
-    return p;
-  }
-  if (p instanceof URL) {
-    return p.pathname;
-  }
-  if (p instanceof Uint8Array) {
-    return Buffer.from(p).toString("utf8");
-  }
-  return "";
-}
+// Virtual filesystem for fs/promises mocks used by the linux/darwin tests.
+const fsState = vi.hoisted(() => ({
+  files: new Map<string, string>(),
+}));
 
-// Normalize to forward slashes so virtual fs keys are consistent on all platforms.
-// inspect.ts uses path.join internally (which uses \ on Windows), but the Linux
-// paths it constructs (/etc/systemd/system, ~/.config/systemd/user) are always
-// semantically forward-slash paths — normalizing lets the spy match them correctly.
-function toForwardSlash(p: string): string {
-  return p.replace(/\\/g, "/");
-}
+vi.mock("node:fs/promises", () => {
+  const readdir = vi.fn(async (dir: string) => {
+    const prefix = dir.endsWith("/") ? dir : dir + "/";
+    const names: string[] = [];
+    for (const key of fsState.files.keys()) {
+      const rest = key.slice(prefix.length);
+      if (key.startsWith(prefix) && !rest.includes("/")) {
+        names.push(rest);
+      }
+    }
+    return names;
+  });
+  const readFile = vi.fn(async (filePath: string, _enc: string) => {
+    const contents = fsState.files.get(String(filePath));
+    if (contents === undefined) {
+      throw Object.assign(new Error(`ENOENT: ${filePath}`), { code: "ENOENT" });
+    }
+    return contents;
+  });
+  return { default: { readdir, readFile }, readdir, readFile };
+});
 
 // Real content from the openclaw-gateway.service unit file (the canonical gateway unit).
 const GATEWAY_SERVICE_CONTENTS = `\
@@ -77,43 +83,18 @@ WantedBy=default.target
 
 describe("findExtraGatewayServices (linux / scanSystemdDir)", () => {
   const HOME = "/home/testuser";
-  const USER_SYSTEMD_DIR = "/home/testuser/.config/systemd/user";
-  let originalPlatform: string;
-  let files: Map<string, string>;
+  const USER_SYSTEMD_DIR = path.join(HOME, ".config", "systemd", "user");
+  const originalPlatform = process.platform;
 
   beforeEach(() => {
-    originalPlatform = process.platform;
     Object.defineProperty(process, "platform", {
       configurable: true,
       value: "linux",
     });
-    files = new Map();
-    vi.spyOn(fs, "readdir").mockImplementation(async (dir) => {
-      const prefix = toForwardSlash(pathLikeToString(dir));
-      const withSep = prefix.endsWith("/") ? prefix : prefix + "/";
-      const names: string[] = [];
-      for (const key of files.keys()) {
-        const rest = key.slice(withSep.length);
-        if (key.startsWith(withSep) && !rest.includes("/")) {
-          names.push(rest);
-        }
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return names as any;
-    });
-    vi.spyOn(fs, "readFile").mockImplementation(async (filePath) => {
-      const p = toForwardSlash(pathLikeToString(filePath));
-      const contents = files.get(p);
-      if (contents === undefined) {
-        throw Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" });
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return contents as any;
-    });
+    fsState.files.clear();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
     Object.defineProperty(process, "platform", {
       configurable: true,
       value: originalPlatform,
@@ -121,7 +102,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir)", () => {
   });
 
   function addUnit(name: string, contents: string, dir = USER_SYSTEMD_DIR) {
-    files.set(`${dir}/${name}`, contents);
+    fsState.files.set(path.join(dir, name), contents);
   }
 
   it("returns empty results when the systemd user dir is empty", async () => {
@@ -167,7 +148,7 @@ Environment=HOME=/home/clawdbot
       {
         platform: "linux",
         label: "clawdbot-gateway.service",
-        detail: `unit: ${USER_SYSTEMD_DIR}/clawdbot-gateway.service`,
+        detail: `unit: ${path.join(USER_SYSTEMD_DIR, "clawdbot-gateway.service")}`,
         scope: "user",
         marker: "clawdbot",
         legacy: true,
@@ -210,7 +191,7 @@ WantedBy=default.target
       {
         platform: "linux",
         label: "my-openclaw-wrapper.service",
-        detail: `unit: ${USER_SYSTEMD_DIR}/my-openclaw-wrapper.service`,
+        detail: `unit: ${path.join(USER_SYSTEMD_DIR, "my-openclaw-wrapper.service")}`,
         scope: "user",
         marker: "openclaw",
         legacy: false,
@@ -224,7 +205,7 @@ WantedBy=default.target
     expect(result).toEqual([]);
   });
 
-  it("keeps separate entries for the same unit filename appearing in different scanned dirs (deep mode)", async () => {
+  it("deduplicates when the same unit appears in multiple scanned dirs (deep mode)", async () => {
     const SYSTEM_DIR = "/etc/systemd/system";
     const contents = `\
 [Unit]
