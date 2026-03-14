@@ -10,22 +10,43 @@ const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const getActiveTaskCount = vi.fn(() => 0);
 const markGatewayDraining = vi.fn();
-const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
+const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({
+  drained: true,
+}));
 const resetAllLanes = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
-  () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
+  () => {
+    mode: "spawned" | "supervised" | "disabled" | "failed";
+    pid?: number;
+    detail?: string;
+  }
 >(() => ({ mode: "disabled" }));
 const abortEmbeddedPiRun = vi.fn(
   (_sessionId?: string, _opts?: { mode?: "all" | "compacting" }) => false,
 );
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
-const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
+const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs: number) => ({
+  drained: true,
+}));
+const flushAllInboundDebouncers = vi.fn(async () => 0);
+const waitForFollowupQueueDrain = vi.fn(async (_timeoutMs: number) => ({
+  drained: true,
+  remaining: 0,
+}));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const gatewayLog = {
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
 };
+
+vi.mock("../../auto-reply/inbound-debounce.js", () => ({
+  flushAllInboundDebouncers: () => flushAllInboundDebouncers(),
+}));
+
+vi.mock("../../auto-reply/reply/queue/drain-all.js", () => ({
+  waitForFollowupQueueDrain: (timeoutMs: number) => waitForFollowupQueueDrain(timeoutMs),
+}));
 
 vi.mock("../../infra/gateway-lock.js", () => ({
   acquireGatewayLock: (opts?: { port?: number }) => acquireGatewayLock(opts),
@@ -257,10 +278,14 @@ describe("runGatewayLoop", () => {
       expect(start).toHaveBeenCalledTimes(2);
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+      });
       expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(90_000);
-      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, {
+        mode: "all",
+      });
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
       expect(closeFirst).toHaveBeenCalledWith({
@@ -289,6 +314,96 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+    });
+  });
+
+  it("flushes inbound debouncers and waits for followup queue drain before marking gateway draining on SIGUSR1", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      // Simulate debouncers having buffered messages
+      flushAllInboundDebouncers.mockResolvedValueOnce(2);
+      waitForFollowupQueueDrain.mockResolvedValueOnce({
+        drained: true,
+        remaining: 0,
+      });
+
+      const { exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+
+      // Let the restart complete
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      // Verify flush was called before markGatewayDraining
+      expect(flushAllInboundDebouncers).toHaveBeenCalledTimes(1);
+      expect(waitForFollowupQueueDrain).toHaveBeenCalledWith(5_000);
+      expect(markGatewayDraining).toHaveBeenCalledTimes(1);
+
+      // Verify logging
+      expect(gatewayLog.info).toHaveBeenCalledWith("flushed 2 inbound debouncer(s) before restart");
+      expect(gatewayLog.info).toHaveBeenCalledWith("followup queues drained after debounce flush");
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("skips followup queue drain when no debouncers had buffered messages", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      // No debouncers had buffered messages
+      flushAllInboundDebouncers.mockResolvedValueOnce(0);
+
+      const { exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(flushAllInboundDebouncers).toHaveBeenCalledTimes(1);
+      // Should NOT wait for followup drain when nothing was flushed
+      expect(waitForFollowupQueueDrain).not.toHaveBeenCalled();
+      // Should still mark draining
+      expect(markGatewayDraining).toHaveBeenCalledTimes(1);
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("logs warning when followup queue drain times out", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      flushAllInboundDebouncers.mockResolvedValueOnce(1);
+      waitForFollowupQueueDrain.mockResolvedValueOnce({
+        drained: false,
+        remaining: 3,
+      });
+
+      const { exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "followup queue drain timeout; 3 item(s) still pending",
+      );
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
     });
   });
 
