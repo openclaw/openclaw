@@ -154,8 +154,17 @@ function applyTlonSetupConfig(params: {
 }
 
 type ResolvedTlonAccount = ReturnType<typeof resolveTlonAccount>;
+type ConfiguredTlonAccount = ResolvedTlonAccount & {
+  ship: string;
+  url: string;
+  code: string;
+};
 
-function resolveOutboundContext(params: { cfg: OpenClawConfig; accountId?: string; to: string }) {
+function resolveOutboundContext(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  to: string;
+}) {
   const account = resolveTlonAccount(params.cfg, params.accountId ?? undefined);
   if (!account.configured || !account.ship || !account.url || !account.code) {
     throw new Error("Tlon account not configured");
@@ -166,15 +175,15 @@ function resolveOutboundContext(params: { cfg: OpenClawConfig; accountId?: strin
     throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
   }
 
-  return { account, parsed };
+  return { account: account as ConfiguredTlonAccount, parsed };
 }
 
-function resolveReplyId(replyToId?: string, threadId?: string) {
+function resolveReplyId(replyToId?: string | null, threadId?: string | number | null) {
   return (replyToId ?? threadId) ? String(replyToId ?? threadId) : undefined;
 }
 
 async function withHttpPokeAccountApi<T>(
-  account: ResolvedTlonAccount & { ship: string; url: string; code: string },
+  account: ConfiguredTlonAccount,
   run: (api: Awaited<ReturnType<typeof createHttpPokeApi>>) => Promise<T>,
 ) {
   const api = await createHttpPokeApi({
@@ -241,7 +250,7 @@ const tlonOutbound: ChannelOutboundAdapter = {
       shipUrl: account.url,
       shipName: account.ship.replace(/^~/, ""),
       verbose: false,
-      getCode: async () => account.code!,
+      getCode: async () => account.code,
     });
 
     const uploadedUrl = mediaUrl ? await uploadImageFromUrl(mediaUrl) : undefined;

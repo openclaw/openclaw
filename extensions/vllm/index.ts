@@ -2,9 +2,11 @@ import {
   buildVllmProvider,
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
   emptyPluginConfigSchema,
-  promptAndConfigureOpenAICompatibleSelfHostedProviderAuth,
+  promptAndConfigureOpenAICompatibleSelfHostedProvider,
   type OpenClawPluginApi,
+  type ProviderAuthContext,
   type ProviderAuthMethodNonInteractiveContext,
+  type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/core";
 
@@ -28,8 +30,8 @@ const vllmPlugin = {
           label: "vLLM",
           hint: "Local/self-hosted OpenAI-compatible server",
           kind: "custom",
-          run: (ctx) =>
-            promptAndConfigureOpenAICompatibleSelfHostedProviderAuth({
+          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
+            const result = await promptAndConfigureOpenAICompatibleSelfHostedProvider({
               cfg: ctx.config,
               prompter: ctx.prompter,
               providerId: PROVIDER_ID,
@@ -37,7 +39,18 @@ const vllmPlugin = {
               defaultBaseUrl: DEFAULT_BASE_URL,
               defaultApiKeyEnvVar: "VLLM_API_KEY",
               modelPlaceholder: "meta-llama/Meta-Llama-3-8B-Instruct",
-            }),
+            });
+            return {
+              profiles: [
+                {
+                  profileId: result.profileId,
+                  credential: result.credential,
+                },
+              ],
+              configPatch: result.config,
+              defaultModel: result.modelRef,
+            };
+          },
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
             configureOpenAICompatibleSelfHostedProviderNonInteractive({
               ctx,

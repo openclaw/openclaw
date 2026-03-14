@@ -230,7 +230,9 @@ const voiceCallPlugin = {
     const respondToCallMessageAction = async (params: {
       requestParams: GatewayRequestHandlerOptions["params"];
       respond: GatewayRequestHandlerOptions["respond"];
-      action: (request: Awaited<ReturnType<typeof resolveCallMessageRequest>>) => Promise<{
+      action: (
+        request: Exclude<Awaited<ReturnType<typeof resolveCallMessageRequest>>, { error: string }>,
+      ) => Promise<{
         success: boolean;
         error?: string;
         transcript?: string;

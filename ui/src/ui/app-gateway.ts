@@ -339,17 +339,6 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       host as unknown as Parameters<typeof handleAgentEvent>[0],
       evt.payload as AgentEventPayload | undefined,
     );
-    // Reload history after each tool result so the persisted text + tool
-    // output replaces any truncated streaming fragments.
-    const agentPayload = evt.payload as AgentEventPayload | undefined;
-    const toolData = agentPayload?.data;
-    if (
-      agentPayload?.stream === "tool" &&
-      typeof toolData?.phase === "string" &&
-      toolData.phase === "result"
-    ) {
-      void loadChatHistory(host as unknown as OpenClawApp);
-    }
     return;
   }
 

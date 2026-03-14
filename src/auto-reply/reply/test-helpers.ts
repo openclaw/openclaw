@@ -27,6 +27,8 @@ export function createMockFollowupRun(
     enqueuedAt: Date.now(),
     originatingTo: "channel:C1",
     run: {
+      agentId: "agent",
+      agentDir: "/tmp/agent",
       sessionId: "session",
       sessionKey: "main",
       messageProvider: "whatsapp",
@@ -34,7 +36,10 @@ export function createMockFollowupRun(
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       config: {},
-      skillsSnapshot: {},
+      skillsSnapshot: {
+        prompt: "",
+        skills: [],
+      },
       provider: "anthropic",
       model: "claude",
       thinkLevel: "low",
