@@ -16,6 +16,7 @@ export type DiscordMonitorStatusPatch = {
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
+  reconnectFailed?: boolean;
 };
 
 export type DiscordMonitorStatusSink = (patch: DiscordMonitorStatusPatch) => void;
