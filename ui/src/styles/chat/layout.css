@@ -168,6 +168,8 @@
 .context-notice__icon {
   width: 16px;
   height: 16px;
+  max-width: 16px;
+  max-height: 16px;
   flex-shrink: 0;
   stroke: currentColor;
 }
