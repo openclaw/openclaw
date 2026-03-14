@@ -1,0 +1,17 @@
+{
+  "name": "channel-host-demo",
+  "version": "0.0.1",
+  "description": "Standalone channel plugin host demo — explore/load/register/send-receive",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch index.ts",
+    "start": "bun run index.ts"
+  },
+  "dependencies": {
+    "file-type": "^19.0.0",
+    "jiti": "^2.4.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}

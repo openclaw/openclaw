@@ -1,0 +1,16 @@
+{
+  "id": "demo-channel",
+  "name": "Demo HTTP Channel",
+  "description": "Minimal HTTP webhook channel for demo purposes",
+  "channels": ["demo-channel"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "port": {
+        "type": "number",
+        "description": "HTTP server port"
+      }
+    }
+  }
+}

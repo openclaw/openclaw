@@ -1,0 +1,110 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Build + Debug Gateway",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "/Users/asuswang/.nvm/versions/node/v22.15.0/bin/node",
+      "runtimeArgs": ["--enable-source-maps"],
+      "args": ["${workspaceFolder}/openclaw.mjs", "gateway", "run", "--force"],
+      "preLaunchTask": "build",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "OPENCLAW_DEBUG": "1",
+        "OPENCLAW_SKIP_CHANNELS": "1"
+      },
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"],
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Build + Debug Agent",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "/Users/asuswang/.nvm/versions/node/v22.15.0/bin/node",
+      "runtimeArgs": ["--enable-source-maps"],
+      "args": ["${workspaceFolder}/openclaw.mjs", "agent", "--message", "${input:agentMessage}"],
+      "preLaunchTask": "build",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "OPENCLAW_DEBUG": "1"
+      },
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"],
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Build + Debug CLI Command",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "/Users/asuswang/.nvm/versions/node/v22.15.0/bin/node",
+      "runtimeArgs": ["--enable-source-maps"],
+      "args": ["${workspaceFolder}/openclaw.mjs", "${input:cliCommand}"],
+      "preLaunchTask": "build",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "OPENCLAW_DEBUG": "1"
+      },
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"],
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Build + Debug TUI",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "/Users/asuswang/.nvm/versions/node/v22.15.0/bin/node",
+      "runtimeArgs": ["--enable-source-maps"],
+      "args": ["${workspaceFolder}/openclaw.mjs", "tui"],
+      "preLaunchTask": "build",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "OPENCLAW_DEBUG": "1"
+      },
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"],
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Debug Tests (Vitest)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["vitest", "run", "--no-coverage", "${relativeFile}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+    },
+    {
+      "name": "Attach to Process (port 9229)",
+      "type": "node",
+      "request": "attach",
+      "port": 9229,
+      "sourceMaps": true,
+      "localRoot": "${workspaceFolder}",
+      "remoteRoot": "${workspaceFolder}",
+      "resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"],
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "cliCommand",
+      "type": "promptString",
+      "description": "输入 CLI 命令参数 (例如: status, config list, doctor)",
+      "default": "status"
+    },
+    {
+      "id": "agentMessage",
+      "type": "promptString",
+      "description": "输入发送给 Agent 的消息",
+      "default": "Hello"
+    }
+  ]
+}
