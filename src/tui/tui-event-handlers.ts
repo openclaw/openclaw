@@ -136,16 +136,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     return sessionRuns.has(activeRunId);
   };
 
-  const maybeRefreshHistoryForRun = (
-    runId: string,
-    opts?: { allowLocalWithoutDisplayableFinal?: boolean },
-  ) => {
-    const isLocalRun = isLocalRunId?.(runId) ?? false;
-    if (isLocalRun) {
+  const maybeRefreshHistoryForRun = (runId: string) => {
+    if (isLocalRunId?.(runId)) {
       forgetLocalRunId?.(runId);
-      if (!opts?.allowLocalWithoutDisplayableFinal) {
-        return;
-      }
+      return;
     }
     if (hasConcurrentActiveRun(runId)) {
       return;
@@ -208,9 +202,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "final") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       if (!evt.message) {
-        maybeRefreshHistoryForRun(evt.runId, {
-          allowLocalWithoutDisplayableFinal: true,
-        });
+        maybeRefreshHistoryForRun(evt.runId);
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
         tui.requestRender();
