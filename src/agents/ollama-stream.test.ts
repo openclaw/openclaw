@@ -106,7 +106,7 @@ describe("buildAssistantMessage", () => {
     expect(result.usage.totalTokens).toBe(15);
   });
 
-  it("falls back to thinking when content is empty", () => {
+  it("drops thinking-only output when content is empty", () => {
     const response = {
       model: "qwen3:32b",
       created_at: "2026-01-01T00:00:00Z",
@@ -119,10 +119,10 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "text", text: "Thinking output" }]);
+    expect(result.content).toEqual([]);
   });
 
-  it("falls back to reasoning when content and thinking are empty", () => {
+  it("drops reasoning-only output when content and thinking are empty", () => {
     const response = {
       model: "qwen3:32b",
       created_at: "2026-01-01T00:00:00Z",
@@ -135,7 +135,7 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "text", text: "Reasoning output" }]);
+    expect(result.content).toEqual([]);
   });
 
   it("builds response with tool calls", () => {
@@ -201,6 +201,20 @@ function mockNdjsonReader(lines: string[]): ReadableStreamDefaultReader<Uint8Arr
     cancel: async () => {},
     closed: Promise.resolve(undefined),
   } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+}
+
+async function expectDoneEventContent(lines: string[], expectedContent: unknown) {
+  await withMockNdjsonFetch(lines, async () => {
+    const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+    const events = await collectStreamEvents(stream);
+
+    const doneEvent = events.at(-1);
+    if (!doneEvent || doneEvent.type !== "done") {
+      throw new Error("Expected done event");
+    }
+
+    expect(doneEvent.message.content).toEqual(expectedContent);
+  });
 }
 
 describe("parseNdjsonStream", () => {
@@ -485,89 +499,49 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("accumulates thinking chunks when content is empty", async () => {
-    await withMockNdjsonFetch(
+  it("drops thinking chunks when no final content is emitted", async () => {
+    await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"reasoned"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":" output"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
-
-        const doneEvent = events.at(-1);
-        if (!doneEvent || doneEvent.type !== "done") {
-          throw new Error("Expected done event");
-        }
-
-        expect(doneEvent.message.content).toEqual([{ type: "text", text: "reasoned output" }]);
-      },
+      [],
     );
   });
 
   it("prefers streamed content over earlier thinking chunks", async () => {
-    await withMockNdjsonFetch(
+    await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"internal"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"final"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":" answer"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
-
-        const doneEvent = events.at(-1);
-        if (!doneEvent || doneEvent.type !== "done") {
-          throw new Error("Expected done event");
-        }
-
-        expect(doneEvent.message.content).toEqual([{ type: "text", text: "final answer" }]);
-      },
+      [{ type: "text", text: "final answer" }],
     );
   });
 
-  it("accumulates reasoning chunks when thinking is absent", async () => {
-    await withMockNdjsonFetch(
+  it("drops reasoning chunks when no final content is emitted", async () => {
+    await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"reasoned"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":" output"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
-
-        const doneEvent = events.at(-1);
-        if (!doneEvent || doneEvent.type !== "done") {
-          throw new Error("Expected done event");
-        }
-
-        expect(doneEvent.message.content).toEqual([{ type: "text", text: "reasoned output" }]);
-      },
+      [],
     );
   });
 
   it("prefers streamed content over earlier reasoning chunks", async () => {
-    await withMockNdjsonFetch(
+    await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"internal"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"final"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":" answer"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
-
-        const doneEvent = events.at(-1);
-        if (!doneEvent || doneEvent.type !== "done") {
-          throw new Error("Expected done event");
-        }
-
-        expect(doneEvent.message.content).toEqual([{ type: "text", text: "final answer" }]);
-      },
+      [{ type: "text", text: "final answer" }],
     );
   });
 });
