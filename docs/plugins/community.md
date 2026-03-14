@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Civic Google** — Zero-config Google OAuth for OpenClaw: Civic AuthZ handles credentials, token refresh, and least-privilege scope selection automatically — no `gog auth add` needed.
+  npm: `@civic/openclaw-google`
+  repo: `https://github.com/civicteam/openclaw-google`
+  install: `openclaw plugins install @civic/openclaw-google`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
