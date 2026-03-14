@@ -117,4 +117,52 @@ describe("quantd server", () => {
 
     await restarted.close();
   });
+
+  it("rejects non-object JSON bodies for event ingestion", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-quantd-server-invalid-"));
+    cleanupPaths.push(root);
+    const walPath = path.join(root, "quantd.jsonl");
+    const started = await startQuantdServer({
+      host: "127.0.0.1",
+      port: 0,
+      walPath,
+    });
+
+    const baseUrl = started.baseUrl ?? "";
+
+    await expect(
+      fetch(`${baseUrl}/v1/market-events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "[]",
+      }).then(async (res) => ({ status: res.status, body: await res.json() })),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "request body must be a JSON object" },
+    });
+
+    await expect(
+      fetch(`${baseUrl}/v1/order-events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: '"x"',
+      }).then(async (res) => ({ status: res.status, body: await res.json() })),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "request body must be a JSON object" },
+    });
+
+    await expect(
+      fetch(`${baseUrl}/v1/heartbeat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "123",
+      }).then(async (res) => ({ status: res.status, body: await res.json() })),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: "request body must be a JSON object" },
+    });
+
+    await started.close();
+  });
 });

@@ -326,7 +326,7 @@ async function runAutoPinnedOpenAiTurn(params: {
   runId: string;
   authProfileId?: string;
 }) {
-  await runEmbeddedPiAgent({
+  return await runEmbeddedPiAgent({
     sessionId: "session:test",
     sessionKey: params.sessionKey,
     sessionFile: path.join(params.workspaceDir, "session.jsonl"),
