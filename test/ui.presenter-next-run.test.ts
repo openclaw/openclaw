@@ -10,7 +10,8 @@ describe("formatNextRun", () => {
   it("includes weekday and relative time", () => {
     const ts = Date.UTC(2026, 1, 23, 15, 0, 0);
     const out = formatNextRun(ts);
-    expect(out).toMatch(/^[A-Za-z]{3}, /);
+    // Accept both English (Mon, ) and pt-BR (seg., ) weekday abbreviations
+    expect(out).toMatch(/^[\p{L}]{3}[.,]/u);
     expect(out).toContain("(");
     expect(out).toContain(")");
   });
