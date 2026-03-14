@@ -88,6 +88,33 @@ describe("checkBrowserOrigin", () => {
       },
       expected: { ok: false as const, reason: "origin not allowed" },
     },
+    {
+      name: "accepts tauri:// custom scheme in allowedOrigins",
+      input: {
+        requestHost: "gateway.local:18789",
+        origin: "tauri://localhost",
+        allowedOrigins: ["tauri://localhost"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "accepts electron:// custom scheme in allowedOrigins",
+      input: {
+        requestHost: "gateway.local:18789",
+        origin: "electron://app",
+        allowedOrigins: ["electron://app"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "rejects custom scheme not in allowedOrigins",
+      input: {
+        requestHost: "gateway.local:18789",
+        origin: "tauri://localhost",
+        allowedOrigins: ["https://example.com"],
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
   ])("$name", ({ input, expected }) => {
     expect(checkBrowserOrigin(input)).toEqual(expected);
   });
