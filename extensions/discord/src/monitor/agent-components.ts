@@ -804,6 +804,9 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
   fields?: Array<{ id: string; name: string; values: string[] }>;
   messageId?: string;
 }): Promise<"handled" | "unmatched"> {
+  const normalizedConversationId = params.interactionCtx.rawGuildId
+    ? `channel:${params.interactionCtx.channelId}`
+    : `user:${params.interactionCtx.userId}`;
   let responded = false;
   const respond = {
     acknowledge: async () => {
@@ -858,15 +861,35 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       decision: pluginBindingApproval.decision,
       senderId: params.interactionCtx.userId,
     });
+    let cleared = false;
     try {
       await respond.clearComponents();
+      cleared = true;
     } catch {
-      await respond.acknowledge();
+      try {
+        await respond.acknowledge();
+      } catch {
+        // Interaction may already be acknowledged; continue with best-effort follow-up.
+      }
     }
-    await respond.followUp({
-      text: buildPluginBindingResolvedText(resolved),
-      ephemeral: true,
-    });
+    try {
+      await respond.followUp({
+        text: buildPluginBindingResolvedText(resolved),
+        ephemeral: true,
+      });
+    } catch (err) {
+      logError(`discord plugin binding approval: failed to follow up: ${String(err)}`);
+      if (!cleared) {
+        try {
+          await respond.reply({
+            text: buildPluginBindingResolvedText(resolved),
+            ephemeral: true,
+          });
+        } catch {
+          // Interaction may no longer accept a direct reply.
+        }
+      }
+    }
     return "handled";
   }
   const dispatched = await dispatchPluginInteractiveHandler({
@@ -876,7 +899,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     ctx: {
       accountId: params.ctx.accountId,
       interactionId: resolveDiscordInteractionId(params.interaction),
-      conversationId: params.interactionCtx.channelId,
+      conversationId: normalizedConversationId,
       parentConversationId: params.channelCtx.parentId,
       guildId: params.interactionCtx.rawGuildId,
       senderId: params.interactionCtx.userId,
@@ -894,11 +917,13 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
   if (!dispatched.matched) {
     return "unmatched";
   }
-  if (dispatched.handled && !responded) {
-    try {
-      await respond.acknowledge();
-    } catch {
-      // Interaction may have expired after the handler finished.
+  if (dispatched.handled) {
+    if (!responded) {
+      try {
+        await respond.acknowledge();
+      } catch {
+        // Interaction may have expired after the handler finished.
+      }
     }
     return "handled";
   }
