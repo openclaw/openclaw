@@ -4,12 +4,14 @@ import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
+  type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
+
   function useFakeHeartbeatTime() {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
   }
 
-  function startDefaultRunner(runOnce: Parameters<typeof startHeartbeatRunner>[0]["runOnce"]) {
+  function startDefaultRunner(runOnce: RunOnce) {
     return startHeartbeatRunner({
       cfg: heartbeatConfig(),
       runOnce,
@@ -40,7 +42,7 @@ describe("startHeartbeatRunner", () => {
 
   async function expectWakeDispatch(params: {
     cfg: OpenClawConfig;
-    runSpy: ReturnType<typeof vi.fn>;
+    runSpy: RunOnce;
     wake: { reason: string; agentId?: string; sessionKey?: string; coalesceMs: number };
     expectedCall: Record<string, unknown>;
   }) {
