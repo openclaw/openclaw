@@ -30,16 +30,20 @@ async function invokeSingleRunAbort({
   });
 }
 
+function createSingleAbortContext() {
+  return createChatAbortContext({
+    chatAbortControllers: new Map([
+      [
+        "run-1",
+        createActiveRun("main", { owner: { connId: "conn-owner", deviceId: "dev-owner" } }),
+      ],
+    ]),
+  });
+}
+
 describe("chat.abort authorization", () => {
   it("rejects explicit run aborts from other clients", async () => {
-    const context = createChatAbortContext({
-      chatAbortControllers: new Map([
-        [
-          "run-1",
-          createActiveRun("main", { owner: { connId: "conn-owner", deviceId: "dev-owner" } }),
-        ],
-      ]),
-    });
+    const context = createSingleAbortContext();
 
     const respond = await invokeSingleRunAbort({
       context,
@@ -104,14 +108,7 @@ describe("chat.abort authorization", () => {
   });
 
   it("allows operator.admin clients to bypass owner checks", async () => {
-    const context = createChatAbortContext({
-      chatAbortControllers: new Map([
-        [
-          "run-1",
-          createActiveRun("main", { owner: { connId: "conn-owner", deviceId: "dev-owner" } }),
-        ],
-      ]),
-    });
+    const context = createSingleAbortContext();
 
     const respond = await invokeSingleRunAbort({
       context,

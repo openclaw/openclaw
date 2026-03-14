@@ -111,6 +111,23 @@ function createSecurePluginRouteHandler(params: {
   });
 }
 
+async function invokeSecureGatewayRoute(params: { gatewayAuthSatisfied: boolean }) {
+  const exactPluginHandler = vi.fn(async () => false);
+  const prefixGatewayHandler = vi.fn(async () => true);
+  const handler = createSecurePluginRouteHandler({
+    exactPluginHandler,
+    prefixGatewayHandler,
+  });
+  const { res } = makeMockHttpResponse();
+  const handled = await handler(
+    { url: "/plugin/secure/report" } as IncomingMessage,
+    res,
+    undefined,
+    { gatewayAuthSatisfied: params.gatewayAuthSatisfied },
+  );
+  return { handled, exactPluginHandler, prefixGatewayHandler };
+}
+
 describe("createGatewayPluginRequestHandler", () => {
   it("caps unauthenticated plugin routes to non-admin subagent scopes", async () => {
     loadOpenClawPlugins.mockReset();
@@ -232,44 +249,18 @@ describe("createGatewayPluginRequestHandler", () => {
   });
 
   it("fails closed when a matched gateway route reaches dispatch without auth", async () => {
-    const exactPluginHandler = vi.fn(async () => false);
-    const prefixGatewayHandler = vi.fn(async () => true);
-    const handler = createSecurePluginRouteHandler({
-      exactPluginHandler,
-      prefixGatewayHandler,
+    const { handled, exactPluginHandler, prefixGatewayHandler } = await invokeSecureGatewayRoute({
+      gatewayAuthSatisfied: false,
     });
-
-    const { res } = makeMockHttpResponse();
-    const handled = await handler(
-      { url: "/plugin/secure/report" } as IncomingMessage,
-      res,
-      undefined,
-      {
-        gatewayAuthSatisfied: false,
-      },
-    );
     expect(handled).toBe(false);
     expect(exactPluginHandler).not.toHaveBeenCalled();
     expect(prefixGatewayHandler).not.toHaveBeenCalled();
   });
 
   it("allows gateway route fallthrough only after gateway auth succeeds", async () => {
-    const exactPluginHandler = vi.fn(async () => false);
-    const prefixGatewayHandler = vi.fn(async () => true);
-    const handler = createSecurePluginRouteHandler({
-      exactPluginHandler,
-      prefixGatewayHandler,
+    const { handled, exactPluginHandler, prefixGatewayHandler } = await invokeSecureGatewayRoute({
+      gatewayAuthSatisfied: true,
     });
-
-    const { res } = makeMockHttpResponse();
-    const handled = await handler(
-      { url: "/plugin/secure/report" } as IncomingMessage,
-      res,
-      undefined,
-      {
-        gatewayAuthSatisfied: true,
-      },
-    );
     expect(handled).toBe(true);
     expect(exactPluginHandler).toHaveBeenCalledTimes(1);
     expect(prefixGatewayHandler).toHaveBeenCalledTimes(1);
