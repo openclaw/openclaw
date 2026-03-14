@@ -201,6 +201,8 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
             signature: safeTrim(ctx.ForwardedFromSignature),
             chat_type: safeTrim(ctx.ForwardedFromChatType),
             date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
+            forwarding_score:
+              typeof ctx.ForwardingScore === "number" ? ctx.ForwardingScore : undefined,
           },
           null,
           2,

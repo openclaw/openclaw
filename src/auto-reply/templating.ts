@@ -72,6 +72,13 @@ export type MsgContext = {
   ReplyToForwardedFromUsername?: string;
   ReplyToForwardedFromTitle?: string;
   ReplyToForwardedDate?: number;
+  /**
+   * Display name / identifier of the original sender of a forwarded message.
+   * For Telegram this is resolved from the forward_origin (user name, channel
+   * title, etc.). For WhatsApp the platform intentionally does not disclose the
+   * original sender, so this field is set to a fixed privacy-placeholder string
+   * — do NOT treat an "unknown sender" value as a data-quality problem.
+   */
   ForwardedFrom?: string;
   ForwardedFromType?: string;
   ForwardedFromId?: string;
@@ -81,6 +88,8 @@ export type MsgContext = {
   ForwardedFromChatType?: string;
   ForwardedFromMessageId?: number;
   ForwardedDate?: number;
+  /** How many times the message has been forwarded (WhatsApp forwarding score). */
+  ForwardingScore?: number;
   ThreadStarterBody?: string;
   /** Full thread history when starting a new thread session. */
   ThreadHistoryBody?: string;
