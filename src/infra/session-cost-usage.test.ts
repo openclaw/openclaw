@@ -264,31 +264,6 @@ describe("session cost usage", () => {
     });
   });
 
-  it("discovers archived sessions and extracts correct session IDs", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-archive-"));
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-
-    const activeFile = path.join(sessionsDir, "sess-active.jsonl");
-    await fs.writeFile(activeFile, "", "utf-8");
-
-    const archiveFile = path.join(sessionsDir, "sess-old.jsonl.reset.2026-03-14T20-28-29.627Z");
-    await fs.writeFile(archiveFile, "", "utf-8");
-
-    const now = Date.now();
-    await fs.utimes(activeFile, now / 1000, now / 1000);
-    await fs.utimes(archiveFile, now / 1000, now / 1000);
-
-    await withStateDir(root, async () => {
-      const sessions = await discoverAllSessions({
-        startMs: now - 7 * 24 * 60 * 60 * 1000,
-      });
-      expect(sessions.length).toBe(2);
-      const ids = sessions.map((s) => s.sessionId).sort();
-      expect(ids).toEqual(["sess-active", "sess-old"]);
-    });
-  });
-
   it("does not exclude sessions with mtime after endMs during discovery", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
