@@ -59,5 +59,9 @@ export type PluginRuntime = PluginRuntimeCore & {
     getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
   };
+  gateway: {
+    /** Dispatch an internal gateway RPC (same as calling via WebSocket, but in-process). */
+    dispatchMethod: <T = unknown>(method: string, params: Record<string, unknown>) => Promise<T>;
+  };
   channel: PluginRuntimeChannel;
 };
