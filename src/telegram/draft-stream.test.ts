@@ -56,7 +56,7 @@ function expectDmMessagePreviewViaSendMessage(
 async function createDmDraftTransportStream(params: {
   api?: ReturnType<typeof createMockDraftApi>;
   previewTransport?: "draft" | "message";
-  warn?: ReturnType<typeof vi.fn>;
+  warn?: (message: string) => void;
 }) {
   const api = params.api ?? createMockDraftApi();
   const stream = createDraftStream(api, {
