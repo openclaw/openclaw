@@ -34,6 +34,10 @@ export function attachMediaRoutes(
 
   app.get("/media/:id", async (req, res) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
+    // Temporary media URLs are capability-style secrets; prevent browser/proxy caching.
+    res.setHeader("Cache-Control", "no-store, private, max-age=0, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     const id = req.params.id;
     if (!isValidMediaId(id)) {
       res.status(400).send("invalid path");
