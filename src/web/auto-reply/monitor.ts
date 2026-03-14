@@ -226,7 +226,42 @@ export async function monitorWebChannel(
       sessionKey: connectRoute.sessionKey,
     });
 
-    setActiveWebListener(account.accountId, listener);
+    // Wrap listener methods to update lastMessageAt on outbound activity.
+    // This prevents the watchdog from triggering reconnects when the gateway
+    // is actively sending messages but not receiving any inbound messages.
+    // See: https://github.com/openclaw/openclaw/issues/22511
+    const updateLastActivity = () => {
+      lastMessageAt = Date.now();
+      status.lastMessageAt = lastMessageAt;
+      status.lastEventAt = lastMessageAt;
+      emitStatus();
+    };
+
+    const wrappedListener = {
+      ...listener,
+      sendMessage: async (...args: Parameters<typeof listener.sendMessage>) => {
+        const result = await listener.sendMessage(...args);
+        updateLastActivity();
+        return result;
+      },
+      sendPoll: async (...args: Parameters<typeof listener.sendPoll>) => {
+        const result = await listener.sendPoll(...args);
+        updateLastActivity();
+        return result;
+      },
+      sendReaction: async (...args: Parameters<typeof listener.sendReaction>) => {
+        const result = await listener.sendReaction(...args);
+        updateLastActivity();
+        return result;
+      },
+      sendComposingTo: async (...args: Parameters<typeof listener.sendComposingTo>) => {
+        const result = await listener.sendComposingTo(...args);
+        updateLastActivity();
+        return result;
+      },
+    };
+
+    setActiveWebListener(account.accountId, wrappedListener);
     unregisterUnhandled = registerUnhandledRejectionHandler((reason) => {
       if (!isLikelyWhatsAppCryptoError(reason)) {
         return false;
