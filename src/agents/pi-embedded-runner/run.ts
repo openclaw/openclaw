@@ -1524,11 +1524,16 @@ export async function runEmbeddedPiAgent(
           // Emit an explicit timeout error instead of silently completing, so
           // callers do not lose the turn as an orphaned user message.
           if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+            const timeoutSeconds = Math.round(params.timeoutMs / 1000);
+            const providerDetail =
+              agentMeta.provider && agentMeta.model
+                ? `The LLM provider (${agentMeta.provider}/${agentMeta.model}) did not respond within ${timeoutSeconds}s.`
+                : `No response was received within ${timeoutSeconds}s.`;
             return {
               payloads: [
                 {
                   text:
-                    "Request timed out before a response was generated. " +
+                    `Request timed out. ${providerDetail} ` +
                     "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
                   isError: true,
                 },
