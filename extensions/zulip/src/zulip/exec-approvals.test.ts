@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions.js";
 import type { ZulipExecApprovalConfig } from "../types.js";
 import type { ZulipUser } from "./client.js";
@@ -19,6 +19,7 @@ const mockState = vi.hoisted(() => ({
   sendMessageZulip: vi.fn(async () => ({ messageId: "43", target: "dm:123" })),
   fetchZulipUsers: vi.fn<() => Promise<ZulipUser[]>>(async () => []),
   updateZulipMessage: vi.fn(async () => ({ result: "success" })),
+  removeZulipComponentMessageEntries: vi.fn(async () => 0),
   buildGatewayConnectionDetails: vi.fn(() => ({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
@@ -56,6 +57,10 @@ vi.mock("./client.js", async () => {
   };
 });
 
+vi.mock("./components-registry.js", () => ({
+  removeZulipComponentMessageEntries: mockState.removeZulipComponentMessageEntries,
+}));
+
 vi.mock("../../../../src/gateway/call.js", () => ({
   buildGatewayConnectionDetails: mockState.buildGatewayConnectionDetails,
 }));
@@ -84,6 +89,10 @@ vi.mock("../../../../src/gateway/client.js", () => ({
 function writeStore(store: Record<string, unknown>) {
   fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
   clearSessionStoreCacheForTest();
+}
+
+function pendingApprovalsPath(accountId = "default") {
+  return path.join(stateDir, "zulip", `exec-approvals-${accountId}.json`);
 }
 
 function createRequest(
@@ -168,13 +177,19 @@ function clearPendingTimeouts(handler: ZulipExecApprovalHandler) {
   internals.pending.clear();
 }
 
+let stateDir: string;
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+
 beforeEach(() => {
+  stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-zulip-approvals-state-"));
+  process.env.OPENCLAW_STATE_DIR = stateDir;
   writeStore({});
   vi.clearAllMocks();
   mockState.sendZulipComponentMessage.mockResolvedValue({ messageId: "42", target: "dm:123" });
   mockState.sendMessageZulip.mockResolvedValue({ messageId: "43", target: "dm:123" });
   mockState.fetchZulipUsers.mockResolvedValue([]);
   mockState.updateZulipMessage.mockResolvedValue({ result: "success" });
+  mockState.removeZulipComponentMessageEntries.mockResolvedValue(0);
   mockState.buildGatewayConnectionDetails.mockReturnValue({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
@@ -185,6 +200,15 @@ beforeEach(() => {
   });
   mockState.gatewayClientCtorParams.length = 0;
   mockState.gatewayClientRequests.mockResolvedValue({ ok: true });
+});
+
+afterEach(() => {
+  if (originalStateDir == null) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+  }
+  fs.rmSync(stateDir, { recursive: true, force: true });
 });
 
 describe("zulip exec approval callback data", () => {
@@ -336,6 +360,82 @@ describe("ZulipExecApprovalHandler", () => {
     await handler.stop();
   });
 
+  it("persists pending approvals and reloads them on restart", async () => {
+    const request = createRequest();
+    const firstHandler = createHandler({ enabled: true, approvers: [123], target: "dm" });
+    await getInternals(firstHandler).handleApprovalRequested(request);
+    clearPendingTimeouts(firstHandler);
+
+    const persisted = JSON.parse(fs.readFileSync(pendingApprovalsPath(), "utf8")) as {
+      approvals: Record<string, unknown>;
+    };
+    expect(Object.keys(persisted.approvals)).toContain(request.id);
+
+    const secondHandler = createHandler({ enabled: true, approvers: [123], target: "dm" });
+    await secondHandler.start();
+
+    expect(getInternals(secondHandler).pending.has(request.id)).toBe(true);
+
+    await getInternals(secondHandler).handleApprovalResolved({
+      id: request.id,
+      decision: "allow-once",
+      resolvedBy: "restart-test",
+      ts: Date.now(),
+    });
+
+    expect(mockState.updateZulipMessage).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ messageId: 42, content: expect.stringContaining("Allowed (once)") }),
+    );
+    expect(mockState.removeZulipComponentMessageEntries).toHaveBeenCalledWith({
+      accountId: "default",
+      messageId: 42,
+    });
+    expect(getInternals(secondHandler).pending.has(request.id)).toBe(false);
+
+    await secondHandler.stop();
+    clearPendingTimeouts(secondHandler);
+  });
+
+  it("expires persisted stale approvals on startup", async () => {
+    const request = createRequest();
+    fs.mkdirSync(path.dirname(pendingApprovalsPath()), { recursive: true });
+    fs.writeFileSync(
+      pendingApprovalsPath(),
+      `${JSON.stringify(
+        {
+          version: 1,
+          approvals: {
+            [request.id]: {
+              id: request.id,
+              request: { ...request, expiresAtMs: Date.now() - 1_000 },
+              messages: [{ messageId: 42, target: "dm:123" }],
+              expiresAtMs: Date.now() - 1_000,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const handler = createHandler({ enabled: true, approvers: [123], target: "dm" });
+    await handler.start();
+
+    expect(mockState.updateZulipMessage).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ messageId: 42, content: expect.stringContaining("expired") }),
+    );
+    expect(mockState.removeZulipComponentMessageEntries).toHaveBeenCalledWith({
+      accountId: "default",
+      messageId: 42,
+    });
+    expect(getInternals(handler).pending.has(request.id)).toBe(false);
+
+    await handler.stop();
+  });
+
   it("rejects unauthorized approval callbacks without consuming the button", async () => {
     const handler = createHandler({ enabled: true, approvers: [123], target: "dm" });
     await handler.start();
@@ -370,6 +470,10 @@ describe("ZulipExecApprovalHandler", () => {
         content: expect.stringContaining("Allowed (always)"),
       }),
     );
+    expect(mockState.removeZulipComponentMessageEntries).toHaveBeenCalledWith({
+      accountId: "default",
+      messageId: 42,
+    });
   });
 
   it("finalizes approval messages on timeout", async () => {
@@ -386,6 +490,10 @@ describe("ZulipExecApprovalHandler", () => {
         content: expect.stringContaining("expired"),
       }),
     );
+    expect(mockState.removeZulipComponentMessageEntries).toHaveBeenCalledWith({
+      accountId: "default",
+      messageId: 42,
+    });
   });
 
   it("filters requests to the configured Zulip account when turn-source account is present", () => {

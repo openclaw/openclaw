@@ -617,6 +617,16 @@ export function applyJobPatch(
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
   }
+  if ("pacing" in patch) {
+    if (patch.pacing === null) {
+      job.pacing = undefined;
+    } else if (patch.pacing) {
+      job.pacing = {
+        providerTarget: patch.pacing.providerTarget,
+        role: patch.pacing.role,
+      };
+    }
+  }
   if ("failureAlert" in patch) {
     job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
   }

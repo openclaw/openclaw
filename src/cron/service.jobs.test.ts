@@ -59,6 +59,22 @@ describe("applyJobPatch", () => {
     expect(job.delivery).toBeUndefined();
   });
 
+  it("replaces and clears pacing metadata from job patches", () => {
+    const job = createIsolatedAgentTurnJob("job-pacing", {
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    }, {
+      pacing: { providerTarget: "codex", role: "maintenance" },
+    });
+
+    applyJobPatch(job, { pacing: { providerTarget: "claude", role: "review" } });
+    expect(job.pacing).toEqual({ providerTarget: "claude", role: "review" });
+
+    applyJobPatch(job, { pacing: null });
+    expect(job.pacing).toBeUndefined();
+  });
+
   it("keeps webhook delivery when switching to main session", () => {
     const job = createIsolatedAgentTurnJob("job-webhook", {
       mode: "webhook",

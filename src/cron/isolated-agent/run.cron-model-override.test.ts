@@ -250,4 +250,40 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
+
+  it("returns error when explicit pacing provider target cannot resolve", async () => {
+    const jobWithoutModel = makeJob({
+      pacing: { providerTarget: "gemini", role: "maintenance" },
+      payload: { kind: "agentTurn", message: "run deep research digest" },
+    });
+
+    resolveAllowedModelRefMock.mockReturnValueOnce({
+      error: "model not allowed: google/gemini-3.1-pro-preview",
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("explicit pacing.providerTarget 'gemini'");
+    expect(result.error).toContain("google/gemini-3.1-pro-preview");
+    expect(runWithModelFallbackMock).not.toHaveBeenCalled();
+  });
+
+  it("continues with defaults when inferred provider target cannot resolve", async () => {
+    const jobWithoutModel = makeJob({
+      name: "Deep Research Digest",
+      payload: { kind: "agentTurn", message: "perform deep research and market comparison" },
+    });
+
+    resolveAllowedModelRefMock.mockReturnValueOnce({
+      error: "model not allowed: google/gemini-3.1-pro-preview",
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    expect(result.status).toBe("ok");
+    expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+    expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+  });
 });

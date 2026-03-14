@@ -19,11 +19,12 @@ describe("resolveModelsCommandReply (zulip)", () => {
     },
   } as OpenClawConfig;
 
-  it("returns provider buttons for /models on Zulip", async () => {
+  it("returns provider buttons for /models on Zulip with invoker ACLs", async () => {
     const reply = await resolveModelsCommandReply({
       cfg,
       commandBodyNormalized: "/models",
       surface: "zulip",
+      allowedUserIds: [42],
     });
 
     expect(reply?.text).toBe("Select a provider:");
@@ -31,24 +32,36 @@ describe("resolveModelsCommandReply (zulip)", () => {
       heading: "Model Providers",
       buttons: expect.arrayContaining([
         expect.arrayContaining([
-          expect.objectContaining({ text: "anthropic (1)", callback_data: "mdl_list_anthropic_1" }),
-          expect.objectContaining({ text: "openai (2)", callback_data: "mdl_list_openai_1" }),
+          expect.objectContaining({
+            text: "anthropic (1)",
+            callback_data: "mdl_list_anthropic_1",
+            allowed_users: [42],
+          }),
+          expect.objectContaining({
+            text: "openai (2)",
+            callback_data: "mdl_list_openai_1",
+            allowed_users: [42],
+          }),
         ]),
       ]),
     });
   });
 
-  it("returns model buttons for /models <provider> on Zulip", async () => {
+  it("returns model buttons for /models <provider> on Zulip with invoker ACLs", async () => {
     const reply = await resolveModelsCommandReply({
       cfg,
       commandBodyNormalized: "/models openai",
       surface: "zulip",
       currentModel: "openai/gpt-4.1-mini",
+      allowedUserIds: [42],
     });
 
     expect(reply?.text).toContain("Models (openai");
     const zulipData = reply?.channelData?.zulip as
-      | { heading?: string; buttons?: Array<Array<{ text?: string; callback_data?: string }>> }
+      | {
+          heading?: string;
+          buttons?: Array<Array<{ text?: string; callback_data?: string; allowed_users?: number[] }>>;
+        }
       | undefined;
     expect(zulipData).toMatchObject({
       heading: "openai models",
@@ -57,10 +70,17 @@ describe("resolveModelsCommandReply (zulip)", () => {
     expect(buttons).toEqual(
       expect.arrayContaining([
         expect.arrayContaining([
-          expect.objectContaining({ text: expect.stringContaining("gpt-4.1-mini ✓") }),
+          expect.objectContaining({
+            text: expect.stringContaining("gpt-4.1-mini ✓"),
+            allowed_users: [42],
+          }),
         ]),
         expect.arrayContaining([
-          expect.objectContaining({ text: "<< Back", callback_data: "mdl_back" }),
+          expect.objectContaining({
+            text: "<< Back",
+            callback_data: "mdl_back",
+            allowed_users: [42],
+          }),
         ]),
       ]),
     );

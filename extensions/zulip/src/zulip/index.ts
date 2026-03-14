@@ -11,7 +11,10 @@ export {
 } from "./components.js";
 export {
   registerZulipComponentEntries,
-  resolveZulipComponentEntry,
+  loadZulipComponentRegistry,
+  claimZulipComponentEntry,
+  consumeZulipComponentMessageEntries,
+  removeZulipComponentMessageEntries,
   removeZulipComponentEntry,
   clearZulipComponentEntries,
 } from "./components-registry.js";

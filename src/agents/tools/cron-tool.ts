@@ -308,6 +308,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "sessionTarget",
               "wakeMode",
               "payload",
+              "pacing",
               "delivery",
               "enabled",
               "description",
@@ -458,6 +459,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "sessionKey",
               "sessionTarget",
               "wakeMode",
+              "pacing",
               "failureAlert",
               "allowUnsafeExternalContent",
             ]);

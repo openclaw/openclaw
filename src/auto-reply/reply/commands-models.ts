@@ -15,6 +15,7 @@ import {
   buildProviderKeyboard,
   calculateTotalPages,
   getModelsPageSize,
+  type ButtonRow,
   type ProviderInfo,
 } from "../../telegram/model-buttons.js";
 import type { ReplyPayload } from "../types.js";
@@ -187,6 +188,18 @@ function parseModelsArgs(raw: string): {
   };
 }
 
+function mapZulipButtonsWithAllowedUsers(
+  buttons: ButtonRow[],
+  allowedUserIds?: number[],
+): Array<Array<{ text: string; callback_data: string; allowed_users?: number[] }>> {
+  return buttons.map((row) =>
+    row.map((button) => ({
+      ...button,
+      allowed_users: allowedUserIds,
+    })),
+  );
+}
+
 function resolveProviderLabel(params: {
   provider: string;
   cfg: OpenClawConfig;
@@ -229,6 +242,7 @@ export async function resolveModelsCommandReply(params: {
   agentId?: string;
   agentDir?: string;
   sessionEntry?: ModelsSessionEntry;
+  allowedUserIds?: number[];
 }): Promise<ReplyPayload | null> {
   const body = params.commandBodyNormalized.trim();
   if (!body.startsWith("/models")) {
@@ -256,7 +270,12 @@ export async function resolveModelsCommandReply(params: {
         text,
         channelData: isTelegram
           ? { telegram: { buttons } }
-          : { zulip: { heading: "Model Providers", buttons } },
+          : {
+              zulip: {
+                heading: "Model Providers",
+                buttons: mapZulipButtonsWithAllowedUsers(buttons, params.allowedUserIds),
+              },
+            },
       };
     }
 
@@ -284,7 +303,12 @@ export async function resolveModelsCommandReply(params: {
         text: `Unknown provider: ${provider}\n\nSelect a provider:`,
         channelData: isTelegram
           ? { telegram: { buttons } }
-          : { zulip: { heading: "Model Providers", buttons } },
+          : {
+              zulip: {
+                heading: "Model Providers",
+                buttons: mapZulipButtonsWithAllowedUsers(buttons, params.allowedUserIds),
+              },
+            },
       };
     }
     const lines: string[] = [
@@ -343,7 +367,12 @@ export async function resolveModelsCommandReply(params: {
       text,
       channelData: isTelegram
         ? { telegram: { buttons } }
-        : { zulip: { heading: `${provider} models`, buttons } },
+        : {
+            zulip: {
+              heading: `${provider} models`,
+              buttons: mapZulipButtonsWithAllowedUsers(buttons, params.allowedUserIds),
+            },
+          },
     };
   }
 
@@ -406,6 +435,11 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
     });
   const modelsAgentDir = resolveAgentDir(params.cfg, modelsAgentId);
 
+  const allowedUserIds =
+    params.ctx.Surface === "zulip" && params.command.senderId
+      ? [Number.parseInt(params.command.senderId, 10)].filter(Number.isFinite)
+      : undefined;
+
   const reply = await resolveModelsCommandReply({
     cfg: params.cfg,
     commandBodyNormalized,
@@ -414,6 +448,7 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
     agentId: modelsAgentId,
     agentDir: modelsAgentDir,
     sessionEntry: params.sessionEntry,
+    allowedUserIds,
   });
   if (!reply) {
     return null;

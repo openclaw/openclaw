@@ -21,6 +21,22 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
   });
 
+  it("accepts pacing metadata on add and update, including null clears", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        pacing: { providerTarget: "gemini", role: "maintenance" },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { pacing: { providerTarget: "claude", role: "review" } },
+      }),
+    ).toBe(true);
+    expect(validateCronUpdateParams({ id: "job-1", patch: { pacing: null } })).toBe(true);
+  });
+
   it("rejects add params when required scheduling fields are missing", () => {
     const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
     expect(validateCronAddParams(withoutWakeMode)).toBe(false);

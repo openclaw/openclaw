@@ -179,7 +179,11 @@ export function readZulipComponentSpec(raw: unknown): ZulipComponentSpec {
             : undefined,
       style,
       reusable: typeof b.reusable === "boolean" ? b.reusable : undefined,
-      allowedUsers: Array.isArray(b.allowedUsers) ? b.allowedUsers : undefined,
+      allowedUsers: Array.isArray(b.allowedUsers)
+        ? b.allowedUsers
+        : Array.isArray(b.allowed_users)
+          ? b.allowed_users
+          : undefined,
     });
   }
 

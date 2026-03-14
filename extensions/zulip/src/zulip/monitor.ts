@@ -51,7 +51,12 @@ import {
   type ZulipMessage,
   type ZulipSubmessageEvent,
 } from "./client.js";
-import { resolveZulipComponentEntry, removeZulipComponentEntry } from "./components-registry.js";
+import {
+  claimZulipComponentEntry,
+  consumeZulipComponentMessageEntries,
+  loadZulipComponentRegistry,
+  removeZulipComponentEntry,
+} from "./components-registry.js";
 import { formatZulipComponentEventText, readZulipComponentSpec } from "./components.js";
 import { createZulipDraftStream, type ZulipDraftTarget } from "./draft-stream.js";
 import { ZulipExecApprovalHandler } from "./exec-approvals.js";
@@ -1300,6 +1305,23 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
     }
   };
 
+  await loadZulipComponentRegistry(account.accountId);
+
+  const sendStaleComponentNotice = async (senderId: number) => {
+    try {
+      await sendMessageZulip(
+        `dm:${senderId}`,
+        "That Zulip action is no longer active. Please rerun the command or request a fresh prompt.",
+        {
+          cfg,
+          accountId: account.accountId,
+        },
+      );
+    } catch (err) {
+      logVerbose(`zulip: failed to send stale component notice: ${String(err)}`);
+    }
+  };
+
   const resolvedAllowFromEntries = resolvedConfigAllowFrom.flatMap((entry) =>
     [entry.id, entry.email].filter((value): value is string => Boolean(value)),
   );
@@ -1710,22 +1732,27 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       return;
     }
 
-    // Resolve the component entry from registry without consuming first so
-    // unauthorized clicks on shared widgets do not burn the button.
-    const entry = resolveZulipComponentEntry({ id: buttonId, consume: false });
-    if (!entry) {
-      runtime.log?.(`zulip: ocform callback for unknown/expired button '${buttonId}', ignoring`);
+    const claimResult = await claimZulipComponentEntry({
+      accountId: account.accountId,
+      id: buttonId,
+      senderId: event.sender_id,
+    });
+    if (claimResult.kind === "missing" || claimResult.kind === "expired") {
+      runtime.log?.(`zulip: ocform callback for stale button '${buttonId}', notifying clicker`);
+      await sendStaleComponentNotice(event.sender_id);
+      return;
+    }
+    if (claimResult.kind === "consumed") {
+      runtime.log?.(`zulip: ocform callback for consumed button '${buttonId}', notifying clicker`);
+      await sendStaleComponentNotice(event.sender_id);
+      return;
+    }
+    if (claimResult.kind === "unauthorized") {
+      runtime.log?.(`zulip: ocform callback from unauthorized user ${event.sender_id}`);
       return;
     }
 
-    // Check allowedUsers if configured
-    if (entry.allowedUsers && entry.allowedUsers.length > 0) {
-      if (!entry.allowedUsers.includes(event.sender_id)) {
-        runtime.log?.(`zulip: ocform callback from unauthorized user ${event.sender_id}`);
-        return;
-      }
-    }
-
+    const entry = claimResult.entry;
     const sessionKey = entry.sessionKey;
     const agentId = entry.agentId;
     const componentChatType = entry.chatType ?? "channel";
@@ -1733,6 +1760,19 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       replyTo: entry.replyTo,
       senderId: event.sender_id,
     });
+    const consumeWidgetMessage = async () => {
+      if (entry.reusable) {
+        return;
+      }
+      if (typeof entry.messageId === "number" && Number.isFinite(entry.messageId) && entry.messageId > 0) {
+        await consumeZulipComponentMessageEntries({
+          accountId: entry.accountId,
+          messageId: entry.messageId,
+        });
+        return;
+      }
+      await removeZulipComponentEntry(entry.id, entry.accountId);
+    };
 
     const approvalResult = execApprovalsHandler
       ? await execApprovalsHandler.handleCallback({
@@ -1741,8 +1781,8 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
         })
       : { handled: false, consume: false };
     if (approvalResult.handled) {
-      if (approvalResult.consume && !entry.reusable) {
-        removeZulipComponentEntry(entry.id);
+      if (approvalResult.consume) {
+        await consumeWidgetMessage();
       }
       return;
     }
@@ -1752,13 +1792,9 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       callbackData: entry.callbackData,
       agentId,
       sessionKey,
+      allowedUserIds: entry.allowedUsers,
     });
     if (modelPickerAction) {
-      const consumeModelPickerEntry = () => {
-        if (!entry.reusable) {
-          removeZulipComponentEntry(entry.id);
-        }
-      };
       if (modelPickerAction.kind === "render") {
         await sendZulipComponentMessage(
           replyTarget,
@@ -1771,7 +1807,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
             agentId,
           },
         );
-        consumeModelPickerEntry();
+        await consumeWidgetMessage();
         return;
       }
       if (modelPickerAction.kind === "text") {
@@ -1779,7 +1815,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
           cfg,
           accountId: entry.accountId,
         });
-        consumeModelPickerEntry();
+        await consumeWidgetMessage();
         return;
       }
       runtime.log?.(
@@ -1883,16 +1919,14 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
             onModelSelected: prefixContext.onModelSelected,
           },
         });
-        consumeModelPickerEntry();
+        await consumeWidgetMessage();
       } finally {
         markDispatchIdle();
       }
       return;
     }
 
-    if (!entry.reusable) {
-      removeZulipComponentEntry(entry.id);
-    }
+
 
     const label = typeof data.label === "string" ? data.label : entry.label;
     const eventText = formatZulipComponentEventText({
@@ -2008,6 +2042,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
           onModelSelected: prefixContext.onModelSelected,
         },
       });
+      await consumeWidgetMessage();
     } finally {
       markDispatchIdle();
     }

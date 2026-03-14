@@ -251,6 +251,31 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       expect(logWarnMock).not.toHaveBeenCalled();
       expect(runWithModelFallbackMock).not.toHaveBeenCalled();
     });
+
+    it("applies inferred gemini routing when no stronger model override exists", async () => {
+      resolveAllowedModelRefMock.mockReturnValueOnce({
+        ref: { provider: "google", model: "gemini-3.1-pro-preview" },
+      });
+
+      const result = await runCronIsolatedAgentTurn(
+        makeSkillParams({
+          job: makeSkillJob({
+            name: "leo-nightly-research",
+            payload: {
+              kind: "agentTurn",
+              message: "Do deep research with web_search and summarize market signals.",
+            },
+          }),
+          agentId: "leo",
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+      const runParams = runWithModelFallbackMock.mock.calls[0][0];
+      expect(runParams.provider).toBe("google");
+      expect(runParams.model).toBe("gemini-3.1-pro-preview");
+    });
   });
 
   describe("CLI session handoff (issue #29774)", () => {

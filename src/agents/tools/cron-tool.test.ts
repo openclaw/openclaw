@@ -388,14 +388,21 @@ describe("cron tool", () => {
       name: "empty-job",
       schedule: { kind: "cron", expr: "0 9 * * *" },
       sessionTarget: "main",
+      pacing: { providerTarget: "codex", role: "maintenance" },
       payload: { kind: "systemEvent", text: "wake up" },
     });
 
     const params = expectSingleGatewayCallMethod("cron.add") as
-      | { name?: string; sessionTarget?: string; payload?: { text?: string } }
+      | {
+          name?: string;
+          sessionTarget?: string;
+          pacing?: { providerTarget?: string; role?: string };
+          payload?: { text?: string };
+        }
       | undefined;
     expect(params?.name).toBe("empty-job");
     expect(params?.sessionTarget).toBe("main");
+    expect(params?.pacing).toEqual({ providerTarget: "codex", role: "maintenance" });
     expect(params?.payload?.text).toBe("wake up");
   });
 

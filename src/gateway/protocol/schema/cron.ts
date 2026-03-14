@@ -150,6 +150,24 @@ export const CronFailureAlertSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const CronPacingMetadataSchema = Type.Object(
+  {
+    providerTarget: Type.Optional(
+      Type.Union([Type.Literal("claude"), Type.Literal("codex"), Type.Literal("gemini")]),
+    ),
+    role: Type.Optional(
+      Type.Union([
+        Type.Literal("maintenance"),
+        Type.Literal("report"),
+        Type.Literal("review"),
+      ]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const CronPacingPatchSchema = Type.Union([Type.Null(), CronPacingMetadataSchema]);
+
 export const CronFailureDestinationSchema = Type.Object(
   {
     channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
@@ -245,6 +263,7 @@ export const CronJobSchema = Type.Object(
     wakeMode: CronWakeModeSchema,
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
+    pacing: Type.Optional(CronPacingMetadataSchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
     state: CronJobStateSchema,
   },
@@ -275,6 +294,7 @@ export const CronAddParamsSchema = Type.Object(
     wakeMode: CronWakeModeSchema,
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
+    pacing: Type.Optional(CronPacingMetadataSchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
   },
   { additionalProperties: false },
@@ -289,6 +309,7 @@ export const CronJobPatchSchema = Type.Object(
     wakeMode: Type.Optional(CronWakeModeSchema),
     payload: Type.Optional(CronPayloadPatchSchema),
     delivery: Type.Optional(CronDeliveryPatchSchema),
+    pacing: Type.Optional(CronPacingPatchSchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
     state: Type.Optional(Type.Partial(CronJobStateSchema)),
   },

@@ -34,9 +34,10 @@ const routeHealth: RouteSpec = {
 
 const routeStatus: RouteSpec = {
   match: (path) => path[0] === "status",
-  // Status runs security audit with channel checks in both text and JSON output,
-  // so plugin registry must be ready for consistent findings.
-  loadPlugins: true,
+  // Keep JSON status on the same fast path as `health --json`.
+  // Full plugin preload is expensive (~tens of seconds in some environments)
+  // and is only required for richer local channel/plugin metadata in text mode.
+  loadPlugins: (argv) => !hasFlag(argv, "--json"),
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
     const deep = hasFlag(argv, "--deep");

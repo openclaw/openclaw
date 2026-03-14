@@ -61,6 +61,19 @@ describe("tryRouteCli", () => {
     );
   });
 
+  it("skips plugin preload when routed command marks json mode as fast-path", async () => {
+    findRoutedCommandMock.mockReturnValue({
+      loadPlugins: (argv: string[]) => !argv.includes("--json"),
+      run: runRouteMock,
+    });
+
+    await expect(tryRouteCli(["node", "openclaw", "status", "--json"])).resolves.toBe(true);
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+
+    await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not pass suppressDoctorStdout for routed non-json commands", async () => {
     await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
 

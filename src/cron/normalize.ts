@@ -204,6 +204,23 @@ function coerceDelivery(delivery: UnknownRecord) {
   return next;
 }
 
+function coercePacing(pacing: UnknownRecord) {
+  const next: UnknownRecord = {};
+  if (typeof pacing.providerTarget === "string") {
+    const trimmed = pacing.providerTarget.trim().toLowerCase();
+    if (trimmed === "claude" || trimmed === "codex" || trimmed === "gemini") {
+      next.providerTarget = trimmed;
+    }
+  }
+  if (typeof pacing.role === "string") {
+    const trimmed = pacing.role.trim().toLowerCase();
+    if (trimmed === "maintenance" || trimmed === "report" || trimmed === "review") {
+      next.role = trimmed;
+    }
+  }
+  return Object.keys(next).length > 0 ? next : null;
+}
+
 function unwrapJob(raw: UnknownRecord) {
   if (isRecord(raw.data)) {
     return raw.data;
@@ -394,6 +411,22 @@ export function normalizeCronJobInput(
 
   if (isRecord(base.delivery)) {
     next.delivery = coerceDelivery(base.delivery);
+  }
+  if (base.pacing === null) {
+    if (options.applyDefaults) {
+      delete next.pacing;
+    } else {
+      next.pacing = null;
+    }
+  } else if (isRecord(base.pacing)) {
+    const pacing = coercePacing(base.pacing);
+    if (pacing) {
+      next.pacing = pacing;
+    } else {
+      delete next.pacing;
+    }
+  } else if ("pacing" in base) {
+    delete next.pacing;
   }
 
   if ("isolation" in next) {

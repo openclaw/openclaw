@@ -99,6 +99,7 @@ function isTextOnlyAction(value: ZulipModelPickerRender | TextOnlyAction): value
 function buildProvidersRender(params: {
   modelData: ModelsProviderData;
   introText?: string;
+  allowedUserIds?: number[];
 }): ZulipModelPickerRender | TextOnlyAction {
   const providerInfos = buildProviderInfo(params.modelData);
   if (providerInfos.length === 0) {
@@ -110,7 +111,12 @@ function buildProvidersRender(params: {
       : "Select a provider:",
     spec: readZulipComponentSpec({
       heading: "Model Providers",
-      buttons: buildProviderKeyboard(providerInfos),
+      buttons: buildProviderKeyboard(providerInfos).map((row) =>
+        row.map((button) => ({
+          ...button,
+          allowedUsers: params.allowedUserIds,
+        })),
+      ),
     }),
   };
 }
@@ -128,6 +134,7 @@ export function buildZulipModelPickerReply(params: {
           text: button.label,
           callback_data: button.callbackData,
           style: button.style,
+          allowed_users: button.allowedUsers,
         })),
       },
     },
@@ -138,11 +145,13 @@ export async function buildZulipModelPickerProvidersReply(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   introText?: string;
+  allowedUserIds?: number[];
 }): Promise<ReplyPayload | null> {
   const modelData = await buildModelsProviderData(params.cfg, params.agentId);
   const render = buildProvidersRender({
     modelData,
     introText: params.introText,
+    allowedUserIds: params.allowedUserIds,
   });
   if (isTextOnlyAction(render)) {
     return { text: render.text };
@@ -156,6 +165,7 @@ export async function buildZulipModelPickerModelsReply(params: {
   sessionKey?: string;
   provider: string;
   page: number;
+  allowedUserIds?: number[];
 }): Promise<ReplyPayload> {
   const modelData = await buildModelsProviderData(params.cfg, params.agentId);
   const render = buildModelsRender({
@@ -165,6 +175,7 @@ export async function buildZulipModelPickerModelsReply(params: {
     provider: params.provider,
     page: params.page,
     modelData,
+    allowedUserIds: params.allowedUserIds,
   });
   if (isTextOnlyAction(render)) {
     return { text: render.text };
@@ -179,12 +190,14 @@ function buildModelsRender(params: {
   provider: string;
   page: number;
   modelData: ModelsProviderData;
+  allowedUserIds?: number[];
 }): ZulipModelPickerRender | TextOnlyAction {
   const modelSet = params.modelData.byProvider.get(params.provider);
   if (!modelSet || modelSet.size === 0) {
     return buildProvidersRender({
       modelData: params.modelData,
       introText: `Unknown provider: ${params.provider}`,
+      allowedUserIds: params.allowedUserIds,
     });
   }
 
@@ -215,7 +228,12 @@ function buildModelsRender(params: {
         currentPage: safePage,
         totalPages,
         pageSize,
-      }),
+      }).map((row) =>
+        row.map((button) => ({
+          ...button,
+          allowedUsers: params.allowedUserIds,
+        })),
+      ),
     }),
   };
 }
@@ -225,6 +243,7 @@ export async function resolveZulipModelPickerCallbackAction(params: {
   callbackData?: string | null;
   agentId?: string;
   sessionKey?: string;
+  allowedUserIds?: number[];
 }): Promise<ZulipModelPickerCallbackAction | null> {
   const callback = parseModelCallbackData(params.callbackData ?? "");
   if (!callback) {
@@ -233,7 +252,7 @@ export async function resolveZulipModelPickerCallbackAction(params: {
 
   const modelData = await buildModelsProviderData(params.cfg, params.agentId);
   if (callback.type === "providers" || callback.type === "back") {
-    const render = buildProvidersRender({ modelData });
+    const render = buildProvidersRender({ modelData, allowedUserIds: params.allowedUserIds });
     return isTextOnlyAction(render) ? render : { kind: "render", render };
   }
 
@@ -245,6 +264,7 @@ export async function resolveZulipModelPickerCallbackAction(params: {
       provider: callback.provider,
       page: callback.page,
       modelData,
+      allowedUserIds: params.allowedUserIds,
     });
     return isTextOnlyAction(render) ? render : { kind: "render", render };
   }
@@ -258,6 +278,7 @@ export async function resolveZulipModelPickerCallbackAction(params: {
     const render = buildProvidersRender({
       modelData,
       introText: `Could not resolve model "${selection.model}".`,
+      allowedUserIds: params.allowedUserIds,
     });
     return isTextOnlyAction(render) ? render : { kind: "render", render };
   }

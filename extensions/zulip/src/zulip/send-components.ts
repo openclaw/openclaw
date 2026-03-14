@@ -19,6 +19,7 @@ export type ZulipComponentSendOpts = {
   replyToTopic?: string;
   sessionKey?: string;
   agentId?: string;
+  callbackExpiresAtMs?: number;
 };
 
 function isHttpUrl(value: string): boolean {
@@ -158,9 +159,10 @@ export async function sendZulipComponentMessage(
           widgetContent: JSON.stringify(buildResult.widgetContent),
         });
 
-  registerZulipComponentEntries({
+  await registerZulipComponentEntries({
     entries: buildResult.entries,
     messageId: response.id,
+    callbackExpiresAtMs: opts.callbackExpiresAtMs,
   });
 
   core.channel.activity.record({

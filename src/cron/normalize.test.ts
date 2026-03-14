@@ -233,6 +233,29 @@ describe("normalizeCronJobCreate", () => {
     expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
   });
 
+  it("normalizes top-level pacing metadata", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "paced",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+      pacing: {
+        providerTarget: " GeMiNi ",
+        role: " Maintenance ",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.pacing).toEqual({
+      providerTarget: "gemini",
+      role: "maintenance",
+    });
+  });
+
   it("normalizes delivery accountId and strips blanks", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "delivery account",
@@ -462,5 +485,38 @@ describe("normalizeCronJobPatch", () => {
 
     const schedule = normalized.schedule as Record<string, unknown>;
     expect(schedule.staggerMs).toBe(30_000);
+  });
+
+  it("strips invalid pacing provider values in patches while preserving valid roles", () => {
+    const normalized = normalizeCronJobPatch({
+      pacing: {
+        providerTarget: "other",
+        role: " Review ",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.pacing).toEqual({
+      role: "review",
+    });
+  });
+
+  it("accepts gemini pacing provider values in patches", () => {
+    const normalized = normalizeCronJobPatch({
+      pacing: {
+        providerTarget: " GeMiNi ",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.pacing).toEqual({
+      providerTarget: "gemini",
+    });
+  });
+
+  it("preserves null pacing patches so callers can clear metadata", () => {
+    const normalized = normalizeCronJobPatch({
+      pacing: null,
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.pacing).toBeNull();
   });
 });
