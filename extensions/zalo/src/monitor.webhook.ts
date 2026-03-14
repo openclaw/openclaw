@@ -15,8 +15,8 @@ import {
   withResolvedWebhookRequestPipeline,
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
+  resolveClientIp,
 } from "openclaw/plugin-sdk/zalo";
-import { resolveClientIp } from "../../../src/gateway/net.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.js";
