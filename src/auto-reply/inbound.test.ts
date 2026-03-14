@@ -320,16 +320,6 @@ describe("inbound dedupe", () => {
       ),
     ).toBe(true);
   });
-          MessageThreadId: "42",
-        },
-        { now: 200 },
-      ),
-    ).toBe(true);
-  });
-        { now: 200 },
-      ),
-    ).toBe(true);
-  });
 });
 
 describe("createInboundDebouncer", () => {
