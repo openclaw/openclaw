@@ -44,6 +44,33 @@ struct ExecuTorchTalkTextDeltaTests {
         #expect(merged == "open the finder")
     }
 
+    @Test func `merge replaces revised full hypothesis instead of concatenating`() {
+        let merged = TalkModeRuntime._testMergeTranscriptForFinalize(
+            base: "Could you please open it?",
+            tail: "Could you please open the fine?")
+        #expect(merged == "Could you please open the fine?")
+    }
+
+    @Test func `merge keeps longer stable phrase when revision regresses`() {
+        let merged = TalkModeRuntime._testMergeTranscriptForFinalize(
+            base: "Did you please open the finder?",
+            tail: "Open the finder.")
+        #expect(merged == "Did you please open the finder?")
+    }
+
+    @Test func `merge chain avoids accumulating competing hypotheses`() {
+        var merged = TalkModeRuntime._testMergeTranscriptForFinalize(
+            base: "Could you please open it?",
+            tail: "Could you please open the fine?")
+        merged = TalkModeRuntime._testMergeTranscriptForFinalize(
+            base: merged,
+            tail: "Did you please open the finder?")
+        merged = TalkModeRuntime._testMergeTranscriptForFinalize(
+            base: merged,
+            tail: "Open the finder.")
+        #expect(merged == "Did you please open the finder?")
+    }
+
     @Test func `execuTorch silence window enforces safer minimum`() {
         let effective = TalkModeRuntime._testEffectiveSilenceWindow(
             configured: 0.7,

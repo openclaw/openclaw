@@ -908,6 +908,9 @@ actor TalkModeRuntime {
         if overlap > 0 {
             return baseTrimmed + String(tailTrimmed.dropFirst(overlap))
         }
+        if Self.shouldTreatAsCompetingHypothesis(base: baseTrimmed, tail: tailTrimmed) {
+            return Self.preferHypothesis(base: baseTrimmed, tail: tailTrimmed)
+        }
         return baseTrimmed + " " + tailTrimmed
     }
 
@@ -922,6 +925,58 @@ actor TalkModeRuntime {
             }
         }
         return 0
+    }
+
+    /// Parakeet polling can emit revised full hypotheses, not just append-only tails.
+    /// Treat similar full phrases as competing alternatives and choose one instead of concatenating.
+    private static func shouldTreatAsCompetingHypothesis(base: String, tail: String) -> Bool {
+        let baseTokens = Self.normalizedTokens(base)
+        let tailTokens = Self.normalizedTokens(tail)
+        guard baseTokens.count >= 3, tailTokens.count >= 3 else { return false }
+
+        let similarity = Self.tokenJaccardSimilarity(baseTokens, tailTokens)
+        if similarity >= 0.35 { return true }
+        return Self.looksCompleteUtterance(base) && Self.looksCompleteUtterance(tail)
+    }
+
+    private static func preferHypothesis(base: String, tail: String) -> String {
+        let baseTokens = Self.normalizedTokens(base)
+        let tailTokens = Self.normalizedTokens(tail)
+        let similarity = Self.tokenJaccardSimilarity(baseTokens, tailTokens)
+
+        // Favor richer hypotheses, but avoid replacing a stable long phrase with a shorter regression.
+        if tailTokens.count >= baseTokens.count + 2 {
+            return tail
+        }
+        if baseTokens.count >= tailTokens.count + 2, similarity >= 0.30 {
+            return base
+        }
+        return tail
+    }
+
+    private static func normalizedTokens(_ value: String) -> [String] {
+        value
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+
+    private static func tokenJaccardSimilarity(_ lhs: [String], _ rhs: [String]) -> Double {
+        let leftSet = Set(lhs)
+        let rightSet = Set(rhs)
+        let union = leftSet.union(rightSet)
+        guard !union.isEmpty else { return 0 }
+        let intersection = leftSet.intersection(rightSet)
+        return Double(intersection.count) / Double(union.count)
+    }
+
+    private static func looksCompleteUtterance(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if let last = trimmed.unicodeScalars.last, CharacterSet(charactersIn: ".!?").contains(last) {
+            return true
+        }
+        return Self.normalizedTokens(trimmed).count >= 5
     }
 
     func stopSpeaking(reason: TalkStopReason) async {
