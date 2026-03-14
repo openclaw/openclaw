@@ -575,6 +575,7 @@ export function isCronSessionKey(key: string): boolean {
 type SessionOptionEntry = {
   key: string;
   label: string;
+  scopeLabel: string;
   title: string;
 };
 
@@ -625,10 +626,12 @@ export function resolveSessionOptionGroups(
           resolveAgentGroupLabel(state, parsed.agentId),
         )
       : ensureGroup("other", "Other Sessions");
+    const scopeLabel = parsed?.rest?.trim() || key;
     const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
     group.options.push({
       key,
       label,
+      scopeLabel,
       title: key,
     });
   };
@@ -643,6 +646,19 @@ export function resolveSessionOptionGroups(
     addOption(row.key);
   }
   addOption(sessionKey);
+
+  for (const group of groups.values()) {
+    const counts = new Map<string, number>();
+    for (const option of group.options) {
+      counts.set(option.label, (counts.get(option.label) ?? 0) + 1);
+    }
+    for (const option of group.options) {
+      if ((counts.get(option.label) ?? 0) > 1 && option.scopeLabel !== option.label) {
+        option.label = `${option.label} · ${option.scopeLabel}`;
+      }
+    }
+  }
+
   return Array.from(groups.values());
 }
 
@@ -673,18 +689,14 @@ function resolveSessionScopedOptionLabel(
   if (!row) {
     return base;
   }
-  const displayName =
-    typeof row.displayName === "string" && row.displayName.trim().length > 0
-      ? row.displayName.trim()
-      : null;
-  const label = typeof row.label === "string" ? row.label.trim() : "";
-  const showDisplayName = Boolean(
-    displayName && displayName !== key && displayName !== label && displayName !== base,
-  );
-  if (!showDisplayName) {
-    return base;
+
+  const label = row.label?.trim() || "";
+  const displayName = row.displayName?.trim() || "";
+  if ((label && label !== key) || (displayName && displayName !== key)) {
+    return resolveSessionDisplayName(key, row);
   }
-  return `${base} · ${displayName}`;
+
+  return base;
 }
 
 type ThemeOption = { id: ThemeName; label: string; icon: string };

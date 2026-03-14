@@ -230,12 +230,14 @@ function loadPackageJson(): PackageJson {
 
 function main(): number {
   const pkg = loadPackageJson();
+  const now = new Date();
   const metadataErrors = collectReleasePackageMetadataErrors(pkg);
   const tagErrors = collectReleaseTagErrors({
     packageVersion: pkg.version ?? "",
     releaseTag: process.env.RELEASE_TAG ?? "",
     releaseSha: process.env.RELEASE_SHA,
     releaseMainRef: process.env.RELEASE_MAIN_REF,
+    now,
   });
   const errors = [...metadataErrors, ...tagErrors];
 
@@ -249,9 +251,7 @@ function main(): number {
   const parsedVersion = parseReleaseVersion(pkg.version ?? "");
   const channel = parsedVersion?.channel ?? "unknown";
   const dayDistance =
-    parsedVersion === null
-      ? "unknown"
-      : String(utcCalendarDayDistance(parsedVersion.date, new Date()));
+    parsedVersion === null ? "unknown" : String(utcCalendarDayDistance(parsedVersion.date, now));
   console.log(
     `openclaw-npm-release-check: validated ${channel} release ${pkg.version} (${dayDistance} day UTC delta).`,
   );

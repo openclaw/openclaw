@@ -5,9 +5,9 @@
     "declarationMap": false,
     "emitDeclarationOnly": true,
     "noEmit": false,
-    "noEmitOnError": true,
+    "noEmitOnError": false,
     "outDir": "dist/plugin-sdk",
-    "rootDir": "src",
+    "rootDir": ".",
     "tsBuildInfoFile": "dist/plugin-sdk/.tsbuildinfo"
   },
   "include": [

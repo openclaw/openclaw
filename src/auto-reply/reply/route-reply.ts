@@ -7,13 +7,13 @@
  * across multiple providers.
  */
 
+import { parseSlackBlocksInput } from "../../../extensions/slack/src/blocks-input.js";
+import { isSlackInteractiveRepliesEnabled } from "../../../extensions/slack/src/interactive-replies.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { parseSlackBlocksInput } from "../../slack/blocks-input.js";
-import { isSlackInteractiveRepliesEnabled } from "../../slack/interactive-replies.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
