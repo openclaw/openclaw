@@ -666,7 +666,7 @@ export function attachGatewayWsMessageHandler(params: {
         // Browser-based clients (Control UI / webchat) are excluded because
         // they have separate security requirements (origin checks, device
         // identity via SubtleCrypto).
-        if (!authOk && isLocalClient && device && !hasBrowserOriginHeader) {
+        if (!authOk && !hasSharedAuth && isLocalClient && device && !hasBrowserOriginHeader) {
           authOk = true;
           authMethod = "none";
         }
