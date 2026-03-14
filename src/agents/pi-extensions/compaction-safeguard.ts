@@ -624,11 +624,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "was not called and model was not passed through runtime registry.",
         );
       }
-      setCompactionSafeguardCancelReason(
-        ctx.sessionManager,
-        "Compaction safeguard could not resolve a summarization model.",
-      );
-      return { cancel: true };
+      return undefined;
     }
 
     let requestAuth: ResolvedRequestAuth;
@@ -641,35 +637,23 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       log.warn(
-        `Compaction safeguard: request credentials unavailable; cancelling compaction. ${error}`,
+        `Compaction safeguard: request credentials unavailable; falling back to built-in compaction. ${error}`,
       );
-      setCompactionSafeguardCancelReason(
-        ctx.sessionManager,
-        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${error}`,
-      );
-      return { cancel: true };
+      return undefined;
     }
     if (!requestAuth.ok) {
       log.warn(
-        `Compaction safeguard: request credential resolution failed for ${model.provider}/${model.id}: ${requestAuth.error}`,
+        `Compaction safeguard: request credential resolution failed for ${model.provider}/${model.id}; falling back to built-in compaction. ${requestAuth.error}`,
       );
-      setCompactionSafeguardCancelReason(
-        ctx.sessionManager,
-        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${requestAuth.error}`,
-      );
-      return { cancel: true };
+      return undefined;
     }
     const apiKey = requestAuth.apiKey;
     const headers = requestAuth.headers;
     if (!apiKey && !headers) {
       log.warn(
-        "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
+        "Compaction safeguard: no request credentials available; falling back to built-in compaction.",
       );
-      setCompactionSafeguardCancelReason(
-        ctx.sessionManager,
-        `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
-      );
-      return { cancel: true };
+      return undefined;
     }
 
     try {
