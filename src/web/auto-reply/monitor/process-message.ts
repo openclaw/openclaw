@@ -11,6 +11,7 @@ import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-contex
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { toLocationContext } from "../../../channels/location.js";
+import { resolveWhatsAppGroupSystemPrompt } from "../../../channels/plugins/whatsapp-shared.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
 import { resolveInboundSessionEnvelopeContext } from "../../../channels/session-envelope.js";
 import type { loadConfig } from "../../../config/config.js";
@@ -296,6 +297,16 @@ export async function processMessage(params: {
         )
       : undefined;
 
+  // Resolve combined system prompt (account-level + group-level if applicable)
+  const groupSystemPrompt =
+    params.msg.chatType === "group"
+      ? resolveWhatsAppGroupSystemPrompt({
+          cfg: params.cfg,
+          accountId: params.route.accountId,
+          groupId: conversationId,
+        })
+      : undefined;
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: params.msg.body,
@@ -326,6 +337,7 @@ export async function processMessage(params: {
     SenderE164: params.msg.senderE164,
     CommandAuthorized: commandAuthorized,
     WasMentioned: params.msg.wasMentioned,
+    GroupSystemPrompt: groupSystemPrompt,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
     Provider: "whatsapp",
     Surface: "whatsapp",

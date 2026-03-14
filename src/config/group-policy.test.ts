@@ -3,6 +3,32 @@ import type { OpenClawConfig } from "./config.js";
 import { resolveChannelGroupPolicy, resolveToolsBySender } from "./group-policy.js";
 
 describe("resolveChannelGroupPolicy", () => {
+  it("allows groups when account-level groupPolicy=allowlist and account groupAllowFrom is set (senderFilterBypass)", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          accounts: {
+            test: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+1234"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      accountId: "test",
+      groupId: "123@g.us",
+      hasGroupAllowFrom: true,
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(true);
+  });
   it("fails closed when groupPolicy=allowlist and groups are missing", () => {
     const cfg = {
       channels: {
@@ -128,6 +154,133 @@ describe("resolveChannelGroupPolicy", () => {
 
     expect(policy.allowlistEnabled).toBe(true);
     expect(policy.allowed).toBe(false);
+  });
+
+  it("account-level groups override root-level groups", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groups: {
+            "root-group@g.us": { requireMention: false },
+          },
+          accounts: {
+            work: {
+              groups: {
+                "account-group@g.us": { requireMention: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    // Account group is allowed
+    const accountGroup = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      accountId: "work",
+      groupId: "account-group@g.us",
+    });
+    expect(accountGroup.allowed).toBe(true);
+    expect(accountGroup.groupConfig).toEqual({ requireMention: true });
+
+    // Root group is NOT visible when account defines its own groups
+    const rootGroupViaAccount = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      accountId: "work",
+      groupId: "root-group@g.us",
+    });
+    expect(rootGroupViaAccount.allowed).toBe(false);
+
+    // Root group is still visible without accountId
+    const rootGroupDirect = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: "root-group@g.us",
+    });
+    expect(rootGroupDirect.allowed).toBe(true);
+  });
+
+  it("falls back to root-level groups when account defines no groups", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groups: {
+            "shared-group@g.us": { requireMention: false },
+          },
+          accounts: {
+            personal: {
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      accountId: "personal",
+      groupId: "shared-group@g.us",
+    });
+    expect(policy.allowed).toBe(true);
+    expect(policy.groupConfig).toEqual({ requireMention: false });
+  });
+
+  it("allows groups when account-level groupPolicy=allowlist and account groupAllowFrom is set, with no root policy", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          accounts: {
+            test: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+1234"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      accountId: "test",
+      groupId: "123@g.us",
+      hasGroupAllowFrom: true,
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(true);
+  });
+
+  it("allows groups when account-level groupPolicy=allowlist and account groupAllowFrom is set, overriding root policy", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "disabled",
+          accounts: {
+            test: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+1234"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      accountId: "test",
+      groupId: "123@g.us",
+      hasGroupAllowFrom: true,
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(true);
   });
 });
 

@@ -23,8 +23,8 @@ Translation: allowlisted senders can trigger OpenClaw by mentioning it.
 
 > TL;DR
 >
-> - **DM access** is controlled by `*.allowFrom`.
-> - **Group access** is controlled by `*.groupPolicy` + allowlists (`*.groups`, `*.groupAllowFrom`).
+> - **DM access** is controlled by `*.allowFrom` (root or account-level).
+> - **Group access** is controlled by `*.groupPolicy` + allowlists (`*.groups`, `*.groupAllowFrom`), including account-level `groupAllowFrom`/`allowFrom`.
 > - **Reply triggering** is controlled by mention gating (`requireMention`, `/activation`).
 
 Quick flow (what happens to a group message):
@@ -40,12 +40,12 @@ otherwise -> reply
 
 If you want...
 
-| Goal                                         | What to set                                                |
-| -------------------------------------------- | ---------------------------------------------------------- |
-| Allow all groups but only reply on @mentions | `groups: { "*": { requireMention: true } }`                |
-| Disable all group replies                    | `groupPolicy: "disabled"`                                  |
-| Only specific groups                         | `groups: { "<group-id>": { ... } }` (no `"*"` key)         |
-| Only you can trigger in groups               | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Goal                                         | What to set                                                                        |
+| -------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Allow all groups but only reply on @mentions | `groups: { "*": { requireMention: true } }`                                        |
+| Disable all group replies                    | `groupPolicy: "disabled"`                                                          |
+| Only specific groups                         | `groups: { "<group-id>": { ... } }` (no `"*"` key)                                 |
+| Only you can trigger in groups               | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` (root or account-level) |
 
 ## Session keys
 
@@ -127,7 +127,7 @@ Related:
 
 ## Group policy
 
-Control how group/room messages are handled per channel:
+Control how group/room messages are handled per channel (root or account-level):
 
 ```json5
 {

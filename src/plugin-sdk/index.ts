@@ -760,7 +760,9 @@ export {
 } from "../channels/plugins/normalize/whatsapp.js";
 export {
   resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppGroupSystemPrompt,
   resolveWhatsAppMentionStripPatterns,
+  type WhatsAppGroupSystemPromptParams,
 } from "../channels/plugins/whatsapp-shared.js";
 export { collectWhatsAppStatusIssues } from "../channels/plugins/status-issues/whatsapp.js";
 
