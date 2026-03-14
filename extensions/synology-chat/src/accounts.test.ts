@@ -138,6 +138,19 @@ describe("resolveAccount", () => {
     expect(account.rateLimitPerMinute).toBe(0);
   });
 
+  it("respects SYNOLOGY_RATE_LIMIT from env var", () => {
+    process.env.SYNOLOGY_RATE_LIMIT = "100";
+    const cfg = { channels: { "synology-chat": {} } };
+    const account = resolveAccount(cfg);
+    expect(account.rateLimitPerMinute).toBe(100);
+  });
+
+  it("defaults rateLimitPerMinute to 30 when env var not set", () => {
+    const cfg = { channels: { "synology-chat": {} } };
+    const account = resolveAccount(cfg);
+    expect(account.rateLimitPerMinute).toBe(30);
+  });
+
   it("falls back to 30 for malformed SYNOLOGY_RATE_LIMIT values", () => {
     process.env.SYNOLOGY_RATE_LIMIT = "0abc";
     const cfg = { channels: { "synology-chat": {} } };
