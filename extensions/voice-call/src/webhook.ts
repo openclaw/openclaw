@@ -174,13 +174,13 @@ export class VoiceCallWebhookServer {
           (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
         }
 
-        // Speak initial message if one was provided when call was initiated
-        // Use setTimeout to allow stream setup to complete
-        setTimeout(() => {
-          this.manager.speakInitialMessage(callId).catch((err) => {
-            console.warn(`[voice-call] Failed to speak initial message:`, err);
-          });
-        }, 500);
+        // Speak initial message now that the media stream is connected.
+        // This must happen here (not on call.answered) because TTS audio
+        // sent before the stream is ready gets dropped, causing the
+        // conversation to appear to drop after ~1s.
+        this.manager.speakInitialMessage(callId).catch((err) => {
+          console.warn(`[voice-call] Failed to speak initial message:`, err);
+        });
       },
       onDisconnect: (callId) => {
         console.log(`[voice-call] Media stream disconnected: ${callId}`);

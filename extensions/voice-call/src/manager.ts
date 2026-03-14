@@ -269,6 +269,12 @@ export class CallManager {
     processManagerEvent(this.getContext(), event);
   }
 
+  /**
+   * Speak the initial message on call.answered as a fallback.
+   * For streaming providers, onConnect may also trigger speakInitialMessage;
+   * the dedup in speakInitialMessage (deletes metadata.initialMessage after
+   * first speak) prevents double-firing.
+   */
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
     const initialMessage =
       typeof call.metadata?.initialMessage === "string" ? call.metadata.initialMessage.trim() : "";
