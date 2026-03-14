@@ -850,7 +850,7 @@ export function extractRetryAfterMs(raw: string | undefined | null): number | un
     return undefined;
   }
   const m = raw.match(
-    /(?:retry[_ ]?after|try again in)[:\s]*(\d+(?:\.\d+)?)\s*(?:s(?:ec(?:ond)?s?)?|ms)?/i,
+    /(?:retry[_ ]?after|try again in)[:\s]*(\d+(?:\.\d+)?)\s*(ms|s(?:ec(?:ond)?s?)?)?/i,
   );
   if (!m) {
     return undefined;
@@ -859,8 +859,9 @@ export function extractRetryAfterMs(raw: string | undefined | null): number | un
   if (!Number.isFinite(value) || value <= 0) {
     return undefined;
   }
-  // If the value looks like milliseconds (> 500), use as-is; otherwise treat as seconds
-  const ms = value > 500 ? value : value * 1000;
+  // Dispatch on the captured unit group — default to seconds when no unit is present
+  const unit = (m[2] ?? "s").toLowerCase();
+  const ms = unit === "ms" ? value : value * 1_000;
   // Clamp between 1s and 120s
   return Math.min(Math.max(ms, 1_000), 120_000);
 }
