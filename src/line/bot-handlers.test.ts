@@ -1,5 +1,6 @@
 import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LineAccountConfig } from "./types.js";
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
@@ -79,7 +80,7 @@ function createReplayMessageEvent(params: {
 }) {
   return {
     type: "message",
-    message: { id: params.messageId, type: "text", text: "hello" },
+    message: { id: params.messageId, type: "text", text: "hello", quoteToken: "quote-token" },
     replyToken: "reply-token",
     timestamp: Date.now(),
     source: { type: "group", groupId: params.groupId, userId: params.userId },
@@ -111,8 +112,8 @@ function createTestMessageEvent(params: {
 
 function createLineWebhookTestContext(params: {
   processMessage: LineWebhookContext["processMessage"];
-  groupPolicy?: "open";
-  dmPolicy?: "open";
+  groupPolicy?: LineAccountConfig["groupPolicy"];
+  dmPolicy?: LineAccountConfig["dmPolicy"];
   requireMention?: boolean;
   groupHistories?: Map<string, import("../auto-reply/reply/history.js").HistoryEntry[]>;
   replayCache?: ReturnType<typeof createLineWebhookReplayCache>;
@@ -157,7 +158,7 @@ function createOpenGroupReplayContext(
 }
 
 async function expectGroupMessageBlocked(params: {
-  processMessage: ReturnType<typeof vi.fn>;
+  processMessage: LineWebhookContext["processMessage"];
   event: MessageEvent;
   context: Parameters<typeof handleLineWebhookEvents>[1];
 }) {
@@ -182,7 +183,7 @@ async function expectRequireMentionGroupMessageProcessed(event: MessageEvent) {
 
 async function startInflightReplayDuplicate(params: {
   event: MessageEvent;
-  processMessage: ReturnType<typeof vi.fn>;
+  processMessage: LineWebhookContext["processMessage"];
 }) {
   const context = createOpenGroupReplayContext(
     params.processMessage,
@@ -248,7 +249,7 @@ describe("handleLineWebhookEvents", () => {
     await expectGroupMessageBlocked({
       processMessage,
       event: createTestMessageEvent({
-        message: { id: "m2", type: "text", text: "hi" },
+        message: { id: "m2", type: "text", text: "hi", quoteToken: "quote-token" },
         source: { type: "group", groupId: "group-1", userId: "user-2" },
         webhookEventId: "evt-2",
       }),
@@ -373,7 +374,7 @@ describe("handleLineWebhookEvents", () => {
     await expectGroupMessageBlocked({
       processMessage,
       event: createTestMessageEvent({
-        message: { id: "m5b", type: "text", text: "hi" },
+        message: { id: "m5b", type: "text", text: "hi", quoteToken: "quote-token" },
         source: { type: "group", groupId: "group-1", userId: "user-5" },
         webhookEventId: "evt-5b",
       }),
