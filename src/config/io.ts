@@ -627,8 +627,14 @@ function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console
   }
   if (cmp < 0) {
     logger.warn(
-      `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
+      `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}. ` +
+        `This can cause silent delivery failures for some model APIs. ` +
+        `Auto-downstamping meta.lastTouchedVersion to ${VERSION}. ` +
+        `To fix permanently: openclaw config set meta.lastTouchedVersion ${VERSION}`,
     );
+    if (cfg.meta) {
+      cfg.meta.lastTouchedVersion = VERSION;
+    }
   }
 }
 
