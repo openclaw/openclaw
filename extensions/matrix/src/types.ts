@@ -69,6 +69,8 @@ export type MatrixConfig = {
   allowlistOnly?: boolean;
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
+  /** Top-level alias for dm.allowFrom: allowlist for DM senders (matrix user IDs or "*"). */
+  allowFrom?: Array<string | number>;
   /** Allowlist for group senders (matrix user IDs). */
   groupAllowFrom?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all). */
