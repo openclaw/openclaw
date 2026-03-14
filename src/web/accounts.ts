@@ -147,7 +147,7 @@ export function resolveWhatsAppAccount(params: {
     ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,
     groups: accountCfg?.groups ?? rootCfg?.groups,
     debounceMs: accountCfg?.debounceMs ?? rootCfg?.debounceMs,
-    rawInboundFeedPath: accountCfg?.rawInboundFeedPath,
+    rawInboundFeedPath: accountCfg?.rawInboundFeedPath ?? rootCfg?.rawInboundFeedPath,
   };
 }
 

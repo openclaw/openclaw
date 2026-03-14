@@ -38,6 +38,7 @@ export type MockSock = {
   sendMessage: AnyMockFn;
   readMessages: AnyMockFn;
   updateMediaMessage: AnyMockFn;
+  groupMetadata?: AnyMockFn;
   logger: Record<string, unknown>;
   signalRepository: {
     lidMapping: {
@@ -88,6 +89,7 @@ vi.mock("../media/store.js", () => ({
     size: 1,
     contentType: "image/jpeg",
   }),
+  MEDIA_MAX_BYTES: 5 * 1024 * 1024,
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {

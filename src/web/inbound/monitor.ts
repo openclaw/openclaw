@@ -416,6 +416,8 @@ export async function monitorWebInbox(options: {
           const rawBody = extractText(msg.message ?? undefined) || "";
           const remoteJid = msg.key?.remoteJid;
           const rawMsgId = msg.key?.id;
+          // Share the same dedupe cache as normal processing, but with a `raw:` prefix
+          // to distinguish raw hook calls. This is acceptable for expected message volume.
           const rawDedupeKey = rawMsgId
             ? `raw:${options.accountId}:${remoteJid}:${rawMsgId}`
             : undefined;

@@ -211,7 +211,7 @@ export async function monitorWebChannel(
       },
       onRawInbound: account.rawInboundFeedPath
         ? (msg) => {
-            const feedPath = account.rawInboundFeedPath;
+            const feedPath = account.rawInboundFeedPath!;
             try {
               const line = JSON.stringify(msg) + "\n";
               import("node:fs/promises")
