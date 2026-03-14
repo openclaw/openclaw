@@ -1496,6 +1496,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streaming":
     'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
+  "channels.discord.previewSplitOnAssistantBoundary":
+    'Rotate Discord preview streaming to a new preview message when a new assistant message starts or a reasoning block ends. Default: true when channels.discord.streaming="block", otherwise false.',
   "channels.discord.streamMode":
     "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
   "channels.discord.draftChunk.minChars":

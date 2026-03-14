@@ -265,6 +265,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       textChunkLimit: 2000,
       chunkMode: "length", // length | newline
       streaming: "off", // off | partial | block | progress (progress maps to partial on Discord)
+      previewSplitOnAssistantBoundary: false, // default: true when streaming=block, else false
       maxLinesPerMessage: 17,
       ui: {
         components: {
@@ -322,6 +323,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `channels.discord.voice.daveEncryption` and `channels.discord.voice.decryptionFailureTolerance` pass through to `@discordjs/voice` DAVE options (`true` and `24` by default).
 - OpenClaw additionally attempts voice receive recovery by leaving/rejoining a voice session after repeated decrypt failures.
 - `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
+- `channels.discord.previewSplitOnAssistantBoundary` rotates preview streaming to a new preview message when a new assistant message starts or a reasoning block ends. Defaults to `true` for `streaming: "block"` and `false` otherwise.
 - `channels.discord.autoPresence` maps runtime availability to bot presence (healthy => online, degraded => idle, exhausted => dnd) and allows optional status text overrides.
 - `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 

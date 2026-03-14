@@ -22,7 +22,10 @@ import {
 } from "../../channels/status-reactions.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
-import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-streaming.js";
+import {
+  resolveDiscordPreviewSplitOnAssistantBoundary,
+  resolveDiscordPreviewStreamMode,
+} from "../../config/discord-preview-streaming.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
@@ -476,7 +479,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     draftStream && discordStreamMode === "block"
       ? resolveDiscordDraftStreamingChunking(cfg, accountId)
       : undefined;
-  const shouldSplitPreviewMessages = discordStreamMode === "block";
+  const shouldSplitPreviewMessages = resolveDiscordPreviewSplitOnAssistantBoundary(discordConfig);
   const draftChunker = draftChunking ? new EmbeddedBlockChunker(draftChunking) : undefined;
   let lastPartialText = "";
   let draftText = "";

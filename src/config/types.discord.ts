@@ -255,6 +255,13 @@ export type DiscordAccountConfig = {
    */
   streaming?: DiscordStreamMode | boolean;
   /**
+   * Rotate Discord preview streaming to a new preview message when a new
+   * assistant message starts (for example after a tool call or reasoning block).
+   *
+   * Defaults to `true` for `streaming: "block"` and `false` otherwise.
+   */
+  previewSplitOnAssistantBoundary?: boolean;
+  /**
    * @deprecated Legacy key; migrated automatically to `streaming`.
    */
   streamMode?: "partial" | "block" | "off";

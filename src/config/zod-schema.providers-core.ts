@@ -473,6 +473,7 @@ export const DiscordAccountSchema = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     // Canonical streaming mode. Legacy aliases (`streamMode`, boolean `streaming`) are auto-mapped.
     streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
+    previewSplitOnAssistantBoundary: z.boolean().optional(),
     streamMode: z.enum(["partial", "block", "off"]).optional(),
     draftChunk: BlockStreamingChunkSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),

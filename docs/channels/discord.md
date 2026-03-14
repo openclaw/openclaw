@@ -579,6 +579,7 @@ Default slash command settings:
     - `progress` is accepted for cross-channel consistency and maps to `partial` on Discord.
     - `channels.discord.streamMode` is a legacy alias and is auto-migrated.
     - `partial` edits a single preview message as tokens arrive.
+    - `channels.discord.previewSplitOnAssistantBoundary` rotates preview streaming to a new preview message when a new assistant message starts or a reasoning block ends. It defaults to `true` for `streaming: "block"` and `false` otherwise.
     - `block` emits draft-sized chunks (use `draftChunk` to tune size and breakpoints).
 
     Example:
@@ -588,6 +589,19 @@ Default slash command settings:
   channels: {
     discord: {
       streaming: "partial",
+    },
+  },
+}
+```
+
+    To keep `partial` preview edits but start a new preview message at assistant boundaries:
+
+```json5
+{
+  channels: {
+    discord: {
+      streaming: "partial",
+      previewSplitOnAssistantBoundary: true,
     },
   },
 }
@@ -1200,7 +1214,7 @@ High-signal Discord fields:
 - inbound worker: `inboundWorker.runTimeoutMs`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
-- streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
+- streaming: `streaming` (legacy alias: `streamMode`), `previewSplitOnAssistantBoundary`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
   - `mediaMaxMb` caps outbound Discord uploads (default: `8MB`)
 - actions: `actions.*`

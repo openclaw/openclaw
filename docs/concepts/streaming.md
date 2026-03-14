@@ -145,7 +145,8 @@ Telegram:
 Discord:
 
 - Uses send + edit preview messages.
-- `block` mode uses draft chunking (`draftChunk`).
+- `partial` reuses a single preview message by default, but `channels.discord.previewSplitOnAssistantBoundary: true` rotates to a new preview message when a new assistant message starts or a reasoning block ends.
+- `block` mode uses draft chunking (`draftChunk`) and enables assistant-boundary preview rotation by default.
 - Preview streaming is skipped when Discord block streaming is explicitly enabled.
 
 Slack:

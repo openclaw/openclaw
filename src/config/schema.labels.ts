@@ -762,6 +762,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.commands.native": "Discord Native Commands",
   "channels.discord.commands.nativeSkills": "Discord Native Skill Commands",
   "channels.discord.streaming": "Discord Streaming Mode",
+  "channels.discord.previewSplitOnAssistantBoundary": "Discord Preview Split On Assistant Boundary",
   "channels.discord.streamMode": "Discord Stream Mode (Legacy)",
   "channels.discord.draftChunk.minChars": "Discord Draft Chunk Min Chars",
   "channels.discord.draftChunk.maxChars": "Discord Draft Chunk Max Chars",

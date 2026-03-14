@@ -637,6 +637,27 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("can force new preview messages on assistant boundaries in partial mode", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({ text: "Hello" });
+      await params?.replyOptions?.onAssistantMessageStart?.();
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: {
+        streamMode: "partial",
+        previewSplitOnAssistantBoundary: true,
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("strips reasoning tags from partial stream updates", async () => {
     const draftStream = createMockDraftStreamForTest();
 
