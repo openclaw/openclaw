@@ -1,0 +1,37 @@
+{
+  "id": "workspace-shield",
+  "name": "Workspace Shield",
+  "description": "Protects critical workspace files from accidental writes by the agent. Intercepts Write and Edit tool calls targeting protected files and blocks them with a helpful explanation.",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "protectedFiles": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "List of file paths (relative to workspace) to protect from writes. Example: [\"SOUL.md\", \"IDENTITY.md\", \"openclaw.json\"]"
+      },
+      "protectedPatterns": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Glob-like patterns for files to protect. Supports * and ** wildcards. Example: [\"*.env\", \"secrets/**\"]"
+      },
+      "allowReads": {
+        "type": "boolean",
+        "default": true,
+        "description": "Whether to allow Read operations on protected files (default: true). Set to false to also block reads."
+      },
+      "logViolations": {
+        "type": "boolean",
+        "default": true,
+        "description": "Whether to log blocked operations to a violations file."
+      },
+      "violationsPath": {
+        "type": "string",
+        "default": "shield-violations.jsonl",
+        "description": "Path (relative to workspace) for the violations log."
+      }
+    }
+  }
+}
