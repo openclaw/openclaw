@@ -62,6 +62,22 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Session history looks corrupted");
     expect(result).toContain("/new");
   });
+  it("returns a recovery hint for tool_use_id mismatch errors", () => {
+    const msg = makeAssistantError(
+      'tool_result block with tool_use_id "toolu_abc" not found in the immediately preceding assistant message',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Conversation history corruption detected");
+    expect(result).toContain("/new");
+  });
+  it("returns a recovery hint for unexpected tool_result block errors", () => {
+    const msg = makeAssistantError(
+      "unexpected tool_result block: no corresponding tool_use in the previous assistant turn",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Conversation history corruption detected");
+    expect(result).toContain("/new");
+  });
   it("handles JSON-wrapped role errors", () => {
     const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
     const result = formatAssistantErrorText(msg);

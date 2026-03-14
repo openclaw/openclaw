@@ -27,6 +27,15 @@ describe("sanitizeUserFacingText", () => {
     expect(result).toContain("Message ordering conflict");
   });
 
+  it("sanitizes tool_use/tool_result mismatch errors", () => {
+    const result = sanitizeUserFacingText(
+      'tool_result block with tool_use_id "toolu_xyz" has no corresponding tool_use',
+      { errorContext: true },
+    );
+    expect(result).toContain("Conversation history corruption detected");
+    expect(result).toContain("/new");
+  });
+
   it("sanitizes HTTP status errors with error hints", () => {
     expect(sanitizeUserFacingText("500 Internal Server Error", { errorContext: true })).toBe(
       "HTTP 500: Internal Server Error",

@@ -85,9 +85,7 @@ describe("i18n", () => {
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
     localStorage.setItem("openclaw.i18n.locale", "zh-CN");
     const fresh = await import("../lib/translate.ts");
-    await vi.waitFor(() => {
-      expect(fresh.i18n.getLocale()).toBe("zh-CN");
-    });
+    await fresh.i18n.ready;
     expect(fresh.i18n.getLocale()).toBe("zh-CN");
     expect(fresh.t("common.health")).toBe("健康状况");
   });

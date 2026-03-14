@@ -1,4 +1,4 @@
-import { LitElement } from "lit";
+import { LitElement, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
@@ -115,11 +115,21 @@ export class OpenClawApp extends LitElement {
   clientInstanceId = generateUUID();
   connectGeneration = 0;
   @state() settings: UiSettings = loadSettings();
+  @state() private localeReady = false;
   constructor() {
     super();
-    if (isSupportedLocale(this.settings.locale)) {
-      void i18n.setLocale(this.settings.locale);
-    }
+    const settingsLocale = isSupportedLocale(this.settings.locale)
+      ? i18n.setLocale(this.settings.locale)
+      : Promise.resolve();
+    Promise.all([i18n.ready, settingsLocale]).then(
+      () => {
+        this.localeReady = true;
+      },
+      () => {
+        // Locale load failed; render with the default locale.
+        this.localeReady = true;
+      },
+    );
   }
   @state() password = "";
   @state() loginShowGatewayToken = false;
@@ -716,6 +726,9 @@ export class OpenClawApp extends LitElement {
   }
 
   render() {
+    if (!this.localeReady) {
+      return nothing;
+    }
     return renderApp(this as unknown as AppViewState);
   }
 }
