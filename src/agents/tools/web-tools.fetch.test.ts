@@ -2,6 +2,7 @@ import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { makeFetchHeaders } from "./web-fetch.test-harness.js";
 import { createWebFetchTool } from "./web-tools.js";
 
 type MockResponse = {
@@ -13,18 +14,12 @@ type MockResponse = {
   json?: () => Promise<unknown>;
 };
 
-function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
-  return {
-    get: (key) => map[key.toLowerCase()] ?? null,
-  };
-}
-
 function htmlResponse(html: string, url = "https://example.com/"): MockResponse {
   return {
     ok: true,
     status: 200,
     url,
-    headers: makeHeaders({ "content-type": "text/html; charset=utf-8" }),
+    headers: makeFetchHeaders({ "content-type": "text/html; charset=utf-8" }),
     text: async () => html,
   };
 }
@@ -62,7 +57,7 @@ function textResponse(
     ok: true,
     status: 200,
     url,
-    headers: makeHeaders({ "content-type": contentType }),
+    headers: makeFetchHeaders({ "content-type": contentType }),
     text: async () => text,
   };
 }
@@ -77,7 +72,7 @@ function errorHtmlResponse(
     ok: false,
     status,
     url,
-    headers: contentType ? makeHeaders({ "content-type": contentType }) : makeHeaders({}),
+    headers: contentType ? makeFetchHeaders({ "content-type": contentType }) : makeFetchHeaders({}),
     text: async () => html,
   };
 }
@@ -125,7 +120,7 @@ function installPlainTextFetch(text: string) {
     Promise.resolve({
       ok: true,
       status: 200,
-      headers: makeHeaders({ "content-type": "text/plain" }),
+      headers: makeFetchHeaders({ "content-type": "text/plain" }),
       text: async () => text,
       url: requestUrl(input),
     } as Response),
@@ -215,7 +210,7 @@ describe("web_fetch extraction fallbacks", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        headers: makeHeaders({ "content-type": "text/plain" }),
+        headers: makeFetchHeaders({ "content-type": "text/plain" }),
         text: async () => longText,
         url: requestUrl(input),
       } as Response),
@@ -277,7 +272,7 @@ describe("web_fetch extraction fallbacks", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        headers: makeHeaders({ "content-type": "text/plain" }),
+        headers: makeFetchHeaders({ "content-type": "text/plain" }),
         text: async () => "proxy body",
         url: requestUrl(input),
       } as Response),
@@ -385,7 +380,7 @@ describe("web_fetch extraction fallbacks", () => {
       return Promise.resolve({
         ok: false,
         status: 403,
-        headers: makeHeaders({ "content-type": "text/html" }),
+        headers: makeFetchHeaders({ "content-type": "text/html" }),
         text: async () => "blocked",
       } as Response);
     });
