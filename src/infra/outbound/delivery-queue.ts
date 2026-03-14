@@ -429,6 +429,12 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
+  /message is too long/i,
+  /character limit exceeded/i,
+  // HTTP 4xx client errors are permanent — the request itself is invalid and
+  // retrying won't change the outcome.  Excluded: 401/403 (auth, retryable
+  // after token refresh), 408 (timeout), 429 (rate limit).
+  /\b(?:status(?:\s+code)?|HTTP)\s*:?\s*4(?!0[138]|29)\d{2}\b/i,
 ];
 
 export function isPermanentDeliveryError(error: string): boolean {
