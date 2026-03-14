@@ -15,9 +15,14 @@ export type CronHookContext = {
   error?: string;
   status?: string;
   durationMs?: number;
-  /** Mutable bag shared across all hooks in a single job run. */
+  /**
+   * Mutable bag shared across all hooks in a single job run.
+   * Hooks can write values here for downstream hooks to read (e.g. audit IDs, timestamps).
+   */
   meta: Record<string, unknown>;
   log: Logger;
+  /** Base directory for resolving relative hook script paths (defaults to cwd). */
+  basePath?: string;
 };
 
 export type CronHookRunResult = {
@@ -54,10 +59,15 @@ export function loadHookEntries(
   }
 
   // Per-job shorthand entries (string paths, no priority/filter).
+  // Per-job entries are validated to prevent path traversal since jobs.json
+  // may be more accessible than openclaw.json.
   const jobScripts = job.hooks?.[hookPoint];
   const jobEntries: ResolvedEntry[] = [];
   if (jobScripts) {
     for (const script of jobScripts) {
+      if (!isValidJobHookPath(script)) {
+        continue;
+      }
       jobEntries.push({ script, priority: DEFAULT_PRIORITY });
     }
   }
@@ -84,7 +94,7 @@ export async function runCronHooks(
 
   for (const entry of entries) {
     try {
-      const hookFn = await loadHookModule(entry.script);
+      const hookFn = await loadHookModule(entry.script, ctx.basePath);
       if (typeof hookFn !== "function") {
         ctx.log.warn(
           { hookPoint, script: entry.script },
@@ -93,7 +103,8 @@ export async function runCronHooks(
         continue;
       }
 
-      const timeout = createTimeout(HOOK_TIMEOUT_MS);
+      const timeoutMs = entry.timeoutMs ?? HOOK_TIMEOUT_MS;
+      const timeout = createTimeout(timeoutMs);
       let result: unknown;
       try {
         result = await Promise.race([hookFn(ctx), timeout.promise]);
@@ -114,7 +125,13 @@ export async function runCronHooks(
         return { aborted: true, reason };
       }
     } catch (err) {
-      ctx.log.warn(
+      // Use error level for runtime failures; warn for missing modules.
+      const isModuleError =
+        err instanceof Error &&
+        (err.message.includes("Cannot find module") || err.message.includes("MODULE_NOT_FOUND"));
+      const logFn = isModuleError ? ctx.log.warn : ctx.log.error;
+      logFn.call(
+        ctx.log,
         { hookPoint, script: entry.script, err: String(err) },
         "cron hook: script failed, continuing",
       );
@@ -144,6 +161,13 @@ function matchesFilter(entry: CronHookEntry, job: CronJob, workflow: string): bo
   if (f.jobId && f.jobId.length > 0 && !f.jobId.includes(job.id)) {
     return false;
   }
+  // jobName filter: case-insensitive substring match against the job's name.
+  if (f.jobName && f.jobName.length > 0) {
+    const nameLower = job.name.toLowerCase();
+    if (!f.jobName.some((pattern) => nameLower.includes(pattern.toLowerCase()))) {
+      return false;
+    }
+  }
   // When filter.agentId is set, jobs without an agentId do not match.
   if (f.agentId && f.agentId.length > 0 && (!job.agentId || !f.agentId.includes(job.agentId))) {
     return false;
@@ -151,7 +175,7 @@ function matchesFilter(entry: CronHookEntry, job: CronJob, workflow: string): bo
   return true;
 }
 
-async function loadHookModule(scriptPath: string): Promise<unknown> {
+async function loadHookModule(scriptPath: string, basePath?: string): Promise<unknown> {
   // Check isAbsolute before the URL-scheme regex: Windows drive-letter paths like
   // "C:\hooks\audit.cjs" match /^[a-z][a-z0-9+.-]*:/ and must not be treated as URLs.
   if (!path.isAbsolute(scriptPath) && /^[a-z][a-z0-9+.-]*:/i.test(scriptPath)) {
@@ -159,12 +183,28 @@ async function loadHookModule(scriptPath: string): Promise<unknown> {
     const mod = (await import(scriptPath)) as Record<string, unknown>;
     return mod.default ?? mod;
   }
-  // Resolve relative paths against cwd (the OC home dir at runtime).
-  const resolved = path.isAbsolute(scriptPath)
-    ? scriptPath
-    : path.resolve(process.cwd(), scriptPath);
+  // Resolve relative paths against the provided base (OC home) or cwd as fallback.
+  const base = basePath ?? process.cwd();
+  const resolved = path.isAbsolute(scriptPath) ? scriptPath : path.resolve(base, scriptPath);
   const mod = await importFileModule({ modulePath: resolved, cacheBust: true });
   return resolveFunctionModuleExport({ mod, fallbackExportNames: ["default"] });
+}
+
+/**
+ * Validate that a per-job hook script path does not escape the base directory
+ * via path traversal (e.g. "../../secrets.env"). Global hooks from openclaw.json
+ * are admin-controlled and not subject to this restriction.
+ */
+export function isValidJobHookPath(scriptPath: string): boolean {
+  // Reject absolute paths and traversal segments in per-job entries.
+  if (path.isAbsolute(scriptPath)) {
+    return false;
+  }
+  const normalized = path.normalize(scriptPath);
+  if (normalized.startsWith("..")) {
+    return false;
+  }
+  return true;
 }
 
 function createTimeout(ms: number): { promise: Promise<never>; clear: () => void } {

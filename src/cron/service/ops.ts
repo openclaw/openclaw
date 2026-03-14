@@ -1,5 +1,8 @@
+import path from "node:path";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { loadHookEntries, runCronHooks } from "../hooks.js";
+import type { CronHookContext } from "../hooks.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
@@ -468,6 +471,45 @@ async function finishPreparedManualRun(
   const startedAt = prepared.startedAt;
   const jobId = prepared.jobId;
 
+  const hookMeta: Record<string, unknown> = {};
+  const hookBasePath = path.resolve(path.dirname(state.deps.storePath), "..");
+  const makeHookCtx = (
+    hookPoint: "beforeRun" | "afterComplete" | "onFailure" | "afterRun",
+    extra?: Partial<CronHookContext>,
+  ): CronHookContext => ({
+    hookPoint,
+    workflow: "cron",
+    job: {
+      id: executionJob.id,
+      name: executionJob.name,
+      agentId: executionJob.agentId,
+      schedule: executionJob.schedule,
+    },
+    meta: hookMeta,
+    log: state.deps.log,
+    basePath: hookBasePath,
+    ...extra,
+  });
+
+  // beforeRun hooks — may abort the manual run.
+  const beforeEntries = loadHookEntries("beforeRun", state.deps.cronConfig, executionJob);
+  if (beforeEntries.length > 0) {
+    const beforeResult = await runCronHooks("beforeRun", makeHookCtx("beforeRun"), beforeEntries);
+    if (beforeResult.aborted) {
+      const abortEndedAt = state.deps.nowMs();
+      const abortDurationMs = abortEndedAt - startedAt;
+      const afterRunEntries = loadHookEntries("afterRun", state.deps.cronConfig, executionJob);
+      if (afterRunEntries.length > 0) {
+        await runCronHooks(
+          "afterRun",
+          makeHookCtx("afterRun", { status: "skipped", durationMs: abortDurationMs }),
+          afterRunEntries,
+        );
+      }
+      return;
+    }
+  }
+
   let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
     coreResult = await executeJobCoreWithTimeout(state, executionJob);
@@ -475,6 +517,35 @@ async function finishPreparedManualRun(
     coreResult = { status: "error", error: String(err) };
   }
   const endedAt = state.deps.nowMs();
+
+  const durationMs = endedAt - startedAt;
+  if (coreResult.status === "ok") {
+    const entries = loadHookEntries("afterComplete", state.deps.cronConfig, executionJob);
+    if (entries.length > 0) {
+      await runCronHooks(
+        "afterComplete",
+        makeHookCtx("afterComplete", { status: "ok", durationMs }),
+        entries,
+      );
+    }
+  } else if (coreResult.status === "error") {
+    const entries = loadHookEntries("onFailure", state.deps.cronConfig, executionJob);
+    if (entries.length > 0) {
+      await runCronHooks(
+        "onFailure",
+        makeHookCtx("onFailure", { error: coreResult.error, status: "error", durationMs }),
+        entries,
+      );
+    }
+  }
+  const afterRunEntries = loadHookEntries("afterRun", state.deps.cronConfig, executionJob);
+  if (afterRunEntries.length > 0) {
+    await runCronHooks(
+      "afterRun",
+      makeHookCtx("afterRun", { status: coreResult.status, error: coreResult.error, durationMs }),
+      afterRunEntries,
+    );
+  }
 
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });

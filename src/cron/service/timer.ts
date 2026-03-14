@@ -1,4 +1,5 @@
 // Authored by: cc (Claude Code) | 2026-03-13
+import path from "node:path";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
@@ -635,6 +636,8 @@ export async function onTimer(state: CronServiceState) {
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
 
       const hookMeta: Record<string, unknown> = {};
+      // Derive OC home from the cron store path for stable hook script resolution.
+      const hookBasePath = path.resolve(path.dirname(state.deps.storePath), "..");
       const makeHookCtx = (
         hookPoint: "beforeRun" | "afterComplete" | "onFailure" | "afterRun",
         extra?: Partial<CronHookContext>,
@@ -644,6 +647,7 @@ export async function onTimer(state: CronServiceState) {
         job: { id: job.id, name: job.name, agentId: job.agentId, schedule: job.schedule },
         meta: hookMeta,
         log: state.deps.log,
+        basePath: hookBasePath,
         ...extra,
       });
 
@@ -1015,6 +1019,7 @@ async function runStartupCatchupCandidate(
   const startedAt = state.deps.nowMs();
   emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
   const hookMeta: Record<string, unknown> = {};
+  const hookBasePath = path.resolve(path.dirname(state.deps.storePath), "..");
   const makeHookCtx = (
     hookPoint: "beforeRun" | "afterComplete" | "onFailure" | "afterRun",
     extra?: Partial<CronHookContext>,
@@ -1024,6 +1029,7 @@ async function runStartupCatchupCandidate(
     job: { id: job.id, name: job.name, agentId: job.agentId, schedule: job.schedule },
     meta: hookMeta,
     log: state.deps.log,
+    basePath: hookBasePath,
     ...extra,
   });
 
