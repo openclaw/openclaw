@@ -1,27 +1,33 @@
+import {
+  parseDiscordTarget,
+  type DiscordTargetKind,
+} from "../../../extensions/discord/src/targets.js";
+import {
+  parseIMessageTarget,
+  normalizeIMessageHandle,
+} from "../../../extensions/imessage/src/targets.js";
+import {
+  looksLikeUuid,
+  resolveSignalPeerId,
+  resolveSignalRecipient,
+  resolveSignalSender,
+} from "../../../extensions/signal/src/identity.js";
+import { resolveSlackAccount } from "../../../extensions/slack/src/accounts.js";
+import { createSlackWebClient } from "../../../extensions/slack/src/client.js";
+import { normalizeAllowListLower } from "../../../extensions/slack/src/monitor/allow-list.js";
+import { parseSlackTarget } from "../../../extensions/slack/src/targets.js";
+import { buildTelegramGroupPeerId } from "../../../extensions/telegram/src/bot/helpers.js";
+import { resolveTelegramTargetChatType } from "../../../extensions/telegram/src/inline-buttons.js";
+import { parseTelegramThreadId } from "../../../extensions/telegram/src/outbound-params.js";
+import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { recordSessionMetaFromInbound, resolveStorePath } from "../../config/sessions.js";
-import { parseDiscordTarget, type DiscordTargetKind } from "../../discord/targets.js";
-import { parseIMessageTarget, normalizeIMessageHandle } from "../../imessage/targets.js";
 import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
-import {
-  looksLikeUuid,
-  resolveSignalPeerId,
-  resolveSignalRecipient,
-  resolveSignalSender,
-} from "../../signal/identity.js";
-import { resolveSlackAccount } from "../../slack/accounts.js";
-import { createSlackWebClient } from "../../slack/client.js";
-import { normalizeAllowListLower } from "../../slack/monitor/allow-list.js";
-import { parseSlackTarget } from "../../slack/targets.js";
-import { buildTelegramGroupPeerId } from "../../telegram/bot/helpers.js";
-import { resolveTelegramTargetChatType } from "../../telegram/inline-buttons.js";
-import { parseTelegramThreadId } from "../../telegram/outbound-params.js";
-import { parseTelegramTarget } from "../../telegram/targets.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 

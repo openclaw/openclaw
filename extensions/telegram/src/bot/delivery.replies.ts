@@ -20,7 +20,7 @@ import { buildOutboundMediaLoadOptions } from "../../../../src/media/load-option
 import { isGifMedia, kindFromMime } from "../../../../src/media/mime.js";
 import { getGlobalHookRunner } from "../../../../src/plugins/hook-runner-global.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
-import { loadWebMedia } from "../../../../src/web/media.js";
+import { loadWebMedia } from "../../../whatsapp/src/media.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
