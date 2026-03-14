@@ -267,7 +267,6 @@ describe("browser server-context listKnownProfileNames", () => {
     };
 
     expect(listKnownProfileNames(state).toSorted()).toEqual([
-      "chrome-relay",
       "openclaw",
       "stale-removed",
       "user",
