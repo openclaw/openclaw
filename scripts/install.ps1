@@ -277,16 +277,16 @@ function Main {
     if (!(Ensure-ExecutionPolicy)) {
         Write-Host ""
         Write-Host "Installation cannot continue due to execution policy restrictions" -Level error
-        exit 1
+        return $false
     }
     
     if (!(Ensure-Node)) {
-        exit 1
+        return $false
     }
     
     if ($InstallMethod -eq "git") {
         if (!(Ensure-Git)) {
-            exit 1
+            return $false
         }
         
         if ($DryRun) {
@@ -304,7 +304,7 @@ function Main {
             Write-Host "[DRY RUN] Would install OpenClaw via npm (tag: $Tag)" -Level info
         } else {
             if (!(Install-OpenClawNpm -Version $Tag)) {
-                exit 1
+                return $false
             }
         }
     }
@@ -324,6 +324,7 @@ function Main {
     
     Write-Host ""
     Write-Host "🦞 OpenClaw installed successfully!" -Level success
+    return $true
 }
 
-Main
+[void](Main)
