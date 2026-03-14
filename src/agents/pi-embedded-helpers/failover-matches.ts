@@ -5,7 +5,7 @@ const PERIODIC_USAGE_LIMIT_RE =
 
 const ERROR_PATTERNS = {
   rateLimit: [
-    /rate[_ ]limit|too many requests|429/,
+
     "model_cooldown",
     "exceeded your current quota",
     "resource has been exhausted",
