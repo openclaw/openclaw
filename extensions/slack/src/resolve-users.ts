@@ -145,46 +145,122 @@ export async function resolveSlackUserAllowlist(params: {
   client?: WebClient;
 }): Promise<SlackUserResolution[]> {
   const client = params.client ?? createSlackWebClient(params.token);
-  const users = await listSlackUsers(client);
-  return resolveSlackAllowlistEntries<
-    { id?: string; name?: string; email?: string },
-    SlackUserLookup,
-    SlackUserResolution
-  >({
-    entries: params.entries,
-    lookup: users,
-    parseInput: parseSlackUserInput,
-    findById: (lookup, id) => lookup.find((user) => user.id === id),
-    buildIdResolved: ({ input, parsed, match }) => ({
-      input,
-      resolved: true,
-      id: parsed.id,
-      name: match?.displayName ?? match?.realName ?? match?.name,
-      email: match?.email,
-      deleted: match?.deleted,
-      isBot: match?.isBot,
-    }),
-    resolveNonId: ({ input, parsed, lookup }) => {
-      if (parsed.email) {
-        const matches = lookup.filter((user) => user.email === parsed.email);
-        if (matches.length > 0) {
-          return resolveSlackUserFromMatches(input, matches, parsed);
+
+  // Partition entries: ID-based can use the cheaper users.info (Tier 4),
+  // name/email-based still need users.list (Tier 2).
+  const parsedEntries = params.entries.map((e, index) => ({
+    input: e,
+    parsed: parseSlackUserInput(e),
+    index,
+  }));
+  const idEntries = parsedEntries.filter((e) => e.parsed.id);
+  const nonIdEntries = parsedEntries.filter((e) => !e.parsed.id);
+
+  // Resolve ID-based entries in batches to respect Slack's Tier 4 burst limits
+  const BATCH_SIZE = 20;
+  const idResults: SlackUserResolution[] = [];
+  for (let i = 0; i < idEntries.length; i += BATCH_SIZE) {
+    const batch = idEntries.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.all(
+      batch.map(async ({ input, parsed }) => {
+        try {
+          const res = await client.users.info({ user: parsed.id! });
+          const member = res.user as
+            | {
+                id?: string;
+                name?: string;
+                deleted?: boolean;
+                is_bot?: boolean;
+                is_app_user?: boolean;
+                real_name?: string;
+                profile?: { display_name?: string; real_name?: string; email?: string };
+              }
+            | undefined;
+          if (!member?.id) {
+            return { input, resolved: false, note: "users.info returned no user" };
+          }
+          const profile = member.profile ?? {};
+          return {
+            input,
+            resolved: true,
+            id: member.id,
+            name:
+              profile.display_name?.trim() ||
+              profile.real_name?.trim() ||
+              member.real_name?.trim() ||
+              member.name?.trim(),
+            email: profile.email?.trim()?.toLowerCase(),
+            deleted: Boolean(member.deleted),
+            isBot: Boolean(member.is_bot),
+          };
+        } catch (err) {
+          // user_not_found / users_not_found is expected for deleted/deprovisioned users
+          const code = (err as { data?: { error?: string } })?.data?.error;
+          if (code !== "users_not_found" && code !== "user_not_found") {
+            throw err;
+          }
+          return { input, resolved: false, note: "users.info lookup failed" };
         }
-      }
-      if (parsed.name) {
-        const target = parsed.name.toLowerCase();
-        const matches = lookup.filter((user) => {
-          const candidates = [user.name, user.displayName, user.realName]
-            .map((value) => value?.toLowerCase())
-            .filter(Boolean) as string[];
-          return candidates.includes(target);
-        });
-        if (matches.length > 0) {
-          return resolveSlackUserFromMatches(input, matches, parsed);
+      }),
+    );
+    idResults.push(...batchResults);
+  }
+
+  // Only fetch the full user list if there are name/email-based entries
+  let nonIdResults: SlackUserResolution[] = [];
+  if (nonIdEntries.length > 0) {
+    const users = await listSlackUsers(client);
+    nonIdResults = resolveSlackAllowlistEntries<
+      { id?: string; name?: string; email?: string },
+      SlackUserLookup,
+      SlackUserResolution
+    >({
+      entries: nonIdEntries.map((e) => e.input),
+      lookup: users,
+      parseInput: parseSlackUserInput,
+      findById: (lookup, id) => lookup.find((user) => user.id === id),
+      buildIdResolved: ({ input, parsed, match }) => ({
+        input,
+        resolved: true,
+        id: parsed.id,
+        name: match?.displayName ?? match?.realName ?? match?.name,
+        email: match?.email,
+        deleted: match?.deleted,
+        isBot: match?.isBot,
+      }),
+      resolveNonId: ({ input, parsed, lookup }) => {
+        if (parsed.email) {
+          const matches = lookup.filter((user) => user.email === parsed.email);
+          if (matches.length > 0) {
+            return resolveSlackUserFromMatches(input, matches, parsed);
+          }
         }
-      }
-      return undefined;
-    },
-    buildUnresolved: (input) => ({ input, resolved: false }),
-  });
+        if (parsed.name) {
+          const target = parsed.name.toLowerCase();
+          const matches = lookup.filter((user) => {
+            const candidates = [user.name, user.displayName, user.realName]
+              .map((value) => value?.toLowerCase())
+              .filter(Boolean) as string[];
+            return candidates.includes(target);
+          });
+          if (matches.length > 0) {
+            return resolveSlackUserFromMatches(input, matches, parsed);
+          }
+        }
+        return undefined;
+      },
+      buildUnresolved: (input) => ({ input, resolved: false }),
+    });
+  }
+
+  // Reassemble results in the original input order using indices
+  // (avoids Map key collisions when the same entry appears more than once)
+  const results: SlackUserResolution[] = new Array(params.entries.length);
+  for (let i = 0; i < idEntries.length; i++) {
+    results[idEntries[i].index] = idResults[i];
+  }
+  for (let i = 0; i < nonIdEntries.length; i++) {
+    results[nonIdEntries[i].index] = nonIdResults[i];
+  }
+  return results.map((r, i) => r ?? { input: params.entries[i], resolved: false });
 }
