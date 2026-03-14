@@ -310,13 +310,14 @@ export function resolveIMessageInboundDecision(params: {
           chatIdentifier,
         })
       : false;
+  const hasControlCommandInMessage = hasControlCommand(messageText, params.cfg);
   const { commandAuthorized, shouldBlock } = resolveDualTextControlCommandGate({
     useAccessGroups,
     primaryConfigured: commandDmAllowFrom.length > 0,
     primaryAllowed: ownerAllowedForCommands,
     secondaryConfigured: effectiveGroupAllowFrom.length > 0,
     secondaryAllowed: groupAllowedForCommands,
-    hasControlCommand: hasControlCommand(messageText, params.cfg),
+    hasControlCommand: hasControlCommandInMessage,
   });
   if (isGroup && shouldBlock) {
     if (params.logVerbose) {
