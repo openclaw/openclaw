@@ -60,6 +60,13 @@ async function runRoleMutation(params: {
   await params.mutate({ guildId, userId, roleId });
 }
 
+function readChannelPermissionTarget(params: Record<string, unknown>) {
+  return {
+    channelId: readStringParam(params, "channelId", { required: true }),
+    targetId: readStringParam(params, "targetId", { required: true }),
+  };
+}
+
 export async function handleDiscordGuildAction(
   action: string,
   params: Record<string, unknown>,
@@ -453,10 +460,7 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("channels")) {
         throw new Error("Discord channel management is disabled.");
       }
-      const channelId = readStringParam(params, "channelId", {
-        required: true,
-      });
-      const targetId = readStringParam(params, "targetId", { required: true });
+      const { channelId, targetId } = readChannelPermissionTarget(params);
       const targetTypeRaw = readStringParam(params, "targetType", {
         required: true,
       });
@@ -489,10 +493,7 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("channels")) {
         throw new Error("Discord channel management is disabled.");
       }
-      const channelId = readStringParam(params, "channelId", {
-        required: true,
-      });
-      const targetId = readStringParam(params, "targetId", { required: true });
+      const { channelId, targetId } = readChannelPermissionTarget(params);
       if (accountId) {
         await removeChannelPermissionDiscord(channelId, targetId, { accountId });
       } else {
