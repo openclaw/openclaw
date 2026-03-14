@@ -53,6 +53,12 @@ function makeShareChatEvent(content: unknown) {
 describe("parseFeishuMessageEvent – mentionedBot", () => {
   const BOT_OPEN_ID = "ou_bot_123";
 
+  it("returns mentionedBot=false for @all group notifications", () => {
+    const event = makeEvent("group", [], "@_all hello everyone");
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
   it("returns mentionedBot=false when there are no mentions", () => {
     const event = makeEvent("group", []);
     const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
