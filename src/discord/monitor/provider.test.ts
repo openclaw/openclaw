@@ -806,7 +806,7 @@ describe("monitorDiscordProvider", () => {
     expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("daily application command create limit reached"),
+      expect.stringContaining("native command deploy skipped"),
     );
   });
 
