@@ -192,12 +192,12 @@ describe("isSafeToRetrySendError", () => {
     expect(isSafeToRetrySendError(rateLimited)).toBe(true);
   });
 
-  it("allows retry for grammY failed-after network envelopes", () => {
+  it("does not widen safe-send retries to grammY failed-after envelopes", () => {
     expect(
       isSafeToRetrySendError(
         new Error("Network request for 'sendMessage' failed after 1 attempts."),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 
