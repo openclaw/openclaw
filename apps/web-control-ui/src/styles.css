@@ -1,0 +1,23 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+  background: #08111f;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: #08111f;
+}
+
+body {
+  min-height: 100vh;
+}
+
+code {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #bfdbfe;
+}
