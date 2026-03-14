@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createModelSelectionState } from "./model-selection.js";
+import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
@@ -294,5 +295,66 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
       hasModelDirective: false,
     });
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("off");
+  });
+});
+
+describe("resolveContextTokens", () => {
+  it("uses 1M context when model params set context1m", () => {
+    const resolved = resolveContextTokens({
+      agentCfg: {
+        models: {
+          "anthropic/claude-opus-4-6": {
+            params: { context1m: true },
+          },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+
+    expect(resolved).toBe(1_048_576);
+  });
+
+  it("prefers per-model contextTokens param over catalog defaults", () => {
+    const resolved = resolveContextTokens({
+      agentCfg: {
+        models: {
+          "anthropic/claude-opus-4-6": {
+            params: { contextTokens: 333_000 },
+          },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+
+    expect(resolved).toBe(333_000);
+  });
+
+  it("keeps global contextTokens override as highest priority", () => {
+    const resolved = resolveContextTokens({
+      agentCfg: {
+        contextTokens: 200_000,
+        models: {
+          "anthropic/claude-opus-4-6": {
+            params: { context1m: true },
+          },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+
+    expect(resolved).toBe(200_000);
+  });
+
+  it("falls back to default context tokens when no override exists", () => {
+    const resolved = resolveContextTokens({
+      agentCfg: undefined,
+      provider: "anthropic",
+      model: "non-existent-model",
+    });
+
+    expect(resolved).toBe(DEFAULT_CONTEXT_TOKENS);
   });
 });
