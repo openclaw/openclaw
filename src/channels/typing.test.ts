@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import * as logger from "../logger.js";
 import { createTypingCallbacks } from "./typing.js";
 
 type TypingCallbackOverrides = Partial<Parameters<typeof createTypingCallbacks>[0]>;
@@ -196,7 +197,7 @@ describe("createTypingCallbacks", () => {
   describe("TTL safety", () => {
     it("auto-stops typing after maxDurationMs", async () => {
       await withFakeTimers(async () => {
-        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const logWarnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
         const { start, stop, callbacks } = createTypingHarness({ maxDurationMs: 10_000 });
 
         await callbacks.onReplyStart();
@@ -208,15 +209,15 @@ describe("createTypingCallbacks", () => {
 
         // Should auto-stop
         expect(stop).toHaveBeenCalledTimes(1);
-        expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining("TTL exceeded"));
+        expect(logWarnSpy).toHaveBeenCalledWith(expect.stringContaining("TTL exceeded"));
 
-        consoleWarn.mockRestore();
+        logWarnSpy.mockRestore();
       });
     });
 
     it("does not auto-stop if idle is called before TTL", async () => {
       await withFakeTimers(async () => {
-        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const logWarnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
         const { stop, callbacks } = createTypingHarness({ maxDurationMs: 10_000 });
 
         await callbacks.onReplyStart();
@@ -232,11 +233,11 @@ describe("createTypingCallbacks", () => {
         await vi.advanceTimersByTimeAsync(10_000);
 
         // Should not have triggered TTL warning
-        expect(consoleWarn).not.toHaveBeenCalled();
+        expect(logWarnSpy).not.toHaveBeenCalled();
         // Stop should still be called only once
         expect(stop).toHaveBeenCalledTimes(1);
 
-        consoleWarn.mockRestore();
+        logWarnSpy.mockRestore();
       });
     });
 
