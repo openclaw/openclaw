@@ -3,11 +3,18 @@
 // events ephemeral. Events are session-scoped and require an explicit key.
 
 export type SystemEvent = { text: string; ts: number; contextKey?: string | null };
+export type SystemEventReservation = {
+  sessionKey: string;
+  reservationId: string;
+  entries: SystemEvent[];
+};
 
 const MAX_EVENTS = 20;
+let nextReservationId = 0;
 
 type SessionQueue = {
   queue: SystemEvent[];
+  reservations: Map<string, SystemEvent[]>;
   lastText: string | null;
   lastContextKey: string | null;
 };
@@ -55,6 +62,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     (() => {
       const created: SessionQueue = {
         queue: [],
+        reservations: new Map(),
         lastText: null,
         lastContextKey: null,
       };
@@ -82,6 +90,12 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   return true;
 }
 
+function maybeDeleteSessionQueue(key: string, entry: SessionQueue) {
+  if (entry.queue.length === 0 && entry.reservations.size === 0) {
+    queues.delete(key);
+  }
+}
+
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   const key = requireSessionKey(sessionKey);
   const entry = queues.get(key);
@@ -92,8 +106,78 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   entry.queue.length = 0;
   entry.lastText = null;
   entry.lastContextKey = null;
-  queues.delete(key);
+  maybeDeleteSessionQueue(key, entry);
   return out;
+}
+
+export function reserveSystemEventEntries(sessionKey: string): SystemEventReservation | undefined {
+  const key = requireSessionKey(sessionKey);
+  const entry = queues.get(key);
+  if (!entry || entry.queue.length === 0) {
+    return undefined;
+  }
+  const reserved = entry.queue.slice();
+  entry.queue.length = 0;
+  entry.lastText = null;
+  entry.lastContextKey = null;
+  const reservationId = `r${nextReservationId++}`;
+  entry.reservations.set(reservationId, reserved);
+  return {
+    sessionKey: key,
+    reservationId,
+    entries: reserved.map((event) => ({ ...event })),
+  };
+}
+
+export function commitSystemEventReservation(
+  reservation: SystemEventReservation | undefined,
+): SystemEvent[] {
+  if (!reservation) {
+    return [];
+  }
+  const key = requireSessionKey(reservation.sessionKey);
+  const entry = queues.get(key);
+  if (!entry) {
+    return [];
+  }
+  const reserved = entry.reservations.get(reservation.reservationId);
+  if (!reserved) {
+    return [];
+  }
+  entry.reservations.delete(reservation.reservationId);
+  maybeDeleteSessionQueue(key, entry);
+  return reserved.map((event) => ({ ...event }));
+}
+
+export function restoreSystemEventReservation(
+  reservation: SystemEventReservation | undefined,
+): SystemEvent[] {
+  if (!reservation) {
+    return [];
+  }
+  const key = requireSessionKey(reservation.sessionKey);
+  const entry =
+    queues.get(key) ??
+    (() => {
+      const created: SessionQueue = {
+        queue: [],
+        reservations: new Map(),
+        lastText: null,
+        lastContextKey: null,
+      };
+      queues.set(key, created);
+      return created;
+    })();
+  const reserved = entry.reservations.get(reservation.reservationId);
+  if (!reserved) {
+    return [];
+  }
+  entry.reservations.delete(reservation.reservationId);
+  entry.queue.unshift(...reserved);
+  const latest = entry.queue.at(-1);
+  entry.lastText = latest?.text ?? null;
+  entry.lastContextKey = latest?.contextKey ?? null;
+  return reserved.map((event) => ({ ...event }));
 }
 
 export function consumeSystemEventEntries(
@@ -125,8 +209,8 @@ export function consumeSystemEventEntries(
   if (entry.queue.length === 0) {
     entry.lastText = null;
     entry.lastContextKey = null;
-    queues.delete(key);
   }
+  maybeDeleteSessionQueue(key, entry);
   return out;
 }
 
@@ -150,4 +234,5 @@ export function hasSystemEvents(sessionKey: string) {
 
 export function resetSystemEventsForTest() {
   queues.clear();
+  nextReservationId = 0;
 }

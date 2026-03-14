@@ -48,9 +48,10 @@ import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import {
-  consumePeekedSystemEvents,
+  commitPeekedSystemEvents,
   ensureSkillSnapshot,
   peekFormattedSystemEvents,
+  restorePeekedSystemEvents,
 } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -386,17 +387,23 @@ export async function runPreparedReply(
 
   const hookRunner = getGlobalHookRunner();
   if (beforeAgentRunContext && hookRunner?.hasHooks("before_agent_run")) {
-    const beforeAgentRunResult = await hookRunner.runBeforeAgentRun(
-      { prompt: prefixedCommandBody },
-      beforeAgentRunContext,
-    );
-    if (beforeAgentRunResult?.skip) {
-      typing.cleanup();
-      return undefined;
+    try {
+      const beforeAgentRunResult = await hookRunner.runBeforeAgentRun(
+        { prompt: prefixedCommandBody },
+        beforeAgentRunContext,
+      );
+      if (beforeAgentRunResult?.skip) {
+        restorePeekedSystemEvents(previewedSystemEvents.reservation);
+        typing.cleanup();
+        return undefined;
+      }
+    } catch (error) {
+      restorePeekedSystemEvents(previewedSystemEvents.reservation);
+      throw error;
     }
   }
 
-  consumePeekedSystemEvents(sessionKey, previewedSystemEvents.entries);
+  commitPeekedSystemEvents(previewedSystemEvents.reservation);
   await commitSessionHintEffects({
     abortedLastRun,
     sessionEntry,

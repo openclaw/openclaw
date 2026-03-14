@@ -12,10 +12,12 @@ import {
 } from "../../infra/format-time/format-datetime.ts";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import {
-  consumeSystemEventEntries,
+  commitSystemEventReservation,
   drainSystemEventEntries,
-  peekSystemEventEntries,
   type SystemEvent,
+  type SystemEventReservation,
+  reserveSystemEventEntries,
+  restoreSystemEventReservation,
 } from "../../infra/system-events.js";
 
 /** Drain queued system events, format as `System:` lines, return the block (or undefined). */
@@ -148,19 +150,24 @@ async function persistSessionEntryUpdate(params: {
 
 export async function peekFormattedSystemEvents(
   params: FormattedSystemEventParams,
-): Promise<{ entries: SystemEvent[]; text?: string }> {
-  const entries = peekSystemEventEntries(params.sessionKey);
+): Promise<{ reservation?: SystemEventReservation; text?: string }> {
+  const reservation = reserveSystemEventEntries(params.sessionKey);
   return {
-    entries,
-    text: await formatSystemEvents({ ...params, queued: entries }),
+    reservation,
+    text: await formatSystemEvents({ ...params, queued: reservation?.entries ?? [] }),
   };
 }
 
-export function consumePeekedSystemEvents(
-  sessionKey: string,
-  entries: SystemEvent[],
+export function commitPeekedSystemEvents(
+  reservation: SystemEventReservation | undefined,
 ): SystemEvent[] {
-  return consumeSystemEventEntries(sessionKey, entries);
+  return commitSystemEventReservation(reservation);
+}
+
+export function restorePeekedSystemEvents(
+  reservation: SystemEventReservation | undefined,
+): SystemEvent[] {
+  return restoreSystemEventReservation(reservation);
 }
 
 /** Drain queued system events, format as `System:` lines, return the block (or undefined). */

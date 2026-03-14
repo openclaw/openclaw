@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import {
+  commitSystemEventReservation,
   drainSystemEventEntries,
   consumeSystemEventEntries,
   enqueueSystemEvent,
@@ -11,7 +12,9 @@ import {
   isSystemEventContextChanged,
   peekSystemEventEntries,
   peekSystemEvents,
+  reserveSystemEventEntries,
   resetSystemEventsForTest,
+  restoreSystemEventReservation,
 } from "./system-events.js";
 
 const cfg = {} as unknown as OpenClawConfig;
@@ -167,6 +170,32 @@ describe("system events (session routing)", () => {
 
     expect(consumed.map((entry) => entry.text)).toEqual(["First event"]);
     expect(peekSystemEvents(key)).toEqual(["Second event"]);
+  });
+
+  it("hides reserved events from concurrent readers until they are committed", () => {
+    const key = "agent:main:test-reserve";
+    enqueueSystemEvent("First event", { sessionKey: key });
+
+    const reservation = reserveSystemEventEntries(key);
+
+    expect(reservation?.entries.map((entry) => entry.text)).toEqual(["First event"]);
+    expect(peekSystemEvents(key)).toEqual([]);
+
+    enqueueSystemEvent("Second event", { sessionKey: key });
+    commitSystemEventReservation(reservation);
+
+    expect(peekSystemEvents(key)).toEqual(["Second event"]);
+  });
+
+  it("restores reserved events ahead of newer queued events when a turn is skipped", () => {
+    const key = "agent:main:test-restore";
+    enqueueSystemEvent("First event", { sessionKey: key });
+    const reservation = reserveSystemEventEntries(key);
+    enqueueSystemEvent("Second event", { sessionKey: key });
+
+    restoreSystemEventReservation(reservation);
+
+    expect(peekSystemEvents(key)).toEqual(["First event", "Second event"]);
   });
 });
 

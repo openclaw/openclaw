@@ -91,8 +91,9 @@ vi.mock("./session-updates.js", () => ({
     systemSent,
     skillsSnapshot: undefined,
   })),
-  peekFormattedSystemEvents: vi.fn().mockResolvedValue({ entries: [], text: undefined }),
-  consumePeekedSystemEvents: vi.fn().mockReturnValue([]),
+  peekFormattedSystemEvents: vi.fn().mockResolvedValue({ reservation: undefined, text: undefined }),
+  commitPeekedSystemEvents: vi.fn().mockReturnValue([]),
+  restorePeekedSystemEvents: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock("./typing-mode.js", () => ({
@@ -107,9 +108,10 @@ import { commitSessionHintEffects } from "./body.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import {
-  consumePeekedSystemEvents,
+  commitPeekedSystemEvents,
   ensureSkillSnapshot,
   peekFormattedSystemEvents,
+  restorePeekedSystemEvents,
 } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 
@@ -190,7 +192,10 @@ describe("runPreparedReply media-only handling", () => {
     vi.clearAllMocks();
     hookMocks.hasHooks.mockReturnValue(false);
     hookMocks.runBeforeAgentRun.mockReset();
-    vi.mocked(peekFormattedSystemEvents).mockResolvedValue({ entries: [], text: undefined });
+    vi.mocked(peekFormattedSystemEvents).mockResolvedValue({
+      reservation: undefined,
+      text: undefined,
+    });
     vi.mocked(resolveQueueSettings).mockReturnValue({ mode: "followup" });
     vi.mocked(getQueueSize).mockReturnValue(0);
   });
@@ -319,7 +324,11 @@ describe("runPreparedReply media-only handling", () => {
     hookMocks.hasHooks.mockReturnValue(true);
     hookMocks.runBeforeAgentRun.mockResolvedValue({ skip: false });
     vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
-      entries: [{ text: "Node connected", ts: 1 }],
+      reservation: {
+        sessionKey: "session-key",
+        reservationId: "r0",
+        entries: [{ text: "Node connected", ts: 1 }],
+      },
       text: "System: [t] Node connected.",
     });
 
@@ -369,7 +378,11 @@ describe("runPreparedReply media-only handling", () => {
     hookMocks.hasHooks.mockReturnValue(true);
     hookMocks.runBeforeAgentRun.mockResolvedValue({ skip: true, skipReason: "screened-out" });
     vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
-      entries: [{ text: "Node connected", ts: 1 }],
+      reservation: {
+        sessionKey: "session-key",
+        reservationId: "r0",
+        entries: [{ text: "Node connected", ts: 1 }],
+      },
       text: "System: [t] Node connected.",
     });
     vi.mocked(resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
@@ -414,8 +427,9 @@ describe("runPreparedReply media-only handling", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+    expect(vi.mocked(restorePeekedSystemEvents)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(commitSessionHintEffects)).not.toHaveBeenCalled();
-    expect(vi.mocked(consumePeekedSystemEvents)).not.toHaveBeenCalled();
+    expect(vi.mocked(commitPeekedSystemEvents)).not.toHaveBeenCalled();
     expect(vi.mocked(ensureSkillSnapshot)).not.toHaveBeenCalled();
     expect(vi.mocked(resolveSessionAuthProfileOverride)).not.toHaveBeenCalled();
     expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
@@ -471,7 +485,11 @@ describe("runPreparedReply media-only handling", () => {
 
   it("routes queued system events into user prompt text, not system prompt context", async () => {
     vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
-      entries: [{ text: "Model switched.", ts: 1 }],
+      reservation: {
+        sessionKey: "session-key",
+        reservationId: "r0",
+        entries: [{ text: "Model switched.", ts: 1 }],
+      },
       text: "System: [t] Model switched.",
     });
 
@@ -488,7 +506,11 @@ describe("runPreparedReply media-only handling", () => {
     // The hint must be extracted from the user body BEFORE prepending, so "System:"
     // does not shadow the low|medium|high shorthand.
     vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
-      entries: [{ text: "Node connected.", ts: 1 }],
+      reservation: {
+        sessionKey: "session-key",
+        reservationId: "r0",
+        entries: [{ text: "Node connected.", ts: 1 }],
+      },
       text: "System: [t] Node connected.",
     });
 
@@ -515,7 +537,11 @@ describe("runPreparedReply media-only handling", () => {
     // peekFormattedSystemEvents returns the events block; the caller prepends it to
     // effectiveBaseBody for the queue path so deferred turns see events.
     vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
-      entries: [{ text: "Node connected.", ts: 1 }],
+      reservation: {
+        sessionKey: "session-key",
+        reservationId: "r0",
+        entries: [{ text: "Node connected.", ts: 1 }],
+      },
       text: "System: [t] Node connected.",
     });
 
@@ -529,7 +555,10 @@ describe("runPreparedReply media-only handling", () => {
   it("does not strip think-hint token from deferred queue body", async () => {
     // In steer mode the inferred thinkLevel is never consumed, so the first token
     // must not be stripped from the queue/steer body (followupRun.prompt).
-    vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({ entries: [], text: undefined });
+    vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
+      reservation: undefined,
+      text: undefined,
+    });
 
     await runPreparedReply(
       baseParams({
