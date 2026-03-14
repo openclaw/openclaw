@@ -79,6 +79,11 @@
       - any-glob-to-any-file:
           - "extensions/tlon/**"
           - "docs/channels/tlon.md"
+"channel: twilio-sms":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/twilio-sms/**"
+          - "docs/channels/twilio-sms.md"
 "channel: twitch":
   - changed-files:
       - any-glob-to-any-file:

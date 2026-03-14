@@ -30,6 +30,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Slack](/channels/slack) — Bolt SDK; workspace apps.
 - [Telegram](/channels/telegram) — Bot API via grammY; supports groups.
 - [Tlon](/channels/tlon) — Urbit-based messenger (plugin, installed separately).
+- [Twilio SMS](/channels/twilio-sms) — SMS/MMS messaging via Twilio Programmable Messaging (plugin, installed separately).
 - [Twitch](/channels/twitch) — Twitch chat via IRC connection (plugin, installed separately).
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
 - [WhatsApp](/channels/whatsapp) — Most popular; uses Baileys and requires QR pairing.

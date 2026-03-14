@@ -212,6 +212,14 @@
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
     },
+    "./plugin-sdk/twilio-shared": {
+      "types": "./dist/plugin-sdk/twilio-shared.d.ts",
+      "default": "./dist/plugin-sdk/twilio-shared.js"
+    },
+    "./plugin-sdk/twilio-sms": {
+      "types": "./dist/plugin-sdk/twilio-sms.d.ts",
+      "default": "./dist/plugin-sdk/twilio-sms.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
