@@ -52,4 +52,25 @@ describe("ChatLog", () => {
 
     expect(chatLog.children.length).toBe(20);
   });
+
+  it("renders BTW inline and removes it when dismissed", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addSystem("session agent:main:main");
+    chatLog.showBtw({
+      question: "what is 17 * 19?",
+      text: "323",
+    });
+
+    let rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("BTW: what is 17 * 19?");
+    expect(rendered).toContain("323");
+    expect(chatLog.hasVisibleBtw()).toBe(true);
+
+    chatLog.dismissBtw();
+
+    rendered = chatLog.render(120).join("\n");
+    expect(rendered).not.toContain("BTW: what is 17 * 19?");
+    expect(chatLog.hasVisibleBtw()).toBe(false);
+  });
 });

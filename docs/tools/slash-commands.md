@@ -76,6 +76,7 @@ Text + native (when enabled):
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
+- `/btw <question>` (ask a quick side question about the current session without changing future session context)
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
 - `/session idle <duration|off>` (manage inactivity auto-unfocus for focused thread bindings)
