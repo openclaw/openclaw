@@ -385,6 +385,54 @@ export async function runExecProcess(opts: {
       ? Math.floor(opts.timeoutSec * 1000)
       : undefined;
 
+  // BoxLite provider: run command via BoxLite micro-VM instead of process supervisor.
+  if (opts.sandbox?.provider === "boxlite") {
+    const boxliteScopeKey = opts.sandbox.containerName;
+    const boxlitePromise = (async (): Promise<ExecProcessOutcome> => {
+      try {
+        const { runBoxLiteCommand } = await import("./boxlite/runtime.js");
+        const result = await runBoxLiteCommand(boxliteScopeKey, "sh", ["-c", execCommand]);
+        if (result.stdout) {
+          handleStdout(result.stdout);
+        }
+        if (result.stderr) {
+          handleStderr(result.stderr);
+        }
+        const durationMs = Date.now() - startedAt;
+        const exitCode = result.exitCode;
+        const isShellFailure = exitCode === 126 || exitCode === 127;
+        const status: "completed" | "failed" =
+          exitCode === 0 && !isShellFailure ? "completed" : "failed";
+        markExited(session, exitCode, null, status);
+        maybeNotifyOnExit(session, status);
+        const aggregated = session.aggregated.trim();
+        const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
+        return {
+          status,
+          exitCode,
+          exitSignal: null,
+          durationMs,
+          aggregated: aggregated + exitMsg,
+          timedOut: false,
+        };
+      } catch (err) {
+        markExited(session, null, null, "failed");
+        maybeNotifyOnExit(session, "failed");
+        throw err;
+      }
+    })();
+
+    return {
+      session,
+      startedAt,
+      pid: undefined,
+      promise: boxlitePromise,
+      kill: () => {
+        // BoxLite commands are async calls, not child processes; no kill needed.
+      },
+    };
+  }
+
   const spawnSpec:
     | {
         mode: "child";

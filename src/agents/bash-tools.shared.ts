@@ -8,6 +8,7 @@ import { assertSandboxPath } from "./sandbox-paths.js";
 const CHUNK_LIMIT = 8 * 1024;
 
 export type BashSandboxConfig = {
+  provider?: "docker" | "boxlite";
   containerName: string;
   workspaceDir: string;
   containerWorkdir: string;
