@@ -7,6 +7,7 @@
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/twitch";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/twitch";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { twitchMessageActions } from "./actions.js";
 import { removeClientManager } from "./client-manager-registry.js";
 import { TwitchConfigSchema } from "./config-schema.js";
@@ -169,15 +170,8 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
     },
 
     /** Build channel summary from snapshot */
-    buildChannelSummary: ({ snapshot }: { snapshot: ChannelAccountSnapshot }) => ({
-      configured: snapshot.configured ?? false,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }: { snapshot: ChannelAccountSnapshot }) =>
+      buildPassiveProbedChannelStatusSummary(snapshot),
 
     /** Probe account connection */
     probeAccount: async ({
