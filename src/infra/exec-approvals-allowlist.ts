@@ -459,7 +459,11 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
-  const candidatePath = resolveAllowlistCandidatePath(params.segment.resolution, params.cwd);
+  const candidatePath = resolveAllowlistCandidatePath(
+    params.segment.resolution,
+    params.cwd,
+    params.env,
+  );
   if (!candidatePath) {
     return;
   }

@@ -118,6 +118,7 @@ export function resolveCommandResolutionFromArgv(
 export function resolveAllowlistCandidatePath(
   resolution: CommandResolution | null,
   cwd?: string,
+  env?: NodeJS.ProcessEnv,
 ): string | undefined {
   if (!resolution) {
     return undefined;
@@ -131,7 +132,9 @@ export function resolveAllowlistCandidatePath(
   }
   const expanded = raw.startsWith("~") ? expandHomePrefix(raw) : raw;
   if (!expanded.includes("/") && !expanded.includes("\\")) {
-    return undefined;
+    // Bare basename: fall back to PATH lookup so "allow always" can persist the
+    // resolved absolute path even when the segment was analyzed without full PATH.
+    return resolveExecutableCandidatePath(expanded, { cwd, env });
   }
   if (path.isAbsolute(expanded)) {
     return expanded;

@@ -441,4 +441,67 @@ describe("resolveAllowAlwaysPatterns", () => {
       persistedPattern: benign,
     });
   });
+
+  it("persists resolved path for bare basename when segment lacks resolvedPath (#43988)", () => {
+    // Simulate the bug: segment was created without full PATH so resolvedPath is undefined.
+    // resolveAllowAlwaysPatterns must still persist the right path when env has PATH.
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const myId = makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "id",
+          argv: ["id"],
+          // resolvedPath intentionally absent — as if PATH was unavailable at analysis time
+          resolution: { rawExecutable: "id", executableName: "id" },
+        },
+      ],
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(patterns).toEqual([myId]);
+  });
+
+  it("persists bare basename via full allow-always cycle (#43988)", () => {
+    // End-to-end: evaluateShellAllowlist segments feed resolveAllowAlwaysPatterns,
+    // then the persisted pattern satisfies a subsequent evaluateShellAllowlist call.
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const myJq = makeExecutable(dir, "jq");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const first = evaluateShellAllowlist({
+      command: "jq -r .foo",
+      allowlist: [],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    const persisted = resolveAllowAlwaysPatterns({
+      segments: first.segments,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(persisted).toEqual([myJq]);
+
+    const second = evaluateShellAllowlist({
+      command: "jq -r .bar",
+      allowlist: persisted.map((p) => ({ pattern: p })),
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
+  });
 });
