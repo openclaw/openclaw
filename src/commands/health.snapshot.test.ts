@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { HealthSummary } from "./health.js";
 import { getHealthSnapshot } from "./health.js";
 
@@ -221,6 +222,90 @@ describe("getHealthSnapshot", () => {
     expect(telegram.configured).toBe(true);
     expect(telegram.probe?.ok).toBe(false);
     expect(telegram.probe?.error).toMatch(/network down/i);
+  });
+
+  it("preserves plugin snapshot fields and runtime status in channel health", async () => {
+    const snapshotAwarePlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "googlechat",
+        label: "Google Chat",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            credentialSource: "file",
+            webhookPath: "/googlechat",
+          }),
+          isConfigured: () => true,
+        },
+      }),
+      status: {
+        probeAccount: async () => ({ ok: true }),
+        buildAccountSnapshot: ({ account, runtime, probe }) => ({
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          credentialSource: (account as { credentialSource: string }).credentialSource,
+          webhookPath: (account as { webhookPath: string }).webhookPath,
+          running: runtime?.running ?? false,
+          lastStartAt: runtime?.lastStartAt ?? null,
+          probe,
+        }),
+        buildChannelSummary: ({ snapshot }) => ({
+          configured: snapshot.configured ?? false,
+          credentialSource: snapshot.credentialSource ?? "none",
+          webhookPath: snapshot.webhookPath ?? null,
+          running: snapshot.running ?? false,
+          lastStartAt: snapshot.lastStartAt ?? null,
+          probe: snapshot.probe,
+        }),
+      },
+    };
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "googlechat", plugin: snapshotAwarePlugin, source: "test" }]),
+    );
+    testConfig = { channels: { googlechat: { enabled: true } } };
+    testStore = {};
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      runtimeSnapshot: {
+        channels: {
+          googlechat: {
+            accountId: "default",
+            running: true,
+            lastStartAt: 1234,
+          },
+        },
+        channelAccounts: {
+          googlechat: {
+            default: {
+              accountId: "default",
+              running: true,
+              lastStartAt: 1234,
+            },
+          },
+        },
+      },
+    });
+
+    const googlechat = snap.channels.googlechat as {
+      configured?: boolean;
+      credentialSource?: string;
+      webhookPath?: string | null;
+      running?: boolean;
+      lastStartAt?: number | null;
+      probe?: { ok?: boolean };
+    };
+    expect(googlechat.configured).toBe(true);
+    expect(googlechat.credentialSource).toBe("file");
+    expect(googlechat.webhookPath).toBe("/googlechat");
+    expect(googlechat.running).toBe(true);
+    expect(googlechat.lastStartAt).toBe(1234);
+    expect(googlechat.probe?.ok).toBe(true);
   });
 
   it("disables heartbeat for agents without heartbeat blocks", async () => {

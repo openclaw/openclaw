@@ -1,8 +1,11 @@
+import crypto from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { GoogleAuth, OAuth2Client } from "google-auth-library";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 const CHAT_SCOPE = "https://www.googleapis.com/auth/chat.bot";
 const CHAT_ISSUER = "chat@system.gserviceaccount.com";
+const DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token";
 // Google Workspace Add-ons use a different service account pattern
 const ADDON_ISSUER_PATTERN = /^service-\d+@gcp-sa-gsuiteaddons\.iam\.gserviceaccount\.com$/;
 const CHAT_CERTS_URL =
@@ -11,9 +14,25 @@ const CHAT_CERTS_URL =
 // Size-capped to prevent unbounded growth in long-running deployments (#4948)
 const MAX_AUTH_CACHE_SIZE = 32;
 const authCache = new Map<string, { key: string; auth: GoogleAuth }>();
+const serviceTokenCache = new Map<string, { accessToken: string; expiresAtMs: number }>();
 const verifyClient = new OAuth2Client();
 
 let cachedCerts: { fetchedAt: number; certs: Record<string, string> } | null = null;
+
+type GoogleServiceAccountCredentials = {
+  client_email?: string;
+  private_key?: string;
+  token_uri?: string;
+};
+
+function evictOldestCacheEntry<T>(cache: Map<string, T>) {
+  if (cache.size > MAX_AUTH_CACHE_SIZE) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) {
+      cache.delete(oldest);
+    }
+  }
+}
 
 function buildAuthKey(account: ResolvedGoogleChatAccount): string {
   if (account.credentialsFile) {
@@ -22,7 +41,7 @@ function buildAuthKey(account: ResolvedGoogleChatAccount): string {
   if (account.credentials) {
     return `inline:${JSON.stringify(account.credentials)}`;
   }
-  return "none";
+  return `none:${account.accountId}`;
 }
 
 function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
@@ -32,38 +51,142 @@ function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
     return cached.auth;
   }
 
-  const evictOldest = () => {
-    if (authCache.size > MAX_AUTH_CACHE_SIZE) {
-      const oldest = authCache.keys().next().value;
-      if (oldest !== undefined) {
-        authCache.delete(oldest);
-      }
-    }
-  };
-
-  if (account.credentialsFile) {
-    const auth = new GoogleAuth({ keyFile: account.credentialsFile, scopes: [CHAT_SCOPE] });
-    authCache.set(account.accountId, { key, auth });
-    evictOldest();
-    return auth;
-  }
-
-  if (account.credentials) {
-    const auth = new GoogleAuth({ credentials: account.credentials, scopes: [CHAT_SCOPE] });
-    authCache.set(account.accountId, { key, auth });
-    evictOldest();
-    return auth;
-  }
-
   const auth = new GoogleAuth({ scopes: [CHAT_SCOPE] });
   authCache.set(account.accountId, { key, auth });
-  evictOldest();
+  evictOldestCacheEntry(authCache);
   return auth;
+}
+
+async function readServiceAccountCredentials(
+  account: ResolvedGoogleChatAccount,
+): Promise<GoogleServiceAccountCredentials | null> {
+  if (account.credentials && typeof account.credentials === "object") {
+    return account.credentials as GoogleServiceAccountCredentials;
+  }
+  if (!account.credentialsFile) {
+    return null;
+  }
+  const raw = await readFile(account.credentialsFile, "utf8");
+  return JSON.parse(raw) as GoogleServiceAccountCredentials;
+}
+
+function requireServiceAccountField(
+  value: string | undefined,
+  field: keyof GoogleServiceAccountCredentials,
+): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    throw new Error(`Google Chat service account is missing ${field}`);
+  }
+  return trimmed;
+}
+
+function toBase64Url(input: Buffer | string): string {
+  return Buffer.from(input).toString("base64url");
+}
+
+function buildServiceAccountAssertion(params: {
+  credentials: GoogleServiceAccountCredentials;
+  tokenUri: string;
+  nowMs: number;
+}): string {
+  const { credentials, tokenUri, nowMs } = params;
+  const clientEmail = requireServiceAccountField(credentials.client_email, "client_email");
+  const privateKey = requireServiceAccountField(credentials.private_key, "private_key");
+  const issuedAt = Math.floor(nowMs / 1000);
+  const expiresAt = issuedAt + 3600;
+
+  const encodedHeader = toBase64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const encodedPayload = toBase64Url(
+    JSON.stringify({
+      iss: clientEmail,
+      scope: CHAT_SCOPE,
+      aud: tokenUri,
+      iat: issuedAt,
+      exp: expiresAt,
+    }),
+  );
+  const unsignedToken = `${encodedHeader}.${encodedPayload}`;
+  const signer = crypto.createSign("RSA-SHA256");
+  signer.update(unsignedToken);
+  signer.end();
+  const signature = signer.sign(privateKey);
+  return `${unsignedToken}.${toBase64Url(signature)}`;
+}
+
+async function exchangeServiceAccountAccessToken(params: {
+  authKey: string;
+  credentials: GoogleServiceAccountCredentials;
+}): Promise<string> {
+  const tokenUri = (params.credentials.token_uri?.trim() || DEFAULT_TOKEN_URI).trim();
+  const parsedTokenUrl = new URL(tokenUri);
+  if (parsedTokenUrl.protocol !== "https:") {
+    throw new Error(`Google Chat token_uri must use https: ${tokenUri}`);
+  }
+
+  const nowMs = Date.now();
+  const assertion = buildServiceAccountAssertion({
+    credentials: params.credentials,
+    tokenUri,
+    nowMs,
+  });
+  const body = new URLSearchParams({
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    assertion,
+  });
+
+  const res = await fetch(tokenUri, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Google Chat token exchange ${res.status}: ${text || res.statusText}`);
+  }
+
+  const payload = (await res.json()) as {
+    access_token?: string;
+    expires_in?: number;
+  };
+  const accessToken = payload.access_token?.trim();
+  if (!accessToken) {
+    throw new Error("Google Chat token exchange returned no access_token");
+  }
+  const expiresInSec =
+    typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in)
+      ? Math.max(60, payload.expires_in)
+      : 3600;
+  const expiresAtMs = nowMs + Math.max(30_000, (expiresInSec - 60) * 1000);
+  serviceTokenCache.set(params.authKey, { accessToken, expiresAtMs });
+  evictOldestCacheEntry(serviceTokenCache);
+  return accessToken;
+}
+
+async function getServiceAccountAccessToken(
+  account: ResolvedGoogleChatAccount,
+): Promise<string | null> {
+  const authKey = buildAuthKey(account);
+  const cached = serviceTokenCache.get(authKey);
+  if (cached && cached.expiresAtMs > Date.now()) {
+    return cached.accessToken;
+  }
+
+  const credentials = await readServiceAccountCredentials(account);
+  if (!credentials) {
+    return null;
+  }
+  return await exchangeServiceAccountAccessToken({ authKey, credentials });
 }
 
 export async function getGoogleChatAccessToken(
   account: ResolvedGoogleChatAccount,
 ): Promise<string> {
+  const serviceAccountToken = await getServiceAccountAccessToken(account);
+  if (serviceAccountToken) {
+    return serviceAccountToken;
+  }
+
   const auth = getAuthInstance(account);
   const client = await auth.getClient();
   const access = await client.getAccessToken();
