@@ -74,4 +74,34 @@ describe("config validation allowed-values metadata", () => {
       expect(issue?.message).not.toContain("(allowed:");
     }
   });
+
+  it("surfaces unrecognized key name when bindings[].acp contains an unknown field (#40565)", () => {
+    const result = validateConfigObjectRaw({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "main",
+          match: {
+            channel: "telegram",
+            peer: { kind: "direct", id: "12345" },
+          },
+          acp: {
+            mode: "persistent",
+            agent: "claude", // unrecognized key
+          },
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Should surface a specific issue mentioning the unrecognized key "agent",
+      // not just a generic "Invalid input" at bindings.0
+      const issues = result.issues;
+      const issue = issues.find((entry) => entry.path === "bindings.0.acp");
+      expect(issue).toBeDefined();
+      expect(issue?.path).toBe("bindings.0.acp");
+      expect(issue?.message).toContain("agent");
+    }
+  });
 });
