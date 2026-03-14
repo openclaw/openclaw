@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import type { EditToolOptions } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { SandboxFsBridge, SandboxFsStat } from "./sandbox/fs-bridge.js";
 
 const mocks = vi.hoisted(() => ({
   executeThrows: true,
@@ -92,6 +92,11 @@ describe("createHostWorkspaceEditTool post-write recovery", () => {
     const filePath = "/workspace/MEMORY.md";
     const oldText = "# Memory";
     const newText = "Blog Writing";
+    const statResult: SandboxFsStat = {
+      type: "file",
+      size: newText.length,
+      mtimeMs: Date.now(),
+    };
     const bridge: SandboxFsBridge = {
       resolvePath: () => ({
         hostPath: "/tmp/MEMORY.md",
@@ -103,7 +108,7 @@ describe("createHostWorkspaceEditTool post-write recovery", () => {
       mkdirp: vi.fn(async () => {}),
       remove: vi.fn(async () => {}),
       rename: vi.fn(async () => {}),
-      stat: vi.fn(async () => ({ type: "file", size: newText.length, mtimeMs: Date.now() })),
+      stat: vi.fn(async () => statResult),
     };
 
     const tool = createSandboxedEditTool({ root: "/workspace", bridge });
