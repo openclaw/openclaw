@@ -631,22 +631,27 @@ export function registerMemoryCli(program: Command) {
     .option("--shared", "Index only the shared memory store", false)
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions & { shared?: boolean }) => {
+      setVerbose(Boolean(opts.verbose));
       // Handle --shared: sync only the shared store
       if (opts.shared) {
         const { SHARED_AGENT_ID } = await import("../memory/shared-constants.js");
-        const { config: cfg } = await loadMemoryCommandConfig("memory index");
+        const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory index");
+        emitMemorySecretResolveDiagnostics(diagnostics);
         await withMemoryManagerForAgent({
           cfg,
           agentId: SHARED_AGENT_ID,
           run: async (manager) => {
+            if (!manager.sync) {
+              defaultRuntime.log("Shared store sync not available.");
+              return;
+            }
             defaultRuntime.log("Syncing shared memory store…");
-            await manager.sync?.({ reason: "cli", force: Boolean(opts.force) });
+            await manager.sync({ reason: "cli", force: Boolean(opts.force) });
             defaultRuntime.log("Shared store synced.");
           },
         });
         return;
       }
-      setVerbose(Boolean(opts.verbose));
       const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory index");
       emitMemorySecretResolveDiagnostics(diagnostics);
       const agentIds = resolveAgentIds(cfg, opts.agent);

@@ -782,7 +782,7 @@ export const RESERVED_AGENT_IDS = new Set([SHARED_AGENT_ID]);
 
 export const AgentEntrySchema = z
   .object({
-    id: z.string().refine((id) => !RESERVED_AGENT_IDS.has(id.toLowerCase()), {
+    id: z.string().refine((id) => !RESERVED_AGENT_IDS.has(id.trim().toLowerCase()), {
       message: 'Agent ID "_shared" is reserved for the shared memory store',
     }),
     default: z.boolean().optional(),
