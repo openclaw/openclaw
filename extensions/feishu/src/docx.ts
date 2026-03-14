@@ -104,7 +104,7 @@ async function convertMarkdown(client: Lark.Client, markdown: string) {
   const res = await client.docx.document.convert({
     data: { content_type: "markdown", content: markdown },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
   return {
@@ -150,7 +150,7 @@ async function insertBlocks(
         ...(index !== undefined ? { index: index + offset } : {}),
       },
     });
-    if (res.code !== 0) {
+    if (res.code !== undefined && res.code !== 0) {
       throw new Error(res.msg);
     }
     allInserted.push(...(res.data?.children ?? []));
@@ -320,7 +320,7 @@ async function insertBlocksWithDescendant(
     data: { children_id: firstLevelBlockIds, descendants, index },
   });
 
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(`${res.msg} (code: ${res.code})`);
   }
 
@@ -331,7 +331,7 @@ async function clearDocumentContent(client: Lark.Client, docToken: string) {
   const existing = await client.docx.documentBlock.list({
     path: { document_id: docToken },
   });
-  if (existing.code !== 0) {
+  if (existing.code !== undefined && existing.code !== 0) {
     throw new Error(existing.msg);
   }
 
@@ -345,7 +345,7 @@ async function clearDocumentContent(client: Lark.Client, docToken: string) {
       path: { document_id: docToken, block_id: docToken },
       data: { start_index: 0, end_index: childIds.length },
     });
-    if (res.code !== 0) {
+    if (res.code !== undefined && res.code !== 0) {
       throw new Error(res.msg);
     }
   }
@@ -588,7 +588,7 @@ async function uploadImageBlock(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK type
     data: { children: [{ block_type: 27, image: {} as any }], index: index ?? -1 },
   });
-  if (insertRes.code !== 0) {
+  if (insertRes.code !== undefined && insertRes.code !== 0) {
     throw new Error(`Failed to create image block: ${insertRes.msg}`);
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK return shape
@@ -612,7 +612,7 @@ async function uploadImageBlock(
     path: { document_id: docToken, block_id: imageBlockId },
     data: { replace_image: { token: fileToken } },
   });
-  if (patchRes.code !== 0) {
+  if (patchRes.code !== undefined && patchRes.code !== 0) {
     throw new Error(patchRes.msg);
   }
 
@@ -659,7 +659,7 @@ async function uploadFileBlock(
   const childrenRes = await client.docx.documentBlockChildren.get({
     path: { document_id: docToken, block_id: parentId },
   });
-  if (childrenRes.code !== 0) {
+  if (childrenRes.code !== undefined && childrenRes.code !== 0) {
     throw new Error(childrenRes.msg);
   }
   const items = childrenRes.data?.items ?? [];
@@ -672,7 +672,7 @@ async function uploadFileBlock(
       path: { document_id: docToken, block_id: parentId },
       data: { start_index: placeholderIdx, end_index: placeholderIdx + 1 },
     });
-    if (deleteRes.code !== 0) {
+    if (deleteRes.code !== undefined && deleteRes.code !== 0) {
       throw new Error(deleteRes.msg);
     }
   }
@@ -714,8 +714,14 @@ async function readDoc(client: Lark.Client, docToken: string) {
     client.docx.documentBlock.list({ path: { document_id: docToken } }),
   ]);
 
-  if (contentRes.code !== 0) {
+  if (contentRes.code !== undefined && contentRes.code !== 0) {
     throw new Error(contentRes.msg);
+  }
+  if (infoRes.code !== undefined && infoRes.code !== 0) {
+    throw new Error(infoRes.msg);
+  }
+  if (blocksRes.code !== undefined && blocksRes.code !== 0) {
+    throw new Error(blocksRes.msg);
   }
 
   const blocks = blocksRes.data?.items ?? [];
@@ -756,7 +762,7 @@ async function createDoc(
   const res = await client.docx.document.create({
     data: { title, folder_token: folderToken },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
   const doc = res.data?.document;
@@ -882,7 +888,7 @@ async function insertDoc(
   const blockInfo = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: afterBlockId },
   });
-  if (blockInfo.code !== 0) throw new Error(blockInfo.msg);
+  if (blockInfo.code !== undefined && blockInfo.code !== 0) throw new Error(blockInfo.msg);
 
   const parentId = blockInfo.data?.block?.parent_id ?? docToken;
 
@@ -897,7 +903,7 @@ async function insertDoc(
       path: { document_id: docToken, block_id: parentId },
       params: pageToken ? { page_token: pageToken } : {},
     });
-    if (childrenRes.code !== 0) throw new Error(childrenRes.msg);
+    if (childrenRes.code !== undefined && childrenRes.code !== 0) throw new Error(childrenRes.msg);
     items.push(...(childrenRes.data?.items ?? []));
     pageToken = childrenRes.data?.page_token ?? undefined;
   } while (pageToken);
@@ -978,7 +984,7 @@ async function createTable(
     },
   });
 
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -1012,7 +1018,7 @@ async function writeTableCells(
   const tableRes = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: tableBlockId },
   });
-  if (tableRes.code !== 0) {
+  if (tableRes.code !== undefined && tableRes.code !== 0) {
     throw new Error(tableRes.msg);
   }
 
@@ -1050,7 +1056,7 @@ async function writeTableCells(
       const childrenRes = await client.docx.documentBlockChildren.get({
         path: { document_id: docToken, block_id: cellId },
       });
-      if (childrenRes.code !== 0) {
+      if (childrenRes.code !== undefined && childrenRes.code !== 0) {
         throw new Error(childrenRes.msg);
       }
 
@@ -1060,7 +1066,7 @@ async function writeTableCells(
           path: { document_id: docToken, block_id: cellId },
           data: { start_index: 0, end_index: existingChildren.length },
         });
-        if (delRes.code !== 0) {
+        if (delRes.code !== undefined && delRes.code !== 0) {
           throw new Error(delRes.msg);
         }
       }
@@ -1127,7 +1133,7 @@ async function updateBlock(
   const blockInfo = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: blockId },
   });
-  if (blockInfo.code !== 0) {
+  if (blockInfo.code !== undefined && blockInfo.code !== 0) {
     throw new Error(blockInfo.msg);
   }
 
@@ -1139,7 +1145,7 @@ async function updateBlock(
       },
     },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -1150,7 +1156,7 @@ async function deleteBlock(client: Lark.Client, docToken: string, blockId: strin
   const blockInfo = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: blockId },
   });
-  if (blockInfo.code !== 0) {
+  if (blockInfo.code !== undefined && blockInfo.code !== 0) {
     throw new Error(blockInfo.msg);
   }
 
@@ -1159,7 +1165,7 @@ async function deleteBlock(client: Lark.Client, docToken: string, blockId: strin
   const children = await client.docx.documentBlockChildren.get({
     path: { document_id: docToken, block_id: parentId },
   });
-  if (children.code !== 0) {
+  if (children.code !== undefined && children.code !== 0) {
     throw new Error(children.msg);
   }
 
@@ -1174,7 +1180,7 @@ async function deleteBlock(client: Lark.Client, docToken: string, blockId: strin
     path: { document_id: docToken, block_id: parentId },
     data: { start_index: index, end_index: index + 1 },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -1185,7 +1191,7 @@ async function listBlocks(client: Lark.Client, docToken: string) {
   const res = await client.docx.documentBlock.list({
     path: { document_id: docToken },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -1198,7 +1204,7 @@ async function getBlock(client: Lark.Client, docToken: string, blockId: string) 
   const res = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: blockId },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -1209,7 +1215,7 @@ async function getBlock(client: Lark.Client, docToken: string, blockId: string) 
 
 async function listAppScopes(client: Lark.Client) {
   const res = await client.application.scope.list({});
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
