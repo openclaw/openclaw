@@ -563,13 +563,23 @@ function resolveCurrentSession(
 }
 
 async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey: string) {
-  const [sessions, models] = await Promise.all([
+  // Use allSettled so a transient models.list failure does not prevent session
+  // data from being displayed. When models.list is unavailable the thinking
+  // level falls back to the persisted value (or "off" if unset), which is
+  // acceptable degraded behaviour.
+  const [sessionsResult, modelsResult] = await Promise.allSettled([
     client.request<SessionsListResult>("sessions.list", {}),
     client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
   ]);
+  if (sessionsResult.status === "rejected") {
+    throw sessionsResult.reason;
+  }
+  const sessions = sessionsResult.value;
+  const models =
+    modelsResult.status === "fulfilled" ? (modelsResult.value?.models ?? []) : [];
   return {
     session: resolveCurrentSession(sessions, sessionKey),
-    models: models?.models ?? [],
+    models,
   };
 }
 
