@@ -370,6 +370,36 @@ export async function runAgentTurnWithFallback(params: {
                         mediaUrls: payload.mediaUrls,
                       });
                     }
+                  }
+                  // Track auto-compaction completion and notify UI layer
+                  if (evt.stream === "compaction") {
+                    const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                    if (phase === "start") {
+                      await params.opts?.onCompactionStart?.();
+                    }
+                    const completed = evt.data?.completed === true;
+                    if (phase === "end" && completed) {
+                      attemptCompactionCount += 1;
+                      await params.opts?.onCompactionEnd?.();
+                    }
+                  }
+                },
+                // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
+                // even when regular block streaming is disabled. The handler sends directly
+                // via opts.onBlockReply when the pipeline isn't available.
+                onBlockReply: params.opts?.onBlockReply
+                  ? createBlockReplyDeliveryHandler({
+                      onBlockReply: params.opts.onBlockReply,
+                      currentMessageId:
+                        params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+                      normalizeStreamingText,
+                      applyReplyToMode: params.applyReplyToMode,
+                      normalizeMediaPaths: normalizeReplyMediaPaths,
+                      typingSignals: params.typingSignals,
+                      blockStreamingEnabled: params.blockStreamingEnabled,
+                      blockReplyPipeline,
+                      directlySentBlockKeys,
+                    })
                   : undefined,
               onReasoningEnd: params.opts?.onReasoningEnd,
               onAgentEvent: async (evt) => {
