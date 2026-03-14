@@ -5,6 +5,7 @@ import {
   type AuthProfileCredential,
 } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
@@ -421,6 +422,62 @@ function resolveMinimaxApiHostFromProfile(params: {
   return MINIMAX_DEFAULT_API_HOST_BY_PROVIDER[params.profileProvider];
 }
 
+function resolveMinimaxProfileProviderFromHost(
+  host?: string,
+): MinimaxAuthProfileProvider | undefined {
+  const origin = normalizeUrlOrigin(host);
+  if (!origin) {
+    return undefined;
+  }
+  if (origin.includes("minimaxi.com")) {
+    return "minimax-cn";
+  }
+  if (origin.includes("minimax.io")) {
+    return "minimax-portal";
+  }
+  return undefined;
+}
+
+function resolveMinimaxAuthProfileProviderPriority(params: {
+  sourceConfig: OpenClawConfig;
+  context: ResolverContext;
+}): MinimaxAuthProfileProvider[] {
+  const search = isRecord(params.sourceConfig.tools?.web?.search)
+    ? (params.sourceConfig.tools?.web?.search as Record<string, unknown>)
+    : undefined;
+  const minimax = isRecord(search?.minimax) ? search.minimax : undefined;
+  const searchHost = typeof minimax?.baseUrl === "string" ? minimax.baseUrl : undefined;
+  const runtimeHost = normalizeSecretInput(params.context.env.MINIMAX_API_HOST);
+  const preferredFromHost =
+    resolveMinimaxProfileProviderFromHost(searchHost) ??
+    resolveMinimaxProfileProviderFromHost(runtimeHost);
+  if (preferredFromHost) {
+    return [
+      preferredFromHost,
+      ...MINIMAX_AUTH_PROFILE_PROVIDERS.filter((provider) => provider !== preferredFromHost),
+    ];
+  }
+
+  const modelProviderPrefix = resolveAgentModelPrimaryValue(
+    params.sourceConfig.agents?.defaults?.model,
+  )
+    ?.trim()
+    .toLowerCase()
+    .split("/")[0];
+  if (
+    modelProviderPrefix &&
+    MINIMAX_AUTH_PROFILE_PROVIDERS.includes(modelProviderPrefix as MinimaxAuthProfileProvider)
+  ) {
+    const preferred = modelProviderPrefix as MinimaxAuthProfileProvider;
+    return [
+      preferred,
+      ...MINIMAX_AUTH_PROFILE_PROVIDERS.filter((provider) => provider !== preferred),
+    ];
+  }
+
+  return [...MINIMAX_AUTH_PROFILE_PROVIDERS];
+}
+
 export async function resolveMinimaxApiKeyFromAuthProfiles(params: {
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
@@ -452,8 +509,12 @@ export async function resolveMinimaxApiKeysFromAuthProfiles(params: {
     profileProvider: MinimaxAuthProfileProvider;
     apiHost: string;
   }> = [];
+  const providerPriority = resolveMinimaxAuthProfileProviderPriority({
+    sourceConfig: params.sourceConfig,
+    context: params.context,
+  });
   const visited = new Set<string>();
-  for (const provider of MINIMAX_AUTH_PROFILE_PROVIDERS) {
+  for (const provider of providerPriority) {
     const profileIds = resolveAuthProfileOrder({
       cfg: params.sourceConfig,
       store,

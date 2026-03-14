@@ -413,6 +413,58 @@ describe("runtime web tools resolution", () => {
     expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("beta-token");
   });
 
+  it("prefers minimax-cn auth profiles when default model targets minimax-cn", async () => {
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
+      version: 1,
+      profiles: {
+        "minimax-portal:default": {
+          type: "token",
+          provider: "minimax-portal",
+          token: "portal-token", // pragma: allowlist secret
+        },
+        "minimax-cn:default": {
+          type: "token",
+          provider: "minimax-cn",
+          token: "cn-token", // pragma: allowlist secret
+        },
+      },
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
+    vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) => {
+      if (provider === "minimax-portal") {
+        return ["minimax-portal:default"];
+      }
+      if (provider === "minimax-cn") {
+        return ["minimax-cn:default"];
+      }
+      return [];
+    });
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        agents: {
+          defaults: {
+            model: "minimax-cn/MiniMax-M2.5",
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+      env: {},
+    });
+
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("cn-token");
+    expect(readMinimaxBaseUrl(resolvedConfig)).toBe("https://api.minimaxi.com");
+  });
+
   it("prefers configured minimax-portal baseUrl when auth profile fallback is minimax-portal", async () => {
     vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
       version: 1,
