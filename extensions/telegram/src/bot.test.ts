@@ -25,7 +25,7 @@ import {
   setMyCommandsSpy,
   wasSentByBot,
 } from "./bot.create-telegram-bot.test-harness.js";
-import { createTelegramBot } from "./bot.js";
+let createTelegramBot: typeof import("./bot.js").createTelegramBot;
 
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
@@ -46,7 +46,9 @@ describe("createTelegramBot", () => {
     process.env.TZ = ORIGINAL_TZ;
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createTelegramBot } = await import("./bot.js"));
     setMyCommandsSpy.mockClear();
     loadConfig.mockReturnValue({
       agents: {
