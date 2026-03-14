@@ -349,6 +349,40 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const passwordValue = resolvedAuth.password;
   const hasToken = typeof tokenValue === "string" && tokenValue.trim().length > 0;
   const hasPassword = typeof passwordValue === "string" && passwordValue.trim().length > 0;
+  // [HARDENED] Reject known weak/predictable token values copied from example files.
+  const WEAK_TOKENS = new Set([
+    "change-me-to-a-long-random-token",
+    "change-me",
+    "changeme",
+    "secret",
+    "password",
+    "token",
+    "your-token-here",
+    "replace-me",
+  ]);
+  if (hasToken && WEAK_TOKENS.has(tokenValue.trim().toLowerCase())) {
+    defaultRuntime.error(
+      [
+        "[HARDENED] Gateway token is a known weak/placeholder value and has been rejected.",
+        "Generate a strong token: openssl rand -hex 32",
+        "Then set OPENCLAW_GATEWAY_TOKEN or gateway.auth.token in your config.",
+      ].join("\n"),
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+  const MIN_TOKEN_LENGTH = 16;
+  if (hasToken && tokenValue.trim().length < MIN_TOKEN_LENGTH) {
+    defaultRuntime.error(
+      [
+        `[HARDENED] Gateway token is too short (minimum ${MIN_TOKEN_LENGTH} characters).`,
+        "Generate a strong token: openssl rand -hex 32",
+        "Then set OPENCLAW_GATEWAY_TOKEN or gateway.auth.token in your config.",
+      ].join("\n"),
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
   const tokenConfigured =
     hasToken ||
     hasConfiguredSecretInput(
