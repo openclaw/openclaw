@@ -25,40 +25,27 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
-vi.mock("./streaming-card.js", () => ({
-  mergeStreamingText: (previousText: string | undefined, nextText: string | undefined) => {
-    const previous = typeof previousText === "string" ? previousText : "";
-    const next = typeof nextText === "string" ? nextText : "";
-    if (!next) {
-      return previous;
-    }
-    if (!previous || next === previous) {
-      return next;
-    }
-    if (next.startsWith(previous)) {
-      return next;
-    }
-    if (previous.startsWith(next)) {
-      return previous;
-    }
-    return `${previous}${next}`;
-  },
-  FeishuStreamingSession: class {
-    active = false;
-    start = vi.fn(async () => {
-      this.active = true;
-    });
-    update = vi.fn(async () => {});
-    close = vi.fn(async () => {
-      this.active = false;
-    });
-    isActive = vi.fn(() => this.active);
+vi.mock("./streaming-card.js", async () => {
+  const actual = await vi.importActual<typeof import("./streaming-card.js")>("./streaming-card.js");
+  return {
+    mergeStreamingText: actual.mergeStreamingText,
+    FeishuStreamingSession: class {
+      active = false;
+      start = vi.fn(async () => {
+        this.active = true;
+      });
+      update = vi.fn(async () => {});
+      close = vi.fn(async () => {
+        this.active = false;
+      });
+      isActive = vi.fn(() => this.active);
 
-    constructor() {
-      streamingInstances.push(this);
-    }
-  },
-}));
+      constructor() {
+        streamingInstances.push(this);
+      }
+    },
+  };
+});
 
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 

@@ -23,6 +23,8 @@ class MockWebSocket {
   private closeHandlers: WsEventHandlers["close"][] = [];
   private errorHandlers: WsEventHandlers["error"][] = [];
   readonly sent: string[] = [];
+  closeCalls = 0;
+  terminateCalls = 0;
 
   constructor(_url: string, _options?: unknown) {
     wsInstances.push(this);
@@ -52,7 +54,12 @@ class MockWebSocket {
   }
 
   close(code?: number, reason?: string): void {
+    this.closeCalls += 1;
     this.emitClose(code ?? 1000, reason ?? "");
+  }
+
+  terminate(): void {
+    this.terminateCalls += 1;
   }
 
   send(data: string): void {
@@ -295,6 +302,29 @@ describe("GatewayClient close handling", () => {
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
     client.stop();
+  });
+
+  it("force-terminates a lingering socket after stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+      });
+
+      client.start();
+      const ws = getLatestWs();
+
+      client.stop();
+
+      expect(ws.closeCalls).toBe(1);
+      expect(ws.terminateCalls).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(ws.terminateCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not clear persisted device auth when explicit shared token is provided", () => {

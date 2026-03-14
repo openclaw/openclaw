@@ -1,4 +1,9 @@
 import {
+  markdownToSignalTextChunks,
+  type SignalTextStyleRange,
+} from "../../../extensions/signal/src/format.js";
+import { sendMessageSignal } from "../../../extensions/signal/src/send.js";
+import {
   chunkByParagraph,
   chunkMarkdownTextWithMode,
   resolveChunkMode,
@@ -17,7 +22,6 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
-import type { sendMessageDiscord } from "../../discord/send.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
@@ -26,15 +30,9 @@ import {
   toPluginMessageContext,
   toPluginMessageSentEvent,
 } from "../../hooks/message-hook-mappers.js";
-import type { sendMessageIMessage } from "../../imessage/send.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
-import { sendMessageSignal } from "../../signal/send.js";
-import type { sendMessageSlack } from "../../slack/send.js";
-import type { sendMessageTelegram } from "../../telegram/send.js";
-import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -51,32 +49,47 @@ export { normalizeOutboundPayloads } from "./payloads.js";
 const log = createSubsystemLogger("outbound/deliver");
 const TELEGRAM_TEXT_LIMIT = 4096;
 
-type SendMatrixMessage = (
-  to: string,
-  text: string,
-  opts?: {
-    cfg?: OpenClawConfig;
-    mediaUrl?: string;
-    replyToId?: string;
-    threadId?: string;
-    timeoutMs?: number;
-  },
-) => Promise<{ messageId: string; roomId: string }>;
-
-export type OutboundSendDeps = {
-  sendWhatsApp?: typeof sendMessageWhatsApp;
-  sendTelegram?: typeof sendMessageTelegram;
-  sendDiscord?: typeof sendMessageDiscord;
-  sendSlack?: typeof sendMessageSlack;
-  sendSignal?: typeof sendMessageSignal;
-  sendIMessage?: typeof sendMessageIMessage;
-  sendMatrix?: SendMatrixMessage;
-  sendMSTeams?: (
-    to: string,
-    text: string,
-    opts?: { mediaUrl?: string; mediaLocalRoots?: readonly string[] },
-  ) => Promise<{ messageId: string; conversationId: string }>;
+type LegacyOutboundSendDeps = {
+  sendWhatsApp?: unknown;
+  sendTelegram?: unknown;
+  sendDiscord?: unknown;
+  sendSlack?: unknown;
+  sendSignal?: unknown;
+  sendIMessage?: unknown;
+  sendMatrix?: unknown;
+  sendMSTeams?: unknown;
 };
+
+/**
+ * Dynamic bag of per-channel send functions, keyed by channel ID.
+ * Each outbound adapter resolves its own function from this record and
+ * falls back to a direct import when the key is absent.
+ */
+export type OutboundSendDeps = LegacyOutboundSendDeps & { [channelId: string]: unknown };
+
+const LEGACY_SEND_DEP_KEYS = {
+  whatsapp: "sendWhatsApp",
+  telegram: "sendTelegram",
+  discord: "sendDiscord",
+  slack: "sendSlack",
+  signal: "sendSignal",
+  imessage: "sendIMessage",
+  matrix: "sendMatrix",
+  msteams: "sendMSTeams",
+} as const satisfies Record<string, keyof LegacyOutboundSendDeps>;
+
+export function resolveOutboundSendDep<T>(
+  deps: OutboundSendDeps | null | undefined,
+  channelId: keyof typeof LEGACY_SEND_DEP_KEYS,
+): T | undefined {
+  const dynamic = deps?.[channelId];
+  if (dynamic !== undefined) {
+    return dynamic as T;
+  }
+  const legacyKey = LEGACY_SEND_DEP_KEYS[channelId];
+  const legacy = deps?.[legacyKey];
+  return legacy as T | undefined;
+}
 
 export type OutboundDeliveryResult = {
   channel: Exclude<OutboundChannel, "none">;
@@ -242,7 +255,7 @@ type DeliverOutboundPayloadsCoreParams = {
   silent?: boolean;
 };
 
-type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
+export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
 };
@@ -527,7 +540,8 @@ async function deliverOutboundPayloadsCore(
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
-  const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
+  const sendSignal =
+    resolveOutboundSendDep<typeof sendMessageSignal>(params.deps, "signal") ?? sendMessageSignal;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(
     cfg,
     params.session?.agentId ?? params.mirror?.agentId,

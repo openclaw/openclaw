@@ -12,15 +12,33 @@ function resolveWindowsExecutableExtensions(
   if (path.extname(executable).length > 0) {
     return [""];
   }
-  return (
-    env?.PATHEXT ??
-    env?.Pathext ??
-    process.env.PATHEXT ??
-    process.env.Pathext ??
-    ".EXE;.CMD;.BAT;.COM"
-  )
-    .split(";")
-    .map((ext) => ext.toLowerCase());
+  return [
+    "",
+    ...(
+      env?.PATHEXT ??
+      env?.Pathext ??
+      process.env.PATHEXT ??
+      process.env.Pathext ??
+      ".EXE;.CMD;.BAT;.COM"
+    )
+      .split(";")
+      .map((ext) => ext.toLowerCase()),
+  ];
+}
+
+function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set<string> {
+  return new Set(
+    (
+      env?.PATHEXT ??
+      env?.Pathext ??
+      process.env.PATHEXT ??
+      process.env.Pathext ??
+      ".EXE;.CMD;.BAT;.COM"
+    )
+      .split(";")
+      .map((ext) => ext.toLowerCase())
+      .filter(Boolean),
+  );
 }
 
 export function isExecutableFile(filePath: string): boolean {
@@ -29,9 +47,14 @@ export function isExecutableFile(filePath: string): boolean {
     if (!stat.isFile()) {
       return false;
     }
-    if (process.platform !== "win32") {
-      fs.accessSync(filePath, fs.constants.X_OK);
+    if (process.platform === "win32") {
+      const ext = path.extname(filePath).toLowerCase();
+      if (!ext) {
+        return true;
+      }
+      return resolveWindowsExecutableExtSet(undefined).has(ext);
     }
+    fs.accessSync(filePath, fs.constants.X_OK);
     return true;
   } catch {
     return false;

@@ -19,8 +19,12 @@ describe("detectPackageManager", () => {
 
   it("falls back to lockfiles when package.json is missing or unsupported", async () => {
     const bunRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-detect-pm-"));
-    await fs.writeFile(path.join(bunRoot, "bun.lockb"), "", "utf8");
+    await fs.writeFile(path.join(bunRoot, "bun.lock"), "", "utf8");
     await expect(detectPackageManager(bunRoot)).resolves.toBe("bun");
+
+    const legacyBunRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-detect-pm-"));
+    await fs.writeFile(path.join(legacyBunRoot, "bun.lockb"), "", "utf8");
+    await expect(detectPackageManager(legacyBunRoot)).resolves.toBe("bun");
 
     const npmRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-detect-pm-"));
     await fs.writeFile(

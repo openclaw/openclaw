@@ -65,8 +65,8 @@ export function createProfileAvailability({
     });
 
   const isReachable = async (timeoutMs?: number) => {
-    if (profile.driver === "existing-session") {
-      await ensureChromeMcpAvailable(profile.name);
+    if (capabilities.usesChromeMcp) {
+      // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required
       await listChromeMcpTabs(profile.name);
       return true;
     }
@@ -75,7 +75,7 @@ export function createProfileAvailability({
   };
 
   const isHttpReachable = async (timeoutMs?: number) => {
-    if (profile.driver === "existing-session") {
+    if (capabilities.usesChromeMcp) {
       return await isReachable(timeoutMs);
     }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
@@ -122,7 +122,7 @@ export function createProfileAvailability({
     if (previousProfile.driver === "extension") {
       await stopChromeExtensionRelayServer({ cdpUrl: previousProfile.cdpUrl }).catch(() => false);
     }
-    if (previousProfile.driver === "existing-session") {
+    if (getBrowserProfileCapabilities(previousProfile).usesChromeMcp) {
       await closeChromeMcpSession(previousProfile.name).catch(() => false);
     }
     await closePlaywrightBrowserConnectionForProfile(previousProfile.cdpUrl);
@@ -154,7 +154,7 @@ export function createProfileAvailability({
 
   const ensureBrowserAvailable = async (): Promise<void> => {
     await reconcileProfileRuntime();
-    if (profile.driver === "existing-session") {
+    if (capabilities.usesChromeMcp) {
       await ensureChromeMcpAvailable(profile.name);
       return;
     }
@@ -258,7 +258,7 @@ export function createProfileAvailability({
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
     await reconcileProfileRuntime();
-    if (profile.driver === "existing-session") {
+    if (capabilities.usesChromeMcp) {
       const stopped = await closeChromeMcpSession(profile.name);
       return { stopped };
     }
