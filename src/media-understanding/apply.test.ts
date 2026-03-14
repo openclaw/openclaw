@@ -7,6 +7,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
+import { detectMime } from "../media/mime.js";
 import { runExec } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.js";
@@ -30,12 +31,21 @@ vi.mock("../media/fetch.js", () => ({
   fetchRemoteMedia: vi.fn(),
 }));
 
+vi.mock("../media/mime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/mime.js")>();
+  return {
+    ...actual,
+    detectMime: vi.fn(actual.detectMime),
+  };
+});
+
 vi.mock("../process/exec.js", () => ({
   runExec: vi.fn(),
 }));
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 const mockedRunExec = vi.mocked(runExec);
+const mockedDetectMime = vi.mocked(detectMime);
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
 let suiteTempMediaRootDir = "";
@@ -248,6 +258,7 @@ describe("applyMediaUnderstanding", () => {
       mode: "api-key",
     });
     mockedFetchRemoteMedia.mockClear();
+    mockedDetectMime.mockClear();
     mockedRunExec.mockReset();
     mockedFetchRemoteMedia.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
@@ -991,8 +1002,10 @@ describe("applyMediaUnderstanding", () => {
 
   it("does not inject PDF binary as text when MIME type is missing (issue #23191)", async () => {
     // PDFs uploaded via some platforms arrive without a MIME type and with
-    // a generic filename. The %PDF- magic bytes must prevent the text
-    // heuristic from coercing binary content into text/plain.
+    // a generic filename. detectMime is mocked to return undefined so the
+    // buffer-level %PDF- magic byte check in extractFileBlocks is the only
+    // guard preventing binary injection.
+    mockedDetectMime.mockResolvedValueOnce(undefined);
     const pseudoPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8");
     const filePath = await createTempMediaFile({
       fileName: "attachment.bin",
