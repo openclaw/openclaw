@@ -239,6 +239,31 @@ describe("resolveMedia getFile retry", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
   });
 
+  it("retries fetchRemoteMedia on transient HTTP 5xx error and succeeds", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
+    fetchRemoteMedia
+      .mockRejectedValueOnce(new MockMediaFetchError("http_error", "HTTP 502 Bad Gateway"))
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("audio"),
+        contentType: "audio/ogg",
+        fileName: "file_0.oga",
+      });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.oga",
+      contentType: "audio/ogg",
+    });
+
+    const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
+    const result = await promise;
+
+    expect(getFile).toHaveBeenCalledTimes(1);
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(2);
+    expect(result).toEqual(
+      expect.objectContaining({ path: "/tmp/file_0.oga", placeholder: "<media:audio>" }),
+    );
+  });
+
   it("does not retry fetchRemoteMedia on max_bytes policy violation", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "video/large.mp4" });
     fetchRemoteMedia.mockRejectedValueOnce(

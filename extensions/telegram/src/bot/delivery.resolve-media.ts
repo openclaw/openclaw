@@ -66,9 +66,19 @@ function isRetryableGetFileError(err: unknown): boolean {
  */
 function isRetryableDownloadError(err: unknown): boolean {
   if (err instanceof MediaFetchError) {
-    // Only retry transient fetch failures (network issues, timeouts, connection drops).
-    // Do not retry HTTP errors (4xx, 5xx) or policy violations (max_bytes).
-    return err.code === "fetch_failed";
+    // Retry transient fetch failures (network issues, timeouts, connection drops).
+    if (err.code === "fetch_failed") {
+      return true;
+    }
+    // Retry transient HTTP 5xx server errors; do not retry 4xx or policy violations.
+    if (err.code === "http_error") {
+      const match = /HTTP (\d{3})/.exec(err.message);
+      if (match) {
+        const status = Number(match[1]);
+        return status >= 500;
+      }
+    }
+    return false;
   }
   // For non-MediaFetchError, check if it looks like a transient network error.
   const msg = formatErrorMessage(err).toLowerCase();
