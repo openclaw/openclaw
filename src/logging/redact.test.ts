@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PrivacyDetector } from "../privacy/detector.js";
 import {
@@ -208,6 +211,59 @@ describe("redactToolDetail", () => {
       expect(output).not.toContain("3456");
     } finally {
       detectSpy.mockRestore();
+    }
+  });
+
+  it("isolates detector cache for relative custom rules across different config dirs", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "redact-rules-cache-"));
+    const dirA = path.join(root, "a");
+    const dirB = path.join(root, "b");
+    const prevConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    fs.mkdirSync(dirA, { recursive: true });
+    fs.mkdirSync(dirB, { recursive: true });
+
+    const rulesJson = (type: string, pattern: string) => `{
+  extends: 'none',
+  rules: [
+    {
+      type: '${type}',
+      description: '${type}',
+      riskLevel: 'high',
+      pattern: '${pattern}',
+    },
+  ],
+}`;
+
+    try {
+      fs.writeFileSync(path.join(dirA, "openclaw.json"), "{}\n");
+      fs.writeFileSync(path.join(dirB, "openclaw.json"), "{}\n");
+      fs.writeFileSync(path.join(dirA, "rules.json5"), rulesJson("custom_a", "ALPHA_SECRET_A+"));
+      fs.writeFileSync(path.join(dirB, "rules.json5"), rulesJson("custom_b", "BETA_SECRET_B+"));
+
+      process.env.OPENCLAW_CONFIG_PATH = path.join(dirA, "openclaw.json");
+      const outA = redactWithPrivacyFilter(
+        "token ALPHA_SECRET_AAAAAA",
+        { mode: "tools", patterns: [] },
+        true,
+        "./rules.json5",
+      );
+      expect(outA).not.toContain("ALPHA_SECRET_AAAAAA");
+
+      process.env.OPENCLAW_CONFIG_PATH = path.join(dirB, "openclaw.json");
+      const outB = redactWithPrivacyFilter(
+        "token BETA_SECRET_BBBBBB",
+        { mode: "tools", patterns: [] },
+        true,
+        "./rules.json5",
+      );
+      expect(outB).not.toContain("BETA_SECRET_BBBBBB");
+    } finally {
+      if (prevConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = prevConfigPath;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });

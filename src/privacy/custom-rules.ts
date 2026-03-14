@@ -3,8 +3,9 @@
  */
 
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
+import { resolveConfigPath } from "../config/paths.js";
 import { validateBarePassword, validateHighEntropy } from "./detector.js";
 import { BASIC_RULES, EXTENDED_RULES } from "./rules.js";
 import type { CustomRulesConfig, PrivacyRule, RiskLevel, UserDefinedRule } from "./types.js";
@@ -35,11 +36,23 @@ const TYPE_PATTERN = /^[a-z][a-z0-9_]*$/;
 const MAX_PATTERN_LENGTH = 2000;
 
 /**
+ * Resolve custom rules path.
+ * Relative paths are interpreted from the active config file directory.
+ */
+export function resolveCustomRulesPath(filePath: string): string {
+  if (isAbsolute(filePath)) {
+    return filePath;
+  }
+  const configDir = dirname(resolveConfigPath());
+  return resolve(configDir, filePath);
+}
+
+/**
  * Load custom rules from a JSON5 file path.
  * Returns merged rules (base preset + custom) and any validation errors.
  */
 export function loadCustomRules(filePath: string): CustomRulesResult {
-  const absolutePath = resolve(filePath);
+  const absolutePath = resolveCustomRulesPath(filePath);
   let content: string;
   try {
     content = readFileSync(absolutePath, "utf-8");

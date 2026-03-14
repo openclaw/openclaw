@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -43,6 +43,52 @@ describe("custom-rules", () => {
         expect(loaded.rules.some((r) => r.type === "employee_id")).toBe(true);
       } finally {
         rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves relative rules path from config directory instead of cwd", () => {
+      const root = mkdtempSync(join(tmpdir(), "privacy-custom-rules-rel-"));
+      const configDir = join(root, "config");
+      const workspaceDir = join(root, "workspace");
+      const configPath = join(configDir, "openclaw.json");
+      const rulesPath = join(configDir, "my-rules.json5");
+      const prevCwd = process.cwd();
+      const prevConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+
+      try {
+        mkdirSync(configDir, { recursive: true });
+        mkdirSync(workspaceDir, { recursive: true });
+        writeFileSync(configPath, "{}\n");
+        writeFileSync(
+          rulesPath,
+          `
+          {
+            extends: 'none',
+            rules: [
+              {
+                type: 'workspace_secret',
+                description: 'workspace secret',
+                riskLevel: 'high',
+                pattern: 'WORKSPACE_SECRET_[A-Z]+',
+              },
+            ],
+          }
+          `,
+        );
+        process.env.OPENCLAW_CONFIG_PATH = configPath;
+        process.chdir(workspaceDir);
+
+        const loaded = loadCustomRules("./my-rules.json5");
+        expect(loaded.errors).toHaveLength(0);
+        expect(loaded.rules.some((r) => r.type === "workspace_secret")).toBe(true);
+      } finally {
+        process.chdir(prevCwd);
+        if (prevConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = prevConfigPath;
+        }
+        rmSync(root, { recursive: true, force: true });
       }
     });
   });
