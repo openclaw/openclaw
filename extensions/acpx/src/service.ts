@@ -81,11 +81,16 @@ function hasRestrictedBrowserSsrFPolicy(
   if (!ssrfPolicy) {
     return false;
   }
-  const blocksPrivateNetwork =
-    ssrfPolicy.dangerouslyAllowPrivateNetwork === false || ssrfPolicy.allowPrivateNetwork === false;
+  const hasExplicitPrivateNetworkSetting =
+    ssrfPolicy.dangerouslyAllowPrivateNetwork !== undefined ||
+    ssrfPolicy.allowPrivateNetwork !== undefined;
+  const allowsPrivateNetwork =
+    ssrfPolicy.dangerouslyAllowPrivateNetwork === true ||
+    ssrfPolicy.allowPrivateNetwork === true ||
+    !hasExplicitPrivateNetworkSetting;
   const hasHostnameAllowlist =
     ssrfPolicy.hostnameAllowlist?.some((pattern) => pattern.trim() !== "") ?? false;
-  return blocksPrivateNetwork || hasHostnameAllowlist;
+  return !allowsPrivateNetwork || hasHostnameAllowlist;
 }
 
 function removeChromeDevToolsServer(

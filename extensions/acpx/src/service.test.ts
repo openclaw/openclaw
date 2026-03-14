@@ -340,6 +340,34 @@ describe("createAcpxRuntimeService", () => {
     );
   });
 
+  it("keeps the preset enabled when dangerouslyAllowPrivateNetwork overrides the legacy flag", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const service = createAcpxRuntimeService({ runtimeFactory });
+    const context = createServiceContext({
+      config: {
+        browser: {
+          mcp: { enabled: true },
+          ssrfPolicy: {
+            allowPrivateNetwork: false,
+            dangerouslyAllowPrivateNetwork: true,
+          },
+        },
+      },
+    });
+
+    await service.start(context);
+
+    const passedConfig = getPassedPluginConfig(runtimeFactory);
+    expect(passedConfig.mcpServers["chrome-devtools"]).toEqual({
+      command: CHROME_DEVTOOLS_MCP_BIN,
+      args: ["--autoConnect", "--experimental-page-id-routing"],
+    });
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "chrome-devtools-mcp preset injected from browser.mcp config",
+    );
+  });
+
   it("does not override explicit user-defined chrome-devtools entry", async () => {
     const { runtime } = createRuntimeStub(true);
     const runtimeFactory = createRuntimeFactorySpy(runtime);
@@ -358,6 +386,40 @@ describe("createAcpxRuntimeService", () => {
     expect(passedConfig.mcpServers["chrome-devtools"]).toEqual(userDefined);
     expect(context.logger.info).toHaveBeenCalledWith(
       "chrome-devtools-mcp preset skipped: existing mcpServers entry takes precedence",
+    );
+  });
+
+  it("keeps explicit chrome-devtools entries when dangerouslyAllowPrivateNetwork overrides the legacy flag", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const userDefined = { command: "/tmp/chrome-devtools-mcp", args: ["--custom"] };
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+      pluginConfig: {
+        mcpServers: {
+          "chrome-devtools": userDefined,
+          canva: { command: "npx", args: ["canva-mcp"] },
+        },
+      },
+    });
+    const context = createServiceContext({
+      config: {
+        browser: {
+          ssrfPolicy: {
+            allowPrivateNetwork: false,
+            dangerouslyAllowPrivateNetwork: true,
+          },
+        },
+      },
+    });
+
+    await service.start(context);
+
+    const passedConfig = getPassedPluginConfig(runtimeFactory);
+    expect(passedConfig.mcpServers["chrome-devtools"]).toEqual(userDefined);
+    expect(passedConfig.mcpServers["canva"]).toBeDefined();
+    expect(context.logger.info).not.toHaveBeenCalledWith(
+      "chrome-devtools MCP server removed: browser.ssrfPolicy restrictions disable chrome-devtools access",
     );
   });
 
