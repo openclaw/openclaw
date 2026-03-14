@@ -9,6 +9,14 @@ const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
 
+export function hasHelp(argv: string[]): boolean {
+  return argv.some((arg) => HELP_FLAGS.has(arg));
+}
+
+export function hasVersion(argv: string[]): boolean {
+  return argv.some((arg) => VERSION_FLAGS.has(arg));
+}
+
 export function hasHelpOrVersion(argv: string[]): boolean {
   return (
     argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) || hasRootVersionAlias(argv)

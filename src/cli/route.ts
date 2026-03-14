@@ -1,7 +1,7 @@
 import { isTruthyEnvValue } from "../infra/env.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
-import { getCommandPathWithRootOptions, hasFlag, hasHelpOrVersion } from "./argv.js";
+import { getCommandPathWithRootOptions, hasFlag, hasHelp, hasVersion } from "./argv.js";
 import { emitCliBanner } from "./banner.js";
 import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
 import { ensureConfigReady } from "./program/config-guard.js";
@@ -30,7 +30,9 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_ROUTE_FIRST)) {
     return false;
   }
-  if (hasHelpOrVersion(argv)) {
+  // --help and --version fall through to Commander so it can render rich output
+  // or display the version string (--version is also fast-pathed upstream).
+  if (hasHelp(argv) || hasVersion(argv)) {
     return false;
   }
 

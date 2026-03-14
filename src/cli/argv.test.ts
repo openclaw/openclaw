@@ -8,6 +8,7 @@ import {
   getPrimaryCommand,
   getPositiveIntFlagValue,
   getVerboseFlag,
+  hasHelp,
   hasHelpOrVersion,
   hasFlag,
   isRootHelpInvocation,
@@ -65,6 +66,16 @@ describe("argv helpers", () => {
     },
   ])("detects help/version flags: $name", ({ argv, expected }) => {
     expect(hasHelpOrVersion(argv)).toBe(expected);
+  });
+
+  it.each([
+    { name: "--help flag", argv: ["node", "openclaw", "--help"], expected: true },
+    { name: "-h flag", argv: ["node", "openclaw", "-h"], expected: true },
+    { name: "--version flag", argv: ["node", "openclaw", "--version"], expected: false },
+    { name: "-V flag", argv: ["node", "openclaw", "-V"], expected: false },
+    { name: "normal command", argv: ["node", "openclaw", "status"], expected: false },
+  ])("hasHelp detects only help flags: $name", ({ argv, expected }) => {
+    expect(hasHelp(argv)).toBe(expected);
   });
 
   it.each([
