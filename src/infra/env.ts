@@ -48,5 +48,14 @@ export function isTruthyEnvValue(value?: string): boolean {
 }
 
 export function normalizeEnv(): void {
+  // NOTE: ~/.openclaw/.env (and OPENCLAW_STATE_DIR/.env) is loaded by
+  // loadDotEnv() in run-main.ts, which runs BEFORE this call on the second
+  // invocation. Do NOT load it here: normalizeEnv() is also called from
+  // entry.ts before loadDotEnv() runs, and loading the global file at that
+  // point would let it shadow CWD .env values (wrong precedence).
+  //
+  // Prompt Inspector (pi-client.ts) uses lazy init: the first detectSafety()
+  // call invokes initPiClient() internally, by which time loadDotEnv() has
+  // already populated process.env with PMTINSP_API_KEY / PMTINSP_BASE_URL.
   normalizeZaiEnv();
 }

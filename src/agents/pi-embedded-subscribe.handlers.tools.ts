@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { detectSafety, WEB_TOOL_NAMES } from "../security/pi-client.js";
 import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
@@ -435,6 +436,19 @@ export async function handleToolExecutionEnd(
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+
+  // P0-3: Scan web tool results for prompt injection attempts (indirect injection).
+  // This is fire-and-forget with fail-open semantics: detection errors never
+  // block or delay the agent's normal tool result processing.
+  if (!isToolError && WEB_TOOL_NAMES.has(toolName)) {
+    const resultText = extractToolResultText(sanitizedResult);
+    if (resultText) {
+      void detectSafety(resultText, `tool/${toolName}`).catch(() => {
+        // Swallow errors – fail-open ensures the agent is never blocked.
+      });
+    }
+  }
+
   const toolStartKey = buildToolStartKey(runId, toolCallId);
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);
