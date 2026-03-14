@@ -7,6 +7,9 @@ export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDeliver
     description?: string;
     enabled: boolean;
     deleteAfterRun?: boolean;
+    /** When true, each cron run creates a fresh session instead of reusing
+     *  the previous one. Defaults to true for isolated sessions. */
+    freshSession?: boolean;
     createdAtMs: number;
     updatedAtMs: number;
     schedule: TSchedule;
