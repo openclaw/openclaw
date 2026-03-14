@@ -138,6 +138,7 @@ export type ChannelMeta = {
 export type ChannelAccountSnapshot = {
   accountId: string;
   name?: string;
+  agentId?: string;
   enabled?: boolean;
   configured?: boolean;
   linked?: boolean;
