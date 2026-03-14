@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { stripTrailingSilentReplyToken, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -335,11 +335,20 @@ export function buildEmbeddedRunPayloads(params: {
       replyToCurrent: item.replyToCurrent,
       audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
     }))
+    .map((p) => {
+      // Strip a trailing silent-reply token from text that contains real content
+      // (e.g. "Here is the answer NO_REPLY" → "Here is the answer").
+      // Returns undefined when the entire text is just the token.
+      if (p.text) {
+        const stripped = stripTrailingSilentReplyToken(p.text, SILENT_REPLY_TOKEN);
+        if (stripped !== p.text) {
+          return { ...p, text: stripped };
+        }
+      }
+      return p;
+    })
     .filter((p) => {
       if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0)) {
-        return false;
-      }
-      if (p.text && isSilentReplyText(p.text, SILENT_REPLY_TOKEN)) {
         return false;
       }
       return true;

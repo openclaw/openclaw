@@ -49,6 +49,27 @@ export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKE
   return text.replace(getSilentTrailingRegex(token), "").trim();
 }
 
+/**
+ * Strip a trailing silent-reply token from text that contains real content.
+ * Returns the cleaned text, or undefined if the entire text is just the token.
+ */
+export function stripTrailingSilentReplyToken(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): string | undefined {
+  if (!text) {
+    return undefined;
+  }
+  const escaped = escapeRegExp(token);
+  const prefix = new RegExp(`^\\s*${escaped}(?=$|\\W)`);
+  if (prefix.test(text)) {
+    return undefined;
+  }
+  const suffix = new RegExp(`\\s*\\b${escaped}\\b\\W*$`);
+  const stripped = text.replace(suffix, "").trim();
+  return stripped || undefined;
+}
+
 export function isSilentReplyPrefixText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
