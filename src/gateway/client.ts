@@ -62,6 +62,7 @@ type SelectedConnectAuth = {
   signatureToken?: string;
   resolvedDeviceToken?: string;
   storedToken?: string;
+  storedScopes?: string[];
 };
 
 class GatewayClientRequestError extends Error {
@@ -417,6 +418,7 @@ export class GatewayClient {
       signatureToken,
       resolvedDeviceToken,
       storedToken,
+      storedScopes,
     } = this.selectConnectAuth(role);
     if (this.pendingDeviceTokenRetry && authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
@@ -431,7 +433,10 @@ export class GatewayClient {
           }
         : undefined;
     const signedAtMs = Date.now();
-    const scopes = this.opts.scopes ?? ["operator.admin"];
+    // Use stored scopes when reconnecting with a device token to preserve the authorized scopes.
+    // Otherwise, fall back to explicitly requested scopes or the default admin-only scope.
+    const scopes =
+      storedScopes && resolvedDeviceToken ? storedScopes : (this.opts.scopes ?? ["operator.admin"]);
     const platform = this.opts.platform ?? process.platform;
     const device = (() => {
       if (!this.opts.deviceIdentity) {
@@ -617,9 +622,11 @@ export class GatewayClient {
     const explicitBootstrapToken = this.opts.bootstrapToken?.trim() || undefined;
     const explicitDeviceToken = this.opts.deviceToken?.trim() || undefined;
     const authPassword = this.opts.password?.trim() || undefined;
-    const storedToken = this.opts.deviceIdentity
-      ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
+    const storedAuth = this.opts.deviceIdentity
+      ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })
       : null;
+    const storedToken = storedAuth?.token ?? null;
+    const storedScopes = storedAuth?.scopes;
     const shouldUseDeviceRetryToken =
       this.pendingDeviceTokenRetry &&
       !explicitDeviceToken &&
@@ -645,6 +652,7 @@ export class GatewayClient {
       signatureToken: authToken ?? authBootstrapToken ?? undefined,
       resolvedDeviceToken,
       storedToken: storedToken ?? undefined,
+      storedScopes,
     };
   }
 
