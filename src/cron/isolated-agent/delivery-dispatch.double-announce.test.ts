@@ -665,8 +665,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     // NO_REPLY must be filtered out before reaching the outbound adapter.
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    // No delivery was sent, so delivered stays false.
-    expect(state.delivered).toBe(false);
+    // Mark as silently delivered so the job is persisted as successful.
+    expect(state.delivered).toBe(true);
     // deliveryAttempted must be true so the heartbeat timer does not fire
     // a fallback enqueueSystemEvent with the NO_REPLY sentinel text.
     expect(state.deliveryAttempted).toBe(true);
@@ -693,7 +693,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(state.delivered).toBe(false);
+    expect(state.delivered).toBe(true);
     expect(state.deliveryAttempted).toBe(true);
 
     expect(
