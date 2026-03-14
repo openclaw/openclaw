@@ -1024,7 +1024,7 @@ export async function runEmbeddedPiAgent(
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
           // retrying to break the death spiral of repeated timeouts.
-          if (timedOut && !aborted && !timedOutDuringCompaction) {
+          if (timedOut && !timedOutDuringCompaction) {
             // Only consider prompt-side tokens here. API totals include output
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
@@ -1039,12 +1039,14 @@ export async function runEmbeddedPiAgent(
               );
             } else if (tokenUsedRatio > 0.65) {
               const timeoutDiagId = createCompactionDiagId();
+              const nextTimeoutCompactionAttempt = timeoutCompactionAttempts + 1;
               log.warn(
                 `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
                   `attempting compaction before retry diagId=${timeoutDiagId}`,
               );
               let timeoutCompactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
               await runOwnsCompactionBeforeHook("timeout recovery");
+              timeoutCompactionAttempts = nextTimeoutCompactionAttempt;
               try {
                 timeoutCompactResult = await contextEngine.compact({
                   sessionId: params.sessionId,
@@ -1074,8 +1076,8 @@ export async function runEmbeddedPiAgent(
                     ownerNumbers: params.ownerNumbers,
                     trigger: "timeout_recovery",
                     diagId: timeoutDiagId,
-                    attempt: 1,
-                    maxAttempts: 1,
+                    attempt: nextTimeoutCompactionAttempt,
+                    maxAttempts: MAX_TIMEOUT_COMPACTION_ATTEMPTS,
                   },
                 });
               } catch (compactErr) {
@@ -1085,7 +1087,6 @@ export async function runEmbeddedPiAgent(
                 timeoutCompactResult = { ok: false, compacted: false, reason: String(compactErr) };
               }
               await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
-              timeoutCompactionAttempts += 1;
               if (timeoutCompactResult.compacted) {
                 autoCompactionCount += 1;
                 log.info(

@@ -196,7 +196,7 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
-  it("does not attempt compaction when aborted", async () => {
+  it("still attempts compaction for timed-out attempts that set aborted", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
@@ -206,10 +206,20 @@ describe("timeout-triggered compaction", () => {
         } as never,
       }),
     );
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "timeout recovery compaction",
+        tokensBefore: 180000,
+        tokensAfter: 90000,
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    await runEmbeddedPiAgent(overflowBaseRunParams);
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
-    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.error).toBeUndefined();
   });
 
   it("does not attempt compaction when timedOutDuringCompaction is true", async () => {
