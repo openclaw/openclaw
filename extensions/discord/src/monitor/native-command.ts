@@ -14,8 +14,10 @@ import {
   type StringSelectMenuInteraction,
 } from "@buape/carbon";
 import {
+  ApplicationIntegrationType,
   ApplicationCommandOptionType,
   ApplicationCommandType,
+  InteractionContextType,
   ButtonStyle,
 } from "discord-api-types/v10";
 import {
@@ -218,8 +220,33 @@ export type DiscordNativeCommandDeploymentDefinition = {
   name: string;
   description: string;
   type: typeof ApplicationCommandType.ChatInput;
+  integration_types?: number[];
+  contexts?: number[];
+  default_member_permissions?: string | null;
   options?: DiscordNativeCommandOptionDefinition[];
 };
+
+const DISCORD_NATIVE_COMMAND_DEFAULT_INTEGRATION_TYPES = [
+  ApplicationIntegrationType.GuildInstall,
+  ApplicationIntegrationType.UserInstall,
+];
+
+const DISCORD_NATIVE_COMMAND_DEFAULT_CONTEXTS = [
+  InteractionContextType.Guild,
+  InteractionContextType.BotDM,
+  InteractionContextType.PrivateChannel,
+];
+
+export function applyDiscordNativeCommandDeploymentDefaults(
+  definition: DiscordNativeCommandDeploymentDefinition,
+): DiscordNativeCommandDeploymentDefinition {
+  return {
+    ...definition,
+    integration_types: [...DISCORD_NATIVE_COMMAND_DEFAULT_INTEGRATION_TYPES],
+    contexts: [...DISCORD_NATIVE_COMMAND_DEFAULT_CONTEXTS],
+    default_member_permissions: null,
+  };
+}
 
 export function buildDiscordNativeCommandDeploymentDefinition(params: {
   command: NativeCommandSpec;
@@ -275,12 +302,12 @@ export function buildDiscordNativeCommandDeploymentDefinition(params: {
       choices,
     };
   });
-  return {
+  return applyDiscordNativeCommandDeploymentDefaults({
     name: params.command.name,
     description: params.command.description,
     type: ApplicationCommandType.ChatInput,
     options,
-  };
+  });
 }
 
 function readDiscordCommandArgs(

@@ -965,14 +965,14 @@ describe("monitorDiscordProvider", () => {
     expect(reconcileDiscordNativeCommandsMock).toHaveBeenCalledTimes(1);
     const firstCallArg = (
       reconcileDiscordNativeCommandsMock.mock.calls.at(0) as unknown as
-        | [{ commandSpecs?: Array<{ name: string }> }]
+        | [{ commands?: Array<{ name: string }> }]
         | undefined
     )?.[0];
-    const commandSpecs = firstCallArg?.commandSpecs;
-    expect(commandSpecs?.map((command) => command.name)).toEqual(["cmd", "cron_jobs"]);
+    const commands = firstCallArg?.commands;
+    expect(commands?.map((command) => command.name)).toEqual(["mock-command", "mock-command"]);
   });
 
-  it("passes the voice command definition into the reconcile path when voice is enabled", async () => {
+  it("passes the managed voice command into the reconcile path when voice is enabled", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
     mockResolvedDiscordAccountConfig({
       voice: { enabled: true },
@@ -999,12 +999,12 @@ describe("monitorDiscordProvider", () => {
       reconcileDiscordNativeCommandsMock.mock.calls.at(0) as unknown as
         | [
             {
-              extraDefinitions?: Array<{ name: string }>;
+              commands?: Array<{ name: string }>;
             },
           ]
         | undefined
     )?.[0];
-    expect(firstCallArg?.extraDefinitions?.map((entry) => entry.name)).toEqual(["vc"]);
+    expect(firstCallArg?.commands?.some((entry) => entry.name === "voice-command")).toBe(true);
   });
 
   it("reports connected status on startup and shutdown", async () => {
