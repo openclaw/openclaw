@@ -1,5 +1,6 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/zalouser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "./accounts.test-mocks.js";
 import {
   installSendPayloadContractSuite,
   primeSendMock,
@@ -11,20 +12,6 @@ vi.mock("./send.js", () => ({
   sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
   sendReactionZalouser: vi.fn().mockResolvedValue({ ok: true }),
 }));
-
-vi.mock("./accounts.js", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    resolveZalouserAccountSync: () => ({
-      accountId: "default",
-      profile: "default",
-      name: "test",
-      enabled: true,
-      config: {},
-    }),
-  };
-});
 
 function baseCtx(payload: ReplyPayload) {
   return {

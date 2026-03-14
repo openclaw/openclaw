@@ -421,7 +421,12 @@ export function attachGatewayWsMessageHandler(params: {
               host: requestHost ?? "n/a",
               reason: originCheck.reason,
             });
-            sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage);
+            sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
+              details: {
+                code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+                reason: originCheck.reason,
+              },
+            });
             close(1008, truncateCloseReason(errorMessage));
             return;
           }
@@ -669,14 +674,17 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
         });
+        // auth.mode=none disables all authentication — device pairing is an
+        // auth mechanism and must also be skipped when the operator opted out.
         const skipPairing =
+          resolvedAuth.mode === "none" ||
           shouldSkipBackendSelfPairing({
             connectParams,
             isLocalClient,
             hasBrowserOriginHeader,
             sharedAuthOk,
             authMethod,
-          }) || shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk, trustedProxyAuthOk);
+          }) || shouldSkipControlUiPairing(controlUiAuthPolicy, role, trustedProxyAuthOk);
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
