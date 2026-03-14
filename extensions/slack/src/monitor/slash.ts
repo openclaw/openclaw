@@ -539,7 +539,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         channelInfo,
         channelConfig,
         globalSystemPrompt: account.config?.systemPrompt ?? cfg.channels?.slack?.systemPrompt,
-        dmSystemPrompt: cfg.channels?.slack?.dm?.systemPrompt,
+        dmSystemPrompt: account.config?.dm?.systemPrompt ?? cfg.channels?.slack?.dm?.systemPrompt,
         isDirectMessage,
       });
 
