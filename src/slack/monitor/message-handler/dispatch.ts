@@ -222,6 +222,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
+  // Accumulates all text that has been successfully flushed into the Slack
+  // stream message. Used to reconstruct a complete fallback reply if the
+  // stream fails mid-turn or stopSlackStream fails at finalization — so the
+  // user always receives the full answer, not just the most recent chunk.
+  let streamedText = "";
+  let lastStreamPayload: ReplyPayload | null = null;
   let usedReplyThreadTs: string | undefined;
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
@@ -249,6 +255,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       await deliverNormally(payload, streamSession?.threadTs);
       return;
     }
+    // Track the last payload for metadata (thread ts, media, etc.) and
+    // accumulate its text so a mid-stream failure can re-deliver the complete
+    // answer rather than only the failing chunk.
+    lastStreamPayload = payload;
 
     const text = payload.text.trim();
     let plannedThreadTs: string | undefined;
@@ -273,6 +283,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           teamId: ctx.teamId,
           userId: message.user,
         });
+        // Record text that is now live in the Slack stream message.
+        streamedText = text;
         usedReplyThreadTs ??= streamThreadTs;
         replyPlan.markSent();
         return;
@@ -282,12 +294,54 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         session: streamSession,
         text: "\n" + text,
       });
+      // Record text that was successfully appended to the stream message.
+      streamedText += "\n" + text;
     } catch (err) {
       runtime.error?.(
         danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
       );
       streamFailed = true;
-      await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
+
+      // Mark the stream as stopped so the end-of-dispatch finalizer does not
+      // call stopSlackStream on the orphaned message (which would finalize it
+      // and leave a duplicate visible on mobile Slack).
+      if (streamSession) {
+        streamSession.stopped = true;
+      }
+
+      // If startStream already created a Slack message, delete it to prevent
+      // the orphaned stream message from persisting alongside the fallback.
+      const orphanedTs = streamSession?.streamMessageTs;
+      if (orphanedTs) {
+        try {
+          await ctx.app.client.chat.delete({
+            token: ctx.botToken,
+            channel: message.channel,
+            ts: orphanedTs,
+          });
+          logVerbose(`slack-stream: deleted orphaned stream message ${orphanedTs}`);
+        } catch (deleteErr) {
+          logVerbose(
+            `slack-stream: failed to delete orphaned stream message ${orphanedTs}: ${String(deleteErr)}`,
+          );
+        }
+      }
+
+      // Re-deliver the full content: everything already in the stream message
+      // plus the current payload that failed to append. Using only `payload`
+      // here would drop all previously-streamed text.
+      //
+      // Note: we deliver even when orphan deletion failed. The stream message
+      // is stuck in "streaming" state (never finalized via chat.stopStream)
+      // and may not render on mobile Slack — skipping deliverNormally here
+      // would silently drop content with no later recovery path (the
+      // finalizer is skipped because streamSession.stopped is already true).
+      // A cosmetic duplicate on desktop is preferable to a truncated answer.
+      const fallbackText = streamedText ? `${streamedText}\n${text}` : text;
+      await deliverNormally(
+        { ...payload, text: fallbackText },
+        streamSession?.threadTs ?? plannedThreadTs,
+      );
     }
   };
 
@@ -461,10 +515,43 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // -----------------------------------------------------------------------
   const finalStream = streamSession as SlackStreamSession | null;
   if (finalStream && !finalStream.stopped) {
+    // Capture the stream message timestamp before stopping so we can clean up
+    // if stopSlackStream fails (prevents ghost/duplicate on mobile Slack).
+    const streamMsgTs = finalStream.streamMessageTs;
     try {
       await stopSlackStream({ session: finalStream });
     } catch (err) {
       runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
+      // If stop failed and a stream message exists, try to delete it so it
+      // does not persist as a ghost message alongside any fallback delivery.
+      // Only deliver the fallback when deletion succeeds (or no orphan
+      // existed) — if deletion fails the stream message is still visible with
+      // its full content, so sending a normal reply would recreate the
+      // duplicate this PR prevents.
+      let orphanDeleted = !streamMsgTs; // trivially "deleted" if nothing to delete
+      if (streamMsgTs) {
+        try {
+          await ctx.app.client.chat.delete({
+            token: ctx.botToken,
+            channel: message.channel,
+            ts: streamMsgTs,
+          });
+          logVerbose(
+            `slack-stream: deleted orphaned stream message ${streamMsgTs} after stop failure`,
+          );
+          orphanDeleted = true;
+        } catch (deleteErr) {
+          logVerbose(
+            `slack-stream: failed to delete orphaned stream message ${streamMsgTs}: ${String(deleteErr)}`,
+          );
+        }
+      }
+      // Fall back to normal delivery with the full accumulated streamed text
+      // so the user receives the complete answer even when stop() fails.
+      if (orphanDeleted && lastStreamPayload && streamedText) {
+        const fallback: ReplyPayload = Object.assign({}, lastStreamPayload, { text: streamedText });
+        await deliverNormally(fallback, finalStream.threadTs);
+      }
     }
   }
 
