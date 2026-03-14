@@ -117,7 +117,7 @@ describe("reactions", () => {
             password: "test",
           },
         }),
-      ).rejects.toThrow("Unsupported BlueBubbles reaction");
+      ).rejects.toThrow("Unsupported BlueBubbles reaction: unsupported");
     });
 
     describe("reaction type normalization", () => {
