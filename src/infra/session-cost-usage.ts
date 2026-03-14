@@ -216,10 +216,15 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
 
 /**
  * Check whether a filename is a JSONL transcript (active or reset-archived).
- * Active files end in `.jsonl`; reset archives match `*.jsonl.reset.<timestamp>`.
+ * Active files end in `.jsonl`.
+ * Reset archives match exactly `<id>.jsonl.reset.<ISO-timestamp>` where the
+ * timestamp uses hyphens instead of colons (filesystem-safe ISO 8601), e.g.
+ * `2026-03-14T09-05-00.000Z`. The pattern is anchored to `$` to exclude any
+ * further-archived variants such as `*.jsonl.reset.<ts>.deleted.<ts>`.
  */
+const RESET_ARCHIVE_RE = /\.jsonl\.reset\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d+Z$/;
 const isTranscriptFile = (name: string): boolean =>
-  name.endsWith(".jsonl") || /\.jsonl\.reset\.\d{4}-/.test(name);
+  name.endsWith(".jsonl") || RESET_ARCHIVE_RE.test(name);
 
 /**
  * Extract the session ID from a transcript filename.
