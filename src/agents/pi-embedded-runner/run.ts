@@ -43,6 +43,7 @@ import {
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { DEFAULT_COPILOT_API_BASE_URL } from "../../providers/github-copilot-token.js";
 import {
   formatBillingErrorMessage,
   classifyFailoverReason,
@@ -487,6 +488,15 @@ export async function runEmbeddedPiAgent(
             githubToken,
           });
           authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+          // Apply token-derived baseUrl: only override if user hasn't set custom value.
+          // Must update both model and effectiveModel since effectiveModel may be a spread
+          // copy created by context-window capping (line 390). Idempotent if they're same.
+          const shouldApplyTokenBaseUrl =
+            !model.baseUrl || model.baseUrl === DEFAULT_COPILOT_API_BASE_URL;
+          if (shouldApplyTokenBaseUrl) {
+            model.baseUrl = copilotToken.baseUrl;
+            effectiveModel.baseUrl = copilotToken.baseUrl;
+          }
           copilotTokenState.expiresAt = copilotToken.expiresAt;
           const remaining = copilotToken.expiresAt - Date.now();
           log.debug(
@@ -626,6 +636,16 @@ export async function runEmbeddedPiAgent(
             githubToken: apiKeyInfo.apiKey,
           });
           authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+          // Apply token-derived baseUrl: only override if user hasn't set custom value.
+          // The token exchange returns correct endpoint per account tier (individual/business/enterprise).
+          // Must update both model and effectiveModel since effectiveModel may be a spread copy
+          // created by context-window capping (line 390). Idempotent if they're same.
+          const shouldApplyTokenBaseUrl =
+            !model.baseUrl || model.baseUrl === DEFAULT_COPILOT_API_BASE_URL;
+          if (shouldApplyTokenBaseUrl) {
+            model.baseUrl = copilotToken.baseUrl;
+            effectiveModel.baseUrl = copilotToken.baseUrl;
+          }
           if (copilotTokenState) {
             copilotTokenState.githubToken = apiKeyInfo.apiKey;
             copilotTokenState.expiresAt = copilotToken.expiresAt;
