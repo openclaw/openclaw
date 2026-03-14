@@ -13,7 +13,6 @@ import type {
   CronRunTelemetry,
 } from "../types.js";
 import {
-  computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
@@ -781,24 +780,42 @@ function isRunnableJob(params: {
     // replay once the backoff window has elapsed.
     return false;
   }
+
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;
   }
-  let previousRunAtMs: number | undefined;
+
+  const lastRunAtMs = job.state.lastRunAtMs;
+  if (typeof lastRunAtMs !== "number" || !Number.isFinite(lastRunAtMs)) {
+    return false;
+  }
+
+  const MAX_CATCHUP_SLOTS = 50;
+
+  let computedNextRunAtMs: number | undefined;
+  let slotCount = 0;
+  let probeLastRunAtMs = lastRunAtMs;
+
   try {
-    previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
+    while (slotCount < MAX_CATCHUP_SLOTS) {
+      if (typeof probeLastRunAtMs !== "number" || !Number.isFinite(probeLastRunAtMs)) {
+        break;
+      }
+      computedNextRunAtMs = computeJobNextRunAtMs(job, probeLastRunAtMs);
+      if (typeof computedNextRunAtMs !== "number" || !Number.isFinite(computedNextRunAtMs)) {
+        break;
+      }
+      if (computedNextRunAtMs > nowMs) {
+        break;
+      }
+      probeLastRunAtMs = computedNextRunAtMs;
+      slotCount++;
+    }
   } catch {
     return false;
   }
-  if (typeof previousRunAtMs !== "number" || !Number.isFinite(previousRunAtMs)) {
-    return false;
-  }
-  const lastRunAtMs = job.state.lastRunAtMs;
-  if (typeof lastRunAtMs !== "number" || !Number.isFinite(lastRunAtMs)) {
-    // Only replay a "missed slot" when there is concrete run history.
-    return false;
-  }
-  return previousRunAtMs > lastRunAtMs;
+
+  return slotCount > 0;
 }
 
 function isErrorBackoffPending(job: CronJob, nowMs: number): boolean {
