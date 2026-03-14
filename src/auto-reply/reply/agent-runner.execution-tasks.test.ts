@@ -56,6 +56,7 @@ beforeEach(() => {
 function createRun(overrides?: {
   commandBody?: string;
   summaryLine?: string;
+  sessionKey?: string;
 }) {
   const typing = createMockTypingController();
   const sessionCtx = {
@@ -71,7 +72,7 @@ function createRun(overrides?: {
     enqueuedAt: Date.now(),
     run: {
       sessionId: "session",
-      sessionKey: "main",
+      sessionKey: overrides?.sessionKey ?? "main",
       agentId: "main",
       messageProvider: "webchat",
       sessionFile: "/tmp/session.jsonl",
@@ -104,7 +105,7 @@ function createRun(overrides?: {
     isStreaming: false,
     typing,
     sessionCtx,
-    sessionKey: "main",
+    sessionKey: overrides?.sessionKey ?? "main",
     defaultModel: "anthropic/claude-opus-4-5",
     resolvedVerboseLevel: "off",
     isNewSession: false,
@@ -273,6 +274,31 @@ describe("runReplyAgent execution-task interim retry", () => {
       isError: true,
       text:
         "I could not keep the executor running in the background because starting the follow-up run failed. Please retry the task.",
+    });
+  });
+
+  it("turns repeated subagent acknowledgements into a concrete blocker instead of nesting", async () => {
+    listSubagentRunsForRequesterMock.mockReset().mockReturnValue([]);
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "on it" }],
+        meta: {},
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "working on it, it'll auto-announce when done" }],
+        meta: {},
+      });
+
+    const result = await createRun({
+      sessionKey: "agent:main:subagent:child-1",
+    });
+
+    expect(spawnSubagentRunMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      isError: true,
+      text: expect.stringContaining(
+        "The background executor stopped after repeated acknowledgements without concrete progress.",
+      ),
     });
   });
 });
