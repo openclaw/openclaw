@@ -25,6 +25,11 @@ const formatExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json
 
 const shouldSelect = (filePath) => {
   const ext = path.extname(filePath).toLowerCase();
+  // oxfmt silently skips files in dot-directories (e.g. .claude/) but errors
+  // when ALL targets are skipped. Exclude them here to avoid false failures.
+  if (filePath.split(path.sep).some((seg) => seg !== "." && seg.startsWith("."))) {
+    return false;
+  }
   if (mode === "lint") {
     return lintExts.has(ext);
   }
