@@ -82,6 +82,13 @@ export function registerCronEditCommand(cron: Command) {
         "--failure-alert-account-id <id>",
         "Account ID for failure alert channel (multi-account setups)",
       )
+      .option(
+        "--pre-hook <command>",
+        "Shell command to run before execution (exit non-zero to skip); repeatable",
+        (val: string, prev: string[]) => [...prev, val],
+        [] as string[],
+      )
+      .option("--clear-pre-hooks", "Remove all pre-hooks", false)
       .action(async (id, opts) => {
         try {
           if (opts.session === "main" && opts.message) {
@@ -335,6 +342,22 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.accountId = accountId ? accountId : undefined;
             }
             patch.failureAlert = failureAlert;
+          }
+
+          // Pre-hooks: --pre-hook adds/replaces hooks, --clear-pre-hooks removes all.
+          const preHookCommands = Array.isArray(opts.preHook) ? opts.preHook : [];
+          if (opts.clearPreHooks && preHookCommands.length > 0) {
+            throw new Error("Use --pre-hook or --clear-pre-hooks, not both");
+          }
+          if (opts.clearPreHooks) {
+            patch.hooks = { pre: [] };
+          } else if (preHookCommands.length > 0) {
+            patch.hooks = {
+              pre: preHookCommands.map((cmd: string) => ({
+                kind: "shell" as const,
+                command: cmd,
+              })),
+            };
           }
 
           const res = await callGatewayFromCli("cron.update", opts, {

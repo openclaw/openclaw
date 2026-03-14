@@ -98,6 +98,12 @@ export function registerCronAddCommand(cron: Command) {
       )
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
+      .option(
+        "--pre-hook <command>",
+        "Shell command to run before execution (exit non-zero to skip); repeatable",
+        (val: string, prev: string[]) => [...prev, val],
+        [] as string[],
+      )
       .option("--json", "Output JSON", false)
       .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
         try {
@@ -254,6 +260,17 @@ export function registerCronAddCommand(cron: Command) {
               ? opts.sessionKey.trim()
               : undefined;
 
+          const preHookCommands = Array.isArray(opts.preHook) ? opts.preHook : [];
+          const hooks =
+            preHookCommands.length > 0
+              ? {
+                  pre: preHookCommands.map((cmd: string) => ({
+                    kind: "shell" as const,
+                    command: cmd,
+                  })),
+                }
+              : undefined;
+
           const params = {
             name,
             description,
@@ -277,6 +294,7 @@ export function registerCronAddCommand(cron: Command) {
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
                 }
               : undefined,
+            hooks,
           };
 
           const res = await callGatewayFromCli("cron.add", opts, params);
