@@ -278,6 +278,19 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toContain('{"command":"ls","yieldMs":1000}');
   });
 
+  it("keeps multiline route-marker examples when prose explains them", () => {
+    const result = normalizeReplyPayload({
+      text: [
+        "assistant to=functions.exec",
+        '{"command":"ls","yieldMs":1000}',
+        "This is an example of leaked orchestration text.",
+      ].join("\n"),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain("assistant to=functions.exec");
+    expect(result!.text).toContain("This is an example of leaked orchestration text.");
+  });
+
   it("does not flag fenced code samples as suspicious by default", () => {
     expect(
       hasSuspiciousReplyLeakage(
@@ -302,9 +315,19 @@ describe("normalizeReplyPayload", () => {
   it("does not flag NO_REPLY explanations with tool JSON lines", () => {
     expect(
       hasSuspiciousReplyLeakage(
-        ['NO_REPLY means "do not answer". Example:', '{"command":"ls","yieldMs":1000}'].join(
-          "\n",
-        ),
+        ['NO_REPLY means "do not answer". Example:', '{"command":"ls","yieldMs":1000}'].join("\n"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not flag route-marker examples when prose follows the JSON block", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        [
+          "assistant to=functions.exec",
+          '{"command":"ls","yieldMs":1000}',
+          "This is an example of leaked orchestration text.",
+        ].join("\n"),
       ),
     ).toBe(false);
   });

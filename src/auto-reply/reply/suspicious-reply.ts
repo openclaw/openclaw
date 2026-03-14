@@ -18,11 +18,32 @@ function firstNonEmptyLine(text: string): string {
   return "";
 }
 
+function nonEmptyLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function isStructuredRouteMarkerLine(line: string): boolean {
+  return STRUCTURED_ROUTE_MARKER_LINE_RE.test(line.trim());
+}
+
+function isStructuredToolJsonLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("{") && TOOL_JSON_KEY_RE.test(trimmed);
+}
+
 function hasStructuredToolJsonLine(text: string): boolean {
-  return text.split(/\r?\n/).some((line) => {
-    const trimmed = line.trimStart();
-    return trimmed.startsWith("{") && TOOL_JSON_KEY_RE.test(trimmed);
-  });
+  return nonEmptyLines(text).some(isStructuredToolJsonLine);
+}
+
+function hasOnlyStructuredLeakageLines(text: string): boolean {
+  const lines = nonEmptyLines(text);
+  return (
+    lines.length > 0 &&
+    lines.every((line) => isStructuredRouteMarkerLine(line) || isStructuredToolJsonLine(line))
+  );
 }
 
 export function hasSuspiciousReplyLeakage(text: string | undefined): boolean {
@@ -42,5 +63,7 @@ export function hasSuspiciousReplyLeakage(text: string | undefined): boolean {
   );
   const hasToolJsonArgs = candidate.includes("{") && hasStructuredToolJsonLine(candidate);
 
-  return hasStructuredRouteMarkerLead && hasToolJsonArgs;
+  return (
+    hasStructuredRouteMarkerLead && hasToolJsonArgs && hasOnlyStructuredLeakageLines(candidate)
+  );
 }
