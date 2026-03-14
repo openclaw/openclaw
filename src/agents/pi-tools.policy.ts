@@ -6,7 +6,7 @@ import type { AgentToolsConfig } from "../config/types.tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
@@ -278,7 +278,9 @@ export function resolveEffectiveToolPolicy(params: {
       : undefined;
   const agentId =
     explicitAgentId ??
-    (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
+    (params.sessionKey
+      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.config })
+      : undefined);
   const agentConfig =
     params.config && agentId ? resolveAgentConfig(params.config, agentId) : undefined;
   const agentTools = agentConfig?.tools;
