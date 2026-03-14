@@ -22,6 +22,7 @@ export type RuntimeInfoInput = {
   capabilities?: string[];
   /** Supported message actions for the current channel (e.g., react, edit, unsend) */
   channelActions?: string[];
+  sessionId?: string;
   repoRoot?: string;
 };
 
