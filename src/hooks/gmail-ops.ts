@@ -318,27 +318,43 @@ export async function runGmailService(opts: GmailRunOptions) {
     void startGmailWatch(runtimeConfig);
   }, renewMs);
 
-  const detachSignals = () => {
-    process.off("SIGINT", shutdown);
-    process.off("SIGTERM", shutdown);
-  };
-
-  const shutdown = () => {
+  const shutdown = async () => {
     if (shuttingDown) {
       return;
     }
     shuttingDown = true;
-    detachSignals();
+    process.off("SIGINT", sigintHandler);
+    process.off("SIGTERM", sigtermHandler);
     clearInterval(renewTimer);
     child.kill("SIGTERM");
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {}
+        resolve();
+      }, 5000);
+      child.once("exit", () => {
+        clearTimeout(t);
+        resolve();
+      });
+      if (child.exitCode !== null) {
+        clearTimeout(t);
+        resolve();
+      }
+    });
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  const sigintHandler = () => void shutdown();
+  const sigtermHandler = () => void shutdown();
+
+  process.on("SIGINT", sigintHandler);
+  process.on("SIGTERM", sigtermHandler);
 
   child.on("exit", () => {
     if (shuttingDown) {
-      detachSignals();
+      process.off("SIGINT", sigintHandler);
+      process.off("SIGTERM", sigtermHandler);
       return;
     }
     defaultRuntime.log("gog watch serve exited; restarting in 2s");

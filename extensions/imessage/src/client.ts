@@ -128,17 +128,33 @@ export class IMessageRpcClient {
     const child = this.child;
     this.child = null;
 
-    await Promise.race([
-      this.closed,
-      new Promise<void>((resolve) => {
-        setTimeout(() => {
-          if (!child.killed) {
-            child.kill("SIGTERM");
-          }
-          resolve();
-        }, 500);
+    // Wait briefly for graceful stdin-EOF shutdown, then escalate.
+    const closedOrTimeout = await Promise.race([
+      this.closed.then(() => "closed" as const),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 500);
       }),
     ]);
+
+    if (closedOrTimeout === "timeout" && !child.killed) {
+      child.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(() => {
+          try {
+            child.kill("SIGKILL");
+          } catch {}
+          resolve();
+        }, 5000);
+        child.once("exit", () => {
+          clearTimeout(t);
+          resolve();
+        });
+        if (child.exitCode !== null) {
+          clearTimeout(t);
+          resolve();
+        }
+      });
+    }
   }
 
   async waitForClose(): Promise<void> {
