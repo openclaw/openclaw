@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { validateConfigObject } from "../config/config.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
@@ -127,6 +128,15 @@ async function runOnboardingAndReadConfig(
   return readJsonFile<ProviderAuthConfigSnapshot>(env.configPath);
 }
 
+async function expectWrittenConfigValid(configPath: string): Promise<void> {
+  const cfg = await readJsonFile<Record<string, unknown>>(configPath);
+  const validated = validateConfigObject(cfg);
+  const details = !validated.ok
+    ? validated.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`).join("\n")
+    : "expected config validation to succeed";
+  expect(validated.ok, details).toBe(true);
+}
+
 const CUSTOM_LOCAL_BASE_URL = "https://models.custom.local/v1";
 const CUSTOM_LOCAL_MODEL_ID = "local-large";
 const CUSTOM_LOCAL_PROVIDER_ID = "custom-models-custom-local";
@@ -230,6 +240,28 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/paas/v4");
       expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
       await expectApiKeyProfile({ profileId: "zai:default", provider: "zai", key: "zai-test-key" });
+    });
+  });
+
+  it("stores Kimi Coding API key and writes a schema-valid config", async () => {
+    await withOnboardEnv("openclaw-onboard-kimi-coding-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "kimi-code-api-key",
+        kimiCodeApiKey: "kimi-coding-test-key", // pragma: allowlist secret
+      });
+
+      expect(cfg.auth?.profiles?.["kimi-coding:default"]?.provider).toBe("kimi-coding");
+      expect(cfg.auth?.profiles?.["kimi-coding:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.["kimi-coding"]?.baseUrl).toBe("https://api.kimi.com/coding/");
+      expect(cfg.models?.providers?.["kimi-coding"]?.api).toBe("anthropic-messages");
+      expect(cfg.models?.providers?.["kimi-coding"]?.models?.[0]?.id).toBe("k2p5");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("kimi-coding/k2p5");
+      await expectApiKeyProfile({
+        profileId: "kimi-coding:default",
+        provider: "kimi-coding",
+        key: "kimi-coding-test-key",
+      });
+      await expectWrittenConfigValid(env.configPath);
     });
   });
 
