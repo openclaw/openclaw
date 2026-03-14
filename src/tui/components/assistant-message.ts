@@ -1,4 +1,5 @@
 import { Container, Spacer } from "@mariozechner/pi-tui";
+import { stripAssistantInternalScaffolding } from "../../shared/text/assistant-visible-text.js";
 import { markdownTheme, theme } from "../theme/theme.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
 
@@ -7,16 +8,22 @@ export class AssistantMessageComponent extends Container {
 
   constructor(text: string) {
     super();
-    this.body = new HyperlinkMarkdown(text, 1, 0, markdownTheme, {
-      // Keep assistant body text in terminal default foreground so contrast
-      // follows the user's terminal theme (dark or light).
-      color: (line) => theme.assistantText(line),
-    });
+    this.body = new HyperlinkMarkdown(
+      stripAssistantInternalScaffolding(text),
+      1,
+      0,
+      markdownTheme,
+      {
+        // Keep assistant body text in terminal default foreground so contrast
+        // follows the user's terminal theme (dark or light).
+        color: (line) => theme.assistantText(line),
+      },
+    );
     this.addChild(new Spacer(1));
     this.addChild(this.body);
   }
 
   setText(text: string) {
-    this.body.setText(text);
+    this.body.setText(stripAssistantInternalScaffolding(text));
   }
 }

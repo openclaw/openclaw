@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { stripAssistantInternalScaffolding } from "./assistant-visible-text.js";
+import {
+  stripAssistantInternalScaffolding,
+  stripRelevantMemoriesTags,
+} from "./assistant-visible-text.js";
+
+describe("stripRelevantMemoriesTags (exported)", () => {
+  it("strips relevant-memories tags without touching thinking tags", () => {
+    const input = [
+      "<thinking>reasoning</thinking>",
+      "<relevant-memories>",
+      "memory data",
+      "</relevant-memories>",
+      "Visible",
+    ].join("\n");
+    const result = stripRelevantMemoriesTags(input);
+    expect(result).toContain("<thinking>reasoning</thinking>");
+    expect(result).toContain("Visible");
+    expect(result).not.toContain("memory data");
+  });
+
+  it("returns text unchanged when no relevant-memories tags present", () => {
+    const input = "Hello world";
+    expect(stripRelevantMemoriesTags(input)).toBe(input);
+  });
+});
 
 describe("stripAssistantInternalScaffolding", () => {
   it("strips reasoning tags", () => {

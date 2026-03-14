@@ -542,6 +542,14 @@ export type PluginHookBeforePromptBuildResult = {
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
    */
   appendSystemContext?: string;
+  /**
+   * Generic key-value bag for plugins to attach metadata to the persisted
+   * user message. Keys are namespaced by plugin ID to avoid collisions.
+   *
+   * Standard key: `displayStripPatterns` — an array of `{ regex: string; flags?: string }`
+   * that tells the UI to strip matching text from the user bubble before display.
+   */
+  messageMeta?: Record<string, unknown>;
 };
 
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
@@ -549,6 +557,7 @@ export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "prependContext",
   "prependSystemContext",
   "appendSystemContext",
+  "messageMeta",
 ] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
 
 type MissingPluginPromptMutationResultFields = Exclude<
