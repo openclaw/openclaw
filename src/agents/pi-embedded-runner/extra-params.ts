@@ -3,6 +3,7 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isXaiProvider } from "../schema/clean-for-xai.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -321,6 +322,40 @@ function createParallelToolCallsWrapper(
   };
 }
 
+function stripXaiStrictToolSchemas(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const payloadObj = payload as { tools?: unknown };
+  if (!Array.isArray(payloadObj.tools)) {
+    return;
+  }
+  for (const tool of payloadObj.tools) {
+    if (!tool || typeof tool !== "object") {
+      continue;
+    }
+    const functionDef = (tool as { function?: unknown }).function;
+    if (!functionDef || typeof functionDef !== "object") {
+      continue;
+    }
+    delete (functionDef as Record<string, unknown>).strict;
+  }
+}
+
+function createXaiToolSchemaWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        stripXaiStrictToolSchemas(payload);
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -435,6 +470,11 @@ export function applyExtraParamsToAgent(
       log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
     }
+  }
+
+  if (isXaiProvider(provider, modelId)) {
+    log.debug(`removing unsupported function.strict tool fields for ${provider}/${modelId}`);
+    agent.streamFn = createXaiToolSchemaWrapper(agent.streamFn);
   }
 
   // Guard Google payloads against invalid negative thinking budgets emitted by

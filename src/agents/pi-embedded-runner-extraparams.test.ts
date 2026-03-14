@@ -412,6 +412,49 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
   });
 
+  it("removes unsupported function.strict from xAI tool payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "write",
+              parameters: { type: "object", properties: {} },
+              strict: false,
+            },
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "xai", "grok-4.1-fast");
+
+    const model = {
+      api: "openai-completions",
+      provider: "xai",
+      id: "grok-4.1-fast",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "write",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ]);
+  });
+
   it("injects parallel_tool_calls for openai-completions payloads when configured", () => {
     const payload = runParallelToolCallsPayloadMutationCase({
       applyProvider: "nvidia-nim",
