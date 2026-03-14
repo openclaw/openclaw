@@ -10,9 +10,51 @@ import type { HealthSummary, StatusSummary } from "../../../ui/src/ui/types.ts";
 
 type ConnectionState = "idle" | "connecting" | "connected" | "disconnected" | "error";
 
+type ChatMessage = {
+  role: "user" | "assistant" | "system";
+  text: string;
+  timestamp: number;
+};
+
+type ChatEventPayload = {
+  runId: string;
+  sessionKey: string;
+  state: "delta" | "final" | "aborted" | "error";
+  message?: unknown;
+  errorMessage?: string;
+};
+
 function defaultGatewayUrl(): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}/gateway`;
+}
+
+function extractText(message: unknown): string {
+  if (!message) {
+    return "";
+  }
+  if (typeof message === "string") {
+    return message;
+  }
+  if (typeof message === "object") {
+    const record = message as Record<string, unknown>;
+    if (typeof record.text === "string") {
+      return record.text;
+    }
+    if (Array.isArray(record.content)) {
+      return record.content
+        .map((item) => {
+          if (!item || typeof item !== "object") {
+            return "";
+          }
+          const part = item as Record<string, unknown>;
+          return typeof part.text === "string" ? part.text : "";
+        })
+        .filter(Boolean)
+        .join("\n");
+    }
+  }
+  return "";
 }
 
 @customElement("web-control-ui-app")
@@ -71,7 +113,7 @@ class WebControlUiApp extends LitElement {
 
     .controls {
       display: grid;
-      grid-template-columns: 1.6fr 1fr auto;
+      grid-template-columns: 1.6fr 1fr 1fr auto;
       gap: 12px;
       margin-top: 20px;
     }
@@ -88,7 +130,8 @@ class WebControlUiApp extends LitElement {
       color: #93c5fd;
     }
 
-    input {
+    input,
+    textarea {
       width: 100%;
       box-sizing: border-box;
       border: 1px solid rgba(148, 163, 184, 0.18);
@@ -97,6 +140,11 @@ class WebControlUiApp extends LitElement {
       border-radius: 12px;
       padding: 12px 14px;
       font: inherit;
+    }
+
+    textarea {
+      min-height: 96px;
+      resize: vertical;
     }
 
     button {
@@ -194,18 +242,66 @@ class WebControlUiApp extends LitElement {
     .muted {
       color: #94a3b8;
     }
+
+    .chat-log {
+      display: grid;
+      gap: 12px;
+      max-height: 420px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .bubble {
+      border-radius: 16px;
+      padding: 14px 16px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border: 1px solid rgba(148, 163, 184, 0.12);
+    }
+
+    .bubble.user {
+      background: rgba(37, 99, 235, 0.18);
+    }
+
+    .bubble.assistant {
+      background: rgba(30, 41, 59, 0.9);
+    }
+
+    .bubble.system {
+      background: rgba(120, 53, 15, 0.3);
+    }
+
+    .chat-compose {
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .chat-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+    }
   `;
 
   private client: GatewayBrowserClient | null = null;
 
   @state() gatewayUrl = defaultGatewayUrl();
   @state() gatewayToken = "";
+  @state() sessionKey = "main";
   @state() connectionState: ConnectionState = "idle";
   @state() hello: GatewayHelloOk | null = null;
   @state() health: HealthSummary | null = null;
   @state() statusSummary: StatusSummary | null = null;
   @state() lastEvent: GatewayEventFrame | null = null;
   @state() errorMessage: string | null = null;
+  @state() chatInput = "";
+  @state() chatMessages: ChatMessage[] = [];
+  @state() chatStream = "";
+  @state() chatRunId: string | null = null;
+  @state() chatLoading = false;
+  @state() chatSending = false;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -234,6 +330,87 @@ class WebControlUiApp extends LitElement {
     }
   }
 
+  private async loadChatHistory() {
+    if (!this.client || this.connectionState !== "connected") {
+      return;
+    }
+    this.chatLoading = true;
+    try {
+      const result = await this.client.request<{ messages?: unknown[] }>("chat.history", {
+        sessionKey: this.sessionKey,
+        limit: 100,
+      });
+      const messages = Array.isArray(result.messages) ? result.messages : [];
+      this.chatMessages = messages
+        .map((message) => {
+          const record = (message ?? {}) as Record<string, unknown>;
+          const role = typeof record.role === "string" ? record.role : "assistant";
+          const text = extractText(message);
+          if (!text.trim()) {
+            return null;
+          }
+          return {
+            role: role === "user" || role === "assistant" || role === "system" ? role : "assistant",
+            text,
+            timestamp: Date.now(),
+          } as ChatMessage;
+        })
+        .filter((item): item is ChatMessage => item !== null);
+    } catch (error) {
+      this.errorMessage = `加载聊天记录失败：${String(error)}`;
+    } finally {
+      this.chatLoading = false;
+    }
+  }
+
+  private handleChatEvent(payload?: ChatEventPayload) {
+    if (!payload || payload.sessionKey !== this.sessionKey) {
+      return;
+    }
+    if (payload.runId && this.chatRunId && payload.runId !== this.chatRunId && payload.state !== "final") {
+      return;
+    }
+
+    if (payload.state === "delta") {
+      this.chatStream = extractText(payload.message);
+      return;
+    }
+
+    if (payload.state === "final") {
+      const text = extractText(payload.message) || this.chatStream;
+      if (text.trim()) {
+        this.chatMessages = [
+          ...this.chatMessages,
+          { role: "assistant", text, timestamp: Date.now() },
+        ];
+      }
+      this.chatStream = "";
+      this.chatRunId = null;
+      this.chatSending = false;
+      return;
+    }
+
+    if (payload.state === "aborted") {
+      if (this.chatStream.trim()) {
+        this.chatMessages = [
+          ...this.chatMessages,
+          { role: "assistant", text: this.chatStream, timestamp: Date.now() },
+        ];
+      }
+      this.chatStream = "";
+      this.chatRunId = null;
+      this.chatSending = false;
+      return;
+    }
+
+    if (payload.state === "error") {
+      this.errorMessage = payload.errorMessage ?? "chat error";
+      this.chatStream = "";
+      this.chatRunId = null;
+      this.chatSending = false;
+    }
+  }
+
   private connect() {
     this.errorMessage = null;
     this.connectionState = "connecting";
@@ -256,6 +433,7 @@ class WebControlUiApp extends LitElement {
         this.connectionState = "connected";
         this.hello = hello;
         void this.loadSummaries();
+        void this.loadChatHistory();
       },
       onClose: ({ code, reason, error }) => {
         if (this.client !== client) {
@@ -269,6 +447,9 @@ class WebControlUiApp extends LitElement {
           return;
         }
         this.lastEvent = evt;
+        if (evt.event === "chat") {
+          this.handleChatEvent(evt.payload as ChatEventPayload | undefined);
+        }
       },
       onGap: ({ expected, received }) => {
         this.errorMessage = `事件序列出现缺口：期望 ${expected}，收到 ${received}`;
@@ -277,6 +458,38 @@ class WebControlUiApp extends LitElement {
 
     this.client = client;
     client.start();
+  }
+
+  private async sendChat() {
+    if (!this.client || this.connectionState !== "connected" || this.chatSending) {
+      return;
+    }
+    const text = this.chatInput.trim();
+    if (!text) {
+      return;
+    }
+    const runId = crypto.randomUUID();
+    this.chatMessages = [...this.chatMessages, { role: "user", text, timestamp: Date.now() }];
+    this.chatInput = "";
+    this.chatRunId = runId;
+    this.chatStream = "";
+    this.chatSending = true;
+    try {
+      await this.client.request("chat.send", {
+        sessionKey: this.sessionKey,
+        message: text,
+        deliver: false,
+        idempotencyKey: runId,
+      });
+    } catch (error) {
+      this.chatSending = false;
+      this.chatRunId = null;
+      this.errorMessage = `发送失败：${String(error)}`;
+      this.chatMessages = [
+        ...this.chatMessages,
+        { role: "system", text: `发送失败：${String(error)}`, timestamp: Date.now() },
+      ];
+    }
   }
 
   private handleConnectSubmit(event: Event) {
@@ -311,8 +524,7 @@ class WebControlUiApp extends LitElement {
           <section class="hero">
             <h1>OpenClaw 独立前端</h1>
             <p>
-              这是放在 <code>apps/web-control-ui</code> 里的独立前端。现在已经接上了最小 Gateway 连接能力：
-              可以连网关、拿 hello、读 health 和 status 摘要。
+              现在这版已经不只是状态页了，还接上了最小聊天链路：会话 key、历史加载、发送消息、流式回复展示。
             </p>
 
             <form class="controls" @submit=${this.handleConnectSubmit}>
@@ -334,6 +546,16 @@ class WebControlUiApp extends LitElement {
                     this.gatewayToken = (event.target as HTMLInputElement).value;
                   }}
                   placeholder="gateway token"
+                />
+              </div>
+              <div class="field">
+                <label>Session Key</label>
+                <input
+                  .value=${this.sessionKey}
+                  @input=${(event: InputEvent) => {
+                    this.sessionKey = (event.target as HTMLInputElement).value;
+                  }}
+                  placeholder="main"
                 />
               </div>
               <button type="submit">连接 Gateway</button>
@@ -370,6 +592,30 @@ class WebControlUiApp extends LitElement {
               </article>
             </div>
             ${this.errorMessage ? html`<p style="margin-top:16px;color:#fca5a5;">${this.errorMessage}</p>` : null}
+          </section>
+
+          <section class="panel">
+            <h2>Chat</h2>
+            <div class="chat-log">
+              ${this.chatMessages.map(
+                (message) => html`<div class="bubble ${message.role}">${message.text}</div>`,
+              )}
+              ${this.chatLoading ? html`<div class="bubble system">加载聊天记录中…</div>` : null}
+              ${this.chatStream ? html`<div class="bubble assistant">${this.chatStream}</div>` : null}
+            </div>
+            <div class="chat-compose">
+              <textarea
+                .value=${this.chatInput}
+                @input=${(event: InputEvent) => {
+                  this.chatInput = (event.target as HTMLTextAreaElement).value;
+                }}
+                placeholder="输入一条消息发给当前 session..."
+              ></textarea>
+              <div class="chat-actions">
+                <button class="secondary" type="button" @click=${() => this.loadChatHistory()}>刷新历史</button>
+                <button type="button" @click=${() => this.sendChat()} ?disabled=${this.chatSending}>${this.chatSending ? "发送中..." : "发送"}</button>
+              </div>
+            </div>
           </section>
 
           <section class="panel">
