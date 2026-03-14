@@ -27,6 +27,7 @@ import {
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
 } from "./server-restart-sentinel.js";
+import { startGatewayKvCache } from "./server-startup-kv-cache.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
@@ -179,6 +180,11 @@ export async function startGatewaySidecars(params: {
 
   void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch((err) => {
     params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
+  });
+
+  // Start KV cache manager with memory integration for context preloading
+  void startGatewayKvCache({ cfg: params.cfg, log: params.log }).catch((err) => {
+    params.log.warn(`kv-cache startup failed: ${String(err)}`);
   });
 
   if (shouldWakeFromRestartSentinel()) {
