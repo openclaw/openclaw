@@ -21,19 +21,10 @@ import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
-import {
-  getActiveEmbeddedRunSnapshot,
-  waitForEmbeddedPiRunEnd,
-} from "./pi-embedded-runner/runs.js";
+import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";
 import { mapThinkingLevel } from "./pi-embedded-runner/utils.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
-import { acquireSessionWriteLock } from "./session-write-lock.js";
-
-const BTW_CUSTOM_TYPE = "openclaw:btw";
-const BTW_PERSIST_TIMEOUT_MS = 250;
-const BTW_PERSIST_RETRY_WAIT_MS = 30_000;
-const BTW_PERSIST_RETRY_LOCK_MS = 10_000;
 
 type SessionManagerLike = {
   getLeafEntry?: () => {
@@ -46,97 +37,6 @@ type SessionManagerLike = {
   resetLeaf?: () => void;
   buildSessionContext: () => { messages?: unknown[] };
 };
-
-type BtwCustomEntryData = {
-  timestamp: number;
-  question: string;
-  answer: string;
-  provider: string;
-  model: string;
-  thinkingLevel: ThinkLevel | "off";
-  reasoningLevel: ReasoningLevel;
-  sessionKey?: string;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-  usage?: unknown;
-};
-
-async function appendBtwCustomEntry(params: {
-  sessionFile: string;
-  timeoutMs: number;
-  entry: BtwCustomEntryData;
-}) {
-  const lock = await acquireSessionWriteLock({
-    sessionFile: params.sessionFile,
-    timeoutMs: params.timeoutMs,
-    allowReentrant: false,
-  });
-  try {
-    const persisted = SessionManager.open(params.sessionFile);
-    persisted.appendCustomEntry(BTW_CUSTOM_TYPE, params.entry);
-  } finally {
-    await lock.release();
-  }
-}
-
-function isSessionLockError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("session file locked");
-}
-
-function deferBtwCustomEntryPersist(params: {
-  sessionId: string;
-  sessionFile: string;
-  entry: BtwCustomEntryData;
-}) {
-  void (async () => {
-    try {
-      await waitForEmbeddedPiRunEnd(params.sessionId, BTW_PERSIST_RETRY_WAIT_MS);
-      await appendBtwCustomEntry({
-        sessionFile: params.sessionFile,
-        timeoutMs: BTW_PERSIST_RETRY_LOCK_MS,
-        entry: params.entry,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      diag.warn(`btw transcript persistence skipped: sessionId=${params.sessionId} err=${message}`);
-    }
-  })();
-}
-
-async function persistBtwCustomEntry(params: {
-  sessionId: string;
-  sessionFile: string;
-  entry: BtwCustomEntryData;
-}) {
-  try {
-    await appendBtwCustomEntry({
-      sessionFile: params.sessionFile,
-      timeoutMs: BTW_PERSIST_TIMEOUT_MS,
-      entry: params.entry,
-    });
-  } catch (error) {
-    if (!isSessionLockError(error)) {
-      throw error;
-    }
-    deferBtwCustomEntryPersist({
-      sessionId: params.sessionId,
-      sessionFile: params.sessionFile,
-      entry: params.entry,
-    });
-  }
-}
-
-function persistBtwCustomEntryInBackground(params: {
-  sessionId: string;
-  sessionFile: string;
-  entry: BtwCustomEntryData;
-}) {
-  void persistBtwCustomEntry(params).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    diag.warn(`btw transcript persistence skipped: sessionId=${params.sessionId} err=${message}`);
-  });
-}
 
 function collectTextContent(content: Array<{ type?: string; text?: string }>): string {
   return content
@@ -347,7 +247,7 @@ export async function runBtwSideQuestion(
     throw new Error("No active session context.");
   }
 
-  const { model, authProfileId, authProfileIdSource } = await resolveRuntimeModel({
+  const { model, authProfileId } = await resolveRuntimeModel({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
@@ -483,31 +383,9 @@ export async function runBtwSideQuestion(
     throw new Error("No BTW response generated.");
   }
 
-  const customEntry = {
-    timestamp: Date.now(),
-    question: params.question,
-    answer,
-    provider: model.provider,
-    model: model.id,
-    thinkingLevel: params.resolvedThinkLevel ?? "off",
-    reasoningLevel: params.resolvedReasoningLevel,
-    sessionKey: params.sessionKey,
-    authProfileId,
-    authProfileIdSource,
-    usage: finalMessage?.usage,
-  } satisfies BtwCustomEntryData;
-
-  persistBtwCustomEntryInBackground({
-    sessionId,
-    sessionFile,
-    entry: customEntry,
-  });
-
   if (emittedBlocks > 0) {
     return undefined;
   }
 
   return { text: answer };
 }
-
-export { BTW_CUSTOM_TYPE };
