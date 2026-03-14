@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import { updateSessionStore } from "../../config/sessions/store.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { resolveCronRunLogPath } from "../run-log.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
@@ -336,9 +339,48 @@ export async function remove(state: CronServiceState, id: string) {
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed" });
+      // Clean up session records and run log for the deleted job (#46369).
+      // Run outside the critical path — failures are logged but do not
+      // block the removal response.
+      cleanupRemovedJobArtifacts(state, id).catch((err) => {
+        state.deps.log.warn({ err: String(err) }, "cron: cleanup after remove failed");
+      });
     }
     return { ok: true, removed } as const;
   });
+}
+
+/**
+ * Remove session store entries and the run-log file for a deleted cron job.
+ * Called after the job is already removed from jobs.json.
+ */
+async function cleanupRemovedJobArtifacts(state: CronServiceState, jobId: string): Promise<void> {
+  // 1. Remove matching session entries from sessions.json.
+  const sessionStorePath = state.deps.sessionStorePath ?? state.deps.resolveSessionStorePath?.();
+  if (sessionStorePath) {
+    const cronKeyFragment = `cron:${jobId}:`;
+    await updateSessionStore(sessionStorePath, (store) => {
+      for (const key of Object.keys(store)) {
+        if (key.includes(cronKeyFragment)) {
+          delete store[key];
+        }
+      }
+    });
+  }
+
+  // 2. Delete the run log file ({cronStoreDir}/runs/{jobId}.jsonl).
+  try {
+    const logPath = resolveCronRunLogPath({
+      storePath: state.deps.storePath,
+      jobId,
+    });
+    await fs.unlink(logPath);
+  } catch (err: unknown) {
+    // ENOENT is fine — the log may not exist yet.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
 }
 
 type PreparedManualRun =
