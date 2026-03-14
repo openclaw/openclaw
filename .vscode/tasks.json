@@ -4,7 +4,7 @@
     {
       "label": "clean:dist",
       "type": "shell",
-      "command": "npx rimraf dist",
+      "command": "node -e \"require('fs').rmSync('dist', {recursive: true, force: true})\"",
       "group": "none",
       "presentation": {
         "echo": true,
