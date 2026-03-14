@@ -877,6 +877,87 @@ describe("sendMessageTelegram", () => {
     expect(res.messageId).toBe("9");
   });
 
+  it.each([
+    {
+      name: "images",
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/png",
+      fileName: "photo.png",
+      mediaUrl: "https://example.com/photo.png",
+    },
+    {
+      name: "GIFs",
+      buffer: Buffer.from("GIF89a"),
+      contentType: "image/gif",
+      fileName: "fun.gif",
+      mediaUrl: "https://example.com/fun.gif",
+    },
+  ])("sends $name as documents when forceDocument is true", async (testCase) => {
+    const chatId = "123";
+    const sendAnimation = vi.fn();
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: chatId },
+    });
+    const sendPhoto = vi.fn();
+    const api = { sendAnimation, sendDocument, sendPhoto } as unknown as {
+      sendAnimation: typeof sendAnimation;
+      sendDocument: typeof sendDocument;
+      sendPhoto: typeof sendPhoto;
+    };
+
+    mockLoadedMedia({
+      buffer: testCase.buffer,
+      contentType: testCase.contentType,
+      fileName: testCase.fileName,
+    });
+
+    const res = await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: testCase.mediaUrl,
+      forceDocument: true,
+    });
+
+    expect(sendDocument, testCase.name).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+      disable_content_type_detection: true,
+    });
+    expect(sendPhoto, testCase.name).not.toHaveBeenCalled();
+    expect(sendAnimation, testCase.name).not.toHaveBeenCalled();
+    expect(res.messageId).toBe("10");
+  });
+
+  it("keeps regular document sends on the default Telegram params", async () => {
+    const chatId = "123";
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 11,
+      chat: { id: chatId },
+    });
+    const api = { sendDocument } as unknown as {
+      sendDocument: typeof sendDocument;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("%PDF-1.7"),
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+    });
+
+    const res = await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/report.pdf",
+    });
+
+    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+    });
+    expect(res.messageId).toBe("11");
+  });
+
   it("routes audio media to sendAudio/sendVoice based on voice compatibility", async () => {
     const cases: Array<{
       name: string;
