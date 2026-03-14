@@ -120,7 +120,7 @@ iwr -useb https://openclaw.ai/install.ps1 | iex -InstallMethod git -GitDir "C:\\
 
 Git 要求：
 
-如果你选择 `-InstallMethod git` 但未安装 Git，安装器会打印 Git for Windows 的链接（`https://git-scm.com/download/win`）并退出。
+如果系统未安装 Git（无论是 `-InstallMethod git` 还是默认 `npm` 安装），安装器都会打印 Git for Windows 的链接（`https://git-scm.com/download/win`）并退出。
 
 常见 Windows 问题：
 
