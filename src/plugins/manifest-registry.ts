@@ -221,9 +221,12 @@ export function loadPluginManifestRegistry(params: {
 
       const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
       const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
+      const hasConfigOrigin =
+        candidate.origin === "config" || existing.candidate.origin === "config";
 
-      if (samePlugin || existingRank !== candidateRank) {
-        // Either the same physical directory or different origin precedence.
+      if (samePlugin || hasConfigOrigin) {
+        // Either the same physical directory, or one candidate was explicitly
+        // loaded via plugins.load.paths / plugins.installs (origin "config").
         // Silently keep the higher-precedence candidate without warning.
         // This covers the common case where plugins.installs places a plugin
         // into the extensions dir and auto-discovery finds it again with a
