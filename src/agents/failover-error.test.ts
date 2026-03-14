@@ -420,6 +420,10 @@ describe("failover-error", () => {
     ).toBe("timeout");
   });
 
+  it("infers timeout from generic provider error messages (#45663)", () => {
+    expect(resolveFailoverReasonFromError({ message: "Provider returned error" })).toBe("timeout");
+  });
+
   it("infers timeout from connection/network error messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
