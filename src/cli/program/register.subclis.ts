@@ -299,6 +299,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "tasks",
+    description: "Register tasks and notify session watchers",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../tasks-cli.js");
+      mod.registerTasksCli(program);
+    },
+  },
+  {
     name: "completion",
     description: "Generate shell completion script",
     hasSubcommands: false,
