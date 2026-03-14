@@ -353,7 +353,16 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             const resolvedSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
               : undefined;
-            if (!("agentId" in job)) {
+            // Auto-fill agentId from the current session if not explicitly provided.
+            // We distinguish between:
+            // - agentId: null → user explicitly wants no agent (preserve)
+            // - agentId: "valid-string" → user specified an agent (preserve)
+            // - agentId: undefined/""/missing → auto-fill from session
+            const jobRecord = job as Record<string, unknown>;
+            const agentIdValue = jobRecord.agentId;
+            const shouldAutoFillAgentId =
+              agentIdValue !== null && (typeof agentIdValue !== "string" || !agentIdValue.trim());
+            if (shouldAutoFillAgentId) {
               const agentId = opts?.agentSessionKey
                 ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
                 : undefined;
