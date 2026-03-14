@@ -771,6 +771,12 @@ export const AgentEntrySchema = z
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,
+    executionGate: z
+      .object({
+        mode: z.union([z.literal("off"), z.literal("warn"), z.literal("enforce")]).optional(),
+      })
+      .strict()
+      .optional(),
     runtime: AgentRuntimeSchema,
   })
   .strict();

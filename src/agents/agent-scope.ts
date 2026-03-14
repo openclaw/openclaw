@@ -39,6 +39,7 @@ type ResolvedAgentConfig = {
   subagents?: AgentEntry["subagents"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
+  executionGate?: AgentEntry["executionGate"];
 };
 
 let defaultAgentWarned = false;
@@ -141,6 +142,10 @@ export function resolveAgentConfig(
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
+    executionGate:
+      typeof entry.executionGate === "object" && entry.executionGate
+        ? entry.executionGate
+        : undefined,
   };
 }
 

@@ -117,6 +117,16 @@ export type CliBackendConfig = {
   };
 };
 
+export type AgentExecutionGateConfig = {
+  /**
+   * Enforce intent/action contract for execution-oriented turns:
+   * - off: disabled (default)
+   * - warn: emit telemetry/log warning when assistant acknowledges action without execution artifacts
+   * - enforce: convert such turns to explicit blocked/error payloads
+   */
+  mode?: "off" | "warn" | "enforce";
+};
+
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
@@ -165,6 +175,8 @@ export type AgentDefaultsConfig = {
   envelopeElapsed?: "on" | "off";
   /** Optional context window cap (used for runtime estimates + status %). */
   contextTokens?: number;
+  /** Optional execution-intent gate for action-oriented workflows. */
+  executionGate?: AgentExecutionGateConfig;
   /** Optional CLI backends for text-only fallback (claude-cli, etc.). */
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
