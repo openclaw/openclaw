@@ -152,6 +152,8 @@ function listChildDirectories(dir: string): string[] {
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     const dirs: string[] = [];
+    // R4: résoudre le realpath de dir une seule fois avant la boucle
+    const resolvedDir = fs.realpathSync(dir);
     for (const entry of entries) {
       if (entry.name.startsWith(".")) continue;
       if (entry.name === "node_modules") continue;
@@ -162,11 +164,17 @@ function listChildDirectories(dir: string): string[] {
       }
       if (entry.isSymbolicLink()) {
         try {
-          if (fs.statSync(fullPath).isDirectory()) {
+          // R4: résoudre le realpath du symlink et vérifier qu'il reste dans dir
+          // pour éviter qu'un lien symbolique ne permette de sortir de la racine.
+          const realTarget = fs.realpathSync(fullPath);
+          if (
+            fs.statSync(realTarget).isDirectory() &&
+            (realTarget === resolvedDir || realTarget.startsWith(resolvedDir + path.sep))
+          ) {
             dirs.push(entry.name);
           }
         } catch {
-          // ignore broken symlinks
+          // ignore broken symlinks or paths outside root
         }
       }
     }
