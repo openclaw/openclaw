@@ -66,8 +66,16 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
     }
     // nextMsgRole === undefined means this is the last message — fall through to strip.
 
+    // If content is not an array (e.g. legacy plain-string transcripts), there are no
+    // tool_use blocks to strip.  Keep the message unchanged to avoid silently dropping
+    // the assistant text on session resume.
+    if (!Array.isArray(assistantMsg.content)) {
+      result.push(msg);
+      continue;
+    }
+
     // Filter out tool_use blocks that don't have matching tool_result
-    const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
+    const originalContent = assistantMsg.content;
     const filteredContent = originalContent.filter((block) => {
       if (!block) {
         return false;
