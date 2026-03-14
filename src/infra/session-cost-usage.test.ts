@@ -211,6 +211,79 @@ describe("session cost usage", () => {
     expect(summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.2");
   });
 
+  it("includes archived .jsonl.reset.* files in cost summary", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-archive-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const now = new Date();
+    const entry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 10,
+          output: 10,
+          totalTokens: 20,
+          cost: { total: 0.05 },
+        },
+      },
+    };
+
+    // Active session file
+    const activeFile = path.join(sessionsDir, "sess-active.jsonl");
+    await fs.writeFile(activeFile, JSON.stringify(entry), "utf-8");
+
+    // Archived session file (created by /new or /reset)
+    const archiveFile = path.join(sessionsDir, "sess-old.jsonl.reset.2026-03-14T20-28-29.627Z");
+    await fs.writeFile(archiveFile, JSON.stringify(entry), "utf-8");
+
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.2", cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      // Both files should be included: 20 + 20 = 40 tokens, $0.05 + $0.05 = $0.10
+      expect(summary.totals.totalTokens).toBe(40);
+      expect(summary.totals.totalCost).toBeCloseTo(0.1, 5);
+    });
+  });
+
+  it("discovers archived sessions and extracts correct session IDs", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-archive-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const activeFile = path.join(sessionsDir, "sess-active.jsonl");
+    await fs.writeFile(activeFile, "", "utf-8");
+
+    const archiveFile = path.join(sessionsDir, "sess-old.jsonl.reset.2026-03-14T20-28-29.627Z");
+    await fs.writeFile(archiveFile, "", "utf-8");
+
+    const now = Date.now();
+    await fs.utimes(activeFile, now / 1000, now / 1000);
+    await fs.utimes(archiveFile, now / 1000, now / 1000);
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions({
+        startMs: now - 7 * 24 * 60 * 60 * 1000,
+      });
+      expect(sessions.length).toBe(2);
+      const ids = sessions.map((s) => s.sessionId).sort();
+      expect(ids).toEqual(["sess-active", "sess-old"]);
+    });
+  });
+
   it("does not exclude sessions with mtime after endMs during discovery", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
