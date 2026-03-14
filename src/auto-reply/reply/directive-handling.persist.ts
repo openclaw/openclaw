@@ -44,6 +44,7 @@ export async function persistInlineDirectives(params: {
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
   agentCfg: NonNullable<OpenClawConfig["agents"]>["defaults"] | undefined;
+  sessionId?: string;
 }): Promise<{ provider: string; model: string; contextTokens: number; hookError?: string }> {
   const {
     directives,
@@ -61,6 +62,7 @@ export async function persistInlineDirectives(params: {
     initialModelLabel,
     formatModelSwitchEvent,
     agentCfg,
+    sessionId,
   } = params;
   let { provider, model } = params;
   const activeAgentId = sessionKey
@@ -159,6 +161,8 @@ export async function persistInlineDirectives(params: {
               previousModel: model,
               nextProvider: resolved.ref.provider,
               nextModel: resolved.ref.model,
+              sessionId,
+              agentId: activeAgentId,
             });
             if (hookError !== undefined) {
               return {
@@ -248,14 +252,19 @@ export async function runBeforeModelChangeHook(params: {
   previousModel: string;
   nextProvider: string;
   nextModel: string;
+  sessionId?: string;
+  agentId?: string;
 }): Promise<string | undefined> {
-  const { hookCfg, previousProvider, previousModel, nextProvider, nextModel } = params;
+  const { hookCfg, previousProvider, previousModel, nextProvider, nextModel, sessionId, agentId } =
+    params;
   const timeoutMs = (hookCfg.timeoutSeconds ?? 30) * 1000;
   const command = hookCfg.command
     .replace(/\{provider\}/g, nextProvider)
     .replace(/\{model\}/g, nextModel)
     .replace(/\{previousProvider\}/g, previousProvider)
-    .replace(/\{previousModel\}/g, previousModel);
+    .replace(/\{previousModel\}/g, previousModel)
+    .replace(/\{sessionId\}/g, sessionId ?? "")
+    .replace(/\{agentId\}/g, agentId ?? "");
   return new Promise((resolve) => {
     const { shell, args: shellArgs } = (() => {
       const sh = process.env.SHELL || "/bin/sh";
