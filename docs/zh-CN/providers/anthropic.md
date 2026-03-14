@@ -128,7 +128,7 @@ openclaw onboard --auth-choice setup-token
 ## 注意事项
 
 - 使用 `claude setup-token` 生成 setup-token 并粘贴，或在 Gateway 网关主机上运行 `openclaw models auth setup-token`。
-- 如果你在 Claude 订阅上看到"OAuth token refresh failed …"，请使用 setup-token 重新认证。参见 [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription)。
+- 如果你在 Claude 订阅上看到"OAuth token refresh failed …"，请使用 setup-token 重新认证。参见 [/gateway/troubleshooting](/gateway/troubleshooting)。
 - 认证详情 + 重用规则在 [/concepts/oauth](/concepts/oauth)。
 
 ## 故障排除
