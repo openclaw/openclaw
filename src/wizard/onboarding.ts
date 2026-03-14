@@ -457,6 +457,16 @@ export async function runOnboardingWizard(
     }
   }
 
+  if (authChoice === "skip") {
+    await prompter.note(
+      [
+        "No API key configured. Your agent won't respond until you add one.",
+        `Run ${formatCliCommand("openclaw configure --section model")} to configure API credentials later.`,
+      ].join("\n"),
+      "Auth skipped",
+    );
+  }
+
   if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
