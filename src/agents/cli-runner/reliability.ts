@@ -39,6 +39,9 @@ function pickWatchdogProfile(
     if (typeof value !== "number" || !Number.isFinite(value)) {
       return defaults.maxMs;
     }
+    if (value === 0) {
+      return 0;
+    }
     return Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, Math.floor(value));
   })();
 
@@ -49,8 +52,9 @@ function pickWatchdogProfile(
         ? Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, Math.floor(configured.noOutputTimeoutMs))
         : undefined,
     noOutputTimeoutRatio: ratio,
-    minMs: Math.min(minMs, maxMs),
-    maxMs: Math.max(minMs, maxMs),
+    // maxMs === 0 is the "no cap" sentinel – preserve it through normalization.
+    minMs: maxMs === 0 ? minMs : Math.min(minMs, maxMs),
+    maxMs: maxMs === 0 ? 0 : Math.max(minMs, maxMs),
   };
 }
 
@@ -64,6 +68,9 @@ export function resolveCliNoOutputTimeoutMs(params: {
   const cap = Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, params.timeoutMs - 1_000);
   if (profile.noOutputTimeoutMs !== undefined) {
     return Math.min(profile.noOutputTimeoutMs, cap);
+  }
+  if (profile.maxMs === 0) {
+    return cap;
   }
   const computed = Math.floor(params.timeoutMs * profile.noOutputTimeoutRatio);
   const bounded = Math.min(profile.maxMs, Math.max(profile.minMs, computed));

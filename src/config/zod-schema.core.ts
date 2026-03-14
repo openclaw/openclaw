@@ -444,7 +444,11 @@ const CliBackendWatchdogModeSchema = z
     noOutputTimeoutMs: z.number().int().min(1000).optional(),
     noOutputTimeoutRatio: z.number().min(0.05).max(0.95).optional(),
     minMs: z.number().int().min(1000).optional(),
-    maxMs: z.number().int().min(1000).optional(),
+    maxMs: z
+      .number()
+      .int()
+      .refine((v) => v === 0 || v >= 1000, { message: "maxMs must be 0 (no cap) or >= 1000" })
+      .optional(),
   })
   .strict()
   .optional();
