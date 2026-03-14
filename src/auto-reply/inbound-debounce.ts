@@ -8,7 +8,7 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
  * itself on creation and deregisters after the next global flush sweep.
  */
 type DebouncerFlushHandle = {
-  flushAll: () => Promise<number>;
+  flushAll: (options?: { deadlineMs?: number }) => Promise<number>;
 };
 const INBOUND_DEBOUNCERS_KEY = Symbol.for("openclaw.inboundDebouncers");
 const INBOUND_DEBOUNCERS = resolveGlobalMap<symbol, DebouncerFlushHandle>(INBOUND_DEBOUNCERS_KEY);
@@ -26,15 +26,19 @@ export function clearInboundDebouncerRegistry(): void {
  * Returns the number of debounce buffers actually flushed so restart logic can
  * skip followup draining when there was no buffered work.
  */
-export async function flushAllInboundDebouncers(): Promise<number> {
+export async function flushAllInboundDebouncers(options?: { timeoutMs?: number }): Promise<number> {
   const entries = [...INBOUND_DEBOUNCERS.entries()];
   if (entries.length === 0) {
     return 0;
   }
+  const deadlineMs =
+    typeof options?.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
+      ? Date.now() + Math.max(0, Math.trunc(options.timeoutMs))
+      : undefined;
   const flushedCounts = await Promise.all(
     entries.map(async ([key, handle]) => {
       try {
-        return await handle.flushAll();
+        return await handle.flushAll({ deadlineMs });
       } finally {
         INBOUND_DEBOUNCERS.delete(key);
       }
@@ -172,15 +176,21 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  const flushAll = async () => {
+  const flushAll = async (options?: { deadlineMs?: number }) => {
     let flushedBufferCount = 0;
 
     // Keep sweeping until no debounced keys remain. A flush callback can race
     // with late in-flight ingress and create another buffered key before the
     // global registry deregisters this debouncer during restart.
     while (buffers.size > 0) {
+      if (options?.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
+        break;
+      }
       const keys = [...buffers.keys()];
       for (const key of keys) {
+        if (options?.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
+          return flushedBufferCount;
+        }
         if (!buffers.has(key)) {
           continue;
         }
