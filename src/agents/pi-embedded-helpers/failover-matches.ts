@@ -153,6 +153,8 @@ export function isBillingErrorMessage(raw: string): boolean {
     value.includes("upgrade") ||
     value.includes("credits") ||
     value.includes("payment") ||
+    value.includes("purchase") ||
+    value.includes("subscription") ||
     value.includes("plan")
   );
 }
