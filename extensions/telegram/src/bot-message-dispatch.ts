@@ -582,9 +582,8 @@ export const dispatchTelegramMessage = async ({
   };
   if (ackReactionTiming === "received") {
     void ensureAckReactionStarted();
+    void runStatusReactionTransition(() => statusReactionController?.setThinking());
   }
-
-  void runStatusReactionTransition(() => statusReactionController?.setThinking());
 
   const typingCallbacks = createTypingCallbacks({
     start: sendTyping,
@@ -781,7 +780,11 @@ export const dispatchTelegramMessage = async ({
               })
           : undefined,
         onAgentRunStart: () => {
-          void ensureAckReactionStarted();
+          void ensureAckReactionStarted().then(() => {
+            if (statusReactionController && statusReactionLifecycleStarted) {
+              void statusReactionController.setThinking();
+            }
+          });
         },
         onToolStart: statusReactionController
           ? async (payload) => {

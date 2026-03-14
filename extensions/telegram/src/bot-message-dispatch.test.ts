@@ -2251,6 +2251,90 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(statusReactionController.setDone).not.toHaveBeenCalled();
   });
 
+  it("starts full status reaction lifecycle including thinking on run-start with status reactions enabled", async () => {
+    const events: string[] = [];
+    let startRun!: () => void;
+    let resolveQueued!: () => void;
+    const runStarted = new Promise<void>((resolve) => {
+      startRun = resolve;
+    });
+    const queuedStarted = new Promise<void>((resolve) => {
+      resolveQueued = () => {
+        events.push("queued:resolved");
+        resolve();
+      };
+    });
+    const statusReactionController = {
+      setThinking: vi.fn(async () => {
+        events.push("thinking");
+      }),
+      setCompacting: vi.fn(async () => {
+        events.push("compacting");
+      }),
+      setTool: vi.fn(async (toolName?: string) => {
+        events.push(`tool:${toolName ?? ""}`);
+      }),
+      setDone: vi.fn(async () => {
+        events.push("done");
+      }),
+      setError: vi.fn(async () => {
+        events.push("error");
+      }),
+      setQueued: vi.fn(async () => {
+        events.push("queued");
+        await queuedStarted;
+      }),
+      cancelPending: vi.fn(() => {
+        events.push("cancelPending");
+      }),
+      clear: vi.fn(async () => {
+        events.push("clear");
+      }),
+      restoreInitial: vi.fn(async () => {
+        events.push("restoreInitial");
+      }),
+    };
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await runStarted;
+      replyOptions?.onAgentRunStart?.("run-1");
+      await Promise.resolve();
+      resolveQueued();
+      await Promise.resolve();
+      await Promise.resolve();
+      await replyOptions?.onToolStart?.({ name: "web_search" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const runPromise = dispatchWithContext({
+      context: createContext({
+        ackReactionTiming: "run-start",
+        ackReactionAllowed: true,
+        statusReactionController: statusReactionController as never,
+      }),
+      streamMode: "off",
+    });
+
+    expect(statusReactionController.setQueued).not.toHaveBeenCalled();
+    expect(statusReactionController.setThinking).not.toHaveBeenCalled();
+
+    startRun();
+    await runPromise;
+    await Promise.resolve();
+
+    expect(statusReactionController.setQueued).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.setThinking).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.setTool).toHaveBeenCalledWith("web_search");
+    expect(statusReactionController.setDone).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([
+      "queued",
+      "queued:resolved",
+      "thinking",
+      "tool:web_search",
+      "done",
+    ]);
+  });
+
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
     const statusReactionController = {
       setThinking: vi.fn(async () => {}),
