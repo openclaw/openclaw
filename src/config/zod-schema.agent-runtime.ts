@@ -40,13 +40,23 @@ export const HeartbeatSchema = z
     if (!val.every) {
       return;
     }
+    let ms: number;
     try {
-      parseDurationMs(val.every, { defaultUnit: "m" });
+      ms = parseDurationMs(val.every, { defaultUnit: "m" });
     } catch {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["every"],
         message: "invalid duration (use ms, s, m, h)",
+      });
+      return;
+    }
+    // Node.js setTimeout uses a 32-bit signed int; values above ~24.8 days overflow.
+    if (ms > 2_147_483_647) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["every"],
+        message: "duration exceeds maximum (~24.8 days); use a shorter interval",
       });
     }
 
