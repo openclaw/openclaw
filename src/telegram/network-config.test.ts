@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import {
   resetTelegramNetworkConfigStateForTests,
   resolveTelegramAutoSelectFamilyDecision,
@@ -157,7 +158,9 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
     },
     {
       name: "normalizes trimmed config values",
-      network: { dnsResultOrder: "  Verbatim  " },
+      network: { dnsResultOrder: "  Verbatim  " } as TelegramNetworkConfig & {
+        dnsResultOrder: string;
+      },
       nodeMajor: 20,
       expected: { value: "verbatim", source: "config" },
     },
@@ -171,11 +174,17 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
     {
       name: "ignores invalid env and config values before applying Node 22 default",
       env: { OPENCLAW_TELEGRAM_DNS_RESULT_ORDER: "bogus" },
-      network: { dnsResultOrder: "invalid" },
+      network: { dnsResultOrder: "invalid" } as TelegramNetworkConfig & { dnsResultOrder: string },
       nodeMajor: 22,
       expected: { value: "ipv4first", source: "default-node22" },
     },
-  ])("$name", ({ env, network, nodeMajor, expected }) => {
+  ] satisfies Array<{
+    name: string;
+    env?: NodeJS.ProcessEnv;
+    network?: TelegramNetworkConfig | (TelegramNetworkConfig & { dnsResultOrder: string });
+    nodeMajor: number;
+    expected: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
+  }>)("$name", ({ env, network, nodeMajor, expected }) => {
     const decision = resolveTelegramDnsResultOrderDecision({
       env,
       network,

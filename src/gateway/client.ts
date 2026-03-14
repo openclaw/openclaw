@@ -117,6 +117,8 @@ export function describeGatewayCloseCode(code: number): string | undefined {
   return GATEWAY_CLOSE_CODE_HINTS[code];
 }
 
+const FORCE_STOP_TERMINATE_GRACE_MS = 250;
+
 export class GatewayClient {
   private ws: WebSocket | null = null;
   private opts: GatewayClientOptions;
@@ -273,8 +275,17 @@ export class GatewayClient {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
-    this.ws?.close();
+    const ws = this.ws;
     this.ws = null;
+    if (ws) {
+      ws.close();
+      const forceTerminateTimer = setTimeout(() => {
+        try {
+          ws.terminate();
+        } catch {}
+      }, FORCE_STOP_TERMINATE_GRACE_MS);
+      forceTerminateTimer.unref?.();
+    }
     this.flushPendingErrors(new Error("gateway client stopped"));
   }
 
