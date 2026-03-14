@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
@@ -10,6 +11,7 @@ import {
   type SandboxBrowserRegistryEntry,
   type SandboxRegistryEntry,
 } from "./registry.js";
+import { resolveSandboxWorkspaceDir } from "./shared.js";
 import type { SandboxConfig } from "./types.js";
 
 let lastPruneAtMs = 0;
@@ -56,7 +58,13 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
       // ignore prune failures
     } finally {
       await params.remove(entry.containerName);
-      await params.onRemoved?.(entry);
+      // Guard against race: only delete workspace if the container hasn't been re-registered
+      // between the registry removal and now.
+      const current = await params.read();
+      const reregistered = current.entries.some((e) => e.containerName === entry.containerName);
+      if (!reregistered) {
+        await params.onRemoved?.(entry);
+      }
     }
   }
 }
@@ -66,6 +74,22 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
     cfg,
     read: readRegistry,
     remove: removeRegistryEntry,
+    onRemoved: async (entry) => {
+      // Clean up workspace directory if scope is session/agent (not shared).
+      if (cfg.scope !== "shared") {
+        const workspaceDir = resolveSandboxWorkspaceDir(cfg.workspaceRoot, entry.sessionKey);
+        try {
+          await fs.rm(workspaceDir, { recursive: true, force: true });
+        } catch (error) {
+          const code = (error as { code?: string })?.code;
+          if (code !== "ENOTDIR") {
+            defaultRuntime.error?.(
+              `Failed to remove sandbox workspace directory ${workspaceDir}: ${String(error)}`,
+            );
+          }
+        }
+      }
+    },
   });
 }
 
