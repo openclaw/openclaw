@@ -28,9 +28,11 @@ import {
 } from "./pi-tools.policy.js";
 import {
   assertRequiredParams,
+  createHostAppendTool,
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,
   createOpenClawReadTool,
+  createSandboxedAppendTool,
   createSandboxedEditTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
@@ -397,6 +399,13 @@ export function createOpenClawCodingTools(options?: {
       const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
+    if (tool.name === "append") {
+      if (sandboxRoot) {
+        return [];
+      }
+      const wrapped = createHostAppendTool(workspaceRoot, { workspaceOnly });
+      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+    }
     if (tool.name === "edit") {
       if (sandboxRoot) {
         return [];
@@ -480,6 +489,15 @@ export function createOpenClawCodingTools(options?: {
                   },
                 )
               : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+            workspaceOnly
+              ? wrapToolWorkspaceRootGuardWithOptions(
+                  createSandboxedAppendTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  sandboxRoot,
+                  {
+                    containerWorkdir: sandbox.containerWorkdir,
+                  },
+                )
+              : createSandboxedAppendTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
           ]
         : []
       : []),
