@@ -83,15 +83,29 @@ async function fetchHistoryMessages(
   return historyRes.payload?.messages ?? [];
 }
 
+async function prepareMainHistoryHarness(params: {
+  ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
+  createSessionDir: () => Promise<string>;
+  historyMaxBytes?: number;
+}) {
+  if (params.historyMaxBytes !== undefined) {
+    __setMaxChatHistoryMessagesBytesForTest(params.historyMaxBytes);
+  }
+  await connectOk(params.ws);
+  const sessionDir = await params.createSessionDir();
+  await writeMainSessionStore();
+  return sessionDir;
+}
+
 describe("gateway server chat", () => {
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
-      await connectOk(ws);
-
-      const sessionDir = await createSessionDir();
-      await writeMainSessionStore();
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes,
+      });
 
       const bigText = "x".repeat(2_000);
       const historyLines: string[] = [];
@@ -180,11 +194,11 @@ describe("gateway server chat", () => {
   test("chat.history hard-caps single oversized nested payloads", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
-      await connectOk(ws);
-
-      const sessionDir = await createSessionDir();
-      await writeMainSessionStore();
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes,
+      });
 
       const hugeNestedText = "n".repeat(120_000);
       const oversizedLine = JSON.stringify({
@@ -219,11 +233,11 @@ describe("gateway server chat", () => {
   test("chat.history keeps recent small messages when latest message is oversized", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
-      await connectOk(ws);
-
-      const sessionDir = await createSessionDir();
-      await writeMainSessionStore();
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes,
+      });
 
       const baseText = "s".repeat(1_200);
       const lines: string[] = [];
