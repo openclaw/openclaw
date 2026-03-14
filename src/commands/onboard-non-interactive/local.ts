@@ -91,7 +91,7 @@ export async function runNonInteractiveOnboardingLocal(params: {
           },
           codebaseSearch: {
             ...nextConfig.agents?.defaults?.codebaseSearch,
-            enabled: !opts.skipSearch,
+            enabled: true,
           },
         },
       },
