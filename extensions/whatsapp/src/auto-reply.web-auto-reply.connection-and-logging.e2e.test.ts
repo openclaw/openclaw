@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import { setGatewaySigusr1RestartPolicy } from "../../../src/infra/restart.js";
 import { setLoggerOverride } from "../../../src/logging.js";
 import { withEnvAsync } from "../../../src/test-utils/env.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
@@ -199,6 +200,164 @@ describe("web auto-reply connection", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("status 440"));
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("session conflict"));
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
+  });
+
+  it("gracefully closes the active listener on SIGUSR1 restart without reconnecting", async () => {
+    const sleep = vi.fn(async () => {});
+    let resolveClose: (reason?: unknown) => void = () => {};
+    const close = vi.fn(async () => undefined);
+    const signalClose = vi.fn((reason?: unknown) => resolveClose(reason));
+    const listenerFactory = vi.fn(async () => {
+      const onClose = new Promise<unknown>((res) => {
+        resolveClose = res;
+      });
+      return { close, onClose, signalClose };
+    });
+    const { run } = startMonitorWebChannel({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      heartbeatSeconds: 60,
+    });
+
+    await Promise.resolve();
+    expect(listenerFactory).toHaveBeenCalledTimes(1);
+
+    setGatewaySigusr1RestartPolicy({ allowExternal: true });
+    try {
+      process.emit("SIGUSR1");
+      await run;
+
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(signalClose).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 499,
+          isLoggedOut: false,
+          error: "restart",
+        }),
+      );
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    } finally {
+      setGatewaySigusr1RestartPolicy({ allowExternal: false });
+    }
+  });
+
+  it("exits reconnect backoff immediately when SIGUSR1 requests a restart", async () => {
+    let resolveClose: (reason?: unknown) => void = () => {};
+    const close = vi.fn(async () => undefined);
+    const sleep = vi.fn(
+      async () =>
+        await new Promise<void>(() => {
+          // The restart signal should short-circuit this wait.
+        }),
+    );
+    const listenerFactory = vi.fn(async () => {
+      const onClose = new Promise<unknown>((res) => {
+        resolveClose = res;
+      });
+      return { close, onClose, signalClose: vi.fn() };
+    });
+    const { run, runtime } = startMonitorWebChannel({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      reconnect: { initialMs: 10_000, maxMs: 10_000, maxAttempts: 3, factor: 1.1 },
+    });
+
+    await Promise.resolve();
+    expect(listenerFactory).toHaveBeenCalledTimes(1);
+
+    resolveClose({ status: 500, isLoggedOut: false, error: "socket closed" });
+    await vi.waitFor(
+      () => {
+        expect(sleep).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 250, interval: 2 },
+    );
+
+    setGatewaySigusr1RestartPolicy({ allowExternal: true });
+    try {
+      process.emit("SIGUSR1");
+      await run;
+
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("status 500"));
+    } finally {
+      setGatewaySigusr1RestartPolicy({ allowExternal: false });
+    }
+  });
+
+  it("exits listener startup immediately when SIGUSR1 requests a restart", async () => {
+    const sleep = vi.fn(async () => {});
+    let resolveListener:
+      | ((listener: {
+          close: () => Promise<void>;
+          signalClose: (reason?: unknown) => void;
+        }) => void)
+      | null = null;
+    const close = vi.fn(async () => undefined);
+    const signalClose = vi.fn();
+    const listenerFactory = vi.fn(
+      async () =>
+        await new Promise<{ close: () => Promise<void>; signalClose: (reason?: unknown) => void }>(
+          (resolve) => {
+            resolveListener = resolve;
+          },
+        ),
+    );
+    const { run } = startMonitorWebChannel({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+    });
+
+    await Promise.resolve();
+    expect(listenerFactory).toHaveBeenCalledTimes(1);
+
+    setGatewaySigusr1RestartPolicy({ allowExternal: true });
+    try {
+      process.emit("SIGUSR1");
+      resolveListener?.({ close, signalClose });
+      await run;
+
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+      await vi.waitFor(
+        () => {
+          expect(close).toHaveBeenCalledTimes(1);
+          expect(signalClose).toHaveBeenCalledWith(
+            expect.objectContaining({
+              status: 499,
+              isLoggedOut: false,
+              error: "restart",
+            }),
+          );
+        },
+        { timeout: 250, interval: 2 },
+      );
+    } finally {
+      setGatewaySigusr1RestartPolicy({ allowExternal: false });
+    }
+  });
+
+  it("removes the SIGUSR1 handler when listener startup throws", async () => {
+    const sleep = vi.fn(async () => {});
+    const listenerFactory = vi.fn(async () => {
+      throw new Error("startup failed");
+    });
+    const sigusr1Before = process.listenerCount("SIGUSR1");
+
+    await expect(
+      startMonitorWebChannel({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory,
+        sleep,
+      }).run,
+    ).rejects.toThrow("startup failed");
+
+    expect(process.listenerCount("SIGUSR1")).toBe(sigusr1Before);
   });
 
   it("forces reconnect when watchdog closes without onClose", async () => {
