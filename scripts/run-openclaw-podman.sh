@@ -70,11 +70,6 @@ fi
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$EFFECTIVE_HOME/.openclaw}"
 ENV_FILE="${OPENCLAW_PODMAN_ENV:-$CONFIG_DIR/.env}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$CONFIG_DIR/workspace}"
-CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
-OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-openclaw:local}"
-PODMAN_PULL="${OPENCLAW_PODMAN_PULL:-never}"
-HOST_GATEWAY_PORT="${OPENCLAW_PODMAN_GATEWAY_HOST_PORT:-${OPENCLAW_GATEWAY_PORT:-18789}}"
-HOST_BRIDGE_PORT="${OPENCLAW_PODMAN_BRIDGE_HOST_PORT:-${OPENCLAW_BRIDGE_PORT:-18790}}"
 
 # Safe cwd for podman (openclaw is nologin; avoid inherited cwd from sudo)
 cd "$EFFECTIVE_HOME" 2>/dev/null || cd /tmp 2>/dev/null || true
@@ -96,6 +91,12 @@ if [[ -f "$ENV_FILE" ]]; then
   source "$ENV_FILE" 2>/dev/null || true
   set +a
 fi
+
+CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
+OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-openclaw:local}"
+PODMAN_PULL="${OPENCLAW_PODMAN_PULL:-never}"
+HOST_GATEWAY_PORT="${OPENCLAW_PODMAN_GATEWAY_HOST_PORT:-${OPENCLAW_GATEWAY_PORT:-18789}}"
+HOST_BRIDGE_PORT="${OPENCLAW_PODMAN_BRIDGE_HOST_PORT:-${OPENCLAW_BRIDGE_PORT:-18790}}"
 
 # Keep Podman default local-only unless explicitly overridden.
 # Non-loopback binds require gateway.controlUi.allowedOrigins (security hardening).

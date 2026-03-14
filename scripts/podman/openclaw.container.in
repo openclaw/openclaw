@@ -6,7 +6,7 @@
 Description=OpenClaw gateway (rootless Podman)
 
 [Container]
-Image=openclaw:local
+Image={{IMAGE_NAME}}
 ContainerName=openclaw
 UserNS=keep-id
 # Keep container UID/GID aligned with the invoking user so mounted config is readable.
