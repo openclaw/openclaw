@@ -24,5 +24,12 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
   if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
     enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
   }
+  // Voice-call plugin security flags
+  const voiceCallConfig = cfg.plugins?.entries?.["voice-call"]?.config;
+  if (voiceCallConfig) {
+    if (voiceCallConfig.skipSignatureVerification === true) {
+      enabledFlags.push("plugins.entries.voice-call.config.skipSignatureVerification=true");
+    }
+  }
   return enabledFlags;
 }

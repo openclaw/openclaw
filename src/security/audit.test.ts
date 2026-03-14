@@ -1451,6 +1451,48 @@ description: test skill
     expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
   });
 
+  it("warns when voice-call plugin has skipSignatureVerification enabled", async () => {
+    const cfg: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              skipSignatureVerification: true,
+            },
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
+
+    expect(finding).toBeTruthy();
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain(
+      "plugins.entries.voice-call.config.skipSignatureVerification=true",
+    );
+  });
+
+  it("does not warn when voice-call plugin has skipSignatureVerification disabled", async () => {
+    const cfg: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              skipSignatureVerification: false,
+            },
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
+
+    expect(finding?.detail ?? "").not.toContain("skipSignatureVerification");
+  });
+
   it("flags non-loopback Control UI without allowed origins", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
