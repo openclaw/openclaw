@@ -444,6 +444,11 @@ export async function ensureAgentWorkspace(params?: {
   if (stateDirty) {
     await writeWorkspaceOnboardingState(statePath, state);
   }
+
+  // Ensure the daily memory directory exists. Some installs/upgrades can leave workspaces
+  // without it, which breaks journaling and memory workflows.
+  await fs.mkdir(path.join(dir, "memory"), { recursive: true });
+
   await ensureGitRepo(dir, isBrandNewWorkspace);
 
   return {
