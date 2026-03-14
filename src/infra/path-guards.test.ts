@@ -31,6 +31,9 @@ describe("normalizeWindowsPathForComparison", () => {
     expect(normalizeWindowsPathForComparison("\\\\?\\UNC\\Server\\Share\\Folder")).toBe(
       "\\\\server\\share\\folder",
     );
+    expect(normalizeWindowsPathForComparison("\\\\?\\unc\\Server\\Share\\Folder")).toBe(
+      "\\\\server\\share\\folder",
+    );
   });
 });
 
@@ -48,11 +51,13 @@ describe("node path error helpers", () => {
     expect(isNotFoundPathError({ code: "ENOENT" })).toBe(true);
     expect(isNotFoundPathError({ code: "ENOTDIR" })).toBe(true);
     expect(isNotFoundPathError({ code: "EACCES" })).toBe(false);
+    expect(isNotFoundPathError({ code: 404 })).toBe(false);
 
     expect(isSymlinkOpenError({ code: "ELOOP" })).toBe(true);
     expect(isSymlinkOpenError({ code: "EINVAL" })).toBe(true);
     expect(isSymlinkOpenError({ code: "ENOTSUP" })).toBe(true);
     expect(isSymlinkOpenError({ code: "ENOENT" })).toBe(false);
+    expect(isSymlinkOpenError({ code: null })).toBe(false);
   });
 });
 
