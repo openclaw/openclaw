@@ -468,3 +468,48 @@ describe("mapBraveLlmContextResults", () => {
     expect(results[0].siteName).toBeUndefined();
   });
 });
+
+describe("resolveBraveBaseUrl", () => {
+  const { resolveBraveBaseUrl } = __testing;
+  const DEFAULT = "https://api.search.brave.com";
+
+  it("returns default when brave config is empty", () => {
+    expect(resolveBraveBaseUrl({})).toBe(DEFAULT);
+  });
+
+  it("returns default when baseUrl is not set", () => {
+    expect(resolveBraveBaseUrl({ mode: "web" })).toBe(DEFAULT);
+  });
+
+  it("returns config baseUrl when set", () => {
+    expect(resolveBraveBaseUrl({ baseUrl: "https://my-proxy.example.com" })).toBe(
+      "https://my-proxy.example.com",
+    );
+  });
+
+  it("trims whitespace from config baseUrl", () => {
+    expect(resolveBraveBaseUrl({ baseUrl: "  https://my-proxy.example.com  " })).toBe(
+      "https://my-proxy.example.com",
+    );
+  });
+
+  it("returns BRAVE_BASE_URL env var when config baseUrl is not set", () => {
+    withEnv({ BRAVE_BASE_URL: "https://env-proxy.example.com" }, () => {
+      expect(resolveBraveBaseUrl({})).toBe("https://env-proxy.example.com");
+    });
+  });
+
+  it("config baseUrl takes precedence over env var", () => {
+    withEnv({ BRAVE_BASE_URL: "https://env-proxy.example.com" }, () => {
+      expect(resolveBraveBaseUrl({ baseUrl: "https://config-proxy.example.com" })).toBe(
+        "https://config-proxy.example.com",
+      );
+    });
+  });
+
+  it("falls back to default when env var is empty string", () => {
+    withEnv({ BRAVE_BASE_URL: "" }, () => {
+      expect(resolveBraveBaseUrl({})).toBe(DEFAULT);
+    });
+  });
+});
