@@ -2,7 +2,7 @@
 const NEAR_BOTTOM_THRESHOLD = 450;
 /** Small escape hatch so slight upward manual scroll cancels auto-follow quickly. */
 const MANUAL_SCROLL_RELEASE_THRESHOLD = 24;
-/** Once the user takes over scroll, only re-enable follow when they are effectively back at bottom. */
+/** Once the user takes over scroll, only re-enable follow when they are back at bottom. */
 const FOLLOW_REACQUIRE_THRESHOLD = 24;
 
 type ScrollHost = {
@@ -138,7 +138,11 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   const scrollingUp = currentScrollTop < host.chatLastScrollTop;
   const backAtBottom = distanceFromBottom <= FOLLOW_REACQUIRE_THRESHOLD;
 
-  if (host.chatUserNearBottom && scrollingUp && distanceFromBottom > MANUAL_SCROLL_RELEASE_THRESHOLD) {
+  if (
+    host.chatUserNearBottom &&
+    scrollingUp &&
+    distanceFromBottom > MANUAL_SCROLL_RELEASE_THRESHOLD
+  ) {
     host.chatUserNearBottom = false;
     host.chatFollowLocked = true;
   } else if (backAtBottom) {
@@ -169,7 +173,8 @@ export function handleLogsScroll(host: ScrollHost, event: Event) {
   if (!container) {
     return;
   }
-  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+  const distanceFromBottom =
+    container.scrollHeight - container.scrollTop - container.clientHeight;
   host.logsAtBottom = distanceFromBottom < 80;
 }
 
