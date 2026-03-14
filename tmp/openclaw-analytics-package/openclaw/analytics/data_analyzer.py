@@ -189,7 +189,16 @@ class DataAnalyzer:
             metrics_list = data
         elif isinstance(data, dict):
             if 'metrics' in data:
-                metrics_list = data['metrics']
+                # Handle both list and single object formats
+                # FIX: Support OpenClaw monitor exporter format
+                metrics_data = data['metrics']
+                if isinstance(metrics_data, list):
+                    metrics_list = metrics_data
+                elif isinstance(metrics_data, dict):
+                    # Single metrics object from monitor exporter
+                    metrics_list = [metrics_data]
+                else:
+                    raise ValueError("Invalid 'metrics' format in JSON")
             elif 'data_points' in data:
                 metrics_list = data['data_points']
             else:
@@ -347,24 +356,24 @@ class DataAnalyzer:
             if metric_name == 'cpu_usage':
                 if result.mean > 80:
                     recommendations.append(
-                        f" High CPU usage detected (avg: {result.mean:.1f}%). "
+                        f"⚠️ High CPU usage detected (avg: {result.mean:.1f}%). "
                         "Consider optimizing compute-intensive operations or scaling resources."
                     )
                 if result.trend == 'increasing':
                     recommendations.append(
-                        f" CPU usage trend is increasing. Monitor closely and plan for capacity scaling."
+                        f"📈 CPU usage trend is increasing. Monitor closely and plan for capacity scaling."
                     )
             
             # Memory recommendations
             elif metric_name == 'memory_usage':
                 if result.mean > 85:
                     recommendations.append(
-                        f" High memory usage detected (avg: {result.mean:.1f}%). "
+                        f"⚠️ High memory usage detected (avg: {result.mean:.1f}%). "
                         "Check for memory leaks and consider increasing heap size."
                     )
                 if result.p99 > 95:
                     recommendations.append(
-                        f" Memory usage peaked at {result.max_val:.1f}%. "
+                        f"🔴 Memory usage peaked at {result.max_val:.1f}%. "
                         "Critical: Risk of OOM errors. Increase memory limits immediately."
                     )
             
@@ -372,12 +381,12 @@ class DataAnalyzer:
             elif metric_name == 'ws_latency':
                 if result.p95 > 1000:
                     recommendations.append(
-                        f" High WebSocket latency detected (P95: {result.p95:.0f}ms). "
+                        f"⚠️ High WebSocket latency detected (P95: {result.p95:.0f}ms). "
                         "Check network connectivity and optimize message processing."
                     )
                 if result.trend == 'increasing':
                     recommendations.append(
-                        f" WebSocket latency is increasing. Investigate potential bottlenecks."
+                        f"📈 WebSocket latency is increasing. Investigate potential bottlenecks."
                     )
             
             # Error rate recommendations
@@ -643,7 +652,15 @@ class DataAnalyzer:
         self, 
         points: List[MetricPoint]
     ) -> List[Tuple[float, float]]:
-        """Calculate requests per minute"""
+        """
+        Calculate requests per minute using interval deltas
+        
+        FIX: Uses the difference between consecutive cumulative counters to compute
+        the actual requests in each interval, avoiding inflated throughput values.
+        
+        Previously used absolute cumulative values which showed increasing throughput
+        even when actual per-interval load was constant.
+        """
         if len(points) < 2:
             return []
         
@@ -651,8 +668,21 @@ class DataAnalyzer:
         for i in range(1, len(points)):
             time_diff = points[i].timestamp - points[i-1].timestamp
             if time_diff > 0:
-                requests = points[i].model_requests + points[i].agent_executions
-                rate = (requests / time_diff) * 60
+                # Calculate delta from previous sample (cumulative counters)
+                model_delta = points[i].model_requests - points[i-1].model_requests
+                agent_delta = points[i].agent_executions - points[i-1].agent_executions
+                
+                # Handle counter reset (if negative, use current value as delta)
+                if model_delta < 0:
+                    model_delta = points[i].model_requests
+                if agent_delta < 0:
+                    agent_delta = points[i].agent_executions
+                
+                # Total requests in this interval
+                requests_delta = model_delta + agent_delta
+                
+                # Convert to requests per minute
+                rate = (requests_delta / time_diff) * 60
                 throughput.append((points[i].timestamp, rate))
         
         return throughput
@@ -784,6 +814,7 @@ class DataAnalyzer:
             return '--- Recommendations ---\nNo recommendations at this time.'
         
         lines = ['--- Recommendations ---', '']
+        
         for i, rec in enumerate(recommendations, 1):
             lines.append(f'{i}. {rec}')
         
@@ -803,161 +834,140 @@ class DataAnalyzer:
     def _generate_html_report(self) -> str:
         """Generate HTML report"""
         stats = self.get_summary_stats()
-        time_range = stats.get('time_range', {})
-        ops = stats.get('operations', {})
+        anomalies = self.detect_anomalies()
+        recommendations = self.generate_recommendations()
         
-        html = f"""<!DOCTYPE html>
+        html = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenClaw Performance Analysis Report</title>
     <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ 
+        body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            max-width: 1200px;
+            margin: 0 auto;
             padding: 20px;
-            line-height: 1.6;
-        }}
-        .container {{ 
-            max-width: 1400px; 
-            margin: 0 auto; 
-            background: white; 
-            padding: 40px; 
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }}
-        h1 {{ 
-            color: #2d3748; 
-            border-bottom: 3px solid #667eea; 
-            padding-bottom: 15px; 
-            margin-bottom: 30px;
-            font-size: 2.5em;
-        }}
-        h2 {{ 
-            color: #4a5568; 
-            margin-top: 40px; 
-            margin-bottom: 20px;
-            font-size: 1.8em;
-        }}
-        .meta {{ color: #718096; margin-bottom: 30px; font-size: 0.95em; }}
-        table {{ 
-            width: 100%; 
-            border-collapse: collapse; 
-            margin: 25px 0;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            border-radius: 8px;
-            overflow: hidden;
-        }}
-        th, td {{ 
-            padding: 15px; 
-            text-align: left; 
-            border-bottom: 1px solid #e2e8f0;
-        }}
-        th {{ 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; 
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }}
-        tr:hover {{ background-color: #f7fafc; }}
-        .trend-increasing {{ color: #38a169; font-weight: bold; }}
-        .trend-decreasing {{ color: #e53e3e; font-weight: bold; }}
-        .trend-stable {{ color: #718096; }}
-        .severity-critical {{ color: #e53e3e; font-weight: bold; }}
-        .severity-high {{ color: #dd6b20; font-weight: bold; }}
-        .severity-medium {{ color: #d69e2e; font-weight: bold; }}
-        .severity-low {{ color: #38a169; }}
-        .recommendation {{ 
-            background: #f7fafc; 
-            padding: 15px; 
-            margin: 10px 0; 
-            border-left: 4px solid #667eea;
-            border-radius: 4px;
-        }}
-        .stats-grid {{
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+        }
+        .summary-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
             gap: 20px;
             margin: 20px 0;
-        }}
-        .stat-card {{
-            background: linear-gradient(135deg, #f6f8fb 0%, #e9ecef 100%);
+        }
+        .summary-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
             padding: 20px;
             border-radius: 8px;
-            text-align: center;
-        }}
-        .stat-value {{
-            font-size: 2em;
+        }
+        .summary-card h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        .summary-card .value {
+            font-size: 32px;
             font-weight: bold;
-            color: #667eea;
-        }}
-        .stat-label {{
-            color: #718096;
-            font-size: 0.9em;
-            margin-top: 5px;
-        }}
+            margin: 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+        }
+        tr:hover {
+            background: #f8f9fa;
+        }
+        .anomaly-critical { background: #fee; }
+        .anomaly-high { background: #fff4e6; }
+        .anomaly-medium { background: #fffde7; }
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .badge-critical { background: #e74c3c; color: white; }
+        .badge-high { background: #e67e22; color: white; }
+        .badge-medium { background: #f39c12; color: white; }
+        .badge-low { background: #95a5a6; color: white; }
+        .trend-up { color: #e74c3c; }
+        .trend-down { color: #27ae60; }
+        .trend-stable { color: #95a5a6; }
+        .recommendation {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 12px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>📊 OpenClaw Performance Analysis Report</h1>
-        <p class="meta">Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p><strong>Generated:</strong> """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + """</p>
         
         <h2>📈 Summary</h2>
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-value">{stats.get('total_data_points', 0)}</div>
-                <div class="stat-label">Data Points</div>
+        <div class="summary-grid">
+"""
+        
+        # Summary cards
+        if stats:
+            time_range = stats.get('time_range', {})
+            ops = stats.get('operations', {})
+            
+            html += f"""
+            <div class="summary-card">
+                <h3>Data Points</h3>
+                <p class="value">{stats.get('total_data_points', 0)}</p>
             </div>
-            <div class="stat-card">
-                <div class="stat-value">{time_range.get('duration_human', 'N/A')}</div>
-                <div class="stat-label">Duration</div>
+            <div class="summary-card">
+                <h3>Duration</h3>
+                <p class="value">{time_range.get('duration_human', 'N/A')}</p>
             </div>
-            <div class="stat-card">
-                <div class="stat-value">{ops.get('total_operations', 0)}</div>
-                <div class="stat-label">Total Operations</div>
+            <div class="summary-card">
+                <h3>Total Operations</h3>
+                <p class="value">{ops.get('total_operations', 0):,}</p>
             </div>
-            <div class="stat-card">
-                <div class="stat-value">{ops.get('overall_error_rate', 0):.2f}%</div>
-                <div class="stat-label">Error Rate</div>
+            <div class="summary-card">
+                <h3>Error Rate</h3>
+                <p class="value">{ops.get('overall_error_rate', 0):.2f}%</p>
             </div>
+"""
+        
+        html += """
         </div>
         
-        {self._html_metrics_table()}
-        
-        {self._html_anomalies_table()}
-        
-        {self._html_recommendations()}
-    </div>
-</body>
-</html>"""
-        return html
-    
-    def _html_metrics_table(self) -> str:
-        """Generate HTML metrics table"""
-        rows = []
-        for name, result in self.analysis_cache.items():
-            trend_class = f'trend-{result.trend}'
-            rows.append(f"""
-            <tr>
-                <td><strong>{result.name}</strong></td>
-                <td>{result.count}</td>
-                <td>{result.mean:.2f}</td>
-                <td>{result.median:.2f}</td>
-                <td>{result.std_dev:.2f}</td>
-                <td>{result.min_val:.2f}</td>
-                <td>{result.max_val:.2f}</td>
-                <td>{result.p95:.2f}</td>
-                <td>{result.p99:.2f}</td>
-                <td class="{trend_class}">{result.trend.upper()}</td>
-            </tr>
-            """)
-        
-        return f"""
-        <h2> Metrics Analysis</h2>
+        <h2>📊 Metrics Analysis</h2>
         <table>
             <thead>
                 <tr>
@@ -974,33 +984,40 @@ class DataAnalyzer:
                 </tr>
             </thead>
             <tbody>
-                {''.join(rows)}
+"""
+        
+        # Metrics rows
+        for name, result in self.analysis_cache.items():
+            trend_class = 'trend-up' if result.trend == 'increasing' else 'trend-down' if result.trend == 'decreasing' else 'trend-stable'
+            trend_icon = '↑' if result.trend == 'increasing' else '↓' if result.trend == 'decreasing' else '→'
+            
+            html += f"""
+                <tr>
+                    <td><strong>{result.name}</strong></td>
+                    <td>{result.count}</td>
+                    <td>{result.mean:.2f}</td>
+                    <td>{result.median:.2f}</td>
+                    <td>{result.std_dev:.2f}</td>
+                    <td>{result.min_val:.2f}</td>
+                    <td>{result.max_val:.2f}</td>
+                    <td>{result.p95:.2f}</td>
+                    <td>{result.p99:.2f}</td>
+                    <td class="{trend_class}">{trend_icon} {result.trend}</td>
+                </tr>
+"""
+        
+        html += """
             </tbody>
         </table>
-        """
-    
-    def _html_anomalies_table(self) -> str:
-        """Generate HTML anomalies table"""
-        anomalies = self.detect_anomalies()
+"""
         
-        if not anomalies:
-            return '<h2> Anomalies</h2><p>No anomalies detected. System is operating normally.</p>'
+        # Anomalies
+        html += """
+        <h2>⚠️ Anomalies</h2>
+"""
         
-        rows = []
-        for anomaly in anomalies[:20]:
-            rows.append(f"""
-            <tr>
-                <td class="severity-{anomaly.severity}">{anomaly.severity.upper()}</td>
-                <td>{anomaly.metric}</td>
-                <td>{anomaly.value:.2f}</td>
-                <td>{anomaly.expected:.2f}</td>
-                <td>{anomaly.z_score:.2f}</td>
-                <td>{datetime.fromtimestamp(anomaly.timestamp).strftime('%Y-%m-%d %H:%M:%S')}</td>
-            </tr>
-            """)
-        
-        return f"""
-        <h2> Anomalies ({len(anomalies)} detected)</h2>
+        if anomalies:
+            html += """
         <table>
             <thead>
                 <tr>
@@ -1008,78 +1025,124 @@ class DataAnalyzer:
                     <th>Metric</th>
                     <th>Value</th>
                     <th>Expected</th>
+                    <th>Deviation</th>
                     <th>Z-Score</th>
-                    <th>Timestamp</th>
+                    <th>Time</th>
                 </tr>
             </thead>
             <tbody>
-                {''.join(rows)}
+"""
+            
+            for anomaly in anomalies[:20]:
+                row_class = f'anomaly-{anomaly.severity}' if anomaly.severity in ['critical', 'high', 'medium'] else ''
+                badge_class = f'badge-{anomaly.severity}'
+                
+                html += f"""
+                <tr class="{row_class}">
+                    <td><span class="badge {badge_class}">{anomaly.severity.upper()}</span></td>
+                    <td>{anomaly.metric}</td>
+                    <td><strong>{anomaly.value:.2f}</strong></td>
+                    <td>{anomaly.expected:.2f}</td>
+                    <td>{anomaly.deviation:.2f}</td>
+                    <td>{anomaly.z_score:.2f}</td>
+                    <td>{datetime.fromtimestamp(anomaly.timestamp).strftime('%H:%M:%S')}</td>
+                </tr>
+"""
+            
+            html += """
             </tbody>
         </table>
-        """
-    
-    def _html_recommendations(self) -> str:
-        """Generate HTML recommendations"""
-        recommendations = self.generate_recommendations()
+"""
+            
+            if len(anomalies) > 20:
+                html += f"""
+        <p><em>Showing top 20 of {len(anomalies)} anomalies</em></p>
+"""
+        else:
+            html += """
+        <p style="color: #27ae60;">✅ No anomalies detected</p>
+"""
         
-        if not recommendations:
-            return '<h2> Recommendations</h2><p>No recommendations at this time. Keep up the good work!</p>'
+        # Recommendations
+        html += """
+        <h2>💡 Recommendations</h2>
+"""
         
-        items = '\n'.join(f'<div class="recommendation">{rec}</div>' for rec in recommendations)
+        if recommendations:
+            for rec in recommendations:
+                html += f"""
+        <div class="recommendation">
+            {rec}
+        </div>
+"""
+        else:
+            html += """
+        <p>No recommendations at this time.</p>
+"""
         
-        return f"""
-        <h2> Recommendations</h2>
-        {items}
-        """
+        html += """
+    </div>
+</body>
+</html>
+"""
+        
+        return html
     
     def _generate_markdown_report(self) -> str:
         """Generate Markdown report"""
         stats = self.get_summary_stats()
-        time_range = stats.get('time_range', {})
-        ops = stats.get('operations', {})
+        anomalies = self.detect_anomalies()
         
         md = f"""# OpenClaw Performance Analysis Report
 
-**Generated at:** {datetime.now().isoformat()}
+**Generated:** {datetime.now().isoformat()}
 
-##  Summary
+## 📊 Summary
 
 | Metric | Value |
 |--------|-------|
 | Total Data Points | {stats.get('total_data_points', 0)} |
-| Duration | {time_range.get('duration_human', 'N/A')} |
-| Total Agent Executions | {ops.get('total_agent_executions', 0)} |
-| Total Model Requests | {ops.get('total_model_requests', 0)} |
-| Total Errors | {ops.get('total_errors', 0)} |
-| Overall Error Rate | {ops.get('overall_error_rate', 0):.2f}% |
-
-##  Metrics Analysis
-
-| Metric | Count | Mean | Median | Std Dev | Min | Max | P95 | P99 | Trend |
-|--------|-------|------|--------|---------|-----|-----|-----|-----|-------|
 """
         
-        for name, result in self.analysis_cache.items():
-            md += f"| {result.name} | {result.count} | {result.mean:.2f} | {result.median:.2f} | {result.std_dev:.2f} | {result.min_val:.2f} | {result.max_val:.2f} | {result.p95:.2f} | {result.p99:.2f} | {result.trend} |\n"
+        time_range = stats.get('time_range', {})
+        if time_range:
+            md += f"| Time Range | {time_range.get('start', 'N/A')} to {time_range.get('end', 'N/A')} |\n"
+            md += f"| Duration | {time_range.get('duration_human', 'N/A')} |\n"
         
-        anomalies = self.detect_anomalies()
+        ops = stats.get('operations', {})
+        if ops:
+            md += f"| Total Operations | {ops.get('total_operations', 0):,} |\n"
+            md += f"| Error Rate | {ops.get('overall_error_rate', 0):.2f}% |\n"
+        
+        md += "\n## 📈 Metrics Analysis\n\n"
+        md += "| Metric | Count | Mean | Median | Std Dev | Min | Max | P95 | P99 | Trend |\n"
+        md += "|--------|-------|------|--------|---------|-----|-----|-----|-----|-------|\n"
+        
+        for name, result in self.analysis_cache.items():
+            trend_icon = '↑' if result.trend == 'increasing' else '↓' if result.trend == 'decreasing' else '→'
+            md += f"| {result.name} | {result.count} | {result.mean:.2f} | {result.median:.2f} | {result.std_dev:.2f} | {result.min_val:.2f} | {result.max_val:.2f} | {result.p95:.2f} | {result.p99:.2f} | {trend_icon} {result.trend} |\n"
+        
+        md += "\n## ⚠️ Anomalies\n\n"
+        
         if anomalies:
-            md += f"\n##  Anomalies ({len(anomalies)} detected)\n\n"
-            md += "| Severity | Metric | Value | Expected | Z-Score | Timestamp |\n"
-            md += "|----------|--------|-------|----------|---------|----------|\n"
+            md += "| Severity | Metric | Value | Expected | Z-Score | Time |\n"
+            md += "|----------|--------|-------|----------|---------|------|\n"
             
-            for anomaly in anomalies[:20]:
-                md += f"| {anomaly.severity.upper()} | {anomaly.metric} | {anomaly.value:.2f} | {anomaly.expected:.2f} | {anomaly.z_score:.2f} | {datetime.fromtimestamp(anomaly.timestamp).isoformat()} |\n"
+            for anomaly in anomalies[:10]:
+                md += f"| **{anomaly.severity.upper()}** | {anomaly.metric} | {anomaly.value:.2f} | {anomaly.expected:.2f} | {anomaly.z_score:.2f} | {datetime.fromtimestamp(anomaly.timestamp).strftime('%H:%M:%S')} |\n"
+            
+            if len(anomalies) > 10:
+                md += f"\n*... and {len(anomalies) - 10} more anomalies*\n"
         else:
-            md += "\n##  Anomalies\n\nNo anomalies detected.\n"
+            md += "No anomalies detected.\n"
         
         recommendations = self.generate_recommendations()
         if recommendations:
-            md += "\n##  Recommendations\n\n"
+            md += "\n## 💡 Recommendations\n\n"
             for i, rec in enumerate(recommendations, 1):
                 md += f"{i}. {rec}\n"
         else:
-            md += "\n##  Recommendations\n\nNo recommendations at this time.\n"
+            md += "\n## 💡 Recommendations\n\nNo recommendations at this time.\n"
         
         return md
 
@@ -1117,10 +1180,10 @@ Examples:
     args = parser.parse_args()
     
     # Create analyzer
-    analyzer =  DataAnalyzer(config={'anomaly_threshold': args.threshold})
+    analyzer = DataAnalyzer(config={'anomaly_threshold': args.threshold})
     
     # Load data
-    print(f" Loading data from {args.input}...")
+    print(f"📂 Loading data from {args.input}...")
     
     if args.input.endswith('.json'):
         count = analyzer.load_from_json(args.input)
@@ -1130,16 +1193,16 @@ Examples:
         print("❌ Error: Unsupported file format. Use .json or .csv")
         sys.exit(1)
     
-    print(f" Loaded {count} data points")
+    print(f"✅ Loaded {count} data points")
     
     # Perform analysis
-    print(" Analyzing data...")
+    print("🔍 Analyzing data...")
     results = analyzer.analyze()
-    print(f" Analyzed {len(results)} metrics")
+    print(f"✅ Analyzed {len(results)} metrics")
     
     # Detect anomalies
     anomalies = analyzer.detect_anomalies()
-    print(f"  Detected {len(anomalies)} anomalies")
+    print(f"⚠️  Detected {len(anomalies)} anomalies")
     
     # Generate report
     report = analyzer.generate_report(format=args.format)
@@ -1148,7 +1211,7 @@ Examples:
     if args.output:
         with open(args.output, 'w', encoding='utf-8') as f:
             f.write(report)
-        print(f" Report saved to {args.output}")
+        print(f"✅ Report saved to {args.output}")
     else:
         print("\n" + report)
     
@@ -1156,7 +1219,7 @@ Examples:
     if args.export:
         export_format = 'json' if args.export.endswith('.json') else 'csv'
         analyzer.export_analysis(args.export, export_format)
-        print(f" Analysis exported to {args.export}")
+        print(f"✅ Analysis exported to {args.export}")
 
 
 if __name__ == '__main__':
