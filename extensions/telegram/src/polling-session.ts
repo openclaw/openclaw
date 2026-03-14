@@ -52,6 +52,7 @@ type TelegramPollingSessionOpts = {
 
 export class TelegramPollingSession {
   #restartAttempts = 0;
+  #consecutiveStallRestarts = 0;
   #webhookCleared = false;
   #forceRestarted = false;
   #activeRunner: ReturnType<typeof run> | undefined;
@@ -183,13 +184,12 @@ export class TelegramPollingSession {
     await this.#confirmPersistedOffset(bot);
 
     let lastGetUpdatesAt = Date.now();
-    let consecutiveStallRestarts = 0;
     bot.api.config.use(async (prev, method, payload, signal) => {
       const result = await prev(method, payload, signal);
       if (method === "getUpdates") {
         lastGetUpdatesAt = Date.now();
         this.#restartAttempts = 0;
-        consecutiveStallRestarts = 0;
+        this.#consecutiveStallRestarts = 0;
       }
       return result;
     });
@@ -232,16 +232,16 @@ export class TelegramPollingSession {
       }
       const elapsed = Date.now() - lastGetUpdatesAt;
       if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
-        consecutiveStallRestarts += 1;
+        this.#consecutiveStallRestarts += 1;
         stalledRestart = true;
-        if (consecutiveStallRestarts >= MAX_CONSECUTIVE_POLL_RESTARTS) {
+        if (this.#consecutiveStallRestarts >= MAX_CONSECUTIVE_POLL_RESTARTS) {
           this.opts.log(
-            `[telegram] Polling recovery exhausted after ${consecutiveStallRestarts} consecutive stall restarts without successful getUpdates; escalating to process exit.`,
+            `[telegram] Polling recovery exhausted after ${this.#consecutiveStallRestarts} consecutive stall restarts without successful getUpdates; escalating to process exit.`,
           );
           process.exit(1);
         }
         this.opts.log(
-          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart (attempt ${consecutiveStallRestarts}/${MAX_CONSECUTIVE_POLL_RESTARTS}).`,
+          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart (attempt ${this.#consecutiveStallRestarts}/${MAX_CONSECUTIVE_POLL_RESTARTS}).`,
         );
         void stopRunner();
         void stopBot();
