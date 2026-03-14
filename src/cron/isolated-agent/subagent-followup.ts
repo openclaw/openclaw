@@ -1,6 +1,6 @@
 import { listDescendantRunsForRequester } from "../../agents/subagent-registry.js";
 import { readLatestAssistantReply } from "../../agents/tools/agent-step.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentTokenOnOwnLine, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { callGateway } from "../../gateway/call.js";
 
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
@@ -95,7 +95,11 @@ export async function readDescendantSubagentFallbackReply(params: {
     if (!reply && typeof entry.frozenResultText === "string" && entry.frozenResultText.trim()) {
       reply = entry.frozenResultText.trim();
     }
-    if (!reply || reply.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
+    if (
+      !reply ||
+      reply.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase() ||
+      isSilentTokenOnOwnLine(reply, SILENT_REPLY_TOKEN)
+    ) {
       continue;
     }
     replies.push(reply);
@@ -174,6 +178,7 @@ export async function waitForDescendantSubagentSummary(params: {
     if (
       latest &&
       latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
+      !isSilentTokenOnOwnLine(latest, SILENT_REPLY_TOKEN) &&
       (latest !== initialReply || !isLikelyInterimCronMessage(latest))
     ) {
       return latest;
@@ -186,6 +191,7 @@ export async function waitForDescendantSubagentSummary(params: {
   if (
     latest &&
     latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
+    !isSilentTokenOnOwnLine(latest, SILENT_REPLY_TOKEN) &&
     (latest !== initialReply || !isLikelyInterimCronMessage(latest))
   ) {
     return latest;

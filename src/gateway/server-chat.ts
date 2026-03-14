@@ -1,6 +1,6 @@
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isSilentReplyText, isSilentTokenOnOwnLine, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
@@ -359,7 +359,7 @@ export function createAgentEventHandler({
       return;
     }
     chatRunState.buffers.set(clientRunId, mergedText);
-    if (isSilentReplyText(mergedText, SILENT_REPLY_TOKEN)) {
+    if (isSilentReplyText(mergedText, SILENT_REPLY_TOKEN) || isSilentTokenOnOwnLine(mergedText, SILENT_REPLY_TOKEN)) {
       return;
     }
     if (isSilentReplyLeadFragment(mergedText)) {
@@ -406,7 +406,9 @@ export function createAgentEventHandler({
     });
     const text = normalizedHeartbeatText.text.trim();
     const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
+      normalizedHeartbeatText.suppress ||
+      isSilentReplyText(text, SILENT_REPLY_TOKEN) ||
+      isSilentTokenOnOwnLine(text, SILENT_REPLY_TOKEN);
     const shouldSuppressSilentLeadFragment = isSilentReplyLeadFragment(text);
     const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
       clientRunId,
@@ -463,7 +465,9 @@ export function createAgentEventHandler({
     });
     const text = normalizedHeartbeatText.text.trim();
     const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
+      normalizedHeartbeatText.suppress ||
+      isSilentReplyText(text, SILENT_REPLY_TOKEN) ||
+      isSilentTokenOnOwnLine(text, SILENT_REPLY_TOKEN);
     // Flush any throttled delta so streaming clients receive the complete text
     // before the final event. The 150 ms throttle in emitChatDelta may have
     // suppressed the most recent chunk, leaving the client with stale text.
