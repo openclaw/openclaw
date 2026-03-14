@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mattermostPlugin } from "../../../extensions/mattermost/src/channel.js";
 import { discordOutbound } from "../../channels/plugins/outbound/discord.js";
 import { imessageOutbound } from "../../channels/plugins/outbound/imessage.js";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
@@ -24,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   sendMessageSlack: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   sendMessageTelegram: vi.fn(async () => ({ messageId: "m1", chatId: "c1" })),
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "m1", toJid: "jid" })),
+  sendMessageMattermost: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   deliverOutboundPayloads: vi.fn(),
 }));
 
@@ -42,9 +44,12 @@ vi.mock("../../slack/send.js", () => ({
 vi.mock("../../telegram/send.js", () => ({
   sendMessageTelegram: mocks.sendMessageTelegram,
 }));
-vi.mock("../../web/outbound.js", () => ({
+vi.mock("../../../extensions/whatsapp/src/send.js", () => ({
   sendMessageWhatsApp: mocks.sendMessageWhatsApp,
   sendPollWhatsApp: mocks.sendMessageWhatsApp,
+}));
+vi.mock("../../../extensions/mattermost/src/mattermost/send.js", () => ({
+  sendMessageMattermost: mocks.sendMessageMattermost,
 }));
 vi.mock("../../infra/outbound/deliver.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
@@ -335,6 +340,33 @@ describe("routeReply", () => {
     );
   });
 
+  it("uses threadId as replyToId for Mattermost when replyToId is missing", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "mattermost",
+      to: "channel:CHAN1",
+      threadId: "post-root",
+      cfg: {
+        channels: {
+          mattermost: {
+            enabled: true,
+            botToken: "test-token",
+            baseUrl: "https://chat.example.com",
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "mattermost",
+        to: "channel:CHAN1",
+        replyToId: "post-root",
+        threadId: "post-root",
+      }),
+    );
+  });
+
   it("sends multiple mediaUrls (caption only on first)", async () => {
     mocks.sendMessageSlack.mockClear();
     await routeReply({
@@ -499,6 +531,11 @@ const defaultRegistry = createTestRegistry([
     plugin: createMSTeamsPlugin({
       outbound: createMSTeamsOutbound(),
     }),
+    source: "test",
+  },
+  {
+    pluginId: "mattermost",
+    plugin: mattermostPlugin,
     source: "test",
   },
 ]);
