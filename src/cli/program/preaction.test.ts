@@ -213,6 +213,19 @@ describe("registerPreActionHooks", () => {
     });
   });
 
+  it("suppresses doctor stdout for acp commands even without --json", async () => {
+    await runPreAction({
+      parseArgv: ["acp", "client"],
+      processArgv: ["node", "openclaw", "acp", "client"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["acp", "client"],
+      suppressDoctorStdout: true,
+    });
+  });
+
   it("bypasses config guard for config validate", async () => {
     await runPreAction({
       parseArgv: ["config", "validate"],

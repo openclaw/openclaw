@@ -88,6 +88,11 @@ function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
 }
 
 function isJsonOutputMode(commandPath: string[], argv: string[]): boolean {
+  // ACP commands must keep stdout machine-parseable (NDJSON over stdio).
+  // Suppress doctor note boxes even without --json to avoid protocol pollution.
+  if (commandPath[0] === "acp") {
+    return true;
+  }
   if (!hasFlag(argv, "--json")) {
     return false;
   }
