@@ -86,15 +86,17 @@ function shouldAttachDeviceIdentityForGatewayCall(params: {
   token?: string;
   password?: string;
 }): boolean {
-  if (!(params.token || params.password)) {
-    return true;
-  }
   try {
     const parsed = new URL(params.url);
-    return !["127.0.0.1", "::1", "localhost"].includes(parsed.hostname);
+    // Local loopback calls should always carry device identity so operator-scoped
+    // RPC methods can succeed even when a shared gateway token/password is present.
+    if (["127.0.0.1", "::1", "localhost"].includes(parsed.hostname)) {
+      return true;
+    }
   } catch {
-    return true;
+    return !(params.token || params.password);
   }
+  return !(params.token || params.password);
 }
 
 export type ExplicitGatewayAuth = {
