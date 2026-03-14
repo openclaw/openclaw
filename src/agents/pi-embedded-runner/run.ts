@@ -996,6 +996,75 @@ export async function runEmbeddedPiAgent(
               ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
 
+          // ── Timeout-triggered compaction ──────────────────────────────────
+          // When the LLM times out with high context usage, compact before
+          // retrying to break the death spiral of repeated timeouts.
+          if (timedOut && !aborted && !timedOutDuringCompaction) {
+            const tokenUsedRatio =
+              lastTurnTotal != null && ctxInfo.tokens > 0 ? lastTurnTotal / ctxInfo.tokens : 0;
+            if (
+              tokenUsedRatio > 0.65 ||
+              (overflowCompactionAttempts === 0 && runLoopIterations > 1)
+            ) {
+              const timeoutDiagId = createCompactionDiagId();
+              log.warn(
+                `[timeout-compaction] LLM timed out with high context usage (${Math.round(tokenUsedRatio * 100)}%); ` +
+                  `attempting compaction before retry diagId=${timeoutDiagId}`,
+              );
+              let timeoutCompactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
+              try {
+                timeoutCompactResult = await contextEngine.compact({
+                  sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
+                  sessionFile: params.sessionFile,
+                  tokenBudget: ctxInfo.tokens,
+                  force: true,
+                  compactionTarget: "budget",
+                  runtimeContext: {
+                    sessionKey: params.sessionKey,
+                    messageChannel: params.messageChannel,
+                    messageProvider: params.messageProvider,
+                    agentAccountId: params.agentAccountId,
+                    authProfileId: lastProfileId,
+                    workspaceDir: resolvedWorkspace,
+                    agentDir,
+                    config: params.config,
+                    skillsSnapshot: params.skillsSnapshot,
+                    senderIsOwner: params.senderIsOwner,
+                    provider,
+                    model: modelId,
+                    runId: params.runId,
+                    thinkLevel,
+                    reasoningLevel: params.reasoningLevel,
+                    bashElevated: params.bashElevated,
+                    extraSystemPrompt: params.extraSystemPrompt,
+                    ownerNumbers: params.ownerNumbers,
+                    trigger: "timeout_recovery",
+                    diagId: timeoutDiagId,
+                    attempt: 1,
+                    maxAttempts: 1,
+                  },
+                });
+              } catch (compactErr) {
+                log.warn(
+                  `[timeout-compaction] contextEngine.compact() threw during timeout recovery for ${provider}/${modelId}: ${String(compactErr)}`,
+                );
+                timeoutCompactResult = { ok: false, compacted: false, reason: String(compactErr) };
+              }
+              if (timeoutCompactResult.compacted) {
+                autoCompactionCount += 1;
+                log.info(
+                  `[timeout-compaction] compaction succeeded for ${provider}/${modelId}; retrying prompt`,
+                );
+                continue;
+              } else {
+                log.warn(
+                  `[timeout-compaction] compaction did not reduce context for ${provider}/${modelId}; falling through to normal handling`,
+                );
+              }
+            }
+          }
+
           const contextOverflowError = !aborted
             ? (() => {
                 if (promptError) {
