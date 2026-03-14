@@ -957,6 +957,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
 
       let summary = "";
+      let lastSummaryWithoutPreservedTurns = "";
       let currentInstructions = structuredInstructions;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
       let lastSuccessfulSummary: string | null = null;
@@ -1021,6 +1022,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           throw attemptError;
         }
         lastSuccessfulSummary = summaryWithPreservedTurns;
+        lastSummaryWithoutPreservedTurns = summaryWithoutPreservedTurns;
 
         const canRegenerate =
           messagesToSummarize.length > 0 ||
@@ -1053,21 +1055,26 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           : `${structuredInstructions}\n\n${qualityFeedbackInstruction}`;
       }
 
-      // Cap the main history body first, then append diagnostics and workspace rules
-      // so they survive truncation. Truncation keeps the prefix (slice(0, budget)),
-      // so sections appended at the end would be dropped first—tool failures and
-      // file ops are high-signal diagnostics we want to preserve.
-      const diagnosticSuffix = appendSummarySection(
-        appendSummarySection("", toolFailureSection),
+      // Cap the main history body first, then append preserved turns, diagnostics,
+      // and workspace rules so they survive truncation. Truncation keeps the prefix
+      // (slice(0, budget)), so sections at the end of the body would be dropped
+      // first—preserved turns, tool failures, and file ops must be in the suffix.
+      const reservedSuffix = appendSummarySection(
+        appendSummarySection(appendSummarySection("", preservedTurnsSection), toolFailureSection),
         fileOpsSummary,
       );
       const workspaceContext = await readWorkspaceContextForSummary();
-      const reservedSuffix = appendSummarySection(diagnosticSuffix, workspaceContext);
+      const fullReservedSuffix = appendSummarySection(reservedSuffix, workspaceContext);
       // Ensure leading separator so suffix does not merge with body (e.g. when body
       // ends without newline from buildStructuredFallbackSummary: "...## Exact identifiers## Tool Failures").
       const normalizedSuffix =
-        reservedSuffix && !/^\s/.test(reservedSuffix) ? `\n\n${reservedSuffix}` : reservedSuffix;
-      summary = capCompactionSummaryPreservingSuffix(summary, normalizedSuffix);
+        fullReservedSuffix && !/^\s/.test(fullReservedSuffix)
+          ? `\n\n${fullReservedSuffix}`
+          : fullReservedSuffix;
+      summary = capCompactionSummaryPreservingSuffix(
+        lastSummaryWithoutPreservedTurns,
+        normalizedSuffix,
+      );
 
       return {
         compaction: {
