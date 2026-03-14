@@ -24,7 +24,11 @@ function buildEnv(stateDir: string): NodeJS.ProcessEnv {
 }
 
 function createClientHarness(initialLiveCommands: FakeLiveCommand[] = []) {
-  let nextId = 1;
+  let nextId =
+    initialLiveCommands
+      .map((command) => Number(command.id.replace(/^cmd-/, "")))
+      .filter((value) => Number.isFinite(value))
+      .reduce((max, value) => Math.max(max, value), 0) + 1;
   const liveCommands = [...initialLiveCommands];
   const rest = {
     get: vi.fn(async (route: string) => {
@@ -33,51 +37,45 @@ function createClientHarness(initialLiveCommands: FakeLiveCommand[] = []) {
       }
       throw new Error(`unexpected get route: ${route}`);
     }),
-    post: vi.fn(async (route: string, params: { body: Record<string, unknown> }) => {
+    put: vi.fn(async (route: string, params: { body: Array<Record<string, unknown>> }) => {
+      if (route !== Routes.applicationCommands("app-1")) {
+        throw new Error(`unexpected put route: ${route}`);
+      }
+      const nextLiveCommands = params.body.map((body) => {
+        const name = String(body.name);
+        const existing = liveCommands.find((command) => command.name === name);
+        return {
+          id: existing?.id ?? `cmd-${nextId++}`,
+          name,
+          description: String(body.description ?? ""),
+          type: Number(body.type ?? 1),
+          options: Array.isArray(body.options)
+            ? (body.options as Array<Record<string, unknown>>)
+            : undefined,
+        } satisfies FakeLiveCommand;
+      });
+      liveCommands.splice(0, liveCommands.length, ...nextLiveCommands);
+      return [...liveCommands];
+    }),
+    post: vi.fn(async (route: string, _params: { body: Record<string, unknown> }) => {
       if (route !== Routes.applicationCommands("app-1")) {
         throw new Error(`unexpected post route: ${route}`);
       }
-      const created: FakeLiveCommand = {
-        id: `cmd-${nextId++}`,
-        name: String(params.body.name),
-        description: String(params.body.description),
-        type: Number(params.body.type ?? 1),
-        options: Array.isArray(params.body.options)
-          ? (params.body.options as Array<Record<string, unknown>>)
-          : undefined,
-      };
-      liveCommands.push(created);
-      return created;
+      throw new Error("unexpected post during bulk reconcile");
     }),
-    patch: vi.fn(async (route: string, params: { body: Record<string, unknown> }) => {
+    patch: vi.fn(async (route: string, _params: { body: Record<string, unknown> }) => {
       const prefix = Routes.applicationCommand("app-1", "");
       if (!route.startsWith(prefix)) {
         throw new Error(`unexpected patch route: ${route}`);
       }
-      const id = route.slice(prefix.length);
-      const existing = liveCommands.find((command) => command.id === id);
-      if (!existing) {
-        throw new Error(`missing command for patch: ${id}`);
-      }
-      existing.name = String(params.body.name);
-      existing.description = String(params.body.description);
-      existing.type = Number(params.body.type ?? 1);
-      existing.options = Array.isArray(params.body.options)
-        ? (params.body.options as Array<Record<string, unknown>>)
-        : undefined;
-      return { ...existing };
+      throw new Error("unexpected patch during bulk reconcile");
     }),
     delete: vi.fn(async (route: string) => {
       const prefix = Routes.applicationCommand("app-1", "");
       if (!route.startsWith(prefix)) {
         throw new Error(`unexpected delete route: ${route}`);
       }
-      const id = route.slice(prefix.length);
-      const index = liveCommands.findIndex((command) => command.id === id);
-      if (index >= 0) {
-        liveCommands.splice(index, 1);
-      }
-      return undefined;
+      throw new Error("unexpected delete during bulk reconcile");
     }),
   };
   return {
@@ -118,7 +116,7 @@ describe("reconcileDiscordNativeCommands", () => {
       deleted: 0,
       leftAlone: 0,
     });
-    expect(rest.post).toHaveBeenCalledTimes(2);
+    expect(rest.put).toHaveBeenCalledTimes(1);
     const savedRaw = await fs.readFile(
       __testing.resolveStatePath({ accountId: "default", env }),
       "utf8",
@@ -205,7 +203,7 @@ describe("reconcileDiscordNativeCommands", () => {
       deleted: 0,
       leftAlone: 0,
     });
-    expect(rest.post).not.toHaveBeenCalled();
+    expect(rest.put).not.toHaveBeenCalled();
     expect(rest.patch).not.toHaveBeenCalled();
     expect(rest.delete).not.toHaveBeenCalled();
   });
@@ -283,14 +281,57 @@ describe("reconcileDiscordNativeCommands", () => {
       deleted: 1,
       leftAlone: 1,
     });
-    expect(rest.patch).toHaveBeenCalledTimes(1);
-    expect(rest.post).toHaveBeenCalledTimes(1);
-    expect(rest.delete).toHaveBeenCalledTimes(1);
+    expect(rest.put).toHaveBeenCalledTimes(1);
+    expect(rest.patch).not.toHaveBeenCalled();
+    expect(rest.post).not.toHaveBeenCalled();
+    expect(rest.delete).not.toHaveBeenCalled();
     expect(
       getLiveCommands()
         .map((command) => command.name)
         .toSorted(),
     ).toEqual(["cmd", "custom_live", "new_cmd"]);
+  });
+
+  it("uses a legacy-style overwrite when state is missing and stale managed commands exist", async () => {
+    const { client, rest, getLiveCommands } = createClientHarness([
+      {
+        id: "cmd-1",
+        name: "cmd",
+        description: "built-in",
+        type: 1,
+      },
+      {
+        id: "cmd-2",
+        name: "vc",
+        description: "Voice channel controls",
+        type: 1,
+      },
+    ]);
+    const runtime = { log: vi.fn() };
+
+    const result = await reconcileDiscordNativeCommands({
+      client,
+      cfg: {} as OpenClawConfig,
+      runtime,
+      accountId: "default",
+      applicationId: "app-1",
+      commandSpecs: [{ name: "cmd", description: "built-in", acceptsArgs: false }],
+      env: buildEnv(stateDir),
+    });
+
+    expect(result.summary).toEqual({
+      validated: 1,
+      unchanged: 1,
+      created: 0,
+      updated: 0,
+      deleted: 1,
+      leftAlone: 0,
+    });
+    expect(rest.put).toHaveBeenCalledTimes(1);
+    expect(getLiveCommands().map((command) => command.name)).toEqual(["cmd"]);
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("state missing; using legacy bulk overwrite"),
+    );
   });
 
   it("logs unexpected live command names and validated counts", async () => {
@@ -388,8 +429,84 @@ describe("reconcileDiscordNativeCommands", () => {
       deleted: 0,
       leftAlone: 0,
     });
+    expect(rest.put).not.toHaveBeenCalled();
+    expect(rest.patch).not.toHaveBeenCalled();
+    expect(rest.delete).not.toHaveBeenCalled();
+  });
+
+  it("replaces tracked renames at the Discord command cap without per-command mutations", async () => {
+    const stableCommands = Array.from({ length: 99 }, (_, index) => ({
+      id: `cmd-${index + 1}`,
+      name: `stable_${index + 1}`,
+      description: `stable ${index + 1}`,
+      type: 1,
+    })) satisfies FakeLiveCommand[];
+    const initialLiveCommands: FakeLiveCommand[] = [
+      ...stableCommands,
+      {
+        id: "cmd-100",
+        name: "old_cmd",
+        description: "rename me",
+        type: 1,
+      },
+    ];
+    const { client, rest, getLiveCommands } = createClientHarness(initialLiveCommands);
+    const env = buildEnv(stateDir);
+    await fs.mkdir(path.dirname(__testing.resolveStatePath({ accountId: "default", env })), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      __testing.resolveStatePath({ accountId: "default", env }),
+      JSON.stringify({
+        version: 1,
+        accountId: "default",
+        applicationId: "app-1",
+        commands: initialLiveCommands.map((command) => ({
+          id: command.id,
+          name: command.name,
+          signatureHash: __testing.hashDefinition({
+            name: command.name,
+            description: command.description,
+            type: command.type,
+          }),
+          deployedAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+        })),
+      }),
+      "utf8",
+    );
+
+    const result = await reconcileDiscordNativeCommands({
+      client,
+      cfg: {} as OpenClawConfig,
+      runtime: { log: vi.fn() },
+      accountId: "default",
+      applicationId: "app-1",
+      commandSpecs: [
+        ...stableCommands.map((command) => ({
+          name: command.name,
+          description: command.description,
+          acceptsArgs: false,
+        })),
+        { name: "new_cmd", description: "replacement", acceptsArgs: false },
+      ] satisfies NativeCommandSpec[],
+      env,
+    });
+
+    expect(result.summary).toEqual({
+      validated: 99,
+      unchanged: 99,
+      created: 1,
+      updated: 0,
+      deleted: 1,
+      leftAlone: 0,
+    });
+    expect(rest.put).toHaveBeenCalledTimes(1);
     expect(rest.post).not.toHaveBeenCalled();
     expect(rest.patch).not.toHaveBeenCalled();
     expect(rest.delete).not.toHaveBeenCalled();
+    expect(getLiveCommands()).toHaveLength(100);
+    expect(getLiveCommands().some((command) => command.name === "old_cmd")).toBe(false);
+    expect(getLiveCommands().some((command) => command.name === "new_cmd")).toBe(true);
   });
 });
