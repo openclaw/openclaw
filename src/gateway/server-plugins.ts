@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { loadConfig } from "../config/config.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
@@ -173,6 +174,13 @@ export function loadGatewayPlugins(params: {
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
 }) {
+  // Set the process-global gateway subagent runtime BEFORE loading plugins.
+  // This ensures that even if plugins are loaded (or re-loaded) by non-gateway
+  // code paths that don't pass subagent options, their late-binding subagent
+  // proxy will resolve to the real gateway implementation.
+  const gatewaySubagent = createGatewaySubagentRuntime();
+  setGatewaySubagentRuntime(gatewaySubagent);
+
   const pluginRegistry = loadOpenClawPlugins({
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -184,7 +192,7 @@ export function loadGatewayPlugins(params: {
     },
     coreGatewayHandlers: params.coreGatewayHandlers,
     runtimeOptions: {
-      subagent: createGatewaySubagentRuntime(),
+      subagent: gatewaySubagent,
     },
   });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
