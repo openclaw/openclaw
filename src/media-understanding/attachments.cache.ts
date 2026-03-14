@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { readLocalFileSafely, SafeOpenError } from "../infra/fs-safe.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
 import {
@@ -106,6 +106,14 @@ export class MediaAttachmentCache {
         const safeRead = await readLocalFileSafely({
           filePath: entry.resolvedPath,
           maxBytes: params.maxBytes,
+        }).catch((err) => {
+          if (err instanceof SafeOpenError && err.code === "too-large") {
+            throw new MediaUnderstandingSkipError(
+              "maxBytes",
+              `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
+            );
+          }
+          throw err;
         });
         // Update resolved path to the verified canonical path
         entry.resolvedPath = safeRead.realPath;
