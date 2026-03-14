@@ -45,6 +45,35 @@ type ModelFallbackRunFn<T> = (
 ) => Promise<T>;
 
 /**
+ * Rich error thrown when all model fallback candidates have been exhausted.
+ * Carries structured attempt metadata and the soonest cooldown expiry so
+ * callers can surface human-friendly "back in X" messaging.
+ */
+export class FallbackSummaryError extends Error {
+  readonly attempts: FallbackAttempt[];
+  /** Unix ms timestamp of the earliest profile cooldown expiry, or null if unknown. */
+  readonly soonestCooldownExpiry: number | null;
+
+  constructor(
+    message: string,
+    params: {
+      attempts: FallbackAttempt[];
+      soonestCooldownExpiry: number | null;
+      cause?: Error;
+    },
+  ) {
+    super(message, { cause: params.cause });
+    this.name = "FallbackSummaryError";
+    this.attempts = params.attempts;
+    this.soonestCooldownExpiry = params.soonestCooldownExpiry;
+  }
+}
+
+export function isFallbackSummaryError(err: unknown): err is FallbackSummaryError {
+  return err instanceof FallbackSummaryError;
+}
+
+/**
  * Fallback abort check. Only treats explicit AbortError names as user aborts.
  * Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
  */
@@ -189,18 +218,19 @@ function throwFallbackFailureSummary(params: {
   lastError: unknown;
   label: string;
   formatAttempt: (attempt: FallbackAttempt) => string;
+  soonestCooldownExpiry?: number | null;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
     throw params.lastError;
   }
   const summary =
     params.attempts.length > 0 ? params.attempts.map(params.formatAttempt).join(" | ") : "unknown";
-  throw new Error(
-    `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`,
-    {
-      cause: params.lastError instanceof Error ? params.lastError : undefined,
-    },
-  );
+  const message = `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`;
+  throw new FallbackSummaryError(message, {
+    attempts: params.attempts,
+    soonestCooldownExpiry: params.soonestCooldownExpiry ?? null,
+    cause: params.lastError instanceof Error ? params.lastError : undefined,
+  });
 }
 
 function resolveImageFallbackCandidates(params: {
@@ -762,11 +792,29 @@ export async function runWithModelFallback<T>(params: {
     }
   }
 
+  // Compute soonest cooldown expiry across all candidate providers so callers
+  // can show a human-friendly "back in X" estimate.
+  let soonestCooldownExpiry: number | null = null;
+  if (authStore) {
+    for (const candidate of candidates) {
+      const profileIds = resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store: authStore,
+        provider: candidate.provider,
+      });
+      const expiry = getSoonestCooldownExpiry(authStore, profileIds);
+      if (expiry !== null && (soonestCooldownExpiry === null || expiry < soonestCooldownExpiry)) {
+        soonestCooldownExpiry = expiry;
+      }
+    }
+  }
+
   throwFallbackFailureSummary({
     attempts,
     candidates,
     lastError,
     label: "models",
+    soonestCooldownExpiry,
     formatAttempt: (attempt) =>
       `${attempt.provider}/${attempt.model}: ${attempt.error}${
         attempt.reason ? ` (${attempt.reason})` : ""

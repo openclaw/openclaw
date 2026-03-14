@@ -4,7 +4,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { isFallbackSummaryError, runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -12,6 +12,7 @@ import {
   isContextOverflowError,
   isBillingErrorMessage,
   isLikelyContextOverflowError,
+  isRateLimitErrorMessage,
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
@@ -536,6 +537,7 @@ export async function runAgentTurnWithFallback(params: {
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
+      const isRateLimit = isRateLimitErrorMessage(message) || /\(rate_limit\)/i.test(message);
 
       if (
         isCompactionFailure &&
@@ -633,7 +635,38 @@ export async function runAgentTurnWithFallback(params: {
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
           : isRoleOrderingError
             ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+            : isRateLimit
+              ? (() => {
+                  // Build a human-friendly rate limit message with model info and time estimate.
+                  let backIn = "~60 seconds";
+                  let modelInfo = "";
+                  if (isFallbackSummaryError(err)) {
+                    if (err.soonestCooldownExpiry !== null) {
+                      const secsRemaining = Math.ceil(
+                        (err.soonestCooldownExpiry - Date.now()) / 1000,
+                      );
+                      if (secsRemaining > 0) {
+                        if (secsRemaining < 60) {
+                          backIn = `~${secsRemaining}s`;
+                        } else if (secsRemaining < 3600) {
+                          backIn = `~${Math.ceil(secsRemaining / 60)} min`;
+                        } else {
+                          backIn = `~${Math.ceil(secsRemaining / 3600)} hr`;
+                        }
+                      } else {
+                        backIn = "any moment";
+                      }
+                    }
+                    const limitedModels = err.attempts
+                      .filter((a) => a.reason === "rate_limit")
+                      .map((a) => a.model);
+                    if (limitedModels.length > 0) {
+                      modelInfo = ` (${limitedModels.join(", ")} rate limited)`;
+                    }
+                  }
+                  return `⚡ Temporarily unavailable${modelInfo} — back in ${backIn}.`;
+                })()
+              : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",
