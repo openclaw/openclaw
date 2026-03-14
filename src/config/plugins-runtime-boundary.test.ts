@@ -25,6 +25,40 @@ describe("plugins runtime boundary config", () => {
     expect("runtime" in pluginsProperties).toBe(false);
   });
 
+  it("accepts plugin entry with apiKey and env fields", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "my-plugin": {
+            enabled: true,
+            apiKey: "sk-test-123",
+            env: { MY_VAR: "value" },
+            config: { mode: "auto" },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("tolerates unknown keys in plugin entry without crashing (#43551)", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "openclaw-mem0": {
+            enabled: true,
+            mode: "auto",
+            userId: "user-123",
+            autoCapture: true,
+            autoRecall: false,
+            oss: true,
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects legacy plugins.runtime config entries", () => {
     const result = OpenClawSchema.safeParse({
       plugins: {
