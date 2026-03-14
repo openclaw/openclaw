@@ -17,6 +17,7 @@ import {
   buildKilocodeProviderWithDiscovery,
   buildVeniceProvider,
   buildVercelAiGatewayProvider,
+  buildZenmuxProvider,
   resolveOllamaApiBase,
 } from "./models-config.providers.discovery.js";
 import {
@@ -709,6 +710,10 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("nvidia", async ({ apiKey }) => ({ ...buildNvidiaProvider(), apiKey })),
   withApiKey("kilocode", async ({ apiKey }) => ({
     ...(await buildKilocodeProviderWithDiscovery()),
+    apiKey,
+  })),
+  withApiKey("zenmux", async ({ apiKey }) => ({
+    ...(await buildZenmuxProvider()),
     apiKey,
   })),
 ];

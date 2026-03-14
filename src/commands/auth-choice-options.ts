@@ -12,6 +12,7 @@ export type AuthChoiceOption = {
   label: string;
   hint?: string;
 };
+
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
   label: string;
@@ -180,6 +181,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Cloudflare AI Gateway",
     hint: "Account ID + Gateway ID + API key",
     choices: ["cloudflare-ai-gateway-api-key"],
+  },
+  {
+    value: "zenmux",
+    label: "ZenMux",
+    hint: "API key",
+    choices: ["zenmux-api-key"],
   },
   {
     value: "custom",

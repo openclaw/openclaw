@@ -20,6 +20,7 @@ import {
 } from "./ollama-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
+import { discoverZenmuxModels, ZENMUX_BASE_URL } from "./zenmux-models.js";
 
 export { resolveOllamaApiBase } from "./ollama-models.js";
 
@@ -235,6 +236,15 @@ export async function buildKilocodeProviderWithDiscovery(): Promise<ProviderConf
   const models = await discoverKilocodeModels();
   return {
     baseUrl: KILOCODE_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
+export async function buildZenmuxProvider(): Promise<ProviderConfig> {
+  const models = await discoverZenmuxModels();
+  return {
+    baseUrl: ZENMUX_BASE_URL,
     api: "openai-completions",
     models,
   };

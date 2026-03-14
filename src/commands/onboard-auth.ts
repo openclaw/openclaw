@@ -39,6 +39,8 @@ export {
   applyXiaomiProviderConfig,
   applyZaiConfig,
   applyZaiProviderConfig,
+  applyZenmuxConfig,
+  applyZenmuxProviderConfig,
   applyModelStudioConfig,
   applyModelStudioConfigCn,
   applyModelStudioProviderConfig,
@@ -90,6 +92,7 @@ export {
   setZaiApiKey,
   setXaiApiKey,
   setModelStudioApiKey,
+  setZenmuxApiKey,
   writeOAuthCredentials,
   HUGGINGFACE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
@@ -99,6 +102,7 @@ export {
   MISTRAL_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
   MODELSTUDIO_DEFAULT_MODEL_REF,
+  ZENMUX_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
   buildKilocodeModelDefinition,

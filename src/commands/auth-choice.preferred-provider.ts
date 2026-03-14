@@ -51,6 +51,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "qianfan-api-key": "qianfan",
   "custom-api-key": "custom",
   vllm: "vllm",
+  "zenmux-api-key": "zenmux",
 };
 
 export function resolvePreferredProviderForAuthChoice(params: {

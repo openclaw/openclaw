@@ -38,6 +38,8 @@ import {
   applyVercelAiGatewayProviderConfig,
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
+  applyZenmuxConfig,
+  applyZenmuxProviderConfig,
   KILOCODE_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
@@ -59,11 +61,13 @@ import {
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
+  setZenmuxApiKey,
   SYNTHETIC_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
+  ZENMUX_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
 import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
 import { OPENCODE_GO_DEFAULT_MODEL_REF } from "./opencode-go-model-default.js";
@@ -344,6 +348,18 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
     applyProviderConfig: applySyntheticProviderConfig,
     normalize: (value) => String(value ?? "").trim(),
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+  },
+  "zenmux-api-key": {
+    provider: "zenmux",
+    profileId: "zenmux:default",
+    expectedProviders: ["zenmux"],
+    envLabel: "ZENMUX_API_KEY",
+    promptMessage: "Enter ZenMux API key",
+    setCredential: setZenmuxApiKey,
+    defaultModel: ZENMUX_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyZenmuxConfig,
+    applyProviderConfig: applyZenmuxProviderConfig,
+    noteDefault: ZENMUX_DEFAULT_MODEL_REF,
   },
 };
 
