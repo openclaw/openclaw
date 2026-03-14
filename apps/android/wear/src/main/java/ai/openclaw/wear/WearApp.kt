@@ -140,7 +140,7 @@ class WearApp : Application() {
     Log.i(TAG, "Switching connection mode: usePhoneProxy=$usePhoneProxy")
 
     // Disconnect current
-    directClient?.disconnect()
+    directClient?.shutdown()
     proxyClient?.disconnect()
 
     val config = configStore.load()
