@@ -518,6 +518,23 @@ function resolveActiveSessionRow(state: AppViewState) {
   return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
 }
 
+function buildModelRef(provider?: string | null, model?: string | null): string {
+  const modelValue = typeof model === "string" ? model.trim() : "";
+  if (!modelValue) {
+    return "";
+  }
+  const providerValue = typeof provider === "string" ? provider.trim() : "";
+  if (!providerValue) {
+    return modelValue;
+  }
+  const prefix = `${providerValue}/`;
+  if (modelValue.toLowerCase().startsWith(prefix.toLowerCase())) {
+    const trimmedModel = modelValue.slice(prefix.length).trim();
+    return trimmedModel ? `${providerValue}/${trimmedModel}` : modelValue;
+  }
+  return `${providerValue}/${modelValue}`;
+}
+
 function resolveModelOverrideValue(state: AppViewState): string {
   // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
   const cached = state.chatModelOverrides[state.sessionKey];
@@ -531,7 +548,7 @@ function resolveModelOverrideValue(state: AppViewState): string {
   // No local override recorded yet — fall back to server data.
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow) {
-    return typeof activeRow.model === "string" ? activeRow.model.trim() : "";
+    return buildModelRef(activeRow.modelProvider, activeRow.model);
   }
   return "";
 }
@@ -563,7 +580,7 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    addOption(buildModelRef(provider, entry.id), provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
   if (currentOverride) {
