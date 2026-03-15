@@ -13,6 +13,7 @@ import { normalizeBasePath } from "./navigation.ts";
 import type { ModelCatalogEntry } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
+import { resetChatTransientUi } from "./views/chat.ts";
 
 export type ChatHost = {
   client: GatewayBrowserClient | null;
@@ -240,6 +241,7 @@ export async function handleSendChat(
     host.chatMessage = "";
     host.chatAttachments = [];
   }
+  resetChatTransientUi();
 
   if (isChatBusy(host)) {
     enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);

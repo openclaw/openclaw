@@ -181,6 +181,13 @@ export function resetChatViewState() {
   Object.assign(vs, createChatEphemeralState());
 }
 
+export function resetChatTransientUi() {
+  vs.slashMenuOpen = false;
+  resetSlashMenuState();
+  vs.searchOpen = false;
+  vs.searchQuery = "";
+}
+
 export const cleanupChatModuleState = resetChatViewState;
 
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
