@@ -17,7 +17,20 @@ export type MentionTarget = {
 };
 
 /**
- * Extract mention targets from message event (excluding the bot itself)
+ * Check if a mention likely refers to a bot rather than a real user.
+ *
+ * Feishu's open_id namespace is app-specific: bot A cannot recognize bot B's
+ * open_id. However, bot/app mentions have an empty (or missing) `tenant_key`
+ * because apps created on the open platform don't belong to any tenant.
+ * Regular users always have a non-empty `tenant_key`.
+ */
+export function isLikelyBotMention(mention: { tenant_key?: string }): boolean {
+  return !mention.tenant_key;
+}
+
+/**
+ * Extract mention targets from message event (excluding the bot itself
+ * and other bot mentions detected via empty tenant_key)
  */
 export function extractMentionTargets(
   event: FeishuMessageEvent,
@@ -29,6 +42,10 @@ export function extractMentionTargets(
     .filter((m) => {
       // Exclude the bot itself
       if (botOpenId && m.id.open_id === botOpenId) {
+        return false;
+      }
+      // Exclude other bot mentions (empty tenant_key = bot/app, not a real user)
+      if (isLikelyBotMention(m)) {
         return false;
       }
       // Must have open_id
@@ -54,15 +71,18 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
   }
 
   const isDirectMessage = event.message.chat_type !== "group";
-  const hasOtherMention = mentions.some((m) => m.id.open_id !== botOpenId);
+  // "Other mention" = non-self, non-bot (i.e. a real user)
+  const hasRealUserMention = mentions.some(
+    (m) => m.id.open_id !== botOpenId && !isLikelyBotMention(m),
+  );
 
   if (isDirectMessage) {
-    // DM: trigger if any non-bot user is mentioned
-    return hasOtherMention;
+    // DM: trigger if any real user is mentioned
+    return hasRealUserMention;
   } else {
-    // Group: need to mention both bot and other users
+    // Group: need to mention both bot and at least one real user
     const hasBotMention = mentions.some((m) => m.id.open_id === botOpenId);
-    return hasBotMention && hasOtherMention;
+    return hasBotMention && hasRealUserMention;
   }
 }
 
