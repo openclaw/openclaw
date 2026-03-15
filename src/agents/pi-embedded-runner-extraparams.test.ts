@@ -1544,6 +1544,32 @@ describe("applyExtraParamsToAgent", () => {
     expect(headers).toEqual({ "X-Custom": "1" });
   });
 
+  it("strips -1m suffix from model ID when context1m beta is injected", () => {
+    const modelCalls: Array<{ id: string }> = [];
+    const baseStreamFn: StreamFn = (model, _context, _options) => {
+      modelCalls.push({ id: model.id });
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6-1m", { context1m: true });
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-6-1m");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-opus-4-6-1m",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-api03-test", // pragma: allowlist secret
+    });
+
+    expect(modelCalls).toHaveLength(1);
+    expect(modelCalls[0]?.id).toBe("claude-opus-4-6");
+  });
+
   it("forces store=true for direct OpenAI Responses payloads", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",

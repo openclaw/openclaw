@@ -271,11 +271,19 @@ export function createAnthropicBetaHeadersWrapper(
       );
     }
 
+    // Strip the -1m suffix from model IDs before sending to the Anthropic API.
+    // The suffix is an OpenClaw convention for opting into 1M context; the
+    // Anthropic API only accepts the base model name (e.g. "claude-opus-4-6").
+    const effectiveModel =
+      requestedContext1m && model.id.endsWith("-1m")
+        ? ({ ...model, id: model.id.replace(/-1m$/, "") } as typeof model)
+        : model;
+
     const piAiBetas = isOauth
       ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
       : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
     const allBetas = [...new Set([...piAiBetas, ...effectiveBetas])];
-    return underlying(model, context, {
+    return underlying(effectiveModel, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),
     });
