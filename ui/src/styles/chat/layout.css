@@ -18,10 +18,6 @@
   box-shadow: none !important;
 }
 
-.card.chat {
-  padding-top: 0;
-}
-
 /* Chat header - fixed at top, transparent */
 .chat-header {
   display: flex;

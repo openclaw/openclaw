@@ -116,6 +116,10 @@ export class OpenClawApp extends LitElement {
   clientInstanceId = generateUUID();
   connectGeneration = 0;
   @state() settings: UiSettings = loadSettings();
+  private shouldLockMobileShell() {
+    return this.connected && this.tab === "chat";
+  }
+
   constructor() {
     super();
     if (isSupportedLocale(this.settings.locale)) {
@@ -482,7 +486,7 @@ export class OpenClawApp extends LitElement {
     };
     document.addEventListener("keydown", this.globalKeydownHandler);
     this.mobileViewportController = attachMobileViewportFixes(this);
-    this.mobileViewportController.setShellLocked(this.connected);
+    this.mobileViewportController.setShellLocked(this.shouldLockMobileShell());
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
   }
 
@@ -500,7 +504,7 @@ export class OpenClawApp extends LitElement {
 
   protected updated(changed: Map<PropertyKey, unknown>) {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
-    this.mobileViewportController?.setShellLocked(this.connected);
+    this.mobileViewportController?.setShellLocked(this.shouldLockMobileShell());
   }
 
   connect() {

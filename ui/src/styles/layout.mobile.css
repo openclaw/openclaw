@@ -489,6 +489,10 @@
     min-height: 0;
   }
 
+  .content--chat .card.chat {
+    padding-top: 0;
+  }
+
   .content--chat .chat-thread {
     padding-bottom: 8px;
   }
