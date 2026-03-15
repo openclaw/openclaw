@@ -7,7 +7,11 @@ import {
   MOONSHOT_CN_BASE_URL,
 } from "../commands/onboard-auth.models.js";
 import { captureEnv } from "../test-utils/env.js";
-import { resolveImplicitProviders } from "./models-config.providers.js";
+import {
+  applyNativeStreamingUsageCompat,
+  resolveImplicitProviders,
+} from "./models-config.providers.js";
+import { buildMoonshotProvider } from "./models-config.providers.static.js";
 
 describe("moonshot implicit provider (#33637)", () => {
   it("uses explicit CN baseUrl when provided", async () => {
@@ -39,6 +43,31 @@ describe("moonshot implicit provider (#33637)", () => {
       expect(providers?.moonshot).toBeDefined();
       expect(providers?.moonshot?.baseUrl).toBe(MOONSHOT_CN_BASE_URL);
       expect(providers?.moonshot?.apiKey).toBeDefined();
+      expect(providers?.moonshot?.models?.[0]?.compat?.supportsUsageInStreaming).toBeUndefined();
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("keeps streaming usage opt-in unset before the final compat pass", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const envSnapshot = captureEnv(["MOONSHOT_API_KEY"]);
+    process.env.MOONSHOT_API_KEY = "sk-test-custom";
+
+    try {
+      const providers = await resolveImplicitProviders({
+        agentDir,
+        explicitProviders: {
+          moonshot: {
+            baseUrl: "https://proxy.example.com/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      });
+      expect(providers?.moonshot).toBeDefined();
+      expect(providers?.moonshot?.baseUrl).toBe("https://proxy.example.com/v1");
+      expect(providers?.moonshot?.models?.[0]?.compat?.supportsUsageInStreaming).toBeUndefined();
     } finally {
       envSnapshot.restore();
     }
@@ -53,8 +82,32 @@ describe("moonshot implicit provider (#33637)", () => {
       const providers = await resolveImplicitProviders({ agentDir });
       expect(providers?.moonshot).toBeDefined();
       expect(providers?.moonshot?.baseUrl).toBe(MOONSHOT_AI_BASE_URL);
+      expect(providers?.moonshot?.models?.[0]?.compat?.supportsUsageInStreaming).toBeUndefined();
     } finally {
       envSnapshot.restore();
     }
+  });
+
+  it("opts native Moonshot baseUrls into streaming usage only after the final compat pass", () => {
+    const defaultProviders = applyNativeStreamingUsageCompat({
+      moonshot: buildMoonshotProvider(),
+    });
+    expect(defaultProviders.moonshot?.models?.[0]?.compat?.supportsUsageInStreaming).toBe(true);
+
+    const cnProviders = applyNativeStreamingUsageCompat({
+      moonshot: {
+        ...buildMoonshotProvider(),
+        baseUrl: MOONSHOT_CN_BASE_URL,
+      },
+    });
+    expect(cnProviders.moonshot?.models?.[0]?.compat?.supportsUsageInStreaming).toBe(true);
+
+    const customProviders = applyNativeStreamingUsageCompat({
+      moonshot: {
+        ...buildMoonshotProvider(),
+        baseUrl: "https://proxy.example.com/v1",
+      },
+    });
+    expect(customProviders.moonshot?.models?.[0]?.compat?.supportsUsageInStreaming).toBeUndefined();
   });
 });
