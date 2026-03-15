@@ -79,6 +79,8 @@ describe("isReasoningTagProvider", () => {
     { name: "returns false for null", value: null, expected: false },
     { name: "returns false for undefined", value: undefined, expected: false },
     { name: "returns false for empty", value: "", expected: false },
+    { name: "returns true for xai (grok reasoning tags)", value: "xai", expected: true },
+    { name: "returns true for xai (case-insensitive)", value: "XAI", expected: true },
     { name: "returns false for anthropic", value: "anthropic", expected: false },
     { name: "returns false for openai", value: "openai", expected: false },
     { name: "returns false for openrouter", value: "openrouter", expected: false },
