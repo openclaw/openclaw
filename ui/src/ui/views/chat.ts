@@ -925,6 +925,7 @@ export function renderChat(props: ChatProps) {
               assistantIdentity,
               props.basePath,
               item.key,
+              item.isLive,
             );
           }
           if (item.kind === "group") {
@@ -1440,6 +1441,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
         key: `stream-seg:${props.sessionKey}:${i}`,
         text: segments[i].text,
         startedAt: segments[i].ts,
+        isLive: false,
       });
     }
     if (i < tools.length && props.showToolCalls) {
@@ -1459,6 +1461,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
         key,
         text: props.stream,
         startedAt: props.streamStartedAt ?? Date.now(),
+        isLive: true,
       });
     } else {
       items.push({ kind: "reading-indicator", key });
