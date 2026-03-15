@@ -10,6 +10,8 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
     usageLoading: false,
     usageResult: null,
     usageCostSummary: null,
+    usageProviderSummary: null,
+    usageProviderSummaryError: null,
     usageError: null,
     usageStartDate: "2026-02-16",
     usageEndDate: "2026-02-16",
@@ -66,6 +68,7 @@ describe("usage controller date interpretation params", () => {
     await loadUsage(state);
 
     expectSpecificTimezoneCalls(request, 1);
+    expect(request).toHaveBeenNthCalledWith(3, "usage.status");
   });
 
   it("sends utc mode without offset when usage timezone is utc", async () => {
@@ -86,6 +89,7 @@ describe("usage controller date interpretation params", () => {
       endDate: "2026-02-16",
       mode: "utc",
     });
+    expect(request).toHaveBeenNthCalledWith(3, "usage.status");
   });
 
   it("captures useful error strings in loadUsage", async () => {
@@ -139,26 +143,146 @@ describe("usage controller date interpretation params", () => {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
     });
+    expect(request).toHaveBeenNthCalledWith(5, "usage.status");
 
     // Subsequent loads for the same gateway should skip mode/utcOffset immediately.
     await loadUsage(state);
 
-    expect(request).toHaveBeenNthCalledWith(5, "sessions.usage", {
+    expect(request).toHaveBeenNthCalledWith(6, "sessions.usage", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
       limit: 1000,
       includeContextWeight: true,
     });
-    expect(request).toHaveBeenNthCalledWith(6, "usage.cost", {
+    expect(request).toHaveBeenNthCalledWith(7, "usage.cost", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
     });
+    expect(request).toHaveBeenCalledTimes(7);
 
     // Persisted flag should survive cache resets (simulating app reload).
     __test.resetLegacyUsageDateParamsCache();
     expect(__test.shouldSendLegacyDateInterpretation(state)).toBe(false);
 
     vi.unstubAllGlobals();
+  });
+
+  it("discards provider quota result when client changes mid-flight", async () => {
+    let resolveQuota!: (value: unknown) => void;
+    const quotaPromise = new Promise((resolve) => {
+      resolveQuota = resolve;
+    });
+
+    const request = vi.fn(async (method: string) => {
+      if (method === "usage.status") {
+        return quotaPromise;
+      }
+      return {};
+    });
+
+    const state = createState(request);
+
+    // Start loadUsage; loadProviderQuota runs in the background with the
+    // original client captured.
+    await loadUsage(state);
+
+    // Simulate a gateway switch before the quota request resolves.
+    state.client = null;
+
+    // Resolve the in-flight quota request after the client is gone.
+    resolveQuota({ providers: [{ provider: "anthropic", windows: [] }] });
+
+    // Flush the microtask queue so loadProviderQuota's continuation runs.
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Stale result must not overwrite state.
+    expect(state.usageProviderSummary).toBeNull();
+    expect(state.usageProviderSummaryError).toBeNull();
+  });
+
+  it("silently skips unsupported usage.status on older gateways and remembers it", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage as unknown as Storage);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-14T13:30:00Z"));
+
+    const request = vi.fn(async (method: string) => {
+      if (method === "usage.status") {
+        throw new Error("RPC method not found: usage.status");
+      }
+      return {};
+    });
+
+    const state = createState(request, {
+      settings: { gatewayUrl: "ws://127.0.0.1:18789" },
+    });
+
+    await loadUsage(state);
+
+    expect(request).toHaveBeenNthCalledWith(3, "usage.status");
+    expect(state.usageProviderSummary).toBeNull();
+    expect(state.usageProviderSummaryError).toBeNull();
+    expect(__test.shouldRequestUsageStatus(state)).toBe(false);
+
+    await loadUsage(state);
+
+    expect(request).toHaveBeenCalledTimes(5);
+    expect(request).not.toHaveBeenNthCalledWith(6, "usage.status");
+
+    vi.advanceTimersByTime(__test.LEGACY_USAGE_STATUS_RETRY_MS + 1);
+    await loadUsage(state);
+
+    expect(request).toHaveBeenNthCalledWith(8, "usage.status");
+
+    __test.resetLegacyUsageDateParamsCache();
+    expect(__test.shouldRequestUsageStatus(state)).toBe(false);
+
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("does not refetch provider quota on date-scoped usage reloads unless explicitly refreshed", async () => {
+    const request = vi.fn(async () => ({}));
+    const state = createState(request);
+
+    await loadUsage(state);
+    await loadUsage(state, { startDate: "2026-02-15", endDate: "2026-02-16" });
+
+    expect(request).toHaveBeenCalledTimes(5);
+    expect(request).toHaveBeenNthCalledWith(3, "usage.status");
+
+    await loadUsage(state, { refreshProviderQuota: true });
+
+    expect(request).toHaveBeenNthCalledWith(8, "usage.status");
+  });
+
+  it("retries provider quota after a transient usage.status failure on the next load", async () => {
+    let quotaAttempts = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "usage.status") {
+        quotaAttempts += 1;
+        if (quotaAttempts === 1) {
+          throw new Error("429 rate limited");
+        }
+        return { providers: [{ provider: "anthropic", windows: [] }] };
+      }
+      return {};
+    });
+    const state = createState(request);
+
+    await loadUsage(state);
+
+    expect(state.usageProviderSummary).toBeNull();
+    expect(state.usageProviderSummaryError).toBe("429 rate limited");
+    expect(request).toHaveBeenNthCalledWith(3, "usage.status");
+
+    await loadUsage(state);
+
+    expect(request).toHaveBeenNthCalledWith(6, "usage.status");
+    expect(state.usageProviderSummary).toEqual({
+      providers: [{ provider: "anthropic", windows: [] }],
+    });
+    expect(state.usageProviderSummaryError).toBeNull();
   });
 });
 

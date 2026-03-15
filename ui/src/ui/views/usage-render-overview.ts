@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
+import type { ProviderUsageSummary } from "../usage-types.ts";
 import {
   formatCost,
   formatDayLabel,
@@ -361,6 +362,148 @@ function renderPeakErrorList(
             `
       }
     </div>
+  `;
+}
+
+function renderUsageOverviewQuotaPanel(
+  providerUsage: ProviderUsageSummary | null,
+  providerUsageError?: string | null,
+) {
+  if (!providerUsage && providerUsageError) {
+    return html`
+      <section class="card" style="margin-top: 16px;">
+        <div class="card-title">Provider Quota</div>
+        <div class="callout danger" style="margin-top: 8px;">
+          Failed to load provider quota: ${providerUsageError}
+        </div>
+      </section>
+    `;
+  }
+
+  if (!providerUsage) {
+    return nothing;
+  }
+
+  const snapshots = providerUsage.providers ?? [];
+
+  const friendlyErrorHint = (error: string): { message: string; hint: string } => {
+    const low = error.toLowerCase();
+    if (low.includes("403") && low.includes("user:profile")) {
+      return {
+        message: "Auth scope missing",
+        hint: 'Your Claude OAuth token is missing the "user:profile" scope. Re-authenticate in Settings > Providers > Claude.',
+      };
+    }
+    if (low.includes("401") || low.includes("unauthorized")) {
+      return {
+        message: "Unauthorized",
+        hint: "Invalid or expired credentials. Check your API key or token in Settings > Providers.",
+      };
+    }
+    if (low.includes("403")) {
+      return {
+        message: "Access denied (403)",
+        hint: "Your token cannot read quota data. Re-authenticate in Settings > Providers.",
+      };
+    }
+    if (low.includes("429") || low.includes("rate limit")) {
+      return {
+        message: "Rate limited",
+        hint: "Too many requests. The quota panel will retry shortly.",
+      };
+    }
+    return { message: "Unavailable", hint: error };
+  };
+
+  const renderProviderRow = (label: string, snapshot: (typeof snapshots)[number] | undefined) => {
+    if (!snapshot) {
+      return html`
+        <div class="quota-provider-row">
+          <div class="quota-provider-header">
+            <span class="quota-provider-label">${label}</span>
+            <span class="quota-status-badge quota-status-unconfigured">Not configured</span>
+          </div>
+          <div class="quota-provider-hint muted">Provider auth is not set up for this slot.</div>
+        </div>
+      `;
+    }
+
+    if (snapshot.error) {
+      const { message, hint } = friendlyErrorHint(snapshot.error);
+      return html`
+        <div class="quota-provider-row">
+          <div class="quota-provider-header">
+            <span class="quota-provider-label">${label}</span>
+            <span class="quota-status-badge quota-status-error">${message}</span>
+          </div>
+          <div class="quota-provider-hint muted">${hint}</div>
+        </div>
+      `;
+    }
+
+    const windows = snapshot.windows ?? [];
+    if (windows.length === 0) {
+      return html`
+        <div class="quota-provider-row">
+          <div class="quota-provider-header">
+            <span class="quota-provider-label">${label}</span>
+            <span class="quota-status-badge quota-status-warn">No quota data</span>
+          </div>
+          <div class="quota-provider-hint muted">Connected, but no usage windows were returned.</div>
+        </div>
+      `;
+    }
+
+    const sortedWindows = windows.toSorted((a, b) => b.usedPercent - a.usedPercent);
+    return html`
+      <div class="quota-provider-row">
+        <div class="quota-provider-header">
+          <span class="quota-provider-label">${label}</span>
+          ${snapshot.plan ? html`<span class="quota-plan-badge">${snapshot.plan}</span>` : nothing}
+        </div>
+        <div class="quota-windows">
+          ${sortedWindows.map((win) => {
+            const pct = Math.min(100, Math.max(0, win.usedPercent));
+            const barClass =
+              pct >= 90 ? "quota-bar-critical" : pct >= 70 ? "quota-bar-warn" : "quota-bar-ok";
+            const pctClass = pct >= 90 ? "bad" : pct >= 70 ? "warn" : "good";
+            const reset = win.resetAt ? new Date(win.resetAt).toLocaleString() : null;
+            return html`
+              <div class="quota-window-entry">
+                <div class="quota-window-header">
+                  <span class="quota-window-label">${win.label}</span>
+                  <span class="quota-window-pct ${pctClass}">${Math.round(pct)}% used</span>
+                </div>
+                <div class="quota-bar-track" title="${win.label}: ${Math.round(pct)}% used">
+                  <div class="quota-bar-fill ${barClass}" style="width: ${pct.toFixed(1)}%"></div>
+                </div>
+                ${reset ? html`<div class="quota-window-reset muted">Resets ${reset}</div>` : nothing}
+              </div>
+            `;
+          })}
+        </div>
+      </div>
+    `;
+  };
+
+  if (snapshots.length === 0) {
+    return html`
+      <section class="card" style="margin-top: 16px">
+        <div class="card-title">Provider Quota</div>
+        <div class="quota-provider-hint muted" style="margin-top: 8px">
+          No providers are configured. Add provider credentials in Settings > Providers.
+        </div>
+      </section>
+    `;
+  }
+
+  return html`
+    <section class="card" style="margin-top: 16px;">
+      <div class="card-title">Provider Quota</div>
+      <div class="quota-providers">
+        ${snapshots.map((snapshot) => renderProviderRow(snapshot.displayName, snapshot))}
+      </div>
+    </section>
   `;
 }
 
@@ -793,4 +936,5 @@ export {
   renderPeakErrorList,
   renderSessionsCard,
   renderUsageInsights,
+  renderUsageOverviewQuotaPanel,
 };

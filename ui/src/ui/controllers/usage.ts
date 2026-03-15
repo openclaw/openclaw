@@ -1,5 +1,10 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SessionsUsageResult, CostUsageSummary, SessionUsageTimeSeries } from "../types.ts";
+import type {
+  SessionsUsageResult,
+  CostUsageSummary,
+  ProviderUsageSummary,
+  SessionUsageTimeSeries,
+} from "../types.ts";
 import type { SessionLogEntry } from "../views/usage.ts";
 
 export type UsageState = {
@@ -8,6 +13,8 @@ export type UsageState = {
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
+  usageProviderSummary: ProviderUsageSummary | null;
+  usageProviderSummaryError: string | null;
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;
@@ -30,13 +37,31 @@ type UsageDateInterpretationParams = {
   utcOffset?: string;
 };
 
+type LegacyUnsupportedGatewayCache = {
+  unsupportedGatewayKeys?: Array<{
+    key?: unknown;
+    unsupportedUntil?: unknown;
+  }>;
+};
+
+type UsageQuotaMeta = {
+  gatewayKey: string;
+  status: "loaded" | "error" | "unsupported";
+};
+
 const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY = "openclaw.control.usage.date-params.v1";
 const LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY = "__default__";
+const LEGACY_USAGE_STATUS_STORAGE_KEY = "openclaw.control.usage.status.v1";
 const LEGACY_USAGE_DATE_PARAMS_MODE_RE = /unexpected property ['"]mode['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_OFFSET_RE = /unexpected property ['"]utcoffset['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_INVALID_RE = /invalid sessions\.usage params/i;
+const LEGACY_USAGE_STATUS_UNSUPPORTED_RE =
+  /(?:method|rpc)(?:\s+\w+)*\s+not\s+found|unknown method|unknown rpc method|unsupported method/i;
+const LEGACY_USAGE_STATUS_RETRY_MS = 5 * 60 * 1000;
 
 let legacyUsageDateParamsCache: Set<string> | null = null;
+let legacyUsageStatusCache: Map<string, number> | null = null;
+let usageQuotaMeta = new WeakMap<UsageState, UsageQuotaMeta>();
 
 function getLocalStorage(): Storage | null {
   // Support browser runtime and node tests (when localStorage is stubbed globally).
@@ -96,6 +121,71 @@ function getLegacyUsageDateParamsCache(): Set<string> {
   return legacyUsageDateParamsCache;
 }
 
+function loadLegacyUsageStatusCache(now: number = Date.now()): Map<string, number> {
+  const storage = getLocalStorage();
+  if (!storage) {
+    return new Map<string, number>();
+  }
+  try {
+    const raw = storage.getItem(LEGACY_USAGE_STATUS_STORAGE_KEY);
+    if (!raw) {
+      return new Map<string, number>();
+    }
+    const parsed = JSON.parse(raw) as LegacyUnsupportedGatewayCache | null;
+    if (!parsed || !Array.isArray(parsed.unsupportedGatewayKeys)) {
+      return new Map<string, number>();
+    }
+    const cache = new Map<string, number>();
+    for (const entry of parsed.unsupportedGatewayKeys) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const key = typeof entry.key === "string" ? entry.key.trim() : "";
+      const unsupportedUntil =
+        typeof entry.unsupportedUntil === "number" ? entry.unsupportedUntil : NaN;
+      if (!key || !Number.isFinite(unsupportedUntil) || unsupportedUntil <= now) {
+        continue;
+      }
+      cache.set(key, unsupportedUntil);
+    }
+    return cache;
+  } catch {
+    return new Map<string, number>();
+  }
+}
+
+function persistLegacyUsageStatusCache(cache: Map<string, number>, now: number = Date.now()) {
+  const storage = getLocalStorage();
+  if (!storage) {
+    return;
+  }
+  try {
+    const unsupportedGatewayKeys = Array.from(cache.entries())
+      .filter(([, unsupportedUntil]) => unsupportedUntil > now)
+      .map(([key, unsupportedUntil]) => ({ key, unsupportedUntil }));
+    storage.setItem(LEGACY_USAGE_STATUS_STORAGE_KEY, JSON.stringify({ unsupportedGatewayKeys }));
+  } catch {
+    // ignore quota/private-mode failures
+  }
+}
+
+function getLegacyUsageStatusCache(now: number = Date.now()): Map<string, number> {
+  if (!legacyUsageStatusCache) {
+    legacyUsageStatusCache = loadLegacyUsageStatusCache(now);
+    return legacyUsageStatusCache;
+  }
+  pruneExpiredLegacyUsageStatusCache(legacyUsageStatusCache, now);
+  return legacyUsageStatusCache;
+}
+
+function pruneExpiredLegacyUsageStatusCache(cache: Map<string, number>, now: number) {
+  for (const [key, unsupportedUntil] of cache.entries()) {
+    if (unsupportedUntil <= now) {
+      cache.delete(key);
+    }
+  }
+}
+
 function normalizeGatewayCompatibilityKey(gatewayUrl?: string): string {
   const trimmed = gatewayUrl?.trim();
   if (!trimmed) {
@@ -124,6 +214,31 @@ function rememberLegacyDateInterpretation(state: UsageState) {
   persistLegacyUsageDateParamsCache(cache);
 }
 
+function shouldRequestUsageStatus(state: UsageState, now: number = Date.now()): boolean {
+  const cache = getLegacyUsageStatusCache(now);
+  const key = resolveGatewayCompatibilityKey(state);
+  const unsupportedUntil = cache.get(key);
+  if (!unsupportedUntil) {
+    return true;
+  }
+  if (unsupportedUntil <= now) {
+    cache.delete(key);
+    persistLegacyUsageStatusCache(cache, now);
+    return true;
+  }
+  return false;
+}
+
+function rememberLegacyUsageStatus(
+  state: UsageState,
+  now: number = Date.now(),
+  retryAfterMs: number = LEGACY_USAGE_STATUS_RETRY_MS,
+) {
+  const cache = getLegacyUsageStatusCache(now);
+  cache.set(resolveGatewayCompatibilityKey(state), now + retryAfterMs);
+  persistLegacyUsageStatusCache(cache, now);
+}
+
 function isLegacyDateInterpretationUnsupportedError(err: unknown): boolean {
   const message = toErrorMessage(err);
   return (
@@ -131,6 +246,10 @@ function isLegacyDateInterpretationUnsupportedError(err: unknown): boolean {
     (LEGACY_USAGE_DATE_PARAMS_MODE_RE.test(message) ||
       LEGACY_USAGE_DATE_PARAMS_OFFSET_RE.test(message))
   );
+}
+
+function isLegacyUsageStatusUnsupportedError(err: unknown): boolean {
+  return LEGACY_USAGE_STATUS_UNSUPPORTED_RE.test(toErrorMessage(err));
 }
 
 const formatUtcOffset = (timezoneOffsetMinutes: number): string => {
@@ -187,6 +306,7 @@ export async function loadUsage(
   overrides?: {
     startDate?: string;
     endDate?: string;
+    refreshProviderQuota?: boolean;
   },
 ) {
   // Capture client for TS18047 work around on it being possibly null
@@ -199,6 +319,55 @@ export async function loadUsage(
   }
   state.usageLoading = true;
   state.usageError = null;
+  const gatewayKey = resolveGatewayCompatibilityKey(state);
+  const loadProviderQuota = async () => {
+    const quotaMetaForState = usageQuotaMeta.get(state);
+    const shouldRefreshProviderQuota = overrides?.refreshProviderQuota === true;
+    const shouldProbeCompatibility = shouldRequestUsageStatus(state);
+    const shouldLoadQuota =
+      shouldRefreshProviderQuota ||
+      !quotaMetaForState ||
+      quotaMetaForState.gatewayKey !== gatewayKey ||
+      quotaMetaForState.status === "error" ||
+      (quotaMetaForState.status === "unsupported" && shouldProbeCompatibility);
+    if (!shouldLoadQuota) {
+      state.usageProviderSummaryError =
+        quotaMetaForState?.status === "error" ? state.usageProviderSummaryError : null;
+      return;
+    }
+    state.usageProviderSummaryError = null;
+    if (!shouldProbeCompatibility) {
+      state.usageProviderSummary = null;
+      state.usageProviderSummaryError = null;
+      usageQuotaMeta.set(state, { gatewayKey, status: "unsupported" });
+      return;
+    }
+    try {
+      const quotaRes = await client.request("usage.status");
+      // Discard the result if the client changed while the request was in-flight
+      // (e.g. the user switched gateways before it completed).
+      if (state.client !== client) {
+        return;
+      }
+      state.usageProviderSummary = quotaRes as ProviderUsageSummary;
+      state.usageProviderSummaryError = null;
+      usageQuotaMeta.set(state, { gatewayKey, status: "loaded" });
+    } catch (err) {
+      if (state.client !== client) {
+        return;
+      }
+      if (isLegacyUsageStatusUnsupportedError(err)) {
+        rememberLegacyUsageStatus(state);
+        state.usageProviderSummary = null;
+        state.usageProviderSummaryError = null;
+        usageQuotaMeta.set(state, { gatewayKey, status: "unsupported" });
+        return;
+      }
+      state.usageProviderSummary = null;
+      state.usageProviderSummaryError = toErrorMessage(err);
+      usageQuotaMeta.set(state, { gatewayKey, status: "error" });
+    }
+  };
   try {
     const startDate = overrides?.startDate ?? state.usageStartDate;
     const endDate = overrides?.endDate ?? state.usageEndDate;
@@ -252,9 +421,11 @@ export async function loadUsage(
   } finally {
     state.usageLoading = false;
   }
+  void loadProviderQuota();
 }
 
 export const __test = {
+  LEGACY_USAGE_STATUS_RETRY_MS,
   formatUtcOffset,
   buildDateInterpretationParams,
   toErrorMessage,
@@ -262,8 +433,13 @@ export const __test = {
   normalizeGatewayCompatibilityKey,
   shouldSendLegacyDateInterpretation,
   rememberLegacyDateInterpretation,
+  shouldRequestUsageStatus,
+  rememberLegacyUsageStatus,
+  isLegacyUsageStatusUnsupportedError,
   resetLegacyUsageDateParamsCache: () => {
     legacyUsageDateParamsCache = null;
+    legacyUsageStatusCache = null;
+    usageQuotaMeta = new WeakMap<UsageState, UsageQuotaMeta>();
   },
 };
 
