@@ -13,6 +13,8 @@ GATEWAY_LABEL="ai.openclaw.gateway"
 WATCHDOG_LABEL="ai.openclaw.gateway-watchdog"
 GATEWAY_ERR_LOG="${HOME}/.openclaw/logs/gateway.err.log"
 WATCHDOG_ERR_LOG="/tmp/openclaw/gateway-watchdog.err.log"
+WATCHDOG_STABILIZE_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_STABILIZE_SECONDS:-8}"
+WATCHDOG_AUTO_DISABLE_ON_DUPLICATE="${OPENCLAW_GATEWAY_WATCHDOG_AUTO_DISABLE_ON_DUPLICATE:-1}"
 
 log() {
   printf '[gateway-recover-main] %s\n' "$*"
@@ -142,6 +144,53 @@ wait_for_rpc_probe() {
   done
 }
 
+resolve_launchctl_gateway_pid() {
+  launchctl print "gui/$(id -u)/${GATEWAY_LABEL}" 2>/dev/null | awk '/pid =/ { print $3; exit }'
+}
+
+stabilize_watchdog() {
+  local gateway_pid
+  gateway_pid="$(resolve_launchctl_gateway_pid)"
+  if [[ -z "${gateway_pid}" ]]; then
+    dump_failure_diagnostics "resolve gateway pid from launchctl" "missing gateway pid in launchctl state"
+    exit 1
+  fi
+
+  sleep "${WATCHDOG_STABILIZE_SECONDS}"
+
+  local all_gateway_pids=()
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] && all_gateway_pids+=("${pid}")
+  done < <(pgrep -x openclaw-gateway || true)
+
+  local extra_gateway_pids=()
+  for pid in "${all_gateway_pids[@]}"; do
+    if [[ "${pid}" != "${gateway_pid}" ]]; then
+      extra_gateway_pids+=("${pid}")
+    fi
+  done
+
+  if [[ "${#extra_gateway_pids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  log "watchdog spawned duplicate gateway workers: ${extra_gateway_pids[*]}"
+  if [[ "${WATCHDOG_AUTO_DISABLE_ON_DUPLICATE}" == "1" ]]; then
+    log "auto-disabling watchdog to prevent lock thrash"
+    launchctl bootout "gui/$(id -u)/${WATCHDOG_LABEL}" 2>/dev/null || true
+    for pid in "${extra_gateway_pids[@]}"; do
+      kill -9 "${pid}" 2>/dev/null || true
+    done
+    sleep 1
+    return 0
+  fi
+
+  dump_failure_diagnostics \
+    "watchdog duplicate gateway guard" \
+    "duplicate openclaw-gateway pids detected: ${extra_gateway_pids[*]}"
+  exit 1
+}
+
 main() {
   log "starting deterministic recovery (port=${PORT}, main=${MAIN_REPO})"
 
@@ -178,6 +227,7 @@ main() {
   log_block "Bootstrap watchdog launch agent"
   launchctl bootstrap "gui/$(id -u)" "${HOME}/Library/LaunchAgents/${WATCHDOG_LABEL}.plist" 2>/dev/null || true
   run_strict launchctl kickstart -k "gui/$(id -u)/${WATCHDOG_LABEL}"
+  stabilize_watchdog
 
   log_block "Final verification"
   assert_main_runtime_path
