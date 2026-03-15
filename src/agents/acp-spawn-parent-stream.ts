@@ -1,11 +1,14 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
+import { routeReply } from "../auto-reply/reply/route-reply.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import { loadSessionEntry } from "../gateway/session-utils.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
@@ -13,6 +16,7 @@ const DEFAULT_NO_OUTPUT_POLL_MS = 15_000;
 const DEFAULT_MAX_RELAY_LIFETIME_MS = 6 * 60 * 60 * 1000;
 const STREAM_BUFFER_MAX_CHARS = 4_000;
 const STREAM_SNIPPET_MAX_CHARS = 220;
+const DIRECT_REPLY_MAX_CHARS = 24_000;
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -114,6 +118,18 @@ export function startAcpSpawnParentStreamRelay(params: {
   const relayLabel = truncate(compactWhitespace(params.agentId), 40) || "ACP child";
   const contextPrefix = `acp-spawn:${runId}`;
   const logPath = toTrimmedString(params.logPath);
+  const { cfg, entry } = loadSessionEntry(parentSessionKey);
+  const parentDeliveryContext = deliveryContextFromSession(entry);
+  const directReplyTarget =
+    parentDeliveryContext?.channel &&
+    parentDeliveryContext?.to &&
+    parentDeliveryContext?.threadId == null
+      ? {
+          channel: parentDeliveryContext.channel,
+          to: parentDeliveryContext.to,
+          accountId: parentDeliveryContext.accountId,
+        }
+      : undefined;
   let logDirReady = false;
   let pendingLogLines = "";
   let logFlushScheduled = false;
@@ -203,6 +219,8 @@ export function startAcpSpawnParentStreamRelay(params: {
 
   let disposed = false;
   let pendingText = "";
+  let directReplyText = "";
+  let directReplyTruncated = false;
   let lastProgressAt = Date.now();
   let stallNotified = false;
   let flushTimer: NodeJS.Timeout | undefined;
@@ -234,6 +252,44 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     emit(`${relayLabel}: ${snippet}`, `${contextPrefix}:progress`);
+  };
+
+  const appendDirectReplyText = (text: string) => {
+    if (!directReplyTarget || !text) {
+      return;
+    }
+    if (directReplyText.length >= DIRECT_REPLY_MAX_CHARS) {
+      directReplyTruncated = true;
+      return;
+    }
+    const remaining = DIRECT_REPLY_MAX_CHARS - directReplyText.length;
+    const accepted = remaining < text.length ? text.slice(0, remaining) : text;
+    if (accepted) {
+      directReplyText += accepted;
+    }
+    if (accepted.length < text.length) {
+      directReplyTruncated = true;
+    }
+  };
+
+  const sendDirectReply = (text: string) => {
+    if (!directReplyTarget) {
+      return;
+    }
+    const cleaned = text.trim();
+    if (!cleaned) {
+      return;
+    }
+    void routeReply({
+      payload: { text: cleaned },
+      channel: directReplyTarget.channel,
+      to: directReplyTarget.to,
+      sessionKey: parentSessionKey,
+      accountId: directReplyTarget.accountId,
+      cfg,
+    }).catch(() => {
+      // Preserve best-effort relay semantics if direct delivery fails.
+    });
   };
 
   const scheduleFlush = () => {
@@ -295,6 +351,7 @@ export function startAcpSpawnParentStreamRelay(params: {
         return;
       }
       logEvent("assistant_delta", { delta });
+      appendDirectReplyText(delta);
 
       if (stallNotified) {
         stallNotified = false;
@@ -322,6 +379,13 @@ export function startAcpSpawnParentStreamRelay(params: {
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
       flushPending();
+      if (directReplyText.trim()) {
+        sendDirectReply(
+          directReplyTruncated
+            ? `${directReplyText.trimEnd()}\n\n[Output truncated by relay]`
+            : directReplyText,
+        );
+      }
       const startedAt = toFiniteNumber(
         (event.data as { startedAt?: unknown } | undefined)?.startedAt,
       );
@@ -345,6 +409,9 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (phase === "error") {
       flushPending();
       const errorText = toTrimmedString((event.data as { error?: unknown } | undefined)?.error);
+      if (errorText) {
+        sendDirectReply(errorText);
+      }
       if (errorText) {
         emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
       } else {
