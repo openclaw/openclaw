@@ -598,21 +598,25 @@ export function createOpenClawCodingTools(options?: {
       modelId: options?.modelId,
     }),
   );
-  const withHooks = normalized.map((tool) =>
+  const withAbort = options?.abortSignal
+    ? normalized.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
+    : normalized;
+  const withHooks = withAbort.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
       sessionKey: options?.sessionKey,
       sessionId: options?.sessionId,
       runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      senderId: options?.senderId ?? undefined,
+      senderName: options?.senderName ?? undefined,
+      senderUsername: options?.senderUsername ?? undefined,
+      senderE164: options?.senderE164 ?? undefined,
     }),
   );
-  const withAbort = options?.abortSignal
-    ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
-    : withHooks;
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
-  return withAbort;
+  return withHooks;
 }

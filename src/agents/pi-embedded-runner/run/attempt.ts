@@ -147,7 +147,11 @@ type PromptBuildHookRunner = {
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
   runBeforeAgentStart: (
-    event: { prompt: string; messages: unknown[] },
+    event: {
+      prompt: string;
+      messages: unknown[];
+      tools?: Array<{ name: string; description?: string; parameters?: Record<string, unknown> }>;
+    },
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
@@ -1172,6 +1176,7 @@ function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
 export async function resolvePromptBuildHookResult(params: {
   prompt: string;
   messages: unknown[];
+  tools?: Array<{ name: string; description?: string; parameters?: Record<string, unknown> }>;
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
@@ -1198,6 +1203,7 @@ export async function resolvePromptBuildHookResult(params: {
             {
               prompt: params.prompt,
               messages: params.messages,
+              tools: params.tools,
             },
             params.hookCtx,
           )
@@ -2369,10 +2375,23 @@ export async function runEmbeddedAttempt(
           messageProvider: params.messageProvider ?? undefined,
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+          accountId: params.agentAccountId,
+          senderId: params.senderId ?? undefined,
+          senderName: params.senderName ?? undefined,
+          senderUsername: params.senderUsername ?? undefined,
+          senderE164: params.senderE164 ?? undefined,
+          runId: params.runId,
+          model: params.model,
+          modelRegistry: params.modelRegistry,
         };
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
           messages: activeSession.messages,
+          tools: tools.map((t) => ({
+            name: t.name ?? "",
+            description: t.description,
+            parameters: t.parameters as Record<string, unknown> | undefined,
+          })),
           hookCtx,
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
