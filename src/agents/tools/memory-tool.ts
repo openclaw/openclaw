@@ -269,3 +269,75 @@ function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" |
   }
   return "direct";
 }
+
+export function createMemoryAuditTool(options: {
+  cfg: OpenClawConfig;
+  workspaceDir: string;
+  sessionKey?: string;
+}): AnyAgentTool {
+  return {
+    name: "memory_audit",
+    description:
+      "Query change history for memory files (MEMORY.md, memory/*.md). Returns recent hash changes recorded when files were indexed. Use to detect unexpected modifications or verify when a file was last updated by the agent.",
+    parameters: Type.Object({
+      path: Type.Optional(
+        Type.String({
+          description: "Relative path to filter (e.g. 'MEMORY.md'). Omit to list all recent changes.",
+        }),
+      ),
+      limit: Type.Optional(
+        Type.Number({
+          description: "Maximum number of changes to return (default 20).",
+          minimum: 1,
+          maximum: 200,
+        }),
+      ),
+    }),
+    execute: async (_, params) => {
+      const { manager, error } = await getMemorySearchManager({
+        cfg: options.cfg,
+        workspaceDir: options.workspaceDir,
+        agentId: resolveSessionAgentId(options.sessionKey),
+      });
+      if (error || !manager) {
+        return jsonResult({ error: error ?? "Memory manager unavailable" });
+      }
+      const dbPath = manager.dbPath;
+      if (!dbPath) {
+        return jsonResult({ error: "Memory index path unavailable" });
+      }
+      try {
+        const { DatabaseSync } = await import("node:sqlite");
+        const db = new DatabaseSync(dbPath, { readOnly: true });
+        const limit = readNumberParam(params, "limit") ?? 20;
+        const filterPath = readStringParam(params, "path");
+        let rows: unknown[];
+        if (filterPath) {
+          rows = db
+            .prepare(
+              `SELECT path, old_hash, new_hash, changed_at, source
+               FROM file_changes
+               WHERE path = ?
+               ORDER BY changed_at DESC
+               LIMIT ?`,
+            )
+            .all(filterPath, limit);
+        } else {
+          rows = db
+            .prepare(
+              `SELECT path, old_hash, new_hash, changed_at, source
+               FROM file_changes
+               ORDER BY changed_at DESC
+               LIMIT ?`,
+            )
+            .all(limit);
+        }
+        db.close();
+        return jsonResult({ changes: rows, count: rows.length });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonResult({ error: `Failed to query file_changes: ${message}` });
+      }
+    },
+  };
+}
