@@ -27,9 +27,27 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-let _currentListener: ActiveWebListener | null = null;
+const WEB_LISTENER_STATE = Symbol.for("openclaw.webListenerState");
 
-const listeners = new Map<string, ActiveWebListener>();
+type WebListenerState = {
+  listeners: Map<string, ActiveWebListener>;
+  currentListener: ActiveWebListener | null;
+};
+
+const state: WebListenerState = (() => {
+  const g = globalThis as typeof globalThis & {
+    [WEB_LISTENER_STATE]?: WebListenerState;
+  };
+  if (!g[WEB_LISTENER_STATE]) {
+    g[WEB_LISTENER_STATE] = {
+      listeners: new Map(),
+      currentListener: null,
+    };
+  }
+  return g[WEB_LISTENER_STATE];
+})();
+
+const listeners = state.listeners;
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -73,7 +91,7 @@ export function setActiveWebListener(
     listeners.set(id, listener);
   }
   if (id === DEFAULT_ACCOUNT_ID) {
-    _currentListener = listener;
+    state.currentListener = listener;
   }
 }
 
