@@ -535,11 +535,53 @@ function buildModelRef(provider?: string | null, model?: string | null): string 
   return `${providerValue}/${modelValue}`;
 }
 
+function resolveUniqueCatalogProvider(
+  catalog: ModelCatalogEntry[],
+  model: string,
+): string | undefined {
+  const modelValue = model.trim();
+  if (!modelValue) {
+    return undefined;
+  }
+  const normalizedModel = modelValue.toLowerCase();
+  const providers = new Set<string>();
+  for (const entry of catalog) {
+    const entryModel = typeof entry.id === "string" ? entry.id.trim() : "";
+    const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
+    if (!entryModel || !provider) {
+      continue;
+    }
+    if (entryModel === modelValue || entryModel.toLowerCase() === normalizedModel) {
+      providers.add(provider);
+      if (providers.size > 1) {
+        return undefined;
+      }
+    }
+  }
+  if (providers.size !== 1) {
+    return undefined;
+  }
+  return providers.values().next().value;
+}
+
 function resolveModelOverrideValue(state: AppViewState): string {
   // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
   const cached = state.chatModelOverrides[state.sessionKey];
   if (typeof cached === "string") {
-    return cached.trim();
+    const cachedValue = cached.trim();
+    if (!cachedValue) {
+      return "";
+    }
+    const activeRow = resolveActiveSessionRow(state);
+    const activeModel = typeof activeRow?.model === "string" ? activeRow.model.trim() : "";
+    const inferredProvider = resolveUniqueCatalogProvider(
+      state.chatModelCatalog ?? [],
+      cachedValue,
+    );
+    if (activeModel && activeModel.toLowerCase() === cachedValue.toLowerCase()) {
+      return buildModelRef(activeRow?.modelProvider ?? inferredProvider, cachedValue);
+    }
+    return buildModelRef(inferredProvider, cachedValue);
   }
   // cached === null means explicitly cleared to default.
   if (cached === null) {

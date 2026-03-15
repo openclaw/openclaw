@@ -719,6 +719,26 @@ describe("chat view", () => {
     expect(optionValues).toEqual(["", "openrouter/anthropic/claude-sonnet-4-5"]);
   });
 
+  it("normalizes cached model overrides to provider-qualified refs", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5-mini",
+      defaultModelProvider: "openai",
+    });
+    state.chatModelOverrides = { main: "gpt-5-mini" };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+
+    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
+    expect(optionValues).not.toContain("gpt-5-mini");
+  });
+
   it("prefers the session label over displayName in the grouped chat session selector", () => {
     const { state } = createChatHeaderState({ omitSessionFromList: true });
     state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
