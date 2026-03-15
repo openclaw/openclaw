@@ -68,3 +68,33 @@ describe("looksLikeFeishuId", () => {
     expect(looksLikeFeishuId("channel:oc_456")).toBe(true);
   });
 });
+
+describe("direct: prefix handling (OpenClaw internal peer format)", () => {
+  it("normalizeFeishuTarget strips direct: prefix for ou_ ids", () => {
+    expect(normalizeFeishuTarget("direct:ou_abc123")).toBe("ou_abc123");
+  });
+
+  it("normalizeFeishuTarget strips direct: prefix for oc_ ids", () => {
+    expect(normalizeFeishuTarget("direct:oc_dm_chat")).toBe("oc_dm_chat");
+  });
+
+  it("normalizeFeishuTarget strips feishu:direct: compound prefix", () => {
+    // Gateway passes targets as feishu:direct:ou_xxx from session key extraction
+    expect(normalizeFeishuTarget("feishu:direct:ou_abc123")).toBe("ou_abc123");
+    expect(normalizeFeishuTarget("lark:direct:ou_abc123")).toBe("ou_abc123");
+    expect(normalizeFeishuTarget("feishu:direct:oc_dm_chat")).toBe("oc_dm_chat");
+  });
+
+  it("resolveReceiveIdType handles direct:ou_ as open_id", () => {
+    expect(resolveReceiveIdType("direct:ou_abc123")).toBe("open_id");
+  });
+
+  it("resolveReceiveIdType handles direct:oc_ as chat_id", () => {
+    expect(resolveReceiveIdType("direct:oc_dm_chat")).toBe("chat_id");
+  });
+
+  it("looksLikeFeishuId recognizes direct: prefix", () => {
+    expect(looksLikeFeishuId("direct:ou_abc123")).toBe(true);
+    expect(looksLikeFeishuId("direct:oc_chat123")).toBe(true);
+  });
+});
