@@ -32,6 +32,20 @@ type AllowedValuesCollection = {
   incomplete: boolean;
   hasValues: boolean;
 };
+type ConfigPathSegment = string | number;
+
+const SUBAGENT_ALLOW_ALIAS_KEYS = new Set(["allow", "allowlist"]);
+const AGENT_DEFAULTS_ENTRY_ONLY_KEYS = new Set([
+  "id",
+  "name",
+  "default",
+  "workspace",
+  "agentDir",
+  "tools",
+  "identity",
+  "groupChat",
+  "runtime",
+]);
 
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
@@ -114,16 +128,112 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
   return collection.values;
 }
 
+function normalizeIssuePathSegments(record: UnknownIssueRecord | null): ConfigPathSegment[] {
+  return Array.isArray(record?.path)
+    ? record.path.filter((segment): segment is ConfigPathSegment => {
+        const segmentType = typeof segment;
+        return segmentType === "string" || segmentType === "number";
+      })
+    : [];
+}
+
+function stringifyIssuePath(segments: ConfigPathSegment[]): string {
+  return segments.join(".");
+}
+
+function getUnrecognizedKeys(record: UnknownIssueRecord | null): string[] {
+  return Array.isArray(record?.keys)
+    ? record.keys.filter((key): key is string => typeof key === "string")
+    : [];
+}
+
+function quoteIssueKeys(keys: string[]): string {
+  if (keys.length === 0) {
+    return "";
+  }
+  if (keys.length === 1) {
+    return `"${keys[0]}"`;
+  }
+  return keys.map((key) => `"${key}"`).join(", ");
+}
+
+function resolveCustomConfigIssueForUnrecognizedKeys(
+  record: UnknownIssueRecord | null,
+  pathSegments: ConfigPathSegment[],
+): ConfigValidationIssue | null {
+  if (record?.code !== "unrecognized_keys") {
+    return null;
+  }
+
+  const keys = getUnrecognizedKeys(record);
+  if (keys.length === 0) {
+    return null;
+  }
+
+  const path = stringifyIssuePath(pathSegments);
+  const isAgentsListSubagentsPath =
+    pathSegments.length === 4 &&
+    pathSegments[0] === "agents" &&
+    pathSegments[1] === "list" &&
+    typeof pathSegments[2] === "number" &&
+    pathSegments[3] === "subagents";
+  if (isAgentsListSubagentsPath) {
+    const aliasKeys = keys.filter((key) => SUBAGENT_ALLOW_ALIAS_KEYS.has(key));
+    if (aliasKeys.length > 0) {
+      return {
+        path: aliasKeys.length === 1 ? `${path}.${aliasKeys[0]}` : path,
+        message:
+          `Use agents.list[].subagents.allowAgents to allow target agent ids ("*" allows any). ` +
+          `${quoteIssueKeys(aliasKeys)} ${aliasKeys.length === 1 ? "is" : "are"} not valid under subagents.`,
+      };
+    }
+  }
+
+  const isAgentsDefaultsSubagentsPath =
+    pathSegments.length === 3 &&
+    pathSegments[0] === "agents" &&
+    pathSegments[1] === "defaults" &&
+    pathSegments[2] === "subagents";
+  if (isAgentsDefaultsSubagentsPath) {
+    const misplacedAllowKeys = keys.filter(
+      (key) => key === "allowAgents" || SUBAGENT_ALLOW_ALIAS_KEYS.has(key),
+    );
+    if (misplacedAllowKeys.length > 0) {
+      return {
+        path: misplacedAllowKeys.length === 1 ? `${path}.${misplacedAllowKeys[0]}` : path,
+        message:
+          "agents.defaults.subagents does not accept per-agent target allowlists. " +
+          "Put allowAgents on each caller agent under agents.list[].subagents.allowAgents. " +
+          "defaults.subagents is only for spawned-agent defaults like model, thinking, depth/concurrency, and timeout/archive settings.",
+      };
+    }
+  }
+
+  const isAgentsDefaultsPath =
+    pathSegments.length === 2 && pathSegments[0] === "agents" && pathSegments[1] === "defaults";
+  if (isAgentsDefaultsPath) {
+    const entryOnlyKeys = keys.filter((key) => AGENT_DEFAULTS_ENTRY_ONLY_KEYS.has(key));
+    if (entryOnlyKeys.length > 0) {
+      return {
+        path,
+        message:
+          `agents.defaults is for shared defaults only; received unsupported per-agent keys ${quoteIssueKeys(entryOnlyKeys)}. ` +
+          "Move per-agent fields into agents.list[] entries, and configure tool policy at top-level tools.*.",
+      };
+    }
+  }
+
+  return null;
+}
+
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
-  const path = Array.isArray(record?.path)
-    ? record.path
-        .filter((segment): segment is string | number => {
-          const segmentType = typeof segment;
-          return segmentType === "string" || segmentType === "number";
-        })
-        .join(".")
-    : "";
+  const pathSegments = normalizeIssuePathSegments(record);
+  const path = stringifyIssuePath(pathSegments);
+  const customIssue = resolveCustomConfigIssueForUnrecognizedKeys(record, pathSegments);
+  if (customIssue) {
+    return customIssue;
+  }
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 

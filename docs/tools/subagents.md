@@ -126,6 +126,8 @@ See [Configuration Reference](/gateway/configuration-reference) and [Slash comma
 Allowlist:
 
 - `agents.list[].subagents.allowAgents`: list of agent ids that can be targeted via `agentId` (`["*"]` to allow any). Default: only the requester agent.
+- Use `allowAgents` here, not `allow` or `allowlist`. Those names are used for other allow/deny policies elsewhere in the config and are not valid under `agents.list[].subagents`.
+- `agents.defaults.subagents` configures spawned-agent defaults such as model, thinking, depth, concurrency, timeout, and archive behavior. It does **not** define which target agent ids a caller may spawn.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 
 Discovery:
