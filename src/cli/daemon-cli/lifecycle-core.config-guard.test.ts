@@ -3,6 +3,7 @@ import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,
   resetLifecycleServiceMocks,
+  runtimeLogs,
   service,
   stubEmptyGatewayEnv,
 } from "./test-helpers/lifecycle-core-harness.js";
