@@ -31,4 +31,25 @@ describe("resolvePluginProviders", () => {
       }),
     );
   });
+
+  it("can augment restrictive allowlists for bundled provider compatibility", () => {
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      bundledProviderAllowlistCompat: true,
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: expect.arrayContaining(["openrouter", "kilocode", "moonshot"]),
+          }),
+        }),
+      }),
+    );
+  });
 });
