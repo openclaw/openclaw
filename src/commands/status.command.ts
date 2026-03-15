@@ -346,10 +346,7 @@ export async function statusCommand(
     if (!lastHeartbeat) {
       return muted("none");
     }
-    const age = formatTimeAgo(Date.now() - lastHeartbeat.ts);
-    const channel = lastHeartbeat.channel ?? "unknown";
-    const accountLabel = lastHeartbeat.accountId ? `account ${lastHeartbeat.accountId}` : null;
-    return [lastHeartbeat.status, `${age} ago`, channel, accountLabel].filter(Boolean).join(" · ");
+    return formatLastHeartbeatDetail(lastHeartbeat);
   })();
 
   const storeLabel =
