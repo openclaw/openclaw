@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { getShellConfig, resolvePowerShellPath, resolveShellFromPath } from "./shell-utils.js";
+import {
+  getShellConfig,
+  resolvePowerShellPath,
+  resolveShellFromPath,
+  wrapCommandWithWindowsPowerShellUtf8,
+} from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 
@@ -205,5 +210,28 @@ describe("resolvePowerShellPath", () => {
     delete process.env.WINDIR;
 
     expect(resolvePowerShellPath()).toBe(ps51Path);
+  });
+});
+
+describe("wrapCommandWithWindowsPowerShellUtf8", () => {
+  it("wraps command with UTF-8 initialization on Windows PowerShell", () => {
+    const shell = process.platform === "win32" ? "powershell.exe" : "pwsh";
+    const wrapped = wrapCommandWithWindowsPowerShellUtf8("Write-Output 'ok'", shell);
+    const shouldWrap = process.platform === "win32";
+
+    if (shouldWrap) {
+      expect(wrapped).toContain("[Console]::OutputEncoding = $__openclawUtf8");
+      expect(wrapped).toContain("$OutputEncoding = $__openclawUtf8");
+      expect(wrapped).toContain("chcp 65001 > $null");
+      expect(wrapped).toContain("Write-Output 'ok'");
+      return;
+    }
+
+    expect(wrapped).toBe("Write-Output 'ok'");
+  });
+
+  it("does not wrap non-powershell shells", () => {
+    const wrapped = wrapCommandWithWindowsPowerShellUtf8("echo ok", "bash");
+    expect(wrapped).toBe("echo ok");
   });
 });

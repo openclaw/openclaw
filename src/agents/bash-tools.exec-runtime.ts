@@ -33,7 +33,11 @@ import {
   readEnvInt,
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
-import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import {
+  getShellConfig,
+  sanitizeBinaryOutput,
+  wrapCommandWithWindowsPowerShellUtf8,
+} from "./shell-utils.js";
 
 // Sanitize inherited host env before merge so dangerous variables from process.env
 // are not propagated into non-sandboxed executions.
@@ -417,11 +421,12 @@ export async function runExecProcess(opts: {
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
-    const childArgv = [shell, ...shellArgs, execCommand];
+    const runtimeCommand = wrapCommandWithWindowsPowerShellUtf8(execCommand, shell);
+    const childArgv = [shell, ...shellArgs, runtimeCommand];
     if (opts.usePty) {
       return {
         mode: "pty" as const,
-        ptyCommand: execCommand,
+        ptyCommand: runtimeCommand,
         childFallbackArgv: childArgv,
         env: shellRuntimeEnv,
         stdinMode: "pipe-open" as const,

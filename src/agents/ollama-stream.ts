@@ -43,6 +43,7 @@ interface OllamaChatRequest {
   stream: boolean;
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
+  think?: boolean;
 }
 
 interface OllamaChatMessage {
@@ -458,10 +459,16 @@ export function createOllamaStreamFn(
           ollamaOptions.num_predict = options.maxTokens;
         }
 
+        // Ollama 0.18+ thinking-capable models (qwen3.5, kimi-k2.5, etc.)
+        // default to producing thinking tokens which consumes the output budget.
+        // Explicitly send think: false unless the user requested reasoning.
+        const ollamaThink = !!options?.reasoning;
+
         const body: OllamaChatRequest = {
           model: model.id,
           messages: ollamaMessages,
           stream: true,
+          think: ollamaThink,
           ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
           options: ollamaOptions,
         };

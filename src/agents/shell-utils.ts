@@ -69,6 +69,34 @@ export function getShellConfig(): { shell: string; args: string[] } {
   return { shell, args: ["-c"] };
 }
 
+function isWindowsPowerShellShell(shell: string): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  const name = path
+    .basename(shell)
+    .replace(/\.(exe|cmd|bat)$/i, "")
+    .toLowerCase();
+  return name === "powershell" || name === "pwsh";
+}
+
+export function wrapCommandWithWindowsPowerShellUtf8(command: string, shell: string): string {
+  if (!isWindowsPowerShellShell(shell)) {
+    return command;
+  }
+
+  // Keep command semantics while forcing UTF-8 for both PowerShell text streams
+  // and external console apps (via code page 65001 when available).
+  return [
+    "$__openclawUtf8 = [System.Text.UTF8Encoding]::new($false)",
+    "[Console]::InputEncoding = $__openclawUtf8",
+    "[Console]::OutputEncoding = $__openclawUtf8",
+    "$OutputEncoding = $__openclawUtf8",
+    "try { chcp 65001 > $null } catch {}",
+    command,
+  ].join("; ");
+}
+
 export function resolveShellFromPath(name: string): string | undefined {
   const envPath = process.env.PATH ?? "";
   if (!envPath) {
