@@ -100,7 +100,7 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:main:");
   });
 
-  it("preserves an unknown topic agentId in the session key", async () => {
+  it("falls back to default agent for unknown topic agentId", async () => {
     vi.mocked(loadConfig).mockReturnValue({
       agents: {
         list: [{ id: "main", default: true }, { id: "zu" }],
@@ -112,7 +112,9 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
     const ctx = await buildForumContext({ topicConfig: { agentId: "ghost" } });
 
     expect(ctx).not.toBeNull();
-    expect(ctx?.ctxPayload?.SessionKey).toContain("agent:ghost:");
+    // pickFirstExistingAgentId falls back to the default agent when the
+    // configured agentId does not match any entry in agents.list.
+    expect(ctx?.ctxPayload?.SessionKey).toContain("agent:main:");
   });
 
   it("routes DM topic to specific agent when agentId is set", async () => {
