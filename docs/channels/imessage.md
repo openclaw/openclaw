@@ -49,7 +49,7 @@ imsg rpc --help
   channels: {
     imessage: {
       enabled: true,
-      cliPath: "/usr/local/bin/imsg",
+      cliPath: "/opt/homebrew/bin/imsg",
       dbPath: "/Users/<you>/Library/Messages/chat.db",
     },
   },
