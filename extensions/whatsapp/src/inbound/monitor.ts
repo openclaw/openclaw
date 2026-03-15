@@ -448,6 +448,8 @@ export async function monitorWebInbox(options: {
 
       const group = isJidGroup(remoteJid) === true;
       const reactorJid = userJid ?? key?.participant ?? (group ? undefined : remoteJid);
+      // In groups, reactor identity is required — skip unattributable reactions.
+      if (group && !reactorJid) continue;
       const senderE164 = reactorJid ? await resolveInboundJid(reactorJid) : null;
       // In DMs, `from` must be the E.164 of the conversation peer, not the reactor.
       // Mirror normalizeInboundMessage: drop the event if E.164 resolution fails rather than
