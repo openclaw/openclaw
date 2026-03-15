@@ -319,6 +319,12 @@ export type MemorySearchConfig = {
   sources?: Array<"memory" | "sessions">;
   /** Extra paths to include in memory search (directories or .md files). */
   extraPaths?: string[];
+  /**
+   * Paths indexed into a shared store (`_shared.sqlite`) accessible by all agents.
+   * Accepts plain strings (weight defaults to 1.0) or objects with explicit weight.
+   * Replaces `extraPaths` at the defaults level (soft migration).
+   */
+  sharedPaths?: Array<string | { path: string; weight?: number }>;
   /** Optional multimodal file indexing for selected extra paths. */
   multimodal?: {
     /** Enable image/audio embeddings from extraPaths. */
