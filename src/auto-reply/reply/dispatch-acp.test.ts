@@ -435,4 +435,92 @@ describe("tryDispatchAcpReply", () => {
       }),
     );
   });
+
+  it("delivers accumulated block text as fallback when no block was routed", async () => {
+    setReadyAcpResolution();
+    // Configure TTS mode as "final" but TTS synthesis returns no mediaUrl
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce(
+      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
+    );
+
+    // Simulate a scenario where projector did not route any blocks
+    // (e.g., deliveryMode="final_only" but block delivery failed)
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "CODEX_OK", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+      shouldRouteToOriginating: true,
+    });
+
+    // Should deliver final text as fallback when no block was routed
+    expect(result?.counts.final).toBe(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "CODEX_OK",
+        }),
+      }),
+    );
+  });
+
+  it("does not duplicate delivery when blocks were already routed", async () => {
+    setReadyAcpResolution();
+    // Configure TTS mode as "none" - should skip TTS for final delivery
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "none" });
+
+    // Simulate normal flow where projector routes blocks
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "Task completed", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+      shouldRouteToOriginating: true,
+    });
+
+    // Should NOT deliver duplicate final text when blocks were already routed
+    // The block delivery should be sufficient
+    expect(result?.counts.block).toBeGreaterThanOrEqual(1);
+    expect(result?.counts.final).toBe(0);
+    // Verify routeReply was called for block, not for duplicate final
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips fallback when TTS mode is all (blocks already processed with TTS)", async () => {
+    setReadyAcpResolution();
+    // Configure TTS mode as "all" - blocks already went through TTS
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "all" });
+
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "Response", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+      shouldRouteToOriginating: true,
+    });
+
+    // Should NOT trigger fallback for ttsMode="all" to avoid duplicate TTS
+    expect(result?.counts.final).toBe(0);
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+  });
 });

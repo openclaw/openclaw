@@ -314,28 +314,43 @@ export async function tryDispatchAcpReply(params: {
     await projector.flush(true);
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
-    if (ttsMode === "final" && delivery.getBlockCount() > 0 && accumulatedBlockText.trim()) {
-      try {
-        const ttsSyntheticReply = await maybeApplyTtsToPayload({
-          payload: { text: accumulatedBlockText },
-          cfg: params.cfg,
-          channel: params.ttsChannel,
-          kind: "final",
-          inboundAudio: params.inboundAudio,
-          ttsAuto: params.sessionTtsAuto,
-        });
-        if (ttsSyntheticReply.mediaUrl) {
-          const delivered = await delivery.deliver("final", {
-            mediaUrl: ttsSyntheticReply.mediaUrl,
-            audioAsVoice: ttsSyntheticReply.audioAsVoice,
+    // Only deliver final text if no blocks have been delivered yet.
+    // This prevents duplicate delivery when projector already sent accumulated text as blocks.
+    // Use blockCount (not routedCounts) because blocks may be sent via dispatcher.sendBlockReply
+    // when shouldRouteToOriginating is false.
+    // See analogous guard in dispatch-from-config.ts (replies.length === 0).
+    const hasAlreadyDelivered = delivery.getBlockCount() > 0;
+    // Skip fallback for ttsMode="all" because blocks were already processed with TTS.
+    const shouldSkipFallback = hasAlreadyDelivered || ttsMode === "all";
+    if (!shouldSkipFallback && accumulatedBlockText.trim()) {
+      let delivered = false;
+      if (ttsMode === "final") {
+        try {
+          const ttsSyntheticReply = await maybeApplyTtsToPayload({
+            payload: { text: accumulatedBlockText },
+            cfg: params.cfg,
+            channel: params.ttsChannel,
+            kind: "final",
+            inboundAudio: params.inboundAudio,
+            ttsAuto: params.sessionTtsAuto,
           });
-          queuedFinal = queuedFinal || delivered;
+          if (ttsSyntheticReply.mediaUrl) {
+            delivered = await delivery.deliver("final", {
+              mediaUrl: ttsSyntheticReply.mediaUrl,
+              audioAsVoice: ttsSyntheticReply.audioAsVoice,
+            });
+          }
+        } catch (err) {
+          logVerbose(
+            `dispatch-acp: accumulated ACP block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
-      } catch (err) {
-        logVerbose(
-          `dispatch-acp: accumulated ACP block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
       }
+      // Fallback to text delivery if TTS was not attempted or did not produce media.
+      if (!delivered) {
+        delivered = await delivery.deliver("final", { text: accumulatedBlockText });
+      }
+      queuedFinal = queuedFinal || delivered;
     }
 
     if (shouldEmitResolvedIdentityNotice) {
