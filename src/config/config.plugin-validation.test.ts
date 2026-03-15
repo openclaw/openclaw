@@ -44,7 +44,6 @@ async function writePluginFixture(params: {
 }
 
 describe("config plugin validation", () => {
-  const previousUmask = process.umask(0o022);
   let fixtureRoot = "";
   let suiteHome = "";
   let badPluginDir = "";
@@ -136,7 +135,6 @@ describe("config plugin validation", () => {
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
     clearPluginManifestRegistryCache();
-    process.umask(previousUmask);
   });
 
   it("reports missing plugin refs across load paths, entries, and allowlist surfaces", async () => {

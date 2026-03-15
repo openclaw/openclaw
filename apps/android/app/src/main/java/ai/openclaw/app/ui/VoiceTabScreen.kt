@@ -363,7 +363,7 @@ private fun VoiceTurnBubble(entry: VoiceConversationEntry) {
     Surface(
       modifier = Modifier.fillMaxWidth(0.90f),
       shape = RoundedCornerShape(12.dp),
-      color = if (isUser) mobileAccentSoft else Color.White,
+      color = if (isUser) mobileAccentSoft else mobileCardSurface,
       border = BorderStroke(1.dp, if (isUser) mobileAccent else mobileBorderStrong),
     ) {
       Column(
@@ -391,7 +391,7 @@ private fun VoiceThinkingBubble() {
     Surface(
       modifier = Modifier.fillMaxWidth(0.68f),
       shape = RoundedCornerShape(12.dp),
-      color = Color.White,
+      color = mobileCardSurface,
       border = BorderStroke(1.dp, mobileBorderStrong),
     ) {
       Row(
