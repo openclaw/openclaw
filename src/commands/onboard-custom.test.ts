@@ -259,9 +259,40 @@ describe("promptCustomApiConfig", () => {
     await runPromptCustomApi(prompter);
 
     expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("did not respond"),
+      expect.stringContaining("select the type manually"),
       "Endpoint detection",
     );
+  });
+
+  it("allows manual type selection when detection fails", async () => {
+    const prompter = createTestPrompter({
+      text: [
+        "https://proxy.example.com/api/v1",
+        "test-key",
+        "us.anthropic.claude-3-7-sonnet",
+        "custom",
+        "",
+      ],
+      select: ["plaintext", "unknown", "selectType", "openai"],
+    });
+    stubFetchSequence([
+      { ok: false, status: 404 },
+      { ok: false, status: 404 },
+    ]);
+    const result = await runPromptCustomApi(prompter);
+
+    expect(result.config.models?.providers?.custom?.api).toBe("openai-completions");
+  });
+
+  it("allows manual type selection when verification fails", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://proxy.example.com/api/v1", "test-key", "my-model", "custom", ""],
+      select: ["plaintext", "openai", "selectType", "anthropic"],
+    });
+    stubFetchSequence([{ ok: false, status: 401 }, { ok: true }]);
+    const result = await runPromptCustomApi(prompter);
+
+    expect(result.config.models?.providers?.custom?.api).toBe("anthropic-messages");
   });
 
   it("renames provider id when baseUrl differs", async () => {
