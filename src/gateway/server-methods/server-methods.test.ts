@@ -1065,7 +1065,7 @@ describe("tool approval handlers", () => {
     const context = {
       broadcast: (_event: string, _payload: unknown) => {},
       hasToolApprovalClients: () => false,
-      hasExecApprovalClients: () => true, // exec-approval clients exist but lack tool cap
+      hasExecApprovalClients: () => false, // no approval-scoped clients connected
     };
 
     await handlers["tool.approval.request"]({

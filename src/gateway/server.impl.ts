@@ -867,19 +867,14 @@ export async function startGatewayServer(
       return false;
     },
     hasToolApprovalClients: () => {
-      // A client is tool-approval-capable only when it has the approval scope
-      // AND declares the "tool-approvals" capability. Legacy exec-approval-only
-      // clients lack this cap, so tool requests fall through to the no-route
-      // path immediately instead of blocking until timeout.
+      // Accept any client with an approval scope. Built-in approver clients
+      // (Control UI, macOS app) already handle exec approvals and can handle
+      // tool approvals without declaring a separate "tool-approvals" cap.
       for (const gatewayClient of clients) {
         const scopes = Array.isArray(gatewayClient.connect.scopes)
           ? gatewayClient.connect.scopes
           : [];
-        if (!(scopes.includes("operator.admin") || scopes.includes("operator.approvals"))) {
-          continue;
-        }
-        const caps = Array.isArray(gatewayClient.connect.caps) ? gatewayClient.connect.caps : [];
-        if (caps.includes("tool-approvals")) {
+        if (scopes.includes("operator.admin") || scopes.includes("operator.approvals")) {
           return true;
         }
       }

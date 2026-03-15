@@ -130,6 +130,34 @@ describe("resolveToolApprovalPolicy", () => {
     });
     expect(policy.security).toBe("allowlist");
   });
+
+  it("honors explicit empty per-agent allowlist override", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "*" }],
+        agents: {
+          locked: { allowlist: [] },
+        },
+      }),
+      agentId: "locked",
+    });
+    // An explicit empty array means "no tools allowed" and must not
+    // fall back to the global wildcard allowlist.
+    expect(policy.allowlist).toEqual([]);
+  });
+
+  it("honors explicit empty wildcard agent allowlist override", () => {
+    const policy = resolveToolApprovalPolicy({
+      cfg: makeConfig({
+        allowlist: [{ pattern: "*" }],
+        agents: {
+          "*": { allowlist: [] },
+        },
+      }),
+      agentId: "any-agent",
+    });
+    expect(policy.allowlist).toEqual([]);
+  });
 });
 
 describe("evaluateToolApprovalPolicy", () => {

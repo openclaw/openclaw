@@ -40,7 +40,7 @@ export function resolveToolApprovalPolicy(params: {
   const globalAsk = normalizeToolAsk(toolPolicy?.ask) ?? DEFAULT_TOOL_ASK;
   const globalAskFallback =
     normalizeToolSecurity(toolPolicy?.askFallback) ?? DEFAULT_TOOL_ASK_FALLBACK;
-  const globalAllowlist = normalizeAllowlist(toolPolicy?.allowlist);
+  const globalAllowlist = normalizeAllowlist(toolPolicy?.allowlist) ?? [];
 
   const agentConfig = toolPolicy?.agents?.[agentKey];
   const wildcardConfig = toolPolicy?.agents?.["*"];
@@ -57,16 +57,16 @@ export function resolveToolApprovalPolicy(params: {
     globalAskFallback;
 
   // Per-agent allowlist overrides global. If the specific agent declares its
-  // own allowlist, use it exclusively. Otherwise fall back to the wildcard
-  // agent allowlist, and finally to the global allowlist. This prevents a
-  // permissive global rule (e.g. "*") from undermining a tighter per-agent
-  // restriction.
+  // own allowlist (even an empty one), use it exclusively. Otherwise fall back
+  // to the wildcard agent allowlist, and finally to the global allowlist. An
+  // explicit empty array means "no tools allowed", preventing a permissive
+  // global rule (e.g. "*") from undermining a tighter per-agent restriction.
   const agentSpecificAllowlist = normalizeAllowlist(agentConfig?.allowlist);
   const wildcardAllowlist = normalizeAllowlist(wildcardConfig?.allowlist);
   const agentAllowlist =
-    agentSpecificAllowlist.length > 0
+    agentSpecificAllowlist !== null
       ? agentSpecificAllowlist
-      : wildcardAllowlist.length > 0
+      : wildcardAllowlist !== null
         ? wildcardAllowlist
         : globalAllowlist;
 
@@ -78,9 +78,11 @@ export function resolveToolApprovalPolicy(params: {
   };
 }
 
-function normalizeAllowlist(entries?: Array<{ pattern: string }>): ToolAllowlistEntry[] {
+function normalizeAllowlist(entries?: Array<{ pattern: string }>): ToolAllowlistEntry[] | null {
   if (!Array.isArray(entries)) {
-    return [];
+    // Not set at all. Return null so the caller can distinguish "unset"
+    // (fall through to broader defaults) from "set to empty" (allow nothing).
+    return null;
   }
   return entries
     .filter((e) => typeof e?.pattern === "string" && e.pattern.trim().length > 0)
