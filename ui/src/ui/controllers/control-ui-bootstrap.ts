@@ -11,6 +11,7 @@ export type ControlUiBootstrapState = {
   assistantAvatar: string | null;
   assistantAgentId: string | null;
   serverVersion: string | null;
+  chatContextNoticeShowPricingThreshold: boolean;
 };
 
 export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapState) {
@@ -45,6 +46,8 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
     state.assistantAvatar = normalized.avatar;
     state.assistantAgentId = normalized.agentId ?? null;
     state.serverVersion = parsed.serverVersion ?? null;
+    state.chatContextNoticeShowPricingThreshold =
+      parsed.chat?.contextNotice?.showPricingThreshold ?? true;
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }

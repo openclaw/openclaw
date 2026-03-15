@@ -56,6 +56,7 @@ export type AppViewState = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  chatContextNoticeShowPricingThreshold: boolean;
   sessionKey: string;
   chatLoading: boolean;
   chatSending: boolean;

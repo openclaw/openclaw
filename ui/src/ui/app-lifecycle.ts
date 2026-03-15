@@ -29,6 +29,7 @@ type LifecycleHost = {
   assistantAvatar: string | null;
   assistantAgentId: string | null;
   serverVersion: string | null;
+  chatContextNoticeShowPricingThreshold: boolean;
   chatHasAutoScrolled: boolean;
   chatManualRefreshInFlight: boolean;
   chatLoading: boolean;
