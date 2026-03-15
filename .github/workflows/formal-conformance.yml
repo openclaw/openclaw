@@ -49,7 +49,7 @@ jobs:
           set -euo pipefail
           cd clawdbot-formal-models
 
-          if git diff --quiet -- generated; then
+          if git diff --quiet -- generated && ! git ls-files --others --exclude-standard -- generated | grep -q .; then
             echo "drift=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
