@@ -63,6 +63,7 @@ export const mockedEnsureRuntimePluginsLoaded: (...args: unknown[]) => void = vi
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
+  initializeGlobalHookRunner: vi.fn(),
 }));
 
 vi.mock("../../context-engine/index.js", () => ({
@@ -127,6 +128,7 @@ vi.mock("../pi-embedded-helpers.js", () => ({
   }),
   isFailoverAssistantError: vi.fn(() => false),
   isFailoverErrorMessage: vi.fn(() => false),
+  isLikelySSEParseError: vi.fn(() => false),
   parseImageSizeError: vi.fn(() => null),
   parseImageDimensionError: vi.fn(() => null),
   isRateLimitAssistantError: vi.fn(() => false),

@@ -342,6 +342,7 @@ describe("failover-error", () => {
 
   it("infers timeout from connection/network error messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "Network connection lost." })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(
       "timeout",
