@@ -1,11 +1,14 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import type { WizardPrompter } from "../../wizard/prompts.js";
 import type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
   ChannelOnboardingStatus,
   ChannelOnboardingStatusContext,
 } from "./onboarding-types.js";
+import { configureChannelAccessWithAllowlist } from "./onboarding/channel-access-configure.js";
+import type { ChannelAccessPolicy } from "./onboarding/channel-access.js";
 import {
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
@@ -32,6 +35,28 @@ export type ChannelSetupWizardCredentialState = {
   envValue?: string;
 };
 
+type ChannelSetupWizardCredentialValues = Partial<Record<keyof ChannelSetupInput, string>>;
+
+export type ChannelSetupWizardNote = {
+  title: string;
+  lines: string[];
+  shouldShow?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    credentialValues: ChannelSetupWizardCredentialValues;
+  }) => boolean | Promise<boolean>;
+};
+
+export type ChannelSetupWizardEnvShortcut = {
+  prompt: string;
+  preferredEnvVar?: string;
+  isAvailable: (params: { cfg: OpenClawConfig; accountId: string }) => boolean;
+  apply: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+  }) => OpenClawConfig | Promise<OpenClawConfig>;
+};
+
 export type ChannelSetupWizardCredential = {
   inputKey: keyof ChannelSetupInput;
   providerHint: string;
@@ -47,6 +72,16 @@ export type ChannelSetupWizardCredential = {
     cfg: OpenClawConfig;
     accountId: string;
   }) => ChannelSetupWizardCredentialState;
+  applyUseEnv?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+  }) => OpenClawConfig | Promise<OpenClawConfig>;
+  applySet?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    value: unknown;
+    resolvedValue: string;
+  }) => OpenClawConfig | Promise<OpenClawConfig>;
 };
 
 export type ChannelSetupWizardAllowFromEntry = {
@@ -58,6 +93,7 @@ export type ChannelSetupWizardAllowFromEntry = {
 export type ChannelSetupWizardAllowFrom = {
   helpTitle?: string;
   helpLines?: string[];
+  credentialInputKey?: keyof ChannelSetupInput;
   message: string;
   placeholder: string;
   invalidWithoutCredentialNote: string;
@@ -66,7 +102,7 @@ export type ChannelSetupWizardAllowFrom = {
   resolveEntries: (params: {
     cfg: OpenClawConfig;
     accountId: string;
-    credentialValue?: string;
+    credentialValues: ChannelSetupWizardCredentialValues;
     entries: string[];
   }) => Promise<ChannelSetupWizardAllowFromEntry[]>;
   apply: (params: {
@@ -76,12 +112,42 @@ export type ChannelSetupWizardAllowFrom = {
   }) => OpenClawConfig | Promise<OpenClawConfig>;
 };
 
+export type ChannelSetupWizardGroupAccess = {
+  label: string;
+  placeholder: string;
+  helpTitle?: string;
+  helpLines?: string[];
+  currentPolicy: (params: { cfg: OpenClawConfig; accountId: string }) => ChannelAccessPolicy;
+  currentEntries: (params: { cfg: OpenClawConfig; accountId: string }) => string[];
+  updatePrompt: (params: { cfg: OpenClawConfig; accountId: string }) => boolean;
+  setPolicy: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    policy: ChannelAccessPolicy;
+  }) => OpenClawConfig;
+  resolveAllowlist: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    credentialValues: ChannelSetupWizardCredentialValues;
+    entries: string[];
+    prompter: Pick<WizardPrompter, "note">;
+  }) => Promise<unknown>;
+  applyAllowlist: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    resolved: unknown;
+  }) => OpenClawConfig;
+};
+
 export type ChannelSetupWizard = {
   channel: string;
   status: ChannelSetupWizardStatus;
-  credential: ChannelSetupWizardCredential;
+  introNote?: ChannelSetupWizardNote;
+  envShortcut?: ChannelSetupWizardEnvShortcut;
+  credentials: ChannelSetupWizardCredential[];
   dmPolicy?: ChannelOnboardingDmPolicy;
   allowFrom?: ChannelSetupWizardAllowFrom;
+  groupAccess?: ChannelSetupWizardGroupAccess;
   disable?: (cfg: OpenClawConfig) => OpenClawConfig;
   onAccountRecorded?: ChannelOnboardingAdapter["onAccountRecorded"];
 };
@@ -147,6 +213,31 @@ function applySetupInput(params: {
   };
 }
 
+function trimResolvedValue(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function collectCredentialValues(params: {
+  wizard: ChannelSetupWizard;
+  cfg: OpenClawConfig;
+  accountId: string;
+}): ChannelSetupWizardCredentialValues {
+  const values: ChannelSetupWizardCredentialValues = {};
+  for (const credential of params.wizard.credentials) {
+    const resolvedValue = trimResolvedValue(
+      credential.inspect({
+        cfg: params.cfg,
+        accountId: params.accountId,
+      }).resolvedValue,
+    );
+    if (resolvedValue) {
+      values[credential.inputKey] = resolvedValue;
+    }
+  }
+  return values;
+}
+
 export function buildChannelOnboardingAdapterFromSetupWizard(params: {
   plugin: ChannelSetupWizardPlugin;
   wizard: ChannelSetupWizard;
@@ -178,66 +269,161 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
       });
 
       let next = cfg;
-      let credentialState = wizard.credential.inspect({ cfg: next, accountId });
-      let resolvedCredentialValue = credentialState.resolvedValue?.trim() || undefined;
-      const allowEnv = wizard.credential.allowEnv?.({ cfg: next, accountId }) ?? false;
-
-      const credentialResult = await runSingleChannelSecretStep({
+      let credentialValues = collectCredentialValues({
+        wizard,
         cfg: next,
-        prompter,
-        providerHint: wizard.credential.providerHint,
-        credentialLabel: wizard.credential.credentialLabel,
-        secretInputMode: options?.secretInputMode,
-        accountConfigured: credentialState.accountConfigured,
-        hasConfigToken: credentialState.hasConfiguredValue,
-        allowEnv,
-        envValue: credentialState.envValue,
-        envPrompt: wizard.credential.envPrompt,
-        keepPrompt: wizard.credential.keepPrompt,
-        inputPrompt: wizard.credential.inputPrompt,
-        preferredEnvVar: wizard.credential.preferredEnvVar,
-        onMissingConfigured:
-          wizard.credential.helpLines && wizard.credential.helpLines.length > 0
-            ? async () => {
-                await prompter.note(
-                  wizard.credential.helpLines!.join("\n"),
-                  wizard.credential.helpTitle ?? wizard.credential.credentialLabel,
-                );
-              }
-            : undefined,
-        applyUseEnv: async (currentCfg) =>
-          applySetupInput({
-            plugin,
-            cfg: currentCfg,
-            accountId,
-            input: {
-              [wizard.credential.inputKey]: undefined,
-              useEnv: true,
-            },
-          }).cfg,
-        applySet: async (currentCfg, value, resolvedValue) => {
-          resolvedCredentialValue = resolvedValue;
-          return applySetupInput({
-            plugin,
-            cfg: currentCfg,
-            accountId,
-            input: {
-              [wizard.credential.inputKey]: value,
-              useEnv: false,
-            },
-          }).cfg;
-        },
+        accountId,
       });
+      let usedEnvShortcut = false;
 
-      next = credentialResult.cfg;
-      credentialState = wizard.credential.inspect({ cfg: next, accountId });
-      resolvedCredentialValue =
-        credentialResult.resolvedValue?.trim() ||
-        credentialState.resolvedValue?.trim() ||
-        undefined;
+      if (wizard.envShortcut?.isAvailable({ cfg: next, accountId })) {
+        const useEnvShortcut = await prompter.confirm({
+          message: wizard.envShortcut.prompt,
+          initialValue: true,
+        });
+        if (useEnvShortcut) {
+          next = await wizard.envShortcut.apply({ cfg: next, accountId });
+          credentialValues = collectCredentialValues({
+            wizard,
+            cfg: next,
+            accountId,
+          });
+          usedEnvShortcut = true;
+        }
+      }
+
+      const shouldShowIntro =
+        !usedEnvShortcut &&
+        (wizard.introNote?.shouldShow
+          ? await wizard.introNote.shouldShow({
+              cfg: next,
+              accountId,
+              credentialValues,
+            })
+          : Boolean(wizard.introNote));
+      if (shouldShowIntro && wizard.introNote) {
+        await prompter.note(wizard.introNote.lines.join("\n"), wizard.introNote.title);
+      }
+
+      if (!usedEnvShortcut) {
+        for (const credential of wizard.credentials) {
+          let credentialState = credential.inspect({ cfg: next, accountId });
+          let resolvedCredentialValue = trimResolvedValue(credentialState.resolvedValue);
+          const allowEnv = credential.allowEnv?.({ cfg: next, accountId }) ?? false;
+
+          const credentialResult = await runSingleChannelSecretStep({
+            cfg: next,
+            prompter,
+            providerHint: credential.providerHint,
+            credentialLabel: credential.credentialLabel,
+            secretInputMode: options?.secretInputMode,
+            accountConfigured: credentialState.accountConfigured,
+            hasConfigToken: credentialState.hasConfiguredValue,
+            allowEnv,
+            envValue: credentialState.envValue,
+            envPrompt: credential.envPrompt,
+            keepPrompt: credential.keepPrompt,
+            inputPrompt: credential.inputPrompt,
+            preferredEnvVar: credential.preferredEnvVar,
+            onMissingConfigured:
+              credential.helpLines && credential.helpLines.length > 0
+                ? async () => {
+                    await prompter.note(
+                      credential.helpLines!.join("\n"),
+                      credential.helpTitle ?? credential.credentialLabel,
+                    );
+                  }
+                : undefined,
+            applyUseEnv: async (currentCfg) =>
+              credential.applyUseEnv
+                ? await credential.applyUseEnv({
+                    cfg: currentCfg,
+                    accountId,
+                  })
+                : applySetupInput({
+                    plugin,
+                    cfg: currentCfg,
+                    accountId,
+                    input: {
+                      [credential.inputKey]: undefined,
+                      useEnv: true,
+                    },
+                  }).cfg,
+            applySet: async (currentCfg, value, resolvedValue) => {
+              resolvedCredentialValue = resolvedValue;
+              return credential.applySet
+                ? await credential.applySet({
+                    cfg: currentCfg,
+                    accountId,
+                    value,
+                    resolvedValue,
+                  })
+                : applySetupInput({
+                    plugin,
+                    cfg: currentCfg,
+                    accountId,
+                    input: {
+                      [credential.inputKey]: value,
+                      useEnv: false,
+                    },
+                  }).cfg;
+            },
+          });
+
+          next = credentialResult.cfg;
+          credentialState = credential.inspect({ cfg: next, accountId });
+          resolvedCredentialValue =
+            trimResolvedValue(credentialResult.resolvedValue) ||
+            trimResolvedValue(credentialState.resolvedValue);
+          if (resolvedCredentialValue) {
+            credentialValues[credential.inputKey] = resolvedCredentialValue;
+          } else {
+            delete credentialValues[credential.inputKey];
+          }
+        }
+      }
+
+      if (wizard.groupAccess) {
+        const access = wizard.groupAccess;
+        if (access.helpLines && access.helpLines.length > 0) {
+          await prompter.note(access.helpLines.join("\n"), access.helpTitle ?? access.label);
+        }
+        next = await configureChannelAccessWithAllowlist({
+          cfg: next,
+          prompter,
+          label: access.label,
+          currentPolicy: access.currentPolicy({ cfg: next, accountId }),
+          currentEntries: access.currentEntries({ cfg: next, accountId }),
+          placeholder: access.placeholder,
+          updatePrompt: access.updatePrompt({ cfg: next, accountId }),
+          setPolicy: (currentCfg, policy) =>
+            access.setPolicy({
+              cfg: currentCfg,
+              accountId,
+              policy,
+            }),
+          resolveAllowlist: async ({ cfg: currentCfg, entries }) =>
+            await access.resolveAllowlist({
+              cfg: currentCfg,
+              accountId,
+              credentialValues,
+              entries,
+              prompter,
+            }),
+          applyAllowlist: ({ cfg: currentCfg, resolved }) =>
+            access.applyAllowlist({
+              cfg: currentCfg,
+              accountId,
+              resolved,
+            }),
+        });
+      }
 
       if (forceAllowFrom && wizard.allowFrom) {
         const allowFrom = wizard.allowFrom;
+        const allowFromCredentialValue = trimResolvedValue(
+          credentialValues[allowFrom.credentialInputKey ?? wizard.credentials[0]?.inputKey],
+        );
         if (allowFrom.helpLines && allowFrom.helpLines.length > 0) {
           await prompter.note(
             allowFrom.helpLines.join("\n"),
@@ -252,7 +438,7 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
         const unique = await promptResolvedAllowFrom({
           prompter,
           existing: existingAllowFrom,
-          token: resolvedCredentialValue,
+          token: allowFromCredentialValue,
           message: allowFrom.message,
           placeholder: allowFrom.placeholder,
           label: allowFrom.helpTitle ?? `${plugin.meta.label} allowlist`,
@@ -263,7 +449,7 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
             allowFrom.resolveEntries({
               cfg: next,
               accountId,
-              credentialValue: resolvedCredentialValue,
+              credentialValues,
               entries,
             }),
         });
