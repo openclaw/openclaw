@@ -104,6 +104,10 @@
       "destination": "/providers/opencode"
     },
     {
+      "source": "/opencode-go",
+      "destination": "/providers/opencode-go"
+    },
+    {
       "source": "/qianfan",
       "destination": "/providers/qianfan"
     },
@@ -872,6 +876,7 @@
                 "group": "Hosting and deployment",
                 "pages": [
                   "vps",
+                  "install/kubernetes",
                   "install/fly",
                   "install/hetzner",
                   "install/gcp",
@@ -1004,7 +1009,8 @@
                   "tools/loop-detection",
                   "tools/reactions",
                   "tools/thinking",
-                  "tools/web"
+                  "tools/web",
+                  "tools/btw"
                 ]
               },
               {
@@ -1013,8 +1019,7 @@
                   "tools/browser",
                   "tools/browser-login",
                   "tools/chrome-extension",
-                  "tools/browser-linux-troubleshooting",
-                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                  "tools/browser-linux-troubleshooting"
                 ]
               },
               {
@@ -1112,6 +1117,7 @@
                   "providers/nvidia",
                   "providers/ollama",
                   "providers/openai",
+                  "providers/opencode-go",
                   "providers/opencode",
                   "providers/openrouter",
                   "providers/qianfan",
@@ -1236,7 +1242,6 @@
                 "group": "Security",
                 "pages": [
                   "security/formal-verification",
-                  "security/README",
                   "security/THREAT-MODEL-ATLAS",
                   "security/CONTRIBUTING-THREAT-MODEL"
                 ]
@@ -1592,7 +1597,6 @@
                   "zh-CN/tools/apply-patch",
                   "zh-CN/brave-search",
                   "zh-CN/perplexity",
-                  "zh-CN/tools/diffs",
                   "zh-CN/tools/elevated",
                   "zh-CN/tools/exec",
                   "zh-CN/tools/exec-approvals",

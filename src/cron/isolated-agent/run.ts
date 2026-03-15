@@ -12,6 +12,8 @@ import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveNestedAgentLane } from "../../agents/lanes.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
@@ -78,11 +80,10 @@ export type RunCronAgentTurnResult = {
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;
   /**
-   * `true` when the isolated run already delivered its output to the target
-   * channel (via outbound payloads, the subagent announce flow, or a matching
-   * messaging-tool send). Callers should skip posting a summary to the main
-   * session to avoid duplicate
-   * messages.  See: https://github.com/openclaw/openclaw/issues/15692
+   * `true` when the isolated runner already handled the run's user-visible
+   * delivery outcome. Cron-owned callers use this for cron delivery or
+   * explicit suppression; shared callers may also use it for a matching
+   * message-tool send that already reached the target.
    */
   delivered?: boolean;
   /**
@@ -144,16 +145,22 @@ function buildCronAgentDefaultsConfig(params: {
 
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarget>>;
 
+type IsolatedDeliveryContract = "cron-owned" | "shared";
+
 function resolveCronToolPolicy(params: {
   deliveryRequested: boolean;
   resolvedDelivery: ResolvedCronDeliveryTarget;
+  deliveryContract: IsolatedDeliveryContract;
 }) {
   return {
     // Only enforce an explicit message target when the cron delivery target
     // was successfully resolved. When resolution fails the agent should not
     // be blocked by a target it cannot satisfy (#27898).
     requireExplicitMessageTarget: params.deliveryRequested && params.resolvedDelivery.ok,
-    disableMessageTool: params.deliveryRequested,
+    // Cron-owned runs always route user-facing delivery through the runner
+    // itself. Shared callers keep the previous behavior so non-cron paths do
+    // not silently lose the message tool when no explicit delivery is active.
+    disableMessageTool: params.deliveryContract === "cron-owned" ? true : params.deliveryRequested,
   };
 }
 
@@ -161,6 +168,7 @@ async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
+  deliveryContract: IsolatedDeliveryContract;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
@@ -176,6 +184,7 @@ async function resolveCronDeliveryContext(params: {
     toolPolicy: resolveCronToolPolicy({
       deliveryRequested: deliveryPlan.requested,
       resolvedDelivery,
+      deliveryContract: params.deliveryContract,
     }),
   };
 }
@@ -200,6 +209,7 @@ export async function runCronIsolatedAgentTurn(params: {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  deliveryContract?: IsolatedDeliveryContract;
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
@@ -210,6 +220,7 @@ export async function runCronIsolatedAgentTurn(params: {
       : "cron: job execution timed out";
   };
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
+  const deliveryContract = params.deliveryContract ?? "cron-owned";
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const requestedAgentId =
     typeof params.agentId === "string" && params.agentId.trim()
@@ -425,6 +436,7 @@ export async function runCronIsolatedAgentTurn(params: {
     cfg: cfgWithAgentDefaults,
     job: params.job,
     agentId,
+    deliveryContract,
   });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
@@ -543,6 +555,7 @@ export async function runCronIsolatedAgentTurn(params: {
         cfg: cfgWithAgentDefaults,
         provider,
         model,
+        runId: cronSession.sessionEntry.sessionId,
         agentDir,
         fallbacksOverride:
           payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
@@ -599,12 +612,18 @@ export async function runCronIsolatedAgentTurn(params: {
             config: cfgWithAgentDefaults,
             skillsSnapshot,
             prompt: promptText,
-            lane: params.lane ?? "cron",
+            lane: resolveNestedAgentLane(params.lane),
             provider: providerOverride,
             model: modelOverride,
             authProfileId,
             authProfileIdSource,
             thinkLevel,
+            fastMode: resolveFastModeState({
+              cfg: cfgWithAgentDefaults,
+              provider: providerOverride,
+              model: modelOverride,
+              sessionEntry: cronSession.sessionEntry,
+            }).enabled,
             verboseLevel: resolvedVerboseLevel,
             timeoutMs,
             bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
@@ -807,6 +826,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
   const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
   const skipMessagingToolDelivery =
+    deliveryContract === "shared" &&
     deliveryRequested &&
     finalRunResult.didSendViaMessagingTool === true &&
     (finalRunResult.messagingToolSentTargets ?? []).some((target) =>
@@ -816,7 +836,6 @@ export async function runCronIsolatedAgentTurn(params: {
         accountId: resolvedDelivery.accountId,
       }),
     );
-
   const deliveryResult = await dispatchCronDelivery({
     cfg: params.cfg,
     cfgWithAgentDefaults,

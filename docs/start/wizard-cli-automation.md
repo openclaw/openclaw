@@ -123,12 +123,24 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen example">
+  <Accordion title="OpenCode example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
       --auth-choice opencode-zen \
       --opencode-zen-api-key "$OPENCODE_API_KEY" \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+    Swap to `--auth-choice opencode-go --opencode-go-api-key "$OPENCODE_API_KEY"` for the Go catalog.
+  </Accordion>
+  <Accordion title="Ollama example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice ollama \
+      --custom-model-id "qwen3.5:27b" \
+      --accept-risk \
       --gateway-port 18789 \
       --gateway-bind loopback
     ```

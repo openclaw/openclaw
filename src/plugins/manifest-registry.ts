@@ -4,7 +4,8 @@ import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
-import { safeRealpathSync } from "./path-safety.js";
+import { isPathInside, safeRealpathSync } from "./path-safety.js";
+import { resolvePluginCacheInputs } from "./roots.js";
 import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 
 type SeenIdEntry = {
@@ -12,7 +13,7 @@ type SeenIdEntry = {
   recordIndex: number;
 };
 
-// Precedence: config > workspace > global > bundled
+// Precedence: config > workspace > explicit-install global > bundled > auto-discovered global
 const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
   workspace: 1,
@@ -79,16 +80,19 @@ function shouldUseManifestCache(env: NodeJS.ProcessEnv): boolean {
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
+  env: NodeJS.ProcessEnv;
 }): string {
-  const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
+  const { roots, loadPaths } = resolvePluginCacheInputs({
+    workspaceDir: params.workspaceDir,
+    loadPaths: params.plugins.loadPaths,
+    env: params.env,
+  });
+  const workspaceKey = roots.workspace ?? "";
+  const configExtensionsRoot = roots.global;
+  const bundledRoot = roots.stock ?? "";
   // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
   // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
-  const loadPaths = params.plugins.loadPaths
-    .map((p) => resolveUserPath(p))
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .toSorted();
-  return `${workspaceKey}::${JSON.stringify(loadPaths)}`;
+  return `${workspaceKey}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(loadPaths)}`;
 }
 
 function safeStatMtimeMs(filePath: string): number | null {
@@ -132,6 +136,50 @@ function buildRecord(params: {
   };
 }
 
+function matchesInstalledPluginRecord(params: {
+  pluginId: string;
+  candidate: PluginCandidate;
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  if (params.candidate.origin !== "global") {
+    return false;
+  }
+  const record = params.config?.plugins?.installs?.[params.pluginId];
+  if (!record) {
+    return false;
+  }
+  const candidateSource = resolveUserPath(params.candidate.source, params.env);
+  const trackedPaths = [record.installPath, record.sourcePath]
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .map((entry) => resolveUserPath(entry, params.env));
+  if (trackedPaths.length === 0) {
+    return false;
+  }
+  return trackedPaths.some((trackedPath) => {
+    return candidateSource === trackedPath || isPathInside(trackedPath, candidateSource);
+  });
+}
+
+function resolveDuplicatePrecedenceRank(params: {
+  pluginId: string;
+  candidate: PluginCandidate;
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): number {
+  if (params.candidate.origin === "global") {
+    return matchesInstalledPluginRecord({
+      pluginId: params.pluginId,
+      candidate: params.candidate,
+      config: params.config,
+      env: params.env,
+    })
+      ? 2
+      : 4;
+  }
+  return PLUGIN_ORIGIN_RANK[params.candidate.origin];
+}
+
 export function loadPluginManifestRegistry(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -142,8 +190,8 @@ export function loadPluginManifestRegistry(params: {
 }): PluginManifestRegistry {
   const config = params.config ?? {};
   const normalized = normalizePluginsConfig(config.plugins);
-  const cacheKey = buildCacheKey({ workspaceDir: params.workspaceDir, plugins: normalized });
   const env = params.env ?? process.env;
+  const cacheKey = buildCacheKey({ workspaceDir: params.workspaceDir, plugins: normalized, env });
   const cacheEnabled = params.cache !== false && shouldUseManifestCache(env);
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
@@ -160,6 +208,7 @@ export function loadPluginManifestRegistry(params: {
     : discoverOpenClawPlugins({
         workspaceDir: params.workspaceDir,
         extraPaths: normalized.loadPaths,
+        env,
       });
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
@@ -233,7 +282,21 @@ export function loadPluginManifestRegistry(params: {
         level: "warn",
         pluginId: manifest.id,
         source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        message:
+          resolveDuplicatePrecedenceRank({
+            pluginId: manifest.id,
+            candidate,
+            config,
+            env,
+          }) <
+          resolveDuplicatePrecedenceRank({
+            pluginId: manifest.id,
+            candidate: existing.candidate,
+            config,
+            env,
+          })
+            ? `duplicate plugin id detected; ${existing.candidate.origin} plugin will be overridden by ${candidate.origin} plugin (${candidate.source})`
+            : `duplicate plugin id detected; ${candidate.origin} plugin will be overridden by ${existing.candidate.origin} plugin (${candidate.source})`,
       });
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
