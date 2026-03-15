@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { ImageContent } from "../commands/agent/types.js";
@@ -393,8 +394,13 @@ function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
   return val as OpenAiChatCompletionRequest;
 }
 
+type AgentCommandResult = {
+  payloads?: Array<{ text?: string }>;
+  meta?: { agentMeta?: { usage?: Record<string, unknown> } };
+};
+
 function resolveAgentResponseText(result: unknown): string {
-  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+  const payloads = (result as AgentCommandResult | null)?.payloads;
   if (!Array.isArray(payloads) || payloads.length === 0) {
     return "No response from OpenClaw.";
   }
@@ -403,6 +409,23 @@ function resolveAgentResponseText(result: unknown): string {
     .filter(Boolean)
     .join("\n\n");
   return content || "No response from OpenClaw.";
+}
+
+function resolveAgentUsage(result: unknown): {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+} {
+  const meta = (result as AgentCommandResult | null)?.meta;
+  const rawUsage = meta?.agentMeta?.usage;
+  const usage = normalizeUsage(rawUsage);
+  const promptTokens = usage?.input ?? 0;
+  const completionTokens = usage?.output ?? 0;
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: promptTokens + completionTokens,
+  };
 }
 
 export async function handleOpenAiHttpRequest(
@@ -496,7 +519,7 @@ export async function handleOpenAiHttpRequest(
             finish_reason: "stop",
           },
         ],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        usage: resolveAgentUsage(result),
       });
     } catch (err) {
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);

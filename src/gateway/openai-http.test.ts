@@ -636,6 +636,49 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     );
   });
 
+  it("returns actual token usage from agent result", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 100, output: 25, cacheRead: 500, total: 625 },
+        },
+      },
+    } as never);
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    };
+    expect(body.usage.prompt_tokens).toBe(100);
+    expect(body.usage.completion_tokens).toBe(25);
+    expect(body.usage.total_tokens).toBe(125);
+  });
+
+  it("returns zero usage when agent result has no usage metadata", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+    } as never);
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    };
+    expect(body.usage.prompt_tokens).toBe(0);
+    expect(body.usage.completion_tokens).toBe(0);
+    expect(body.usage.total_tokens).toBe(0);
+  });
+
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
     try {
