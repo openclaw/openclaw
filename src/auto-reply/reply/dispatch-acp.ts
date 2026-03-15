@@ -338,24 +338,27 @@ export async function tryDispatchAcpReply(params: {
             ttsAuto: params.sessionTtsAuto,
           });
           if (ttsSyntheticReply.mediaUrl) {
-            // Use dispatcher directly to avoid re-entering delivery.deliver
-            // which would call maybeApplyTtsToPayload again.
-            const delivered = params.dispatcher.sendFinalReply({
+            // Use delivery.deliver to ensure proper routing in cross-provider ACP turns.
+            // Pass audioAsVoice to avoid re-entering TTS synthesis.
+            const delivered = await delivery.deliver("final", {
               mediaUrl: ttsSyntheticReply.mediaUrl,
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
             });
             queuedFinal = queuedFinal || delivered;
-            return; // TTS succeeded, no need for text fallback
+            // TTS succeeded, skip text fallback but continue with remaining success-path logic
+          } else {
+            // TTS produced no media, fall through to text fallback
           }
         } catch (err) {
           logVerbose(
             `dispatch-acp: accumulated ACP block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
           );
+          // TTS failed, fall through to text fallback
         }
       }
       // Fallback to text-only delivery (no TTS).
-      // Use dispatcher directly to avoid double TTS synthesis.
-      const delivered = params.dispatcher.sendFinalReply({ text: accumulatedBlockText });
+      // Use delivery.deliver to ensure proper routing in cross-provider ACP turns.
+      const delivered = await delivery.deliver("final", { text: accumulatedBlockText });
       queuedFinal = queuedFinal || delivered;
     }
 
