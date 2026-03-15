@@ -30,7 +30,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { buildNamedDmSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   AVATAR_MAX_BYTES,
   isAvatarDataUrl,
@@ -841,6 +841,54 @@ export function resolveSessionModelIdentityRef(
   }
   const resolved = resolveSessionModelRef(cfg, entry, agentId);
   return { provider: resolved.provider, model: resolved.model };
+}
+
+/**
+ * Get the active named session key for a DM peer, if one is set.
+ * Returns the full named session key if active, or null otherwise.
+ */
+export function getActiveNamedSessionKey(params: {
+  mainEntry: SessionEntry | undefined;
+  agentId: string;
+  peerId: string;
+}): string | null {
+  if (!params.mainEntry || !params.mainEntry.activeNamedSession) {
+    return null;
+  }
+  const name = params.mainEntry.activeNamedSession.trim();
+  if (!name) {
+    return null;
+  }
+  return buildNamedDmSessionKey({
+    agentId: params.agentId,
+    peerId: params.peerId,
+    name,
+  });
+}
+
+/**
+ * Set or clear the active named session for a DM peer on the main session entry.
+ * If name is null/empty, clears the active named session (returns to main).
+ * Returns true if the update was applied.
+ */
+export function setActiveNamedSession(params: {
+  mainEntry: SessionEntry;
+  name: string | null | undefined;
+}): boolean {
+  const trimmed = params.name?.trim();
+  if (!trimmed) {
+    if (params.mainEntry.activeNamedSession !== undefined) {
+      delete params.mainEntry.activeNamedSession;
+      return true;
+    }
+    return false;
+  }
+  const normalized = trimmed.toLowerCase();
+  if (params.mainEntry.activeNamedSession !== normalized) {
+    params.mainEntry.activeNamedSession = normalized;
+    return true;
+  }
+  return false;
 }
 
 export function listSessionsFromStore(params: {
