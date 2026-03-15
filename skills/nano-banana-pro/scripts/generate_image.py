@@ -189,6 +189,13 @@ def main():
 
         # Process response and convert to PNG
         image_saved = False
+        if not response.parts:
+            if hasattr(response, 'text') and response.text:
+                print(f"Model response: {response.text}", file=sys.stderr)
+            if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
+                print(f"Prompt feedback: {response.prompt_feedback}", file=sys.stderr)
+            print("Error: No image was generated. The model returned no content.", file=sys.stderr)
+            sys.exit(1)
         for part in response.parts:
             if part.text is not None:
                 print(f"Model response: {part.text}")
