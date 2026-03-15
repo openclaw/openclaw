@@ -201,7 +201,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (thinking) parts.push(formatReasoningPrefix(thinking));
     if (thinking && answer) parts.push("\n\n---\n\n");
     if (answer) parts.push(answer);
-    if (statusLine && !answer) parts.push(statusLine);
+    if (statusLine && !answer) parts.push(thinking ? `\n\n${statusLine}` : statusLine);
     else if (statusLine) parts.push(`\n\n${statusLine}`);
     return parts.join("");
   };
@@ -512,6 +512,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onAssistantMessageStart: streamingEnabled
         ? () => {
             statusLine = "";
+            flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
           }
         : undefined,
       onCompactionStart: streamingEnabled

@@ -728,24 +728,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       chatId: "oc_chat",
     });
 
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: { renderMode: "auto", streaming: false },
-    });
-    const result2 = createFeishuReplyDispatcher({
-      cfg: {} as never,
-      agentId: "agent",
-      runtime: {} as never,
-      chatId: "oc_chat",
-    });
-
-    expect(result2.replyOptions.onToolStart).toBeUndefined();
-    expect(result2.replyOptions.onAssistantMessageStart).toBeUndefined();
-    expect(result2.replyOptions.onCompactionStart).toBeUndefined();
-    expect(result2.replyOptions.onCompactionEnd).toBeUndefined();
+    expect(result.replyOptions.onToolStart).toBeUndefined();
+    expect(result.replyOptions.onAssistantMessageStart).toBeUndefined();
+    expect(result.replyOptions.onCompactionStart).toBeUndefined();
+    expect(result.replyOptions.onCompactionEnd).toBeUndefined();
   });
 
   it("onToolStart shows tool name in streaming card", async () => {
@@ -774,6 +760,25 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const lastUpdateCall = session.update.mock.calls.at(-1)?.[0] as string;
     expect(lastUpdateCall).toContain("🔧");
     expect(lastUpdateCall).toContain("web_search");
+  });
+
+  it("separates reasoning blockquote from status line with blank line", async () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_analyzing_" });
+    await vi.waitFor(() => expect(streamingInstances.length).toBeGreaterThan(0));
+
+    result.replyOptions.onToolStart?.({ name: "web_search" });
+    const session = streamingInstances[0];
+    await vi.waitFor(() => expect(session.update.mock.calls.length).toBeGreaterThan(1));
+    const combined = session.update.mock.calls.at(-1)?.[0] as string;
+    expect(combined).toContain("> analyzing");
+    expect(combined).toMatch(/analyzing\n\n🔧/);
   });
 
   it("onCompactionStart shows compaction status, onCompactionEnd clears it", async () => {
@@ -815,10 +820,19 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const toolUpdate = session.update.mock.calls.at(-1)?.[0] as string;
     expect(toolUpdate).toContain("code_interpreter");
 
+    const updateCountBeforeClear = session.update.mock.calls.length;
     result.replyOptions.onAssistantMessageStart?.();
 
+    await vi.waitFor(() =>
+      expect(session.update.mock.calls.length).toBeGreaterThan(updateCountBeforeClear),
+    );
+    const clearedUpdate = session.update.mock.calls.at(-1)?.[0] as string;
+    expect(clearedUpdate).not.toContain("code_interpreter");
+
     result.replyOptions.onPartialReply?.({ text: "Here is the result" });
-    await vi.waitFor(() => expect(session.update.mock.calls.length).toBeGreaterThan(1));
+    await vi.waitFor(() =>
+      expect(session.update.mock.calls.length).toBeGreaterThan(updateCountBeforeClear + 1),
+    );
     const answerUpdate = session.update.mock.calls.at(-1)?.[0] as string;
     expect(answerUpdate).toContain("Here is the result");
     expect(answerUpdate).not.toContain("code_interpreter");
