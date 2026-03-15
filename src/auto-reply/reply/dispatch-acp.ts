@@ -315,13 +315,13 @@ export async function tryDispatchAcpReply(params: {
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
     const routedCounts = delivery.getRoutedCounts();
-    const blockCount = delivery.getBlockCount();
-    // Skip fallback if blocks were already delivered (normal final_only flow).
-    // This prevents duplicate delivery in the common case where projector
-    // already sent accumulated text as blocks during flush(true) on done.
-    const hasAlreadyDelivered = blockCount > 0 || routedCounts.final > 0;
+    // Only deliver final TTS/text if no final reply has been sent yet.
+    // Check routedCounts.final (not blockCount) because block delivery is expected
+    // during streaming and should not prevent the final fallback.
+    // See analogous guard in dispatch-from-config.ts (replies.length === 0).
+    const hasFinalDelivered = routedCounts.final > 0;
     // Skip fallback for ttsMode="all" because blocks were already processed with TTS.
-    const shouldSkipFallback = hasAlreadyDelivered || ttsMode === "all";
+    const shouldSkipFallback = hasFinalDelivered || ttsMode === "all";
     if (!shouldSkipFallback && accumulatedBlockText.trim()) {
       // Only attempt final TTS synthesis for ttsMode="final".
       // For other modes, skip directly to text fallback to avoid double TTS calls.
