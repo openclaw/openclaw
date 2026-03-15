@@ -82,8 +82,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (hasNonzeroUsage(usage)) {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
+    // Use lastCallUsage for context display when available, so the UI shows
+    // the actual current context size rather than accumulated totals across
+    // all API calls in the run.
+    const lastCallUsage = result.meta.agentMeta?.lastCallUsage;
+    const usageForContext = lastCallUsage ?? usage;
     const totalTokens = deriveSessionTotalTokens({
-      usage,
+      usage: usageForContext,
       contextTokens,
       promptTokens,
     });
@@ -96,8 +101,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
     }
-    next.cacheRead = usage.cacheRead ?? 0;
-    next.cacheWrite = usage.cacheWrite ?? 0;
+    // Cache counters should reflect the latest context snapshot when available
+    next.cacheRead = usageForContext.cacheRead ?? 0;
+    next.cacheWrite = usageForContext.cacheWrite ?? 0;
   }
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
