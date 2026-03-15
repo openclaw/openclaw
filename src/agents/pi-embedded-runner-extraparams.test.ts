@@ -698,7 +698,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.tool_choice).toBe("auto");
   });
 
-  it("disables thinking instead of broadening pinned Moonshot tool_choice", () => {
+  it("falls back to auto tool_choice instead of disabling thinking for pinned Moonshot tool_choice", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -721,8 +721,8 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
-    expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
+    expect(payloads[0]?.thinking).toEqual({ type: "enabled" });
+    expect(payloads[0]?.tool_choice).toBe("auto");
   });
 
   it("respects explicit Moonshot thinking param from model config", () => {
@@ -811,7 +811,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
   });
 
-  it("disables thinking instead of broadening pinned Ollama Kimi cloud tool_choice", () => {
+  it("falls back to auto tool_choice instead of disabling thinking for pinned Ollama Kimi cloud tool_choice", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -834,11 +834,8 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
-    expect(payloads[0]?.tool_choice).toEqual({
-      type: "function",
-      function: { name: "read" },
-    });
+    expect(payloads[0]?.thinking).toEqual({ type: "enabled" });
+    expect(payloads[0]?.tool_choice).toBe("auto");
   });
 
   it("does not rewrite tool schema for kimi-coding (native Anthropic format)", () => {
