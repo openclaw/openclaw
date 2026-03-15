@@ -240,14 +240,11 @@ describe("loginGeminiCliOAuth", () => {
     "GOOGLE_CLOUD_PROJECT_ID",
   ] as const;
 
-  function getExpectedPlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
-    if (process.platform === "win32") {
-      return "WINDOWS";
-    }
+  function getExpectedPlatform(): "MACOS" | "PLATFORM_UNSPECIFIED" {
     if (process.platform === "darwin") {
       return "MACOS";
     }
-    // Matches updated resolvePlatform() which uses PLATFORM_UNSPECIFIED for Linux
+    // Matches resolvePlatform() which uses PLATFORM_UNSPECIFIED for all non-macOS
     return "PLATFORM_UNSPECIFIED";
   }
 

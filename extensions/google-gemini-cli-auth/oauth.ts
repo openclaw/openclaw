@@ -81,7 +81,6 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     const resolvedPath = realpathSync(geminiPath);
     const geminiCliDirs = resolveGeminiCliDirs(geminiPath, resolvedPath);
 
-    let content: string | null = null;
     for (const geminiCliDir of geminiCliDirs) {
       const searchPaths = [
         join(
@@ -105,30 +104,33 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
         ),
       ];
 
+      let content: string | null = null;
       for (const p of searchPaths) {
         if (existsSync(p)) {
           content = readFileSync(p, "utf8");
           break;
         }
       }
-      if (content) {
-        break;
+      if (!content) {
+        const found = findFile(geminiCliDir, "oauth2.js", 10);
+        if (found) {
+          content = readFileSync(found, "utf8");
+        }
       }
-      const found = findFile(geminiCliDir, "oauth2.js", 10);
-      if (found) {
-        content = readFileSync(found, "utf8");
-        break;
+      if (!content) {
+        continue;
       }
-    }
-    if (!content) {
-      return null;
-    }
 
-    const idMatch = content.match(/(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/);
-    const secretMatch = content.match(/(GOCSPX-[A-Za-z0-9_-]+)/);
-    if (idMatch && secretMatch) {
-      cachedGeminiCliCredentials = { clientId: idMatch[1], clientSecret: secretMatch[1] };
-      return cachedGeminiCliCredentials;
+      // Validate that this oauth2.js actually contains Google OAuth credentials.
+      // The `findFile` fallback searches broadly (depth 10) and may pick up an
+      // unrelated oauth2.js (e.g. discord-api-types) when the candidate dir
+      // happens to be a large ancestor directory like the nvm root.
+      const idMatch = content.match(/(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/);
+      const secretMatch = content.match(/(GOCSPX-[A-Za-z0-9_-]+)/);
+      if (idMatch && secretMatch) {
+        cachedGeminiCliCredentials = { clientId: idMatch[1], clientSecret: secretMatch[1] };
+        return cachedGeminiCliCredentials;
+      }
     }
   } catch {
     // Gemini CLI not installed or extraction failed
@@ -224,15 +226,13 @@ function generatePkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-function resolvePlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
-  if (process.platform === "win32") {
-    return "WINDOWS";
-  }
+function resolvePlatform(): "MACOS" | "PLATFORM_UNSPECIFIED" {
   if (process.platform === "darwin") {
     return "MACOS";
   }
-  // Google's loadCodeAssist API rejects "LINUX" as an invalid Platform enum value.
-  // Use "PLATFORM_UNSPECIFIED" for Linux and other platforms to match the pi-ai runtime.
+  // Google's loadCodeAssist API rejects both "LINUX" and "WINDOWS" as invalid
+  // Platform enum values (returns 400 INVALID_ARGUMENT).
+  // Use "PLATFORM_UNSPECIFIED" for all non-macOS platforms.
   return "PLATFORM_UNSPECIFIED";
 }
 
