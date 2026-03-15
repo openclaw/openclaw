@@ -324,13 +324,7 @@ export async function runCronIsolatedAgentTurn(params: {
       defaultModel: resolvedDefault.model,
     });
     if ("error" in resolvedOverride) {
-      if (resolvedOverride.error.startsWith("model not allowed:")) {
-        logWarn(
-          `cron: payload.model '${modelOverride}' not allowed, falling back to agent defaults`,
-        );
-      } else {
-        return { status: "error", error: resolvedOverride.error };
-      }
+      return { status: "error", error: resolvedOverride.error };
     } else {
       provider = resolvedOverride.ref.provider;
       model = resolvedOverride.ref.model;
