@@ -92,7 +92,8 @@ function requirePreparedRunPayload(payload: unknown) {
 }
 
 function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | undefined) {
-  const configuredSecurity = normalizeExecSecurity(execDefaults?.security) ?? "allowlist";
+  const configuredSecurity =
+    normalizeExecSecurity(execDefaults?.security) ?? loadExecApprovals().defaults?.security ?? "allowlist";
   const requestedSecurity = normalizeExecSecurity(opts.security);
   if (opts.security && !requestedSecurity) {
     throw new Error("invalid --security (use deny|allowlist|full)");
@@ -180,7 +181,7 @@ async function resolveNodeApprovals(params: {
   return {
     approvals,
     hostSecurity: minSecurity(params.security, approvals.agent.security),
-    hostAsk: maxAsk(params.ask, approvals.agent.ask),
+    hostAsk: approvals.agent.ask === "off" ? "off" : maxAsk(params.ask, approvals.agent.ask),
     askFallback: approvals.agent.askFallback,
   };
 }

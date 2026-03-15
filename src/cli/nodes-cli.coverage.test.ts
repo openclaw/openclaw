@@ -261,6 +261,68 @@ describe("nodes-cli coverage", () => {
     expect(getApprovalRequestCall()).toBeNull();
   });
 
+  it("inherits security=full from local exec approvals when tools.exec.security is unset", async () => {
+    localExecApprovalsFile = {
+      version: 1,
+      defaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+      },
+      agents: {},
+    };
+    nodeExecApprovalsFile = {
+      version: 1,
+      defaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+      },
+      agents: {},
+    };
+
+    const invoke = await runNodesCommand(["nodes", "run", "--node", "mac-1", "echo", "hi"]);
+
+    expect(invoke).toBeTruthy();
+    expect(invoke?.params?.command).toBe("system.run");
+    expect(invoke?.params?.params).toMatchObject({
+      command: ["echo", "hi"],
+      approved: false,
+    });
+    expect(getApprovalRequestCall()).toBeNull();
+  });
+
+  it("respects remote ask=off when node exec approvals override a stricter local ask", async () => {
+    localExecApprovalsFile = {
+      version: 1,
+      defaults: {
+        security: "full",
+        ask: "on-miss",
+        askFallback: "deny",
+      },
+      agents: {},
+    };
+    nodeExecApprovalsFile = {
+      version: 1,
+      defaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+      },
+      agents: {},
+    };
+
+    const invoke = await runNodesCommand(["nodes", "run", "--node", "mac-1", "echo", "hi"]);
+
+    expect(invoke).toBeTruthy();
+    expect(invoke?.params?.command).toBe("system.run");
+    expect(invoke?.params?.params).toMatchObject({
+      command: ["echo", "hi"],
+      approved: false,
+    });
+    expect(getApprovalRequestCall()).toBeNull();
+  });
+
   it("invokes system.notify with provided fields", async () => {
     const invoke = await runNodesCommand([
       "nodes",
