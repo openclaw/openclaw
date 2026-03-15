@@ -382,17 +382,20 @@ export async function fetchFirecrawlContent(params: {
     storeInCache: params.storeInCache,
   };
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${params.apiKey}`,
-      "Content-Type": "application/json",
+  const { response: res, release } = await fetchWithWebToolsNetworkGuard({
+    url: endpoint,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+    timeoutSeconds: params.timeoutSeconds,
   });
 
-  const payload = (await res.json()) as {
+  let payload: {
     success?: boolean;
     data?: {
       markdown?: string;
@@ -406,6 +409,11 @@ export async function fetchFirecrawlContent(params: {
     warning?: string;
     error?: string;
   };
+  try {
+    payload = (await res.json()) as typeof payload;
+  } finally {
+    await release();
+  }
 
   if (!res.ok || payload?.success === false) {
     const detail = payload?.error ?? "";
