@@ -278,6 +278,78 @@ describe("web auto-reply connection", () => {
     }
   });
 
+  it("does not reconnect solely because the inbox stays quiet by default", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const closeResolvers: Array<(reason: unknown) => void> = [];
+      let capturedOnMessage:
+        | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+        | undefined;
+      const listenerFactory = vi.fn(
+        async (opts: {
+          onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
+        }) => {
+          capturedOnMessage = opts.onMessage;
+          let resolveClose: (reason: unknown) => void = () => {};
+          const onClose = new Promise<unknown>((res) => {
+            resolveClose = res;
+            closeResolvers.push(res);
+          });
+          return {
+            close: vi.fn(),
+            onClose,
+            signalClose: (reason?: unknown) => resolveClose(reason),
+          };
+        },
+      );
+      const { controller, run } = startMonitorWebChannel({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory,
+        sleep,
+        heartbeatSeconds: 60,
+        watchdogCheckMs: 5,
+      });
+
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+      await vi.waitFor(
+        () => {
+          expect(capturedOnMessage).toBeTypeOf("function");
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      const reply = vi.fn().mockResolvedValue(undefined);
+      const sendComposing = vi.fn();
+      const sendMedia = vi.fn();
+
+      await capturedOnMessage?.(
+        makeInboundMessage({
+          body: "hi",
+          from: "+1",
+          to: "+2",
+          id: "m1",
+          sendComposing,
+          reply,
+          sendMedia,
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+
+      controller.abort();
+      closeResolvers[0]?.({ status: 499, isLoggedOut: false });
+      await Promise.resolve();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("processes inbound messages without batching and preserves timestamps", async () => {
     await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
       const originalMax = process.getMaxListeners();
