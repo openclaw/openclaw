@@ -50,6 +50,10 @@ describe("watch-node script", () => {
     expect(watchOptions.ignored("src/infra/watch-node.test.ts")).toBe(true);
     expect(watchOptions.ignored("src/infra/watch-node.test.tsx")).toBe(true);
     expect(watchOptions.ignored("src/infra/watch-node-test-helpers.ts")).toBe(true);
+    expect(watchOptions.ignored("extensions/voice-call/README.md")).toBe(true);
+    expect(watchOptions.ignored("extensions/voice-call/openclaw.plugin.json")).toBe(true);
+    expect(watchOptions.ignored("extensions/voice-call/index.ts")).toBe(false);
+    expect(watchOptions.ignored("extensions/voice-call/src/runtime.ts")).toBe(false);
     expect(watchOptions.ignored("src/infra/watch-node.ts")).toBe(false);
     expect(watchOptions.ignored("tsconfig.json")).toBe(false);
 
@@ -149,6 +153,11 @@ describe("watch-node script", () => {
     expect(childA.kill).not.toHaveBeenCalled();
 
     watcher.emit("change", "src/infra/watch-node-test-helpers.ts");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(childA.kill).not.toHaveBeenCalled();
+
+    watcher.emit("change", "extensions/voice-call/README.md");
     await new Promise((resolve) => setImmediate(resolve));
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(childA.kill).not.toHaveBeenCalled();

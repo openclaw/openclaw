@@ -40,11 +40,14 @@ pnpm gateway:watch
 This maps to:
 
 ```bash
-node --watch-path src --watch-path extensions --watch-path tsconfig.json --watch-path package.json --watch-path tsdown.config.ts --watch-preserve-output scripts/run-node.mjs gateway --force
+node scripts/watch-node.mjs gateway --force
 ```
 
-Add any gateway CLI flags after `gateway:watch` and they will be passed through
-on each restart.
+The watcher restarts on build-relevant files under `src/`, extension source files,
+`tsconfig.json`, `package.json`, and `tsdown.config.ts`.
+
+Add any gateway CLI flags after `gateway:watch` and they will be passed through on
+each restart.
 
 ## Dev profile + dev gateway (--dev)
 

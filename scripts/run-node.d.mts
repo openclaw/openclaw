@@ -1,4 +1,5 @@
 export const runNodeWatchedPaths: string[];
+export function isBuildRelevantRunNodePath(repoPath: string): boolean;
 
 export function runNodeMain(params?: {
   spawn?: (

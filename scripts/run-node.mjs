@@ -11,6 +11,37 @@ const compilerArgs = ["exec", compiler, "--no-clean"];
 const runNodeSourceRoots = ["src", "extensions"];
 const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
+const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
+
+const normalizePath = (filePath) => String(filePath ?? "").replaceAll("\\", "/");
+
+const isIgnoredSourcePath = (relativePath) => {
+  const normalizedPath = normalizePath(relativePath);
+  return (
+    normalizedPath.endsWith(".test.ts") ||
+    normalizedPath.endsWith(".test.tsx") ||
+    normalizedPath.endsWith("test-helpers.ts")
+  );
+};
+
+const isBuildRelevantExtensionPath = (relativePath) => {
+  const normalizedPath = normalizePath(relativePath);
+  return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
+};
+
+export const isBuildRelevantRunNodePath = (repoPath) => {
+  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
+  if (runNodeConfigFiles.includes(normalizedPath)) {
+    return true;
+  }
+  if (normalizedPath.startsWith("src/")) {
+    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
+  }
+  if (normalizedPath.startsWith("extensions/")) {
+    return isBuildRelevantExtensionPath(normalizedPath.slice("extensions/".length));
+  }
+  return false;
+};
 
 const statMtime = (filePath, fsImpl = fs) => {
   try {
@@ -20,16 +51,12 @@ const statMtime = (filePath, fsImpl = fs) => {
   }
 };
 
-const isExcludedSource = (filePath, srcRoot) => {
-  const relativePath = path.relative(srcRoot, filePath);
+const isExcludedSource = (filePath, sourceRoot, sourceRootName) => {
+  const relativePath = normalizePath(path.relative(sourceRoot, filePath));
   if (relativePath.startsWith("..")) {
     return false;
   }
-  return (
-    relativePath.endsWith(".test.ts") ||
-    relativePath.endsWith(".test.tsx") ||
-    relativePath.endsWith(`test-helpers.ts`)
-  );
+  return !isBuildRelevantRunNodePath(path.posix.join(sourceRootName, relativePath));
 };
 
 const findLatestMtime = (dirPath, shouldSkip, deps) => {
@@ -91,6 +118,13 @@ const resolveGitHead = (deps) => {
   return head || null;
 };
 
+const parseGitStatusPaths = (output) =>
+  output
+    .split("\n")
+    .flatMap((line) => line.slice(3).split(" -> "))
+    .map((entry) => normalizePath(entry.trim()))
+    .filter(Boolean);
+
 const hasDirtySourceTree = (deps) => {
   const output = runGit(
     ["status", "--porcelain", "--untracked-files=normal", "--", ...runNodeWatchedPaths],
@@ -99,7 +133,7 @@ const hasDirtySourceTree = (deps) => {
   if (output === null) {
     return null;
   }
-  return output.length > 0;
+  return parseGitStatusPaths(output).some((repoPath) => isBuildRelevantRunNodePath(repoPath));
 };
 
 const readBuildStamp = (deps) => {
@@ -124,8 +158,8 @@ const hasSourceMtimeChanged = (stampMtime, deps) => {
   let latestSourceMtime = null;
   for (const sourceRoot of deps.sourceRoots) {
     const sourceMtime = findLatestMtime(
-      sourceRoot,
-      (candidate) => isExcludedSource(candidate, sourceRoot),
+      sourceRoot.path,
+      (candidate) => isExcludedSource(candidate, sourceRoot.path, sourceRoot.name),
       deps,
     );
     if (sourceMtime != null && (latestSourceMtime == null || sourceMtime > latestSourceMtime)) {
@@ -231,7 +265,10 @@ export async function runNodeMain(params = {}) {
   deps.distRoot = path.join(deps.cwd, "dist");
   deps.distEntry = path.join(deps.distRoot, "/entry.js");
   deps.buildStampPath = path.join(deps.distRoot, ".buildstamp");
-  deps.sourceRoots = runNodeSourceRoots.map((sourceRoot) => path.join(deps.cwd, sourceRoot));
+  deps.sourceRoots = runNodeSourceRoots.map((sourceRoot) => ({
+    name: sourceRoot,
+    path: path.join(deps.cwd, sourceRoot),
+  }));
   deps.configFiles = runNodeConfigFiles.map((filePath) => path.join(deps.cwd, filePath));
 
   if (!shouldBuild(deps)) {
