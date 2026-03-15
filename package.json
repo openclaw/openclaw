@@ -457,10 +457,12 @@
       "yauzl": "3.2.1"
     },
     "onlyBuiltDependencies": [
+      "@discordjs/opus",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
       "@tloncorp/api",
+      "@tloncorp/tlon-skill",
       "@whiskeysockets/baileys",
       "authenticate-pam",
       "esbuild",
