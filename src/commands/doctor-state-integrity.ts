@@ -769,18 +769,21 @@ export async function noteStateIntegrity(
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
       .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
       .filter((filePath) => !referencedTranscriptPaths.has(filePath));
-    if (orphanTranscriptPaths.length > 0) {
+    const emptyOrphanTranscriptPaths = orphanTranscriptPaths.filter(
+      (filePath) => countJsonlLines(filePath) === 0,
+    );
+    if (emptyOrphanTranscriptPaths.length > 0) {
       warnings.push(
-        `- Found ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}. They are not referenced by sessions.json and can consume disk over time.`,
+        `- Found ${emptyOrphanTranscriptPaths.length} empty orphan transcript file(s) in ${displaySessionsDir}. They are not referenced by sessions.json and can be archived safely.`,
       );
       const archiveOrphans = await prompter.confirmSkipInNonInteractive({
-        message: `Archive ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}?`,
+        message: `Archive ${emptyOrphanTranscriptPaths.length} empty orphan transcript file(s) in ${displaySessionsDir}?`,
         initialValue: false,
       });
       if (archiveOrphans) {
         let archived = 0;
         const archivedAt = formatSessionArchiveTimestamp();
-        for (const orphanPath of orphanTranscriptPaths) {
+        for (const orphanPath of emptyOrphanTranscriptPaths) {
           const archivedPath = `${orphanPath}.deleted.${archivedAt}`;
           try {
             fs.renameSync(orphanPath, archivedPath);
