@@ -124,6 +124,36 @@ const resolvePluginSdkAliasFile = (params: {
 const resolvePluginSdkAlias = (): string | null =>
   resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
 
+const resolveExtensionApiAlias = (params: { modulePath?: string } = {}): string | null => {
+  try {
+    const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+    const packageRoot = resolveOpenClawPackageRootSync({
+      cwd: path.dirname(modulePath),
+    });
+    if (!packageRoot) {
+      return null;
+    }
+
+    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+      modulePath,
+      isProduction: process.env.NODE_ENV === "production",
+    });
+    const candidateMap = {
+      src: path.join(packageRoot, "src", "extensionAPI.ts"),
+      dist: path.join(packageRoot, "dist", "extensionAPI.js"),
+    } as const;
+    for (const kind of orderedKinds) {
+      const candidate = candidateMap[kind];
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+};
+
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 
 function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): string[] {
@@ -172,6 +202,7 @@ const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
 export const __testing = {
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
+  resolveExtensionApiAlias,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
   maxPluginRegistryCacheEntries: MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
@@ -485,16 +516,20 @@ function resolveCandidateDuplicateRank(params: {
       env: params.env,
     });
 
-  switch (params.candidate.origin) {
-    case "config":
-      return 0;
-    case "workspace":
-      return 1;
-    case "global":
-      return isExplicitInstall ? 2 : 4;
-    case "bundled":
-      return 3;
+  if (params.candidate.origin === "config") {
+    return 0;
   }
+  if (params.candidate.origin === "global" && isExplicitInstall) {
+    return 1;
+  }
+  if (params.candidate.origin === "bundled") {
+    // Bundled plugin ids stay reserved unless the operator configured an override.
+    return 2;
+  }
+  if (params.candidate.origin === "workspace") {
+    return 3;
+  }
+  return 4;
 }
 
 function compareDuplicateCandidateOrder(params: {
@@ -697,7 +732,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return jitiLoader;
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
+    const extensionApiAlias = resolveExtensionApiAlias();
     const aliasMap = {
+      ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
       ...resolvePluginSdkScopedAliasMap(),
     };

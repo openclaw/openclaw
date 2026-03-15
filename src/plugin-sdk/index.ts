@@ -103,6 +103,15 @@ export type {
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
+  ProviderCacheTtlEligibilityContext,
+  ProviderPreparedRuntimeAuth,
+  ProviderPrepareExtraParamsContext,
+  ProviderPrepareDynamicModelContext,
+  ProviderPrepareRuntimeAuthContext,
+  ProviderResolveDynamicModelContext,
+  ProviderNormalizeResolvedModelContext,
+  ProviderRuntimeModel,
+  ProviderWrapStreamFnContext,
 } from "../plugins/types.js";
 export type {
   GatewayRequestHandler,
@@ -655,7 +664,7 @@ export {
 export { inspectDiscordAccount } from "../../extensions/discord/src/account-inspect.js";
 export type { InspectedDiscordAccount } from "../../extensions/discord/src/account-inspect.js";
 export { collectDiscordAuditChannelIds } from "../../extensions/discord/src/audit.js";
-export { discordOnboardingAdapter } from "../channels/plugins/onboarding/discord.js";
+export { discordOnboardingAdapter } from "../../extensions/discord/src/onboarding.js";
 export {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
@@ -670,7 +679,7 @@ export {
   resolveIMessageAccount,
   type ResolvedIMessageAccount,
 } from "../../extensions/imessage/src/accounts.js";
-export { imessageOnboardingAdapter } from "../channels/plugins/onboarding/imessage.js";
+export { imessageOnboardingAdapter } from "../../extensions/imessage/src/onboarding.js";
 export {
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
@@ -704,7 +713,7 @@ export {
   extractSlackToolSend,
   listSlackMessageActions,
 } from "../../extensions/slack/src/message-actions.js";
-export { slackOnboardingAdapter } from "../channels/plugins/onboarding/slack.js";
+export { slackOnboardingAdapter } from "../../extensions/slack/src/onboarding.js";
 export {
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
@@ -720,7 +729,7 @@ export {
 } from "../../extensions/telegram/src/accounts.js";
 export { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
-export { telegramOnboardingAdapter } from "../channels/plugins/onboarding/telegram.js";
+export { telegramOnboardingAdapter } from "../../extensions/telegram/src/onboarding.js";
 export {
   looksLikeTelegramTargetId,
   normalizeTelegramMessagingTarget,
@@ -739,7 +748,7 @@ export {
   resolveSignalAccount,
   type ResolvedSignalAccount,
 } from "../../extensions/signal/src/accounts.js";
-export { signalOnboardingAdapter } from "../channels/plugins/onboarding/signal.js";
+export { signalOnboardingAdapter } from "../../extensions/signal/src/onboarding.js";
 export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
@@ -805,7 +814,11 @@ export type { ContextEngineFactory } from "../context-engine/registry.js";
 // agentDir/store) rather than importing raw helpers directly.
 export { requireApiKey } from "../agents/model-auth.js";
 export type { ResolvedProviderAuth } from "../agents/model-auth.js";
-export type { ProviderDiscoveryContext } from "../plugins/types.js";
+export type {
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderDiscoveryContext,
+} from "../plugins/types.js";
 export {
   applyProviderDefaultModel,
   promptAndConfigureOpenAICompatibleSelfHostedProvider,

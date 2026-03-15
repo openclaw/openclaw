@@ -209,6 +209,11 @@ export type ChannelSecurityContext<ResolvedAccount = unknown> = {
 };
 
 export type ChannelMentionAdapter = {
+  stripRegexes?: (params: {
+    ctx: MsgContext;
+    cfg: OpenClawConfig | undefined;
+    agentId?: string;
+  }) => RegExp[];
   stripPatterns?: (params: {
     ctx: MsgContext;
     cfg: OpenClawConfig | undefined;
