@@ -789,6 +789,9 @@ function mergeCronDelivery(
     channel: existing?.channel,
     to: existing?.to,
     accountId: existing?.accountId,
+    originChannel: existing?.originChannel,
+    originTo: existing?.originTo,
+    originAccountId: existing?.originAccountId,
     bestEffort: existing?.bestEffort,
     failureDestination: existing?.failureDestination,
   };
@@ -804,6 +807,15 @@ function mergeCronDelivery(
   }
   if ("accountId" in patch) {
     next.accountId = normalizeOptionalTrimmedString(patch.accountId);
+  }
+  if ("originChannel" in patch) {
+    next.originChannel = normalizeOptionalTrimmedString(patch.originChannel);
+  }
+  if ("originTo" in patch) {
+    next.originTo = normalizeOptionalTrimmedString(patch.originTo);
+  }
+  if ("originAccountId" in patch) {
+    next.originAccountId = normalizeOptionalTrimmedString(patch.originAccountId);
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
