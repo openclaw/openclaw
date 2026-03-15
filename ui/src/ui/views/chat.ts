@@ -255,9 +255,22 @@ function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ) {
-  const used = session?.inputTokens ?? 0;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
-  if (!used || !limit) {
+  if (!limit) {
+    return nothing;
+  }
+
+  // Use totalTokens when explicitly marked fresh — it reflects the actual current
+  // context size from the last API call, not the cumulative sum across all turns.
+  // Fall back to inputTokens capped at the context window when:
+  //   - totalTokensFresh is false (snapshot unavailable for this run), or
+  //   - totalTokensFresh is absent (old gateway / test fixture without the field).
+  // Treating absent as stale is the safe default: it keeps the warning visible
+  // for rows that predate the totalTokensFresh field rather than silently hiding it.
+  const isFresh = session?.totalTokensFresh === true;
+  const used = isFresh ? (session?.totalTokens ?? 0) : Math.min(session?.inputTokens ?? 0, limit);
+
+  if (!used) {
     return nothing;
   }
   const ratio = used / limit;

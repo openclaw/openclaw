@@ -2,7 +2,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
+import { flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
   applySettings,
@@ -291,11 +291,14 @@ function handleTerminalChatEvent(
   const runId = payload?.runId;
   if (runId && host.refreshSessionsAfterChat.has(runId)) {
     host.refreshSessionsAfterChat.delete(runId);
-    if (state === "final") {
-      void loadSessions(host as unknown as OpenClawApp, {
-        activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-      });
-    }
+  }
+  // Refresh session list after every final event so totalTokens/contextTokens
+  // stay current in real-time, updating the context-usage notice without
+  // requiring a page reload or a /new command (fixes #45034, #45230, #45192).
+  // No overrides: respect whatever activeMinutes/limit filters the user has set
+  // in the Sessions UI rather than silently narrowing to a hard-coded 120-min window.
+  if (state === "final") {
+    void loadSessions(host as unknown as OpenClawApp);
   }
   // Reload history when tools were used so the persisted tool results
   // replace the now-cleared streaming state.
