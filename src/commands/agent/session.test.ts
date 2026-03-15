@@ -160,6 +160,91 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
+  it("derives an agent-scoped peer session key when --agent and --to are both provided", async () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      agentId: "mybot",
+      to: "cw_111",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:cw_111");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
+  it("keeps explicit sessionKey precedence over --agent and --to", async () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      agentId: "mybot",
+      to: "cw_111",
+      sessionKey: "agent:mybot:main",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:main");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
+  it("keeps session-id lookup scoped to the selected agent store", async () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MAIN_STORE_PATH]: {
+        "agent:main:main": { sessionId: "target-session-id", updatedAt: 0 },
+      },
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      agentId: "mybot",
+      sessionId: "target-session-id",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:main");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
+  it("treats a blank sessionKey as unset before deriving an agent-scoped --to key", async () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      agentId: "mybot",
+      to: "cw_111",
+      sessionKey: "   ",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:cw_111");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
+  it("rewrites qualified --to keys to the selected agent scope", async () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      agentId: "mybot",
+      to: "agent:main:main",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:main");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
   it("skips already-searched primary store when iterating agents", async () => {
     setupMainAndMybotStorePaths();
     mocks.loadSessionStore.mockReturnValue({});
