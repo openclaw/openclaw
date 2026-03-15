@@ -20,6 +20,10 @@ export function resolveWhatsAppMentionStripPatterns(ctx: { To?: string | null })
   return [escaped, `@${escaped}`];
 }
 
+export function resolveWhatsAppMentionStripRegexes(ctx: { To?: string | null }): RegExp[] {
+  return resolveWhatsAppMentionStripPatterns(ctx).map((pattern) => new RegExp(pattern, "g"));
+}
+
 type WhatsAppChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
 type WhatsAppSendMessage = PluginRuntimeChannel["whatsapp"]["sendMessageWhatsApp"];
 type WhatsAppSendPoll = PluginRuntimeChannel["whatsapp"]["sendPollWhatsApp"];
