@@ -2013,4 +2013,96 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
   });
+
+  it("sends fallback reply when agent produces zero replies and zero blocks", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const replyResolver = async () => null as unknown as ReplyPayload;
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(finalCalls).toHaveLength(1);
+    expect(finalCalls[0][0]).toMatchObject({
+      text: expect.stringContaining("wasn't able to generate a response"),
+    });
+  });
+
+  it("does not send fallback when agent produces a normal reply", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const replyResolver = async () => ({ text: "Hello!" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(finalCalls).toHaveLength(1);
+    expect(finalCalls[0][0]).toMatchObject({ text: "Hello!" });
+  });
+
+  it("does not send fallback when blocks were streamed but no final reply", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Streaming chunk" });
+      return undefined;
+    };
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    // Should NOT have the fallback — blocks were streamed
+    for (const call of finalCalls) {
+      expect((call[0] as ReplyPayload).text).not.toContain("wasn't able to generate a response");
+    }
+  });
+
+  it("routes fallback reply to originating channel when cross-provider", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+    });
+    const replyResolver = async () => null as unknown as ReplyPayload;
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:999",
+        payload: expect.objectContaining({
+          text: expect.stringContaining("wasn't able to generate a response"),
+        }),
+      }),
+    );
+  });
 });

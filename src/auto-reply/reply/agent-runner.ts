@@ -28,6 +28,7 @@ import {
 } from "../fallback-state.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
@@ -199,6 +200,7 @@ export async function runReplyAgent(params: {
     if (steered && !shouldFollowup) {
       await touchActiveSessionEntry();
       typing.cleanup();
+      opts?.onIntentionalSilence?.();
       return undefined;
     }
   }
@@ -212,6 +214,7 @@ export async function runReplyAgent(params: {
 
   if (activeRunQueueAction === "drop") {
     typing.cleanup();
+    opts?.onIntentionalSilence?.();
     return undefined;
   }
 
@@ -219,6 +222,7 @@ export async function runReplyAgent(params: {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     await touchActiveSessionEntry();
     typing.cleanup();
+    opts?.onIntentionalSilence?.();
     return undefined;
   }
 
@@ -482,6 +486,9 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      if (runResult.isSilentReply) {
+        opts?.onIntentionalSilence?.();
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -511,6 +518,15 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      // If the raw model output was NO_REPLY or the messaging tool already
+      // delivered the response, treat as intentional silence so the
+      // zero-output fallback does not fire.
+      if (
+        payloadResult.suppressedByMessagingTool ||
+        payloadArray.some((p) => isSilentReplyText(p.text, SILENT_REPLY_TOKEN))
+      ) {
+        opts?.onIntentionalSilence?.();
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 

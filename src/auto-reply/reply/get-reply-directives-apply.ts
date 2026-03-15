@@ -69,6 +69,7 @@ export async function applyInlineDirectiveOverrides(params: {
   contextTokens: number;
   effectiveModelDirective?: string;
   typing: TypingController;
+  onIntentionalSilence?: () => void;
 }): Promise<ApplyDirectiveResult> {
   const {
     ctx,
@@ -146,6 +147,7 @@ export async function applyInlineDirectiveOverrides(params: {
   ) {
     if (!command.isAuthorizedSender) {
       typing.cleanup();
+      params.onIntentionalSilence?.();
       return { kind: "reply", reply: undefined };
     }
     const {
