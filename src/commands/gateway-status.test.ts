@@ -555,6 +555,27 @@ describe("gateway-status command", () => {
     );
   });
 
+  it("keeps inactive local loopback probes on the short timeout in remote mode", async () => {
+    const { runtime } = createRuntimeCapture();
+    probeGateway.mockClear();
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "remote",
+        auth: { mode: "token", token: "ltok" },
+        remote: {},
+      },
+    } as never);
+
+    await runGatewayStatus(runtime, { timeout: "15000", json: true });
+
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        timeoutMs: 800,
+      }),
+    );
+  });
+
   it("skips invalid ssh-auto discovery targets", async () => {
     const { runtime } = createRuntimeCapture();
     await withEnvAsync({ USER: "steipete" }, async () => {

@@ -162,7 +162,7 @@ export async function gatewayStatusCommand(
               token: authResolution.token,
               password: authResolution.password,
             };
-            const timeoutMs = resolveProbeBudgetMs(overallTimeoutMs, target.kind);
+            const timeoutMs = resolveProbeBudgetMs(overallTimeoutMs, target);
             const probe = await probeGateway({
               url: target.url,
               auth,

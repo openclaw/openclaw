@@ -13,6 +13,7 @@ const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
 type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
 
+const INACTIVE_LOOPBACK_PROBE_BUDGET_MS = 800;
 const REMOTE_PROBE_BUDGET_MS = 1_500;
 const SSH_TUNNEL_PROBE_BUDGET_MS = 2_000;
 
@@ -119,12 +120,16 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
   return targets;
 }
 
-export function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
-  switch (kind) {
+export function resolveProbeBudgetMs(
+  overallMs: number,
+  target: Pick<GatewayStatusTarget, "kind" | "active">,
+): number {
+  switch (target.kind) {
     case "localLoopback":
-      // Let the local probe use the caller's full budget. Slow local shells/containers can
-      // exceed the old fixed cap and produce false "unreachable" results.
-      return overallMs;
+      // Active loopback probes should honor the caller budget because local shells/containers
+      // can legitimately take longer to connect. Inactive loopback probes stay bounded so
+      // remote-mode status checks do not stall on an expected local miss.
+      return target.active ? overallMs : Math.min(INACTIVE_LOOPBACK_PROBE_BUDGET_MS, overallMs);
     case "sshTunnel":
       return Math.min(SSH_TUNNEL_PROBE_BUDGET_MS, overallMs);
     default:
