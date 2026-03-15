@@ -155,6 +155,46 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
   });
 
+  it("reports explicit installed globals as the effective duplicate winner", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "zalouser", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      config: {
+        plugins: {
+          installs: {
+            zalouser: {
+              source: "npm",
+              installPath: globalDir,
+            },
+          },
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "zalouser",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "zalouser",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("bundled plugin will be overridden by global plugin"),
+      ),
+    ).toBe(true);
+  });
+
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
     const realDir = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };
