@@ -163,6 +163,10 @@ export function createOpenClawTools(
     }),
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,
+      agentChannel: options?.agentChannel != null ? String(options.agentChannel) : undefined,
+      agentTo: options?.agentTo,
+      agentThreadId: options?.agentThreadId,
+      agentAccountId: options?.agentAccountId,
       config: options?.config,
     }),
     createAgentsListTool({

@@ -11,7 +11,7 @@ import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { validateUpdateRunParams } from "../protocol/index.js";
-import { parseRestartRequestParams } from "./restart-request.js";
+import { parseDeliveryContextFromParams, parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -22,7 +22,24 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
     const actor = resolveControlPlaneActor(client);
     const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
-    const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+    // Prefer live deliveryContext from params over extractDeliveryInfo() (see #18612).
+    // Also prefer threadId from params when present — the session-key-derived value
+    // is empty for Slack sessions where replyToMode="all" but the key is not :thread:-scoped.
+    const { deliveryContext: extractedDeliveryContext, threadId: extractedThreadId } =
+      extractDeliveryInfo(sessionKey);
+    const paramsDeliveryContext = parseDeliveryContextFromParams(params);
+    // When live channel/to is present but accountId is missing (e.g. /tools/invoke without
+    // x-openclaw-account-id), fall back to the session-extracted account so the sentinel is
+    // not written without account context — which would cause deliveries to use the channel
+    // default account and misroute in multi-account setups. See config.ts for the same pattern.
+    const deliveryContext =
+      paramsDeliveryContext != null
+        ? {
+            ...paramsDeliveryContext,
+            accountId: paramsDeliveryContext.accountId ?? extractedDeliveryContext?.accountId,
+          }
+        : extractedDeliveryContext;
+    const threadId = paramsDeliveryContext?.threadId ?? extractedThreadId;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
