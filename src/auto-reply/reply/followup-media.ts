@@ -55,6 +55,30 @@ function replaceLastOccurrence(
   return `${value.slice(0, index)}${replacement}${value.slice(index + search.length)}`;
 }
 
+function findFirstOccurrenceBeforeFileBlocks(value: string, search: string): number {
+  if (!search) {
+    return -1;
+  }
+  const fileBlockIndex = value.search(FILE_BLOCK_RE);
+  const bodyRegion = fileBlockIndex >= 0 ? value.slice(0, fileBlockIndex) : value;
+  return bodyRegion.indexOf(search);
+}
+
+function replaceFirstOccurrenceBeforeFileBlocks(
+  value: string,
+  search: string,
+  replacement: string,
+): string | undefined {
+  if (!search) {
+    return undefined;
+  }
+  const index = findFirstOccurrenceBeforeFileBlocks(value, search);
+  if (index < 0) {
+    return undefined;
+  }
+  return `${value.slice(0, index)}${replacement}${value.slice(index + search.length)}`;
+}
+
 function stripInlineDirectives(text: string | undefined): string {
   return parseInlineDirectives(text ?? "").cleaned.trim();
 }
@@ -92,20 +116,29 @@ function rebuildQueuedPromptWithMediaUnderstanding(params: {
     stripped = stripLeadingMediaReplyHint(stripped);
   }
 
+  const replacementTargets = [
+    params.originalBody?.trim(),
+    stripInlineDirectives(params.originalBody),
+    MEDIA_ONLY_PLACEHOLDER,
+  ].filter(
+    (value, index, list): value is string => Boolean(value) && list.indexOf(value) === index,
+  );
+
   // Strip pre-existing file blocks from the body region when the updated body
   // contains new file blocks.  Mixed messages (audio + PDF) can arrive with
   // file extraction already applied in the primary path; without this strip
   // the old block stays in the prompt while the updated body adds a new one,
   // duplicating potentially large file payloads.
-  // Scope stripping to the body segment so quoted/replied text and thread
-  // history above the body retain any legitimate <file> blocks.
+  // Scope stripping to the confirmed body segment so quoted/replied text,
+  // thread history above the body, and prompts whose original body no longer
+  // appears all retain any legitimate <file> blocks.
   if (params.updatedBody && FILE_BLOCK_RE.test(params.updatedBody)) {
-    const bodyTarget = params.originalBody?.trim();
-    const bodyIdx = bodyTarget ? stripped.lastIndexOf(bodyTarget) : -1;
+    const bodyIdx =
+      replacementTargets
+        .map((target) => findFirstOccurrenceBeforeFileBlocks(stripped, target))
+        .find((index) => index >= 0) ?? -1;
     if (bodyIdx >= 0) {
       stripped = stripped.slice(0, bodyIdx) + stripExistingFileBlocks(stripped.slice(bodyIdx));
-    } else {
-      stripped = stripExistingFileBlocks(stripped);
     }
   }
 
@@ -117,17 +150,9 @@ function rebuildQueuedPromptWithMediaUnderstanding(params: {
     return [params.mediaNote?.trim(), stripped].filter(Boolean).join("\n").trim();
   }
 
-  const replacementTargets = [
-    params.originalBody?.trim(),
-    stripInlineDirectives(params.originalBody),
-    MEDIA_ONLY_PLACEHOLDER,
-  ].filter(
-    (value, index, list): value is string => Boolean(value) && list.indexOf(value) === index,
-  );
-
   let rebuilt = stripped;
   for (const target of replacementTargets) {
-    const replaced = replaceLastOccurrence(rebuilt, target, updatedBody);
+    const replaced = replaceFirstOccurrenceBeforeFileBlocks(rebuilt, target, updatedBody);
     if (replaced !== undefined) {
       rebuilt = replaced;
       return [params.mediaNote?.trim(), rebuilt.trim()].filter(Boolean).join("\n").trim();

@@ -1821,6 +1821,149 @@ describe("createFollowupRunner media understanding", () => {
     expect(agentCall?.prompt).not.toContain("old extracted content");
   });
 
+  it("preserves unrelated file blocks when the original body is absent from the prompt", async () => {
+    const quotedFileBlock =
+      '<file name="thread.pdf" mime="application/pdf">\nquoted thread attachment\n</file>';
+    const existingFileBlock =
+      '<file name="report.pdf" mime="application/pdf">\nold extracted content\n</file>';
+    const newFileBlock =
+      '<file name="report.pdf" mime="application/pdf">\nnew extracted content\n</file>';
+    const transcriptText = "Transcript from deferred audio";
+
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.MediaUnderstanding = [
+          {
+            kind: "audio.transcription",
+            text: transcriptText,
+            attachmentIndex: 0,
+            provider: "whisper",
+          },
+        ];
+        params.ctx.Transcript = transcriptText;
+        params.ctx.Body = `[Audio]\nTranscript:\n${transcriptText}\n\nsummarize this\n\n${newFileBlock}`;
+        return {
+          outputs: [
+            {
+              kind: "audio.transcription",
+              text: transcriptText,
+              attachmentIndex: 0,
+              provider: "whisper",
+            },
+          ],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: true,
+          appliedVideo: false,
+          appliedFile: true,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "processed" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt: `[media attached 1/2: /tmp/voice.ogg]\n[media attached 2/2: /tmp/report.pdf]\n${MEDIA_REPLY_HINT}\nQuoted thread above\n\n${quotedFileBlock}`,
+        mediaContext: {
+          Body: `summarize this\n\n${existingFileBlock}`,
+          CommandBody: "summarize this",
+          RawBody: "summarize this",
+          MediaPaths: ["/tmp/voice.ogg", "/tmp/report.pdf"],
+          MediaTypes: ["audio/ogg", "application/pdf"],
+        },
+      }),
+    );
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain("Quoted thread above");
+    expect(agentCall?.prompt).toContain(quotedFileBlock);
+    expect(agentCall?.prompt).toContain(newFileBlock);
+    expect(agentCall?.prompt?.match(/<file\s+name="/g)).toHaveLength(2);
+  });
+
+  it("replaces the visible body before file blocks instead of matching file content", async () => {
+    const existingFileBlock =
+      '<file name="report.pdf" mime="application/pdf">\nsummary notes:\nsummarize this\n</file>';
+    const transcriptText = "Transcript from deferred audio";
+
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.MediaUnderstanding = [
+          {
+            kind: "audio.transcription",
+            text: transcriptText,
+            attachmentIndex: 0,
+            provider: "whisper",
+          },
+        ];
+        params.ctx.Transcript = transcriptText;
+        params.ctx.Body = `[Audio]\nTranscript:\n${transcriptText}\n\nsummarize this`;
+        return {
+          outputs: [
+            {
+              kind: "audio.transcription",
+              text: transcriptText,
+              attachmentIndex: 0,
+              provider: "whisper",
+            },
+          ],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: true,
+          appliedVideo: false,
+          appliedFile: false,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "processed" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt: `[media attached 1/2: /tmp/voice.ogg]\n[media attached 2/2: /tmp/report.pdf]\n${MEDIA_REPLY_HINT}\nsummarize this\n\n${existingFileBlock}`,
+        mediaContext: {
+          Body: `summarize this\n\n${existingFileBlock}`,
+          CommandBody: "summarize this",
+          RawBody: "summarize this",
+          MediaPaths: ["/tmp/voice.ogg", "/tmp/report.pdf"],
+          MediaTypes: ["audio/ogg", "application/pdf"],
+        },
+      }),
+    );
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    const transcriptBlock = `[Audio]\nTranscript:\n${transcriptText}\n\nsummarize this`;
+    expect(agentCall?.prompt).toContain(existingFileBlock);
+    expect(agentCall?.prompt).toContain(transcriptBlock);
+    expect(agentCall?.prompt?.indexOf(transcriptBlock)).toBeGreaterThan(-1);
+    expect(agentCall?.prompt?.indexOf(transcriptBlock)).toBeLessThan(
+      agentCall?.prompt?.indexOf(existingFileBlock) ?? -1,
+    );
+  });
+
   it("sets DeferredMediaApplied when media understanding throws", async () => {
     applyMediaUnderstandingMock.mockRejectedValueOnce(
       new Error("transcription service unavailable"),
