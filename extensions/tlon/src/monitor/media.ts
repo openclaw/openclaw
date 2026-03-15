@@ -1,15 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { chmod, mkdir, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/tlon";
 import { getDefaultSsrFPolicy } from "../urbit/context.js";
 
 // Default to OpenClaw workspace media directory
 const DEFAULT_MEDIA_DIR = path.join(homedir(), ".openclaw", "workspace", "media", "inbound");
+
+/** Max download size for inbound media (5 MB, matches core MEDIA_MAX_BYTES). */
+const MAX_DOWNLOAD_BYTES = 5 * 1024 * 1024;
+
+/** Restricted directory mode for media storage. */
+const MEDIA_DIR_MODE = 0o700;
 
 export interface ExtractedImage {
   url: string;
@@ -61,8 +67,10 @@ export async function downloadMedia(
       return null;
     }
 
-    // Ensure media directory exists
-    await mkdir(mediaDir, { recursive: true });
+    // Ensure media directory exists with restricted permissions
+    await mkdir(mediaDir, { recursive: true, mode: MEDIA_DIR_MODE });
+    // chmod to harden directories created by earlier versions (recursive: true won't update existing dirs)
+    await chmod(mediaDir, MEDIA_DIR_MODE).catch(() => {});
 
     // Fetch with SSRF protection
     // Use fetchWithSsrFGuard directly (not urbitFetch) to preserve the full URL path
@@ -79,6 +87,18 @@ export async function downloadMedia(
         return null;
       }
 
+      // Pre-check Content-Length when available
+      const contentLengthHeader = response.headers.get("content-length");
+      if (contentLengthHeader) {
+        const declaredSize = Number(contentLengthHeader);
+        if (Number.isFinite(declaredSize) && declaredSize > MAX_DOWNLOAD_BYTES) {
+          console.warn(
+            `[tlon-media] Rejected oversized media (${declaredSize} bytes > ${MAX_DOWNLOAD_BYTES}): ${url}`,
+          );
+          return null;
+        }
+      }
+
       // Determine content type and extension
       const contentType = response.headers.get("content-type") || "application/octet-stream";
       const ext = getExtensionFromContentType(contentType) || getExtensionFromUrl(url) || "bin";
@@ -87,15 +107,39 @@ export async function downloadMedia(
       const filename = `${randomUUID()}.${ext}`;
       const localPath = path.join(mediaDir, filename);
 
-      // Stream to file
+      // Stream to file with byte-count enforcement
       const body = response.body;
       if (!body) {
         console.error(`[tlon-media] No response body for ${url}`);
         return null;
       }
 
-      const writeStream = createWriteStream(localPath);
-      await pipeline(Readable.fromWeb(body as any), writeStream);
+      let bytesWritten = 0;
+      const limiter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          bytesWritten += chunk.length;
+          if (bytesWritten > MAX_DOWNLOAD_BYTES) {
+            callback(new Error(`Download exceeded ${MAX_DOWNLOAD_BYTES} bytes`));
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+
+      const writeStream = createWriteStream(localPath, { mode: 0o644 });
+      try {
+        await pipeline(Readable.fromWeb(body as any), limiter, writeStream);
+      } catch (err: any) {
+        // Clean up partial file on size limit or other pipeline errors
+        await unlink(localPath).catch(() => {});
+        if (bytesWritten > MAX_DOWNLOAD_BYTES) {
+          console.warn(
+            `[tlon-media] Aborted oversized download (${bytesWritten} bytes > ${MAX_DOWNLOAD_BYTES}): ${url}`,
+          );
+          return null;
+        }
+        throw err;
+      }
 
       return {
         localPath,
