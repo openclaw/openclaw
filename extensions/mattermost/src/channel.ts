@@ -17,6 +17,7 @@ import {
   type ChannelMessageActionName,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/mattermost";
+import { readStringParam } from "../../../src/agents/tools/common.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
@@ -85,22 +86,12 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "edit") {
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
-      const messageId =
-        typeof (params as any)?.messageId === "string"
-          ? (params as any).messageId.trim()
-          : typeof (params as any)?.postId === "string"
-            ? (params as any).postId.trim()
-            : "";
+      const messageId = readMattermostMessageActionId(params);
       if (!messageId) {
         throw new Error("Mattermost edit requires messageId (post id)");
       }
 
-      const message =
-        typeof (params as any)?.message === "string"
-          ? (params as any).message
-          : typeof (params as any)?.text === "string"
-            ? (params as any).text
-            : "";
+      const message = readStringParam(params, "message") ?? readStringParam(params, "text");
       if (!message) {
         throw new Error("Mattermost edit requires message text");
       }
@@ -126,12 +117,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "delete") {
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
-      const messageId =
-        typeof (params as any)?.messageId === "string"
-          ? (params as any).messageId.trim()
-          : typeof (params as any)?.postId === "string"
-            ? (params as any).postId.trim()
-            : "";
+      const messageId = readMattermostMessageActionId(params);
       if (!messageId) {
         throw new Error("Mattermost delete requires messageId (post id)");
       }
@@ -278,6 +264,10 @@ const meta = {
   order: 65,
   quickstartAllowFrom: true,
 } as const;
+
+function readMattermostMessageActionId(params: Record<string, unknown>): string | undefined {
+  return readStringParam(params, "messageId") ?? readStringParam(params, "postId");
+}
 
 function readMattermostReplyToId(params: Record<string, unknown>): string | undefined {
   const readNormalizedValue = (value: unknown) => {

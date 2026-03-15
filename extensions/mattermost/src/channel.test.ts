@@ -300,6 +300,18 @@ describe("mattermostPlugin", () => {
       expect(result?.details).toEqual({ postId: "POST1" });
     });
 
+    it("accepts message_id aliases when editing posts", async () => {
+      const { calls, result } = await runPostAction({
+        action: "edit",
+        input: { message_id: "POST1", message: "updated message" },
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://chat.example.com/api/v4/posts/POST1/patch");
+      expect(result?.content).toEqual([{ type: "text", text: "Edited post POST1" }]);
+      expect(result?.details).toEqual({ postId: "POST1" });
+    });
+
     it("handles delete by deleting the Mattermost post", async () => {
       const { calls, result } = await runPostAction({
         action: "delete",
@@ -311,6 +323,38 @@ describe("mattermostPlugin", () => {
       expect(calls[0]?.init?.method).toBe("DELETE");
       expect(result?.content).toEqual([{ type: "text", text: "Deleted post POST1" }]);
       expect(result?.details).toEqual({});
+    });
+
+    it("accepts message_id aliases when deleting posts", async () => {
+      const { calls, result } = await runPostAction({
+        action: "delete",
+        input: { message_id: "POST1" },
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://chat.example.com/api/v4/posts/POST1");
+      expect(calls[0]?.init?.method).toBe("DELETE");
+      expect(result?.content).toEqual([{ type: "text", text: "Deleted post POST1" }]);
+      expect(result?.details).toEqual({});
+    });
+
+    it("rejects whitespace-only edit content before calling Mattermost", async () => {
+      const cfg = createMattermostTestConfig();
+      const fetchImpl = vi.fn();
+
+      await expect(
+        withMockedGlobalFetch(fetchImpl as unknown as typeof fetch, async () => {
+          return await mattermostPlugin.actions?.handleAction?.({
+            channel: "mattermost",
+            action: "edit",
+            params: { messageId: "POST1", message: "   " },
+            cfg,
+            accountId: "default",
+          } as any);
+        }),
+      ).rejects.toThrow("Mattermost edit requires message text");
+
+      expect(fetchImpl).not.toHaveBeenCalled();
     });
 
     it("maps replyTo to replyToId for send actions", async () => {
