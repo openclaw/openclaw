@@ -109,6 +109,36 @@ describe("runBrowserProxyCommand", () => {
     );
   });
 
+  it("redacts sensitive cdpUrl details in timeout diagnostics", async () => {
+    dispatcherMocks.dispatch
+      .mockImplementationOnce(async () => {
+        await new Promise(() => {});
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: {
+          running: true,
+          cdpHttp: true,
+          cdpReady: false,
+          cdpUrl:
+            "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
+        },
+      });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "GET",
+          path: "/snapshot",
+          profile: "remote",
+          timeoutMs: 5,
+        }),
+      ),
+    ).rejects.toThrow(
+      /status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=https:\/\/example\.com\/chrome\?token=supers…7890\)/,
+    );
+  });
+
   it("keeps non-timeout browser errors intact", async () => {
     dispatcherMocks.dispatch.mockResolvedValue({
       status: 500,
