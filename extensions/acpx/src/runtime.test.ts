@@ -642,6 +642,7 @@ describe("AcpxRuntime", () => {
   it("preserves ACP_SESSION_INIT_FAILED for silent exits during session init", async () => {
     const { runtime } = await createMockRuntimeFixture();
 
+    // Session-init silent exits should keep stale-session guidance instead of turn-failure guidance.
     await expect(
       runtime.ensureSession({
         sessionKey: "agent:claude:acp:silent-init",
