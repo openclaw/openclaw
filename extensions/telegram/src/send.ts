@@ -236,11 +236,14 @@ function resolveTelegramClientOptions(
   const fetchImpl = resolveTelegramFetch(proxyFetch, {
     network: account.config.network,
   });
+  const apiRoot =
+    account.config.apiRoot?.trim() || process.env.TELEGRAM_API_ROOT?.trim() || undefined;
   const clientOptions =
-    fetchImpl || timeoutSeconds
+    fetchImpl || timeoutSeconds || apiRoot
       ? {
           ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
+          ...(apiRoot ? { apiRoot } : {}),
         }
       : undefined;
   if (cacheKey) {
