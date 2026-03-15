@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getAgentRuntimeCommandSecretTargetIds,
   getMemoryCommandSecretTargetIds,
+  getStatusCommandSecretTargetIds,
 } from "./command-secret-targets.js";
 
 describe("command secret target ids", () => {
@@ -20,5 +21,11 @@ describe("command secret target ids", () => {
         "agents.list[].memorySearch.remote.apiKey",
       ]),
     );
+  });
+
+  it("includes local gateway auth targets for status commands", () => {
+    const ids = getStatusCommandSecretTargetIds();
+    expect(ids.has("gateway.auth.token")).toBe(true);
+    expect(ids.has("gateway.auth.password")).toBe(true);
   });
 });

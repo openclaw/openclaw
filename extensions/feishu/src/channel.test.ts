@@ -17,6 +17,23 @@ vi.mock("./reactions.js", () => ({
 import { feishuPlugin } from "./channel.js";
 
 describe("feishuPlugin.status.probeAccount", () => {
+  it("does not throw when config-facing account resolution sees unresolved file SecretRefs", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "cli_main",
+          appSecret: { source: "file", provider: "filemain", id: "/channels/feishu/appSecret" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(() => feishuPlugin.config.resolveAccount(cfg, "default")).not.toThrow();
+    const account = feishuPlugin.config.resolveAccount(cfg, "default");
+    expect(account.configured).toBe(false);
+    expect(account.appId).toBeUndefined();
+  });
+
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
       channels: {

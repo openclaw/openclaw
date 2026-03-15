@@ -25,11 +25,15 @@ const COMMAND_SECRET_TARGETS = {
     "tools.web.search",
     "tools.web.fetch.firecrawl.",
   ]),
-  status: idsByPrefix([
-    "channels.",
-    "agents.defaults.memorySearch.remote.",
-    "agents.list[].memorySearch.remote.",
-  ]),
+  status: [
+    ...idsByPrefix([
+      "channels.",
+      "agents.defaults.memorySearch.remote.",
+      "agents.list[].memorySearch.remote.",
+    ]),
+    "gateway.auth.token",
+    "gateway.auth.password",
+  ],
 } as const;
 
 function toTargetIdSet(values: readonly string[]): Set<string> {
