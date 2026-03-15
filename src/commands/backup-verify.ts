@@ -20,6 +20,7 @@ type BackupManifest = {
   nodeVersion: string;
   options?: {
     includeWorkspace?: boolean;
+    includeBrowser?: boolean;
   };
   paths?: {
     stateDir?: string;
@@ -150,7 +151,10 @@ function parseManifest(raw: string): BackupManifest {
     platform: typeof parsed.platform === "string" ? parsed.platform : "unknown",
     nodeVersion: typeof parsed.nodeVersion === "string" ? parsed.nodeVersion : "unknown",
     options: isRecord(parsed.options)
-      ? { includeWorkspace: parsed.options.includeWorkspace as boolean | undefined }
+      ? {
+          includeWorkspace: parsed.options.includeWorkspace as boolean | undefined,
+          includeBrowser: parsed.options.includeBrowser as boolean | undefined,
+        }
       : undefined,
     paths: isRecord(parsed.paths)
       ? {

@@ -391,4 +391,140 @@ describe("backup commands", () => {
       delete process.env.OPENCLAW_CONFIG_PATH;
     }
   });
+
+  it("excludes browser directory from backup when --no-include-browser is used", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+    await fs.mkdir(path.join(stateDir, "browser", "Default"), { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, "browser", "Default", "Cookies"),
+      "browser-data\n",
+      "utf8",
+    );
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const result = await backupCreateCommand(runtime, {
+      dryRun: true,
+      includeBrowser: false,
+    });
+
+    expect(result.includeBrowser).toBe(false);
+    expect(result.skipped).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: "excluded",
+          sourcePath: expect.stringContaining("browser"),
+        }),
+      ]),
+    );
+  });
+
+  it("creates an archive excluding browser directory contents", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-browser-"));
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+      await fs.mkdir(path.join(stateDir, "browser", "Default"), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "browser", "Default", "Cookies"),
+        "browser-data\n",
+        "utf8",
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      const nowMs = Date.UTC(2026, 2, 9, 3, 0, 0);
+      const result = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeBrowser: false,
+        nowMs,
+      });
+
+      const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-extract-"));
+      try {
+        await tar.x({ file: result.archivePath, cwd: extractDir, gzip: true });
+        const archiveRoot = path.join(extractDir, buildBackupArchiveRoot(nowMs));
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(archiveRoot, "manifest.json"), "utf8"),
+        ) as {
+          options: { includeBrowser?: boolean };
+        };
+
+        expect(manifest.options.includeBrowser).toBe(false);
+
+        // Verify state.txt is present but browser data is not
+        const stateAsset = result.assets.find((asset) => asset.kind === "state");
+        expect(stateAsset).toBeDefined();
+        const encodedStatePath = path.join(
+          archiveRoot,
+          "payload",
+          encodeAbsolutePathForBackupArchive(stateAsset!.sourcePath),
+        );
+        expect(await fs.readFile(path.join(encodedStatePath, "state.txt"), "utf8")).toBe("state\n");
+
+        // browser directory should not exist in the archive
+        const browserPath = path.join(encodedStatePath, "browser");
+        await expect(fs.access(browserPath)).rejects.toThrow();
+      } finally {
+        await fs.rm(extractDir, { recursive: true, force: true });
+      }
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("includes browser directory by default", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-browser-default-"));
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.mkdir(path.join(stateDir, "browser"), { recursive: true });
+      await fs.writeFile(path.join(stateDir, "browser", "data.txt"), "browser\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      const nowMs = Date.UTC(2026, 2, 9, 4, 0, 0);
+      const result = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        nowMs,
+      });
+
+      expect(result.includeBrowser).toBe(true);
+
+      const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-extract-"));
+      try {
+        await tar.x({ file: result.archivePath, cwd: extractDir, gzip: true });
+        const archiveRoot = path.join(extractDir, buildBackupArchiveRoot(nowMs));
+        const stateAsset = result.assets.find((asset) => asset.kind === "state");
+        const encodedStatePath = path.join(
+          archiveRoot,
+          "payload",
+          encodeAbsolutePathForBackupArchive(stateAsset!.sourcePath),
+        );
+        // browser data should be present
+        expect(await fs.readFile(path.join(encodedStatePath, "browser", "data.txt"), "utf8")).toBe(
+          "browser\n",
+        );
+      } finally {
+        await fs.rm(extractDir, { recursive: true, force: true });
+      }
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
 });

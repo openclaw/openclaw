@@ -19,6 +19,7 @@ export type BackupCreateOptions = {
   output?: string;
   dryRun?: boolean;
   includeWorkspace?: boolean;
+  includeBrowser?: boolean;
   onlyConfig?: boolean;
   verify?: boolean;
   json?: boolean;
@@ -40,6 +41,7 @@ type BackupManifest = {
   nodeVersion: string;
   options: {
     includeWorkspace: boolean;
+    includeBrowser?: boolean;
     onlyConfig?: boolean;
   };
   paths: {
@@ -63,6 +65,7 @@ export type BackupCreateResult = {
   archivePath: string;
   dryRun: boolean;
   includeWorkspace: boolean;
+  includeBrowser: boolean;
   onlyConfig: boolean;
   verified: boolean;
   assets: BackupAsset[];
@@ -191,6 +194,7 @@ function buildManifest(params: {
   createdAt: string;
   archiveRoot: string;
   includeWorkspace: boolean;
+  includeBrowser: boolean;
   onlyConfig: boolean;
   assets: BackupAsset[];
   skipped: BackupCreateResult["skipped"];
@@ -208,6 +212,7 @@ function buildManifest(params: {
     nodeVersion: process.version,
     options: {
       includeWorkspace: params.includeWorkspace,
+      includeBrowser: params.includeBrowser,
       onlyConfig: params.onlyConfig,
     },
     paths: {
@@ -276,7 +281,13 @@ export async function createBackupArchive(
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
-  const plan = await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs });
+  const includeBrowser = onlyConfig ? true : (opts.includeBrowser ?? true);
+  const plan = await resolveBackupPlanFromDisk({
+    includeWorkspace,
+    includeBrowser,
+    onlyConfig,
+    nowMs,
+  });
   const outputPath = await resolveOutputPath({
     output: opts.output,
     nowMs,
@@ -313,6 +324,7 @@ export async function createBackupArchive(
     archivePath: outputPath,
     dryRun: Boolean(opts.dryRun),
     includeWorkspace,
+    includeBrowser,
     onlyConfig,
     verified: false,
     assets: plan.included,
@@ -332,6 +344,7 @@ export async function createBackupArchive(
       createdAt,
       archiveRoot,
       includeWorkspace,
+      includeBrowser,
       onlyConfig,
       assets: result.assets,
       skipped: result.skipped,
@@ -342,12 +355,27 @@ export async function createBackupArchive(
     });
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
+    const browserExcludePaths = !includeBrowser
+      ? result.assets
+          .filter((asset) => asset.kind === "state")
+          .map((asset) => path.join(asset.sourcePath, "browser"))
+      : [];
+
     await tar.c(
       {
         file: tempArchivePath,
         gzip: true,
         portable: true,
         preservePaths: true,
+        filter: (entryPath) => {
+          if (browserExcludePaths.length === 0) {
+            return true;
+          }
+          const resolved = path.resolve(entryPath);
+          return !browserExcludePaths.some(
+            (excludePath) => resolved === excludePath || isPathWithin(resolved, excludePath),
+          );
+        },
         onWriteEntry: (entry) => {
           entry.path = remapArchiveEntryPath({
             entryPath: entry.path,
