@@ -333,6 +333,27 @@ describe("pairing setup code", () => {
     expectResolvedSetupError(resolved, "only bound to loopback");
   });
 
+  it("returns a bind-specific error when interface discovery throws", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "token", token: "tok" },
+        },
+      },
+      {
+        networkInterfaces: () => {
+          throw new Error("uv_interface_addresses failed");
+        },
+      },
+    );
+
+    expect(resolved).toEqual({
+      ok: false,
+      error: "gateway.bind=lan set, but no private LAN IP was found.",
+    });
+  });
+
   it("uses tailscale serve DNS when available", async () => {
     const runCommandWithTimeout = createTailnetDnsRunner();
 
