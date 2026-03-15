@@ -12,7 +12,7 @@ vi.mock("./summary.js", () => ({
   generateSummary: vi.fn(),
 }));
 
-import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { callGuardian, callForText } from "./guardian-client.js";
 import guardianPlugin, { __testing } from "./index.js";
 import {

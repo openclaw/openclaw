@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { callGuardian } from "./guardian-client.js";
 import {
   getAllTurns,
