@@ -1,6 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { buildActivityMeta } from "./activity/build.js";
 import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
@@ -212,6 +213,20 @@ export function logSessionStateChange(
       } prev=${prevState} new=${params.state} reason="${params.reason ?? ""}" queueDepth=${
         state.queueDepth
       }`,
+      {
+        activity: buildActivityMeta({
+          kind: "run",
+          summary: `session ${params.state}`,
+          sessionKey: state.sessionKey,
+          status:
+            params.state === "processing" ? "start" : params.state === "idle" ? "done" : "queued",
+          extra: {
+            prevState,
+            reason: params.reason ?? "",
+            queueDepth: state.queueDepth,
+          },
+        }),
+      },
     );
   }
   emitDiagnosticEvent({
@@ -245,7 +260,14 @@ export function logSessionStuck(params: SessionRef & { state: SessionStateValue;
 }
 
 export function logLaneEnqueue(lane: string, queueSize: number) {
-  diag.debug(`lane enqueue: lane=${lane} queueSize=${queueSize}`);
+  diag.debug(`lane enqueue: lane=${lane} queueSize=${queueSize}`, {
+    activity: buildActivityMeta({
+      kind: "queue",
+      summary: `lane ${lane} enqueue`,
+      status: "queued",
+      extra: { lane, queueSize },
+    }),
+  });
   emitDiagnosticEvent({
     type: "queue.lane.enqueue",
     lane,
@@ -255,7 +277,15 @@ export function logLaneEnqueue(lane: string, queueSize: number) {
 }
 
 export function logLaneDequeue(lane: string, waitMs: number, queueSize: number) {
-  diag.debug(`lane dequeue: lane=${lane} waitMs=${waitMs} queueSize=${queueSize}`);
+  diag.debug(`lane dequeue: lane=${lane} waitMs=${waitMs} queueSize=${queueSize}`, {
+    activity: buildActivityMeta({
+      kind: "queue",
+      summary: `lane ${lane} dequeue`,
+      status: "dequeued",
+      durationMs: waitMs,
+      extra: { lane, queueSize },
+    }),
+  });
   emitDiagnosticEvent({
     type: "queue.lane.dequeue",
     lane,
@@ -270,6 +300,15 @@ export function logRunAttempt(params: SessionRef & { runId: string; attempt: num
     `run attempt: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
       params.sessionKey ?? "unknown"
     } runId=${params.runId} attempt=${params.attempt}`,
+    {
+      activity: buildActivityMeta({
+        kind: "run",
+        summary: `run attempt ${params.attempt}`,
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+        status: "start",
+      }),
+    },
   );
   emitDiagnosticEvent({
     type: "run.attempt",

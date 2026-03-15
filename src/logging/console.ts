@@ -10,7 +10,7 @@ import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
 import { formatLocalIsoWithOffset } from "./timestamps.js";
 
-export type ConsoleStyle = "pretty" | "compact" | "json";
+export type ConsoleStyle = "pretty" | "compact" | "json" | "activity";
 type ConsoleSettings = {
   level: LogLevel;
   style: ConsoleStyle;
@@ -48,7 +48,7 @@ function normalizeConsoleLevel(level?: string): LogLevel {
 }
 
 function normalizeConsoleStyle(style?: string): ConsoleStyle {
-  if (style === "compact" || style === "json" || style === "pretty") {
+  if (style === "compact" || style === "json" || style === "pretty" || style === "activity") {
     return style;
   }
   if (!process.stdout.isTTY) {
@@ -86,7 +86,7 @@ function resolveConsoleSettings(): ConsoleSettings {
     }
   }
   const level = envLevel ?? normalizeConsoleLevel(cfg?.consoleLevel);
-  const style = normalizeConsoleStyle(cfg?.consoleStyle);
+  const style = normalizeConsoleStyle(loggingState.consoleStyleOverride ?? cfg?.consoleStyle);
   return { level, style };
 }
 
@@ -123,6 +123,19 @@ export function setConsoleSubsystemFilter(filters?: string[] | null): void {
   }
   const normalized = filters.map((value) => value.trim()).filter((value) => value.length > 0);
   loggingState.consoleSubsystemFilter = normalized.length > 0 ? normalized : null;
+}
+
+export function setConsoleStyleOverride(style?: ConsoleStyle | null): void {
+  loggingState.consoleStyleOverride = style ?? null;
+  loggingState.cachedConsoleSettings = null;
+}
+
+export function setConsoleActivityDetailMode(full: boolean): void {
+  loggingState.consoleActivityFullDetails = full;
+}
+
+export function isConsoleActivityDetailMode(): boolean {
+  return loggingState.consoleActivityFullDetails;
 }
 
 export function setConsoleTimestampPrefix(enabled: boolean): void {
@@ -168,7 +181,7 @@ function isEpipeError(err: unknown): boolean {
 
 export function formatConsoleTimestamp(style: ConsoleStyle): string {
   const now = new Date();
-  if (style === "pretty") {
+  if (style === "pretty" || style === "activity") {
     const h = String(now.getHours()).padStart(2, "0");
     const m = String(now.getMinutes()).padStart(2, "0");
     const s = String(now.getSeconds()).padStart(2, "0");

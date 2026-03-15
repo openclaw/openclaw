@@ -19,7 +19,12 @@ import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
-import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
+import {
+  setConsoleActivityDetailMode,
+  setConsoleStyleOverride,
+  setConsoleSubsystemFilter,
+  setConsoleTimestampPrefix,
+} from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -50,6 +55,8 @@ type GatewayRunOpts = {
   claudeCliLogs?: boolean;
   wsLog?: unknown;
   compact?: boolean;
+  human?: boolean;
+  humanFull?: boolean;
   rawStream?: boolean;
   rawStreamPath?: unknown;
   dev?: boolean;
@@ -79,6 +86,8 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "verbose",
   "claudeCliLogs",
   "compact",
+  "human",
+  "humanFull",
   "rawStream",
 ] as const;
 
@@ -185,6 +194,11 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
   }
   setGatewayWsLogStyle(wsLogStyle);
+
+  const humanFull = Boolean(opts.humanFull);
+  const human = humanFull || Boolean(opts.human);
+  setConsoleStyleOverride(human ? "activity" : null);
+  setConsoleActivityDetailMode(humanFull);
 
   if (opts.rawStream) {
     process.env.OPENCLAW_RAW_STREAM = "1";
@@ -500,6 +514,8 @@ export function addGatewayRunCommand(cmd: Command): Command {
     )
     .option("--ws-log <style>", 'WebSocket log style ("auto"|"full"|"compact")', "auto")
     .option("--compact", 'Alias for "--ws-log compact"', false)
+    .option("--human", "Render human-readable activity logs", false)
+    .option("--human-full", "Render human logs with internal IDs/details", false)
     .option("--raw-stream", "Log raw model stream events to jsonl", false)
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
     .action(async (opts, command) => {

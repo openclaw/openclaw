@@ -48,7 +48,18 @@ while still printing to stdout/stderr.
 You can tune console verbosity independently via:
 
 - `logging.consoleLevel` (default `info`)
-- `logging.consoleStyle` (`pretty` | `compact` | `json`)
+- `logging.consoleStyle` (`pretty` | `compact` | `json` | `activity`)
+
+For one-off human timelines without config edits:
+
+```bash
+openclaw gateway --verbose --human
+openclaw gateway --verbose --human-full
+```
+
+- `--human` enables activity timeline rendering.
+- `--human-full` includes internal IDs/details.
+- These flags override `logging.consoleStyle` for that process only.
 
 ## Tool summary redaction
 
@@ -106,7 +117,7 @@ Behavior:
 - **Shortened subsystem prefixes**: drops leading `gateway/` + `channels/`, keeps last 2 segments (e.g. `whatsapp/outbound`)
 - **Sub-loggers by subsystem** (auto prefix + structured field `{ subsystem }`)
 - **`logRaw()`** for QR/UX output (no prefix, no formatting)
-- **Console styles** (e.g. `pretty | compact | json`)
+- **Console styles** (e.g. `pretty | compact | json | activity`)
 - **Console log level** separate from file log level (file keeps full detail when `logging.level` is set to `debug`/`trace`)
 - **WhatsApp message bodies** are logged at `debug` (use `--verbose` to see them)
 

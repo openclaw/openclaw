@@ -3,9 +3,12 @@ import type { Logger as TsLogger } from "tslog";
 import { isVerbose } from "../globals.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
+import { extractActivityMeta } from "./activity/extract.js";
+import { renderActivityLine } from "./activity/render.js";
 import {
   formatConsoleTimestamp,
   getConsoleSettings,
+  isConsoleActivityDetailMode,
   shouldLogSubsystemToConsole,
 } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
@@ -194,9 +197,36 @@ function formatConsoleLine(opts: {
   level: LogLevel;
   subsystem: string;
   message: string;
-  style: "pretty" | "compact" | "json";
+  style: "pretty" | "compact" | "json" | "activity";
   meta?: Record<string, unknown>;
 }): string {
+  if (opts.style === "activity") {
+    const activity = extractActivityMeta({
+      activity: opts.meta?.activity,
+      meta: opts.meta,
+      message: opts.message,
+    });
+    if (activity) {
+      return renderActivityLine(activity, {
+        mode: isConsoleActivityDetailMode() ? "full" : "normal",
+        time: formatConsoleTimestamp("activity"),
+        level: opts.level,
+        subsystem: opts.subsystem,
+      });
+    }
+    const level = opts.level.toLowerCase();
+    if (level === "warn" || level === "error" || level === "fatal") {
+      return formatConsoleLine({ ...opts, style: "compact" });
+    }
+    if (isConsoleActivityDetailMode()) {
+      return formatConsoleLine({ ...opts, style: "compact" });
+    }
+    if (level === "debug" || level === "trace") {
+      return "";
+    }
+    return formatConsoleLine({ ...opts, style: "compact" });
+  }
+
   const displaySubsystem =
     opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
@@ -357,6 +387,9 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       style: consoleSettings.style,
       meta: fileMeta,
     });
+    if (!line) {
+      return;
+    }
     writeConsoleLine(level, line);
   };
   const isConsoleEnabled = (level: LogLevel): boolean => {
