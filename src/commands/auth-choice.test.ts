@@ -677,7 +677,7 @@ describe("applyAuthChoice", () => {
         expectEnvPrompt: true,
         expectedTextCalls: 0,
         expectedKey: "sk-openrouter-test",
-        expectedModel: "openrouter/auto",
+        expectedModel: "openrouter/anthropic/claude-sonnet-4-6",
       },
       {
         authChoice: "ai-gateway-api-key",
