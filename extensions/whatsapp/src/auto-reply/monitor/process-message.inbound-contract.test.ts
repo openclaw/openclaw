@@ -333,6 +333,31 @@ describe("web processMessage inbound contract", () => {
     expect(replyOptions?.disableBlockStreaming).toBeUndefined();
   });
 
+  it("disables block streaming when blockStreaming is explicitly false", async () => {
+    const args = makeProcessMessageArgs({
+      routeSessionKey: "agent:main:whatsapp:direct:+1555",
+      groupHistoryKey: "+1555",
+      cfg: {
+        channels: { whatsapp: { blockStreaming: false } },
+        messages: {},
+        session: { store: sessionStorePath },
+      } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>,
+      msg: {
+        id: "msg1",
+        from: "+1555",
+        to: "+2000",
+        chatType: "direct",
+        body: "hi",
+      },
+    });
+    await processMessage(args);
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const replyOptions = (capturedDispatchParams as any)?.replyOptions;
+    // blockStreaming: false in config → disableBlockStreaming: true
+    expect(replyOptions?.disableBlockStreaming).toBe(true);
+  });
+
   it("passes sendComposing through as the reply typing callback", async () => {
     const sendComposing = vi.fn(async () => undefined);
     const args = createWhatsAppDirectStreamingArgs();

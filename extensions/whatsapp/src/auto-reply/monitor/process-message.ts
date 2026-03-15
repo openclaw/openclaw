@@ -403,12 +403,12 @@ export async function processMessage(params: {
         }
       },
       deliver: async (payload: ReplyPayload, info) => {
-        if (info.kind === "tool") {
+        if (info.kind === "tool" || payload.isReasoning) {
           // Tool updates are internal-only; don't deliver to WhatsApp.
+          // Reasoning blocks are suppressed upstream by shouldSuppressReasoningPayload,
+          // but we guard here too in case that filter is ever bypassed.
           return;
         }
-        // Reasoning blocks are already filtered upstream by shouldSuppressReasoningPayload
-        // in dispatch-from-config.ts. Only user-facing text/media blocks reach here.
         await deliverWebReply({
           replyResult: payload,
           msg: params.msg,
