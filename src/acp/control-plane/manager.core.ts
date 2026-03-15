@@ -227,7 +227,7 @@ export class AcpSessionManager {
       const runtime = backend.runtime;
       const initialRuntimeOptions = validateRuntimeOptionPatch({ cwd: input.cwd });
       const requestedCwd = initialRuntimeOptions.cwd;
-      this.enforceConcurrentSessionLimit({
+      await this.enforceConcurrentSessionLimit({
         cfg: input.cfg,
         sessionKey,
       });
@@ -926,7 +926,7 @@ export class AcpSessionManager {
       this.clearCachedRuntimeState(params.sessionKey);
     }
 
-    this.enforceConcurrentSessionLimit({
+    await this.enforceConcurrentSessionLimit({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
     });
@@ -1067,7 +1067,7 @@ export class AcpSessionManager {
     cached.appliedControlSignature = undefined;
   }
 
-  private enforceConcurrentSessionLimit(params: { cfg: OpenClawConfig; sessionKey: string }): void {
+  private async enforceConcurrentSessionLimit(params: { cfg: OpenClawConfig; sessionKey: string }): Promise<void> {
     const configuredLimit = params.cfg.acp?.maxConcurrentSessions;
     if (typeof configuredLimit !== "number" || !Number.isFinite(configuredLimit)) {
       return;
@@ -1079,9 +1079,17 @@ export class AcpSessionManager {
     }
     const activeCount = this.runtimeCache.size();
     if (activeCount >= limit) {
-      throw new AcpRuntimeError(
-        "ACP_SESSION_INIT_FAILED",
-        `ACP max concurrent sessions reached (${activeCount}/${limit}).`,
+      const reclaimed = await this.evictStaleRuntimesUnderPressure({ cfg: params.cfg });
+      const updatedCount = this.runtimeCache.size();
+      if (updatedCount >= limit) {
+        throw new AcpRuntimeError(
+          "ACP_SESSION_INIT_FAILED",
+          `ACP max concurrent sessions reached (${updatedCount}/${limit}).` +
+            (reclaimed > 0 ? ` Reclaimed ${reclaimed} stale session(s) but still at capacity.` : ""),
+        );
+      }
+      logVerbose(
+        `acp-manager: back-pressure eviction freed ${reclaimed} stale session(s) (${activeCount} -> ${updatedCount}/${limit})`,
       );
     }
   }
@@ -1145,6 +1153,77 @@ export class AcpSessionManager {
         }
       });
     }
+  }
+
+  /**
+   * Under back-pressure (all slots full), attempt to reclaim sessions that are
+   * likely stale: not currently executing a turn and idle for at least a short
+   * grace period. Evicts oldest-idle-first until at least one slot is freed.
+   * Falls back to probing runtime status when available.
+   */
+  private async evictStaleRuntimesUnderPressure(params: { cfg: OpenClawConfig }): Promise<number> {
+    if (this.runtimeCache.size() === 0) {
+      return 0;
+    }
+    const now = Date.now();
+    const PROBE_IDLE_MS = 5 * 60 * 1000;
+    const BLIND_IDLE_MS = 30 * 60 * 1000;
+    const snapshot = this.runtimeCache.snapshot({ now });
+    const candidates = snapshot
+      .filter((entry) => !this.activeTurnBySession.has(entry.actorKey) && entry.idleMs >= PROBE_IDLE_MS)
+      .sort((a, b) => b.idleMs - a.idleMs);
+
+    let reclaimed = 0;
+    for (const candidate of candidates) {
+      const evicted = await this.actorQueue.run(candidate.actorKey, async () => {
+        if (this.activeTurnBySession.has(candidate.actorKey)) {
+          return false;
+        }
+        const cached = this.runtimeCache.peek(candidate.actorKey);
+        if (!cached) {
+          return false;
+        }
+        let isStale = false;
+        if (cached.runtime.getStatus) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5_000);
+          try {
+            await cached.runtime.getStatus({ handle: cached.handle, signal: controller.signal });
+          } catch {
+            isStale = true;
+          } finally {
+            clearTimeout(timeout);
+          }
+        } else if (candidate.idleMs >= BLIND_IDLE_MS) {
+          isStale = true;
+        }
+        if (!isStale) {
+          return false;
+        }
+        if (this.activeTurnBySession.has(candidate.actorKey)) {
+          return false;
+        }
+        this.runtimeCache.clear(candidate.actorKey);
+        this.evictedRuntimeCount += 1;
+        this.lastEvictedAt = Date.now();
+        logVerbose(
+          `acp-manager: back-pressure evicted stale session ${candidate.actorKey} (idle ${Math.round(candidate.idleMs / 1000)}s)`,
+        );
+        try {
+          await cached.runtime.close({ handle: cached.handle, reason: "stale-pressure-evicted" });
+        } catch (error) {
+          logVerbose(
+            `acp-manager: stale pressure eviction close failed for ${candidate.state.handle.sessionKey}: ${String(error)}`,
+          );
+        }
+        return true;
+      });
+      if (evicted) {
+        reclaimed += 1;
+        break;
+      }
+    }
+    return reclaimed;
   }
 
   private async resolveRuntimeCapabilities(params: {

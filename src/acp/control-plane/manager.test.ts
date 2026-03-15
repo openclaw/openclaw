@@ -1298,4 +1298,266 @@ describe("AcpSessionManager", () => {
       }),
     ).rejects.toThrow("disk locked");
   });
+
+  it("back-pressure evicts stale sessions when getStatus fails at capacity", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-15T00:00:00.000Z"));
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+        return {
+          sessionKey,
+          storeSessionKey: sessionKey,
+          acp: {
+            ...readySessionMeta(),
+            runtimeSessionName: `runtime:${sessionKey}`,
+          },
+        };
+      });
+      hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
+        sessionKey: "agent:codex:acp:session-b",
+        storeSessionKey: "agent:codex:acp:session-b",
+        acp: readySessionMeta(),
+      });
+      const limitedCfg = {
+        acp: {
+          ...baseCfg.acp,
+          maxConcurrentSessions: 1,
+        },
+      } as OpenClawConfig;
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-a",
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
+
+      runtimeState.getStatus.mockRejectedValue(new Error("process not found"));
+
+      vi.advanceTimersByTime(6 * 60 * 1000);
+
+      await manager.initializeSession({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-b",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(runtimeState.close).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "stale-pressure-evicted" }),
+      );
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not evict healthy sessions under back-pressure", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-15T00:00:00.000Z"));
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+        return {
+          sessionKey,
+          storeSessionKey: sessionKey,
+          acp: {
+            ...readySessionMeta(),
+            runtimeSessionName: `runtime:${sessionKey}`,
+          },
+        };
+      });
+      const limitedCfg = {
+        acp: {
+          ...baseCfg.acp,
+          maxConcurrentSessions: 1,
+        },
+      } as OpenClawConfig;
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-a",
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
+
+      vi.advanceTimersByTime(6 * 60 * 1000);
+
+      await expect(
+        manager.initializeSession({
+          cfg: limitedCfg,
+          sessionKey: "agent:codex:acp:session-b",
+          agent: "codex",
+          mode: "persistent",
+        }),
+      ).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: expect.stringContaining("max concurrent sessions"),
+      });
+
+      expect(runtimeState.close).not.toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "stale-pressure-evicted" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("back-pressure evicts sessions without getStatus after blind idle threshold", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-15T00:00:00.000Z"));
+      const ensureSession = vi.fn(
+        async (input: { sessionKey: string; agent: string; mode: "persistent" | "oneshot" }) => ({
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
+        }),
+      );
+      const runTurn = vi.fn(async function* () {
+        yield { type: "done" as const };
+      });
+      const cancel = vi.fn(async () => {});
+      const close = vi.fn(async () => {});
+      const runtimeNoStatus: AcpRuntime = {
+        ensureSession,
+        runTurn,
+        cancel,
+        close,
+      };
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeNoStatus,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+        return {
+          sessionKey,
+          storeSessionKey: sessionKey,
+          acp: {
+            ...readySessionMeta(),
+            runtimeSessionName: `runtime:${sessionKey}`,
+          },
+        };
+      });
+      hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
+        sessionKey: "agent:codex:acp:session-b",
+        storeSessionKey: "agent:codex:acp:session-b",
+        acp: readySessionMeta(),
+      });
+      const limitedCfg = {
+        acp: {
+          ...baseCfg.acp,
+          maxConcurrentSessions: 1,
+        },
+      } as OpenClawConfig;
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-a",
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
+
+      vi.advanceTimersByTime(31 * 60 * 1000);
+
+      await manager.initializeSession({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-b",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(close).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "stale-pressure-evicted" }),
+      );
+      expect(ensureSession).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("back-pressure does not evict sessions without getStatus before blind idle threshold", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-15T00:00:00.000Z"));
+      const runtimeNoStatus: AcpRuntime = {
+        ensureSession: vi.fn(
+          async (input: { sessionKey: string; agent: string; mode: "persistent" | "oneshot" }) => ({
+            sessionKey: input.sessionKey,
+            backend: "acpx",
+            runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
+          }),
+        ),
+        runTurn: vi.fn(async function* () {
+          yield { type: "done" as const };
+        }),
+        cancel: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      };
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeNoStatus,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+        return {
+          sessionKey,
+          storeSessionKey: sessionKey,
+          acp: {
+            ...readySessionMeta(),
+            runtimeSessionName: `runtime:${sessionKey}`,
+          },
+        };
+      });
+      const limitedCfg = {
+        acp: {
+          ...baseCfg.acp,
+          maxConcurrentSessions: 1,
+        },
+      } as OpenClawConfig;
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-a",
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
+
+      vi.advanceTimersByTime(10 * 60 * 1000);
+
+      await expect(
+        manager.initializeSession({
+          cfg: limitedCfg,
+          sessionKey: "agent:codex:acp:session-b",
+          agent: "codex",
+          mode: "persistent",
+        }),
+      ).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: expect.stringContaining("max concurrent sessions"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
