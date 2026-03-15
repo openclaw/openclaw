@@ -357,7 +357,10 @@ export async function startGatewayServer(
   // installed. This prevents SecretRef resolution failures for removed
   // plugins from blocking gateway startup.
   const resolveLoadablePluginIds = (config: OpenClawConfig): ReadonlySet<string> => {
-    const manifestRegistry = loadPluginManifestRegistry({ config, cache: true });
+    // Include workspace-scoped plugins so their SecretRefs are resolved,
+    // matching the workspaceDir used by loadGatewayPlugins at startup.
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const manifestRegistry = loadPluginManifestRegistry({ config, workspaceDir, cache: true });
     return new Set(manifestRegistry.plugins.map((record) => record.id));
   };
 
