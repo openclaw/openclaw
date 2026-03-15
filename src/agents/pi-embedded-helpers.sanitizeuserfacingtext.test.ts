@@ -74,6 +74,56 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("sanitizes non-_error raw API payloads when errorContext is true", () => {
+    const raw =
+      '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(
+      "LLM error: The model is overloaded. Please try later",
+    );
+  });
+
+  it("sanitizes raw API error payloads even without explicit errorContext", () => {
+    const raw =
+      '{"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
+    expect(sanitizeUserFacingText(raw)).toBe(
+      "LLM error server_error: An error occurred while processing your request.",
+    );
+  });
+
+  it("keeps context-overflow rewrites in errorContext for stream-marked *_error payloads", () => {
+    const raw =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Request exceeds model context window"},"sequence_number":2}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
+      "Context overflow: prompt too large for the model.",
+    );
+  });
+
+  it("does not rewrite *_error JSON payloads without errorContext unless stream-marked", () => {
+    const text =
+      '{"type":"error","error":{"type":"server_error","code":"server_error","message":"Example payload for docs"}}';
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("does not rewrite HTTP-prefixed raw API JSON payloads without errorContext", () => {
+    const text =
+      '400 {"type":"error","error":{"type":"server_error","code":"server_error","message":"Example payload for docs"}}';
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("still rewrites HTTP-prefixed raw API payloads in errorContext", () => {
+    const text =
+      '400 {"type":"error","error":{"type":"server_error","code":"server_error","message":"Provider failed"}}';
+    expect(sanitizeUserFacingText(text, { errorContext: true })).toBe(
+      "HTTP 400 server_error: Provider failed",
+    );
+  });
+
+  it("does not rewrite regular assistant JSON that only contains error-shaped fields", () => {
+    const text =
+      '{"request_id":"example-123","error":{"code":"example_code","message":"Example payload for docs"}}';
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
   it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
     expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
       "⚠️ API rate limit reached. Please try again later.",
