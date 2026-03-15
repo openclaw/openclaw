@@ -396,7 +396,11 @@ export async function authorizeGatewayConnect(
     if ("user" in result) {
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
-    return { ok: false, reason: result.reason };
+
+    if (!localDirect || !auth.token) {
+      return { ok: false, reason: result.reason };
+    }
+    // Fall through to token verification for local requests fallback
   }
 
   if (auth.mode === "none") {
@@ -436,7 +440,7 @@ export async function authorizeGatewayConnect(
     }
   }
 
-  if (auth.mode === "token") {
+  if (auth.mode === "token" || (auth.mode === "trusted-proxy" && localDirect)) {
     if (!auth.token) {
       return { ok: false, reason: "token_missing_config" };
     }
