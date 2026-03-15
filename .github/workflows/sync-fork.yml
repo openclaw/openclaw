@@ -1,0 +1,18 @@
+name: Sync Fork
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # every 6 hours
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync fork with upstream
+        run: gh repo sync "$GITHUB_REPOSITORY" --source openclaw/openclaw --branch main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

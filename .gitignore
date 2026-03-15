@@ -121,8 +121,9 @@ dist/protocol.schema.json
 **/.settings/
 **/.gradle/
 
-# Synthing
+# Syncthing
 **/.stfolder/
+*.sync-conflict-*
 .dev-state
 docs/superpowers/plans/2026-03-10-collapsed-side-nav.md
 docs/superpowers/specs/2026-03-10-collapsed-side-nav-design.md
