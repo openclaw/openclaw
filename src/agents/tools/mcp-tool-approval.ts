@@ -24,11 +24,23 @@ import { jsonResult } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 
 // Timeout for the gateway RPC call itself (not the approval wait).
-const APPROVAL_REQUEST_TIMEOUT_MS = 10_000;
+// Aligned with DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS (exec flow) because the
+// registration RPC may block on forwarder.handleRequested before responding.
+const APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
 
 // Runtime set of tool names that have been granted allow-always during this
 // process lifetime. This avoids re-prompting for the same tool within a session.
+// Keys are scoped by agent+policy context so that an approval granted under one
+// agent/policy does not leak to a different agent or stricter policy.
 const runtimeAllowedTools = new Set<string>();
+
+function allowAlwaysCacheKey(
+  toolName: string,
+  agentId: string | undefined,
+  policy: ResolvedToolApprovalPolicy,
+): string {
+  return `${agentId ?? ""}:${policy.security}:${policy.ask}:${toolName}`;
+}
 
 export type ToolApprovalGateOptions = {
   agentId?: string;
@@ -64,9 +76,17 @@ export function withToolApprovalGate(
         return originalExecute(toolCallId, args);
       }
 
-      // Runtime allow-always: skip approval if previously granted.
-      if (runtimeAllowedTools.has(toolName)) {
-        return originalExecute(toolCallId, args);
+      // Runtime allow-always: skip approval if previously granted under this
+      // agent+policy context. Re-evaluate the current policy first so a stricter
+      // policy (e.g. security=deny) is never bypassed by a stale cache entry.
+      const cacheKey = allowAlwaysCacheKey(toolName, opts.agentId, policy);
+      if (runtimeAllowedTools.has(cacheKey)) {
+        const currentDecision = evaluateToolApprovalPolicy({ toolName, policy });
+        if (currentDecision.allowed || currentDecision.requiresApproval) {
+          return originalExecute(toolCallId, args);
+        }
+        // Policy now denies this tool outright. Remove stale cache entry.
+        runtimeAllowedTools.delete(cacheKey);
       }
 
       const decision = evaluateToolApprovalPolicy({ toolName, policy });
@@ -96,7 +116,7 @@ export function withToolApprovalGate(
         });
 
         if (approvalDecision === "allow-always") {
-          runtimeAllowedTools.add(toolName);
+          runtimeAllowedTools.add(cacheKey);
           return originalExecute(toolCallId, args);
         }
         if (approvalDecision === "allow-once") {
