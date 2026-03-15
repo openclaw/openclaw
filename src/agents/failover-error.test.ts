@@ -467,4 +467,18 @@ describe("failover-error", () => {
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
   });
+
+  it("coerces bare leading 402 assistant error string to FailoverError (#47576)", () => {
+    // ZenMux quota-refresh 402 arrives as a bare assistant error string — must coerce to FailoverError
+    // so the embedded runner can enter model fallback.
+    const zenmuxQuota402 =
+      "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.";
+    const err = coerceToFailoverError(new Error(zenmuxQuota402), {
+      provider: "zenmux",
+      model: "gpt-4o",
+    });
+    expect(err).not.toBeNull();
+    expect(err?.reason).toBe("rate_limit");
+    expect(err?.provider).toBe("zenmux");
+  });
 });

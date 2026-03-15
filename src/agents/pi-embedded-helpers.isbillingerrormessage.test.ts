@@ -860,4 +860,19 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+
+  it("classifies bare leading 402 assistant error strings as rate_limit (#47576)", () => {
+    // ZenMux quota-refresh 402 surfaces as a bare assistant error string — must enter model fallback.
+    expect(
+      classifyFailoverReason(
+        "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.",
+      ),
+    ).toBe("rate_limit");
+    // Bare 402 with generic text should be treated as a 402 marker.
+    expect(classifyFailoverReason("402 Quota exceeded")).toBe("rate_limit");
+    // Bare 402 with typical billing text should classify as billing.
+    expect(
+      classifyFailoverReason("402 Please add more credits to continue using this service."),
+    ).toBe("billing");
+  });
 });
