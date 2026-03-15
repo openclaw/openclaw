@@ -120,6 +120,43 @@ If you see `!`:
 - Make sure the Gateway is running locally (default setup), or run a node host on this machine if the Gateway runs elsewhere.
 - Open the extension Options page; it validates relay reachability + gateway-token auth.
 
+### `!` on non-localhost tabs (`host_permissions` scope)
+
+The extension's `manifest.json` declares `host_permissions` for `http://127.0.0.1/*` and `http://localhost/*` only.
+On Chrome MV3, this can cause the service worker's `fetch()` and `WebSocket` connections to the relay
+to be blocked when the **active tab** is a non-localhost page (e.g. `google.com`), depending on your
+Chrome "site access" setting for the extension.
+
+**Symptom:** extension shows `ON` on `127.0.0.1` tabs but `!` on any other site.
+
+**Workaround** (until upstream ships a broader `host_permissions`):
+
+1. Edit `manifest.json` (find its path with `openclaw browser extension path`):
+
+```json
+"host_permissions": ["http://127.0.0.1/*", "http://localhost/*", "<all_urls>"]
+```
+
+2. `chrome://extensions` → **Reload** the extension.
+3. Right-click the extension icon → _This can read and change site data_ → select **On all sites**.
+
+### `chrome.debugger` conflicts with other extensions
+
+Some Chrome extensions conflict with OpenClaw's use of the `chrome.debugger` API.
+
+**Symptom:** all configuration is correct (Options page shows "Relay reachable and authenticated"),
+but clicking the toolbar button still shows `!`. The service worker console
+(`chrome://extensions` → inspect _Service Worker_ → Console) logs:
+
+```
+attach failed Cannot access a chrome-extension:// URL of different extension
+```
+
+**Fix:** disable other extensions one by one to find the conflicting one.
+Once found, either keep it disabled while using OpenClaw, or — recommended — use a
+**dedicated Chrome profile** for OpenClaw browser relay
+(this also improves security by isolating your browsing sessions from agent control).
+
 ## Remote Gateway (use a node host)
 
 ### Local Gateway (same machine as Chrome) — usually **no extra steps**
