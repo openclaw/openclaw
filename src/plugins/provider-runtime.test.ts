@@ -51,6 +51,12 @@ describe("provider-runtime", () => {
     const plugin = resolveProviderRuntimePlugin({ provider: "Open Router" });
 
     expect(plugin?.id).toBe("openrouter");
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "Open Router",
+        bundledProviderAllowlistCompat: true,
+      }),
+    );
   });
 
   it("dispatches runtime hooks for the matched provider", async () => {
