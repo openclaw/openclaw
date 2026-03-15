@@ -116,8 +116,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     if (displayName) {
-      await updatePairedDeviceMetadata(approved.device.deviceId, { displayName });
-      approved.device.displayName = displayName;
+      try {
+        await updatePairedDeviceMetadata(approved.device.deviceId, { displayName });
+        approved.device.displayName = displayName;
+      } catch (err) {
+        context.logGateway.warn(
+          `device pairing approved but displayName update failed device=${approved.device.deviceId}: ${err}`,
+        );
+      }
     }
     context.logGateway.info(
       `device pairing approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
