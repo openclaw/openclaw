@@ -15,7 +15,7 @@ struct CronSettings_Previews: PreviewProvider {
                 createdAtMs: 0,
                 updatedAtMs: 0,
                 schedule: .every(everyMs: 86_400_000, anchorMs: nil),
-                sessionTarget: .isolated,
+                sessionTargetRaw: CronSessionTarget.isolated.rawValue,
                 wakeMode: .now,
                 payload: .agentTurn(
                     message: "Summarize inbox",
@@ -69,7 +69,7 @@ extension CronSettings {
             createdAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_100_000,
             schedule: .cron(expr: "0 8 * * *", tz: "UTC"),
-            sessionTarget: .isolated,
+            sessionTargetRaw: CronSessionTarget.isolated.rawValue,
             wakeMode: .nextHeartbeat,
             payload: .agentTurn(
                 message: "Summarize",

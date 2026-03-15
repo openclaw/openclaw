@@ -20,7 +20,7 @@ struct SettingsViewSmokeTests {
             createdAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_100_000,
             schedule: .cron(expr: "0 8 * * *", tz: "UTC"),
-            sessionTarget: .main,
+            sessionTargetRaw: CronSessionTarget.main.rawValue,
             wakeMode: .now,
             payload: .systemEvent(text: "ping"),
             delivery: nil,
@@ -42,7 +42,7 @@ struct SettingsViewSmokeTests {
             createdAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_100_000,
             schedule: .every(everyMs: 30000, anchorMs: nil),
-            sessionTarget: .isolated,
+            sessionTargetRaw: CronSessionTarget.isolated.rawValue,
             wakeMode: .nextHeartbeat,
             payload: .agentTurn(
                 message: "hello",

@@ -254,6 +254,38 @@ struct CronJob: Identifiable, Codable, Equatable {
         case state
     }
 
+    init(
+        id: String,
+        agentId: String?,
+        name: String,
+        description: String?,
+        enabled: Bool,
+        deleteAfterRun: Bool?,
+        createdAtMs: Int,
+        updatedAtMs: Int,
+        schedule: CronSchedule,
+        sessionTargetRaw: String,
+        wakeMode: CronWakeMode,
+        payload: CronPayload,
+        delivery: CronDelivery?,
+        state: CronJobState)
+    {
+        self.id = id
+        self.agentId = agentId
+        self.name = name
+        self.description = description
+        self.enabled = enabled
+        self.deleteAfterRun = deleteAfterRun
+        self.createdAtMs = createdAtMs
+        self.updatedAtMs = updatedAtMs
+        self.schedule = schedule
+        self.sessionTargetRaw = sessionTargetRaw
+        self.wakeMode = wakeMode
+        self.payload = payload
+        self.delivery = delivery
+        self.state = state
+    }
+
     /// Parsed session target (predefined or custom session ID)
     var parsedSessionTarget: CronCustomSessionTarget {
         CronCustomSessionTarget.from(self.sessionTargetRaw)
