@@ -124,7 +124,18 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
         })
         .join(".")
     : "";
-  const message = typeof record?.message === "string" ? record.message : "Invalid input";
+
+  const code = typeof record?.code === "string" ? record.code : "";
+  const keys = Array.isArray(record?.keys)
+    ? record.keys.filter((k): k is string => typeof k === "string")
+    : [];
+
+  const messageBase = typeof record?.message === "string" ? record.message : "Invalid input";
+  const message =
+    code === "unrecognized_keys" && keys.length > 0
+      ? `${messageBase} (at ${path || "<root>"}: ${keys.join(", ")})`
+      : messageBase;
+
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 
   if (!allowedValuesSummary) {
