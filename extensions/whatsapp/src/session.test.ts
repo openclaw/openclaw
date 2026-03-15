@@ -65,6 +65,7 @@ describe("web session", () => {
     resetLogger();
     setLoggerOverride(null);
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it("creates WA socket with QR handler", async () => {
@@ -83,6 +84,51 @@ describe("web session", () => {
     sock.ev.emit("creds.update", {});
     await flushCredsUpdate();
     expect(saveCreds).toHaveBeenCalled();
+  });
+
+  it("uses configured proxy for WhatsApp socket and fetches", async () => {
+    await createWaSocket(false, false, { proxy: "http://proxy.test:8080" });
+
+    const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+    const passed = makeWASocket.mock.calls[0][0] as {
+      agent?: unknown;
+      fetchAgent?: unknown;
+      options?: unknown;
+    };
+
+    expect(passed.agent).toBeTruthy();
+    expect(passed.fetchAgent).toBeTruthy();
+    expect(passed.options).toEqual(expect.objectContaining({ dispatcher: passed.fetchAgent }));
+  });
+
+  it("uses HTTPS_PROXY when no explicit proxy is configured", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+
+    await createWaSocket(false, false);
+
+    const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+    const passed = makeWASocket.mock.calls[0][0] as {
+      agent?: unknown;
+      fetchAgent?: unknown;
+    };
+
+    expect(passed.agent).toBeTruthy();
+    expect(passed.fetchAgent).toBeTruthy();
+  });
+
+  it("treats blank explicit proxy as opt-out from env proxy fallback", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+
+    await createWaSocket(false, false, { proxy: "" });
+
+    const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+    const passed = makeWASocket.mock.calls[0][0] as {
+      agent?: unknown;
+      fetchAgent?: unknown;
+    };
+
+    expect(passed.agent).toBeUndefined();
+    expect(passed.fetchAgent).toBeUndefined();
   });
 
   it("waits for connection open", async () => {

@@ -328,6 +328,7 @@ vi.mock("./provider.lifecycle.js", () => ({
 }));
 
 vi.mock("./rest-fetch.js", () => ({
+  patchDiscordRequestClientFetch: vi.fn(),
   resolveDiscordRestFetch: () => async () => undefined,
 }));
 

@@ -7,7 +7,9 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import qrcode from "qrcode-terminal";
+import { ProxyAgent } from "undici";
 import { formatCliCommand } from "../../../src/cli/command-format.js";
 import { danger, success } from "../../../src/globals.js";
 import { getChildLogger, toPinoLikeLogger } from "../../../src/logging.js";
@@ -90,7 +92,7 @@ async function safeSaveCreds(
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
-  opts: { authDir?: string; onQr?: (qr: string) => void } = {},
+  opts: { authDir?: string; onQr?: (qr: string) => void; proxy?: string } = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
@@ -104,7 +106,14 @@ export async function createWaSocket(
   const sessionLogger = getChildLogger({ module: "web-session" });
   maybeRestoreCredsFromBackup(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
-  const { version } = await fetchLatestBaileysVersion();
+  const proxy = resolveWhatsAppProxyUrl(opts.proxy);
+  const proxyAgents = createWhatsAppProxyAgents(proxy, sessionLogger);
+  if (proxyAgents) {
+    sessionLogger.info({ source: proxy?.source }, "WhatsApp proxy enabled");
+  }
+  const { version } = await fetchLatestBaileysVersion(
+    proxyAgents ? ({ dispatcher: proxyAgents.fetchAgent } as RequestInit) : undefined,
+  );
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
@@ -116,6 +125,9 @@ export async function createWaSocket(
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    agent: proxyAgents?.wsAgent,
+    fetchAgent: proxyAgents?.fetchAgent as unknown as import("node:https").Agent,
+    options: proxyAgents ? ({ dispatcher: proxyAgents.fetchAgent } as RequestInit) : undefined,
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
@@ -158,6 +170,82 @@ export async function createWaSocket(
   }
 
   return sock;
+}
+
+const WHATSAPP_HTTP_PROXY_ENV_KEYS = [
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "https_proxy",
+  "http_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+] as const;
+
+type WhatsAppProxyResolution =
+  | { url: string; source: "config" | "env" }
+  | { source: "config" | "env"; unsupportedProtocol: string }
+  | undefined;
+
+function resolveWhatsAppProxyUrl(configuredProxy?: string): WhatsAppProxyResolution {
+  if (configuredProxy !== undefined) {
+    const trimmed = configuredProxy.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    return validateWhatsAppProxyUrl(trimmed, "config");
+  }
+  for (const key of WHATSAPP_HTTP_PROXY_ENV_KEYS) {
+    const value = process.env[key]?.trim();
+    if (!value) {
+      continue;
+    }
+    const validated = validateWhatsAppProxyUrl(value, "env");
+    if (validated && "unsupportedProtocol" in validated) {
+      continue;
+    }
+    return validated;
+  }
+  return undefined;
+}
+
+function validateWhatsAppProxyUrl(
+  value: string,
+  source: "config" | "env",
+): WhatsAppProxyResolution {
+  try {
+    const protocol = new URL(value).protocol;
+    if (protocol === "http:" || protocol === "https:") {
+      return { url: value, source };
+    }
+    return { source, unsupportedProtocol: protocol };
+  } catch {
+    return { source, unsupportedProtocol: "invalid" };
+  }
+}
+
+function createWhatsAppProxyAgents(
+  proxy: WhatsAppProxyResolution,
+  logger: ReturnType<typeof getChildLogger>,
+) {
+  if (!proxy) {
+    return undefined;
+  }
+  if ("unsupportedProtocol" in proxy) {
+    logger.warn(
+      { protocol: proxy.unsupportedProtocol, source: proxy.source },
+      "WhatsApp proxy ignored because only HTTP(S) proxies are supported",
+    );
+    return undefined;
+  }
+  try {
+    return {
+      wsAgent: new HttpsProxyAgent<string>(proxy.url),
+      fetchAgent: new ProxyAgent(proxy.url),
+    };
+  } catch (err) {
+    logger.warn({ error: String(err), source: proxy.source }, "invalid WhatsApp proxy");
+    return undefined;
+  }
 }
 
 export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {

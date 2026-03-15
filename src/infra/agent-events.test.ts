@@ -17,6 +17,35 @@ describe("agent-events sequencing", () => {
     expect(getAgentRunContext("run-1")).toBeUndefined();
   });
 
+  test("preserves webchat mirror target across later run context updates", async () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-bridge", {
+      sessionKey: "agent:main:telegram:12345",
+      webchatMirrorTarget: {
+        channel: "telegram",
+        to: "telegram:12345",
+        accountId: "default",
+      },
+    });
+    registerAgentRunContext("run-bridge", {
+      verboseLevel: "on",
+      isControlUiVisible: true,
+    });
+
+    expect(getAgentRunContext("run-bridge")).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:12345",
+        verboseLevel: "on",
+        isControlUiVisible: true,
+        webchatMirrorTarget: {
+          channel: "telegram",
+          to: "telegram:12345",
+          accountId: "default",
+        },
+      }),
+    );
+  });
+
   test("maintains monotonic seq per runId", async () => {
     const seen: Record<string, number[]> = {};
     const stop = onAgentEvent((evt) => {

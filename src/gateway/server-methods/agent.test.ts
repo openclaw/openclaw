@@ -509,6 +509,77 @@ describe("gateway agent handler", () => {
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
   });
 
+  it("registers a webchat mirror target for channel-scoped agent sessions", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "existing-session-id",
+        updatedAt: Date.now(),
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:12345",
+          accountId: "default",
+          threadId: "42",
+        },
+        lastChannel: "telegram",
+        lastTo: "telegram:12345",
+        lastAccountId: "default",
+        lastThreadId: "42",
+      },
+      canonicalKey: "agent:main:telegram:12345:thread:42",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:telegram:12345:thread:42": {
+          sessionId: "existing-session-id",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "telegram:12345",
+            accountId: "default",
+            threadId: "42",
+          },
+        },
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "webchat turn",
+        sessionKey: "agent:main:telegram:12345:thread:42",
+        idempotencyKey: "test-webchat-mirror-target",
+      },
+      {
+        reqId: "webchat-mirror-1",
+        client: {
+          connect: {
+            client: { id: "webchat-ui", mode: "webchat" },
+          },
+        } as AgentHandlerArgs["client"],
+        isWebchatConnect: () => true,
+      },
+    );
+
+    expect(mocks.registerAgentRunContext).toHaveBeenCalledWith(
+      "test-webchat-mirror-target",
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:12345:thread:42",
+        webchatMirrorTarget: {
+          channel: "telegram",
+          to: "telegram:12345",
+          accountId: "default",
+          threadId: "42",
+        },
+      }),
+    );
+  });
+
   it("handles missing cliSessionIds gracefully", async () => {
     mockMainSessionEntry({});
 

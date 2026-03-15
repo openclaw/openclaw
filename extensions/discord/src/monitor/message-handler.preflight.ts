@@ -55,6 +55,7 @@ import type {
 } from "./message-handler.preflight.types.js";
 import {
   resolveDiscordChannelInfo,
+  resolveDiscordFallbackChannelType,
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
 } from "./message-utils.js";
@@ -197,10 +198,24 @@ export async function preflightDiscordMessage(
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
-  const isDirectMessage = channelInfo?.type === ChannelType.DM;
-  const isGroupDm = channelInfo?.type === ChannelType.GroupDM;
+  const fallbackChannelType = resolveDiscordFallbackChannelType(message);
+  // If Discord omits guild_id, treat unexpected fetched guild-style channel types as untrusted.
+  // Some proxy/REST paths have returned incomplete or misleading channel metadata for DMs, and
+  // letting that override payload-derived DM semantics can route a private chat into channel mode.
+  const fetchedChannelType =
+    !isGuildMessage &&
+    channelInfo?.type !== ChannelType.DM &&
+    channelInfo?.type !== ChannelType.GroupDM
+      ? undefined
+      : channelInfo?.type;
+  // If Discord omits guild_id and the channel lookup fails, default to DM semantics.
+  // This keeps DM routing stable when REST metadata fetches are flaky behind proxies.
+  const effectiveChannelType =
+    fetchedChannelType ?? fallbackChannelType ?? (!isGuildMessage ? ChannelType.DM : undefined);
+  const isDirectMessage = effectiveChannelType === ChannelType.DM;
+  const isGroupDm = effectiveChannelType === ChannelType.GroupDM;
   logDebug(
-    `[discord-preflight] channelId=${messageChannelId} guild_id=${params.data.guild_id} channelType=${channelInfo?.type} isGuild=${isGuildMessage} isDM=${isDirectMessage} isGroupDm=${isGroupDm}`,
+    `[discord-preflight] channelId=${messageChannelId} guild_id=${params.data.guild_id} channelType=${channelInfo?.type} fallbackType=${fallbackChannelType} effectiveType=${effectiveChannelType} isGuild=${isGuildMessage} isDM=${isDirectMessage} isGroupDm=${isGroupDm}`,
   );
 
   if (isGroupDm && !params.groupDmEnabled) {

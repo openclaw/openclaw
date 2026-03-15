@@ -9,6 +9,8 @@ import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   buildInboundDedupeKey,
+  buildInboundDedupeKeyFromParts,
+  markInboundMessageAsSeen,
   resetInboundDedupe,
   shouldSkipDuplicateInbound,
 } from "./reply/inbound-dedupe.js";
@@ -209,6 +211,16 @@ describe("inbound dedupe", () => {
     expect(buildInboundDedupeKey(ctx)).toBe("telegram|telegram:123|42");
   });
 
+  it("builds the same dedupe key from raw parts", () => {
+    expect(
+      buildInboundDedupeKeyFromParts({
+        provider: "telegram",
+        peerId: "telegram:123",
+        messageId: "42",
+      }),
+    ).toBe("telegram|telegram:123|42");
+  });
+
   it("skips duplicates with the same key", () => {
     resetInboundDedupe();
     const ctx: MsgContext = {
@@ -274,6 +286,35 @@ describe("inbound dedupe", () => {
     expect(
       shouldSkipDuplicateInbound(
         { ...base, SessionKey: "agent:main:telegram:direct:7463849194" },
+        { now: 200 },
+      ),
+    ).toBe(true);
+  });
+
+  it("marks mirrored outbound provider message ids as seen", () => {
+    resetInboundDedupe();
+    expect(
+      markInboundMessageAsSeen({
+        provider: "telegram",
+        peerId: "telegram:123",
+        messageId: "msg-out-1",
+        sessionKey: "agent:main:telegram:123",
+        accountId: "default",
+        threadId: "42",
+        now: 100,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipDuplicateInbound(
+        {
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:123",
+          MessageSid: "msg-out-1",
+          SessionKey: "agent:main:telegram:123",
+          AccountId: "default",
+          MessageThreadId: "42",
+        },
         { now: 200 },
       ),
     ).toBe(true);

@@ -17,6 +17,13 @@ export type AgentRunContext = {
   isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
+  /** Optional external route for mirroring a webchat-authored reply back to IM. */
+  webchatMirrorTarget?: {
+    channel: string;
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
 };
 
 // Keep per-run counters so streams stay strictly monotonic per runId.
@@ -44,6 +51,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
+  }
+  if (context.webchatMirrorTarget) {
+    existing.webchatMirrorTarget = { ...context.webchatMirrorTarget };
   }
 }
 

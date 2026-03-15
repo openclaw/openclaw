@@ -5,6 +5,7 @@ import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { mirrorWebchatTextToTarget } from "./server-methods/webchat-mirror.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -467,6 +468,22 @@ export function createAgentEventHandler({
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+
+    const webchatMirrorTarget =
+      getAgentRunContext(sourceRunId)?.webchatMirrorTarget ??
+      getAgentRunContext(clientRunId)?.webchatMirrorTarget;
+    if (jobState === "done" && text && !shouldSuppressSilent && webchatMirrorTarget) {
+      mirrorWebchatTextToTarget({
+        cfg: loadConfig(),
+        sessionKey,
+        text,
+        target: webchatMirrorTarget,
+      }).catch((err: unknown) => {
+        // Log but don't fail the webchat response
+        console.error(`[webchat-mirror] Failed to mirror to ${webchatMirrorTarget.channel}:`, err);
+      });
+    }
+
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,

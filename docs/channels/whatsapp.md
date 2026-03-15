@@ -355,6 +355,39 @@ Behavior notes:
     - legacy default auth in `~/.openclaw/credentials/` is still recognized/migrated for default-account flows
   </Accordion>
 
+  <Accordion title="Gateway proxy">
+    Route WhatsApp WebSocket traffic and Baileys startup/media fetches through an HTTP(S) proxy with `channels.whatsapp.proxy`.
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      proxy: "http://proxy.example:8080",
+    },
+  },
+}
+```
+
+    Per-account override:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      accounts: {
+        primary: {
+          proxy: "http://proxy.example:8080",
+        },
+      },
+    },
+  },
+}
+```
+
+    When `channels.whatsapp.proxy` is unset, OpenClaw falls back to `HTTPS_PROXY` / `HTTP_PROXY` if present.
+
+  </Accordion>
+
   <Accordion title="Logout behavior">
     `openclaw channels logout --channel whatsapp [--account <id>]` clears WhatsApp auth state for that account.
 

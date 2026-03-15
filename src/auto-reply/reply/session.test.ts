@@ -1942,8 +1942,8 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.to).toBe("group:12345");
   });
 
-  it("lets direct webchat turns override persisted external routes for per-channel-peer sessions", async () => {
-    const storePath = await createStorePath("webchat-direct-route-override-");
+  it("keeps persisted external routes for direct webchat turns on per-channel-peer sessions", async () => {
+    const storePath = await createStorePath("webchat-direct-route-preserve-");
     const sessionKey = "agent:main:imessage:direct:+1555";
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
@@ -1973,10 +1973,10 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBe("webchat");
-    expect(result.sessionEntry.lastTo).toBe("session:dashboard");
-    expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
-    expect(result.sessionEntry.deliveryContext?.to).toBe("session:dashboard");
+    expect(result.sessionEntry.lastChannel).toBe("imessage");
+    expect(result.sessionEntry.lastTo).toBe("+1555");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("imessage");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("+1555");
   });
 
   it("keeps persisted external route when OriginatingChannel is non-deliverable", async () => {
