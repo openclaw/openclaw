@@ -21,7 +21,7 @@ type SpawnWithFallbackParams = {
   onFallback?: (err: unknown, fallback: SpawnFallback) => void;
 };
 
-const DEFAULT_RETRY_CODES = ["EBADF"];
+const DEFAULT_RETRY_CODES = ["EBADF", "EAGAIN"];
 
 export function resolveCommandStdio(params: {
   hasInput: boolean;
