@@ -10,16 +10,16 @@
      "test": "echo \"Error: no test specified\" && exit 1" 
    }, 
    "dependencies": { 
-     "ws": "^8.18.0",          // WebSocket 核心依赖（必须） 
-     "dotenv": "^16.4.5",      // 环境变量管理（可选，方便本地测试） 
-     "node-fetch": "^3.3.2",    // HTTP 请求（适配模型调用，可选）
-     "http-proxy": "^1.18.1"     // 反向代理依赖（必须） 
+     "ws": "^8.18.0", 
+     "dotenv": "^16.4.5", 
+     "node-fetch": "^3.3.2", 
+     "http-proxy": "^1.18.1" 
    }, 
    "devDependencies": { 
-     "nodemon": "^3.1.0"       // 开发热重载（可选，本地调试用） 
+     "nodemon": "^3.1.0" 
    }, 
    "engines": { 
-     "node": ">=22.12.0"       // 匹配 OpenClaw 要求的 Node 版本 
+     "node": ">=22.12.0" 
    }, 
    "keywords": ["openclaw", "websocket", "gateway", "railway"], 
    "author": "", 
