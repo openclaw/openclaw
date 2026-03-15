@@ -32,7 +32,8 @@ die() { printf '[deploy-stable] ERROR: %s\n' "$*" >&2; exit 1; }
 # ── 0. Ensure stable worktree exists ──────────────────────────────────────────
 if [[ ! -d "${STABLE_DIR}" ]]; then
   log "Creating openclaw-stable worktree..."
-  git -C "${REPO_DIR}" worktree add "${STABLE_DIR}" main
+  # Use --detach so the stable worktree doesn't need an exclusive branch
+  git -C "${REPO_DIR}" worktree add --detach "${STABLE_DIR}" main
   log "Worktree created at ${STABLE_DIR}"
 fi
 
