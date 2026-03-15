@@ -736,11 +736,12 @@ private fun settingsTextFieldColors() =
     cursorColor = mobileAccent,
   )
 
+@Composable
 private fun Modifier.settingsRowModifier() =
   this
     .fillMaxWidth()
     .border(width = 1.dp, color = mobileBorder, shape = RoundedCornerShape(14.dp))
-    .background(Color.White, RoundedCornerShape(14.dp))
+    .background(mobileCardSurface, RoundedCornerShape(14.dp))
 
 @Composable
 private fun settingsPrimaryButtonColors() =

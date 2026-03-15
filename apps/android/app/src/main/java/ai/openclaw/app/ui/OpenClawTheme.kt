@@ -5,6 +5,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
@@ -13,8 +14,11 @@ fun OpenClawTheme(content: @Composable () -> Unit) {
   val context = LocalContext.current
   val isDark = isSystemInDarkTheme()
   val colorScheme = if (isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+  val mobileColors = if (isDark) darkMobileColors() else lightMobileColors()
 
-  MaterialTheme(colorScheme = colorScheme, content = content)
+  CompositionLocalProvider(LocalMobileColors provides mobileColors) {
+    MaterialTheme(colorScheme = colorScheme, content = content)
+  }
 }
 
 @Composable
