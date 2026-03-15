@@ -309,7 +309,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     const preflightSnapshot = await readConfigFileSnapshot();
     if (preflightSnapshot.exists && !preflightSnapshot.valid) {
       const issues =
-        preflightSnapshot.issues.length > 0
+        (preflightSnapshot.issues?.length ?? 0) > 0
           ? formatConfigIssueLines(preflightSnapshot.issues, "", { normalizeRoot: true }).join("\n")
           : "Unknown validation issue.";
 
