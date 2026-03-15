@@ -122,6 +122,10 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   return list.some((entry) => Boolean(entry?.heartbeat));
 }
 
+function hasDefaultHeartbeat(cfg: OpenClawConfig) {
+  return Boolean(cfg.agents?.defaults?.heartbeat);
+}
+
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const list = cfg.agents?.list ?? [];
@@ -131,7 +135,12 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
       (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
     );
   }
-  return resolvedAgentId === resolveDefaultAgentId(cfg);
+  // When agents.defaults.heartbeat is configured, all agents are enabled.
+  if (hasDefaultHeartbeat(cfg)) {
+    return true;
+  }
+  // No heartbeat configured anywhere — disabled for all agents.
+  return false;
 }
 
 function resolveHeartbeatConfig(
@@ -208,8 +217,16 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
       })
       .filter((entry) => entry.agentId);
   }
-  const fallbackId = resolveDefaultAgentId(cfg);
-  return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
+  if (hasDefaultHeartbeat(cfg)) {
+    // Defaults apply to all agents — include every agent in the list plus the default.
+    const agentIds = new Set(list.map((entry) => normalizeAgentId(entry.id)).filter(Boolean));
+    agentIds.add(resolveDefaultAgentId(cfg));
+    return [...agentIds].map((id) => ({
+      agentId: id,
+      heartbeat: resolveHeartbeatConfig(cfg, id),
+    }));
+  }
+  return [];
 }
 
 export function resolveHeartbeatIntervalMs(
