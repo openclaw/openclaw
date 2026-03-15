@@ -59,9 +59,23 @@ describe("timeout-policy", () => {
     expect(timeout).toBe(5_000);
   });
 
-  it("disables timeout for script jobs when timeoutSeconds <= 0", () => {
+  it("floors fractional timeoutSeconds for script jobs", () => {
+    const timeout = resolveCronJobTimeoutMs(
+      makeJob({ kind: "script", command: "echo hi", timeoutSeconds: 1.9 }),
+    );
+    expect(timeout).toBe(1_900);
+  });
+
+  it("disables timeout for script jobs when timeoutSeconds is zero", () => {
     const timeout = resolveCronJobTimeoutMs(
       makeJob({ kind: "script", command: "echo hi", timeoutSeconds: 0 }),
+    );
+    expect(timeout).toBeUndefined();
+  });
+
+  it("disables timeout for script jobs when timeoutSeconds is negative", () => {
+    const timeout = resolveCronJobTimeoutMs(
+      makeJob({ kind: "script", command: "echo hi", timeoutSeconds: -1 }),
     );
     expect(timeout).toBeUndefined();
   });
