@@ -1,3 +1,4 @@
+import { requestHeartbeatNow } from "../../../../../src/infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../../../../src/infra/system-events.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
@@ -231,6 +232,7 @@ export async function emitSlackModalLifecycleEvent(params: {
     sessionKey: sessionRouting.sessionKey,
     contextKey: [params.contextPrefix, callbackId, viewId, userId].filter(Boolean).join(":"),
   });
+  requestHeartbeatNow({ reason: "slack-interaction", sessionKey: sessionRouting.sessionKey });
 }
 
 export function registerModalLifecycleHandler(params: {
