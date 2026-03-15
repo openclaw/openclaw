@@ -511,6 +511,16 @@ export function triggerChainedJob(
       const successId = jobSnapshot?.onSuccessJobId;
       const failureId = jobSnapshot?.onFailureJobId;
 
+      // Respect the disabled flag: `run(..., "force")` bypasses due-time
+      // gating but disabled jobs must never run — even as chain targets.
+      if (jobSnapshot && !jobSnapshot.enabled) {
+        state.deps.log.warn(
+          { sourceJobId, targetJobId, chainRunId },
+          "cron: chained job is disabled — chain stopped",
+        );
+        return { ok: true, ran: false, reason: "disabled" } as const;
+      }
+
       // Lazy-import the runtime boundary (not ops.js directly) to avoid a
       // circular dep while also keeping ops.ts in the purely-static import
       // graph (service.ts already imports it statically — mixing static and
