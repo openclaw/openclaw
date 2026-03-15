@@ -208,13 +208,25 @@ function resolveImageFallbackCandidates(params: {
   defaultProvider: string;
   modelOverride?: string;
 }): ModelCandidate[] {
+  // Use the user's configured primary model provider as the default for
+  // unprefixed image model refs so that e.g. "moondream" resolves to
+  // "ollama/moondream" instead of always falling back to "anthropic".
+  const primaryRef = params.cfg
+    ? resolveConfiguredModelRef({
+        cfg: params.cfg,
+        defaultProvider: params.defaultProvider,
+        defaultModel: DEFAULT_MODEL,
+      })
+    : null;
+  const effectiveDefaultProvider = primaryRef?.provider ?? params.defaultProvider;
+
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
-    defaultProvider: params.defaultProvider,
+    defaultProvider: effectiveDefaultProvider,
   });
   const allowlist = buildConfiguredAllowlistKeys({
     cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
+    defaultProvider: effectiveDefaultProvider,
   });
   const { candidates, addExplicitCandidate, addAllowlistedCandidate } =
     createModelCandidateCollector(allowlist);
@@ -222,7 +234,7 @@ function resolveImageFallbackCandidates(params: {
   const addRaw = (raw: string, opts?: { allowlist?: boolean }) => {
     const resolved = resolveModelRefFromString({
       raw: String(raw ?? ""),
-      defaultProvider: params.defaultProvider,
+      defaultProvider: effectiveDefaultProvider,
       aliasIndex,
     });
     if (!resolved) {
