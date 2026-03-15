@@ -145,6 +145,7 @@ export type StatusScanResult = {
   gatewayProbeAuthWarning?: string;
   gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
   gatewayReachable: boolean;
+  gatewayConnected: boolean;
   gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
   channelIssues: ReturnType<typeof collectChannelStatusIssues>;
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
@@ -232,6 +233,9 @@ async function scanStatusJsonFast(opts: {
     gatewayProbe,
   } = gatewaySnapshot;
   const gatewayReachable = gatewayProbe?.ok === true;
+  const gatewayConnected =
+    gatewayReachable ||
+    (gatewayProbe?.connectLatencyMs != null && gatewayProbe.connectLatencyMs >= 0);
   const gatewaySelf = gatewayProbe?.presence
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;
@@ -257,6 +261,7 @@ async function scanStatusJsonFast(opts: {
     gatewayProbeAuthWarning,
     gatewayProbe,
     gatewayReachable,
+    gatewayConnected,
     gatewaySelf,
     channelIssues,
     agentStatus,
@@ -342,6 +347,9 @@ export async function scanStatus(
         gatewayProbe,
       } = await resolveGatewayProbeSnapshot({ cfg, opts });
       const gatewayReachable = gatewayProbe?.ok === true;
+      const gatewayConnected =
+        gatewayReachable ||
+        (gatewayProbe?.connectLatencyMs != null && gatewayProbe.connectLatencyMs >= 0);
       const gatewaySelf = gatewayProbe?.presence
         ? pickGatewaySelfPresence(gatewayProbe.presence)
         : null;
@@ -389,6 +397,7 @@ export async function scanStatus(
         gatewayProbeAuthWarning,
         gatewayProbe,
         gatewayReachable,
+        gatewayConnected,
         gatewaySelf,
         channelIssues,
         agentStatus,
