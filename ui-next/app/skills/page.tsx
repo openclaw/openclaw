@@ -88,6 +88,8 @@ const styles = {
     borderColor: "var(--border)",
     borderRadius: "var(--radius-lg)",
     padding: 20,
+    maxWidth: "100%",
+    overflow: "hidden",
   } as React.CSSProperties,
   cardHeader: {
     display: "flex",
@@ -134,6 +136,7 @@ const styles = {
     flexDirection: "column" as const,
     gap: 4,
     flex: 1,
+    minWidth: 0,
   } as React.CSSProperties,
   label: {
     fontSize: 12,
@@ -176,6 +179,7 @@ const styles = {
     borderColor: "var(--border)",
     borderRadius: "var(--radius-md)",
     overflow: "hidden",
+    maxWidth: "100%",
   } as React.CSSProperties,
   groupSummary: {
     padding: "12px 16px",
@@ -196,26 +200,34 @@ const styles = {
     justifyContent: "space-between",
     gap: 16,
     background: "var(--card)",
+    overflow: "hidden",
+    maxWidth: "100%",
   } as React.CSSProperties,
   skillMain: {
     flex: 1,
     minWidth: 0,
+    maxWidth: "100%",
   } as React.CSSProperties,
   skillTitle: {
     fontSize: 14,
     fontWeight: 500,
     color: "var(--text-strong)",
+    wordBreak: "break-word" as const,
+    overflowWrap: "break-word" as const,
   } as React.CSSProperties,
   skillSub: {
     fontSize: 13,
     color: "var(--muted)",
     marginTop: 4,
+    wordBreak: "break-word" as const,
+    overflowWrap: "break-word" as const,
   } as React.CSSProperties,
   chipRow: {
     display: "flex",
     flexWrap: "wrap" as const,
     gap: 6,
     marginTop: 8,
+    maxWidth: "100%",
   } as React.CSSProperties,
   chip: {
     padding: "2px 8px",
@@ -682,7 +694,9 @@ export default function SkillsPage() {
               padding: 24,
               borderRadius: "var(--radius-lg)",
               width: 1800,
-              maxWidth: "90%",
+              maxWidth: "90vw",
+              maxHeight: "90vh",
+              overflow: "auto",
               borderWidth: 1,
               borderStyle: "solid",
               borderColor: "var(--border)",
@@ -711,7 +725,7 @@ export default function SkillsPage() {
               <div style={styles.field}>
                 <label style={styles.label}>Instructions</label>
                 <textarea
-                  style={{ ...styles.input, height: 400, padding: "8px 10px", resize: "vertical" }}
+                  style={{ ...styles.input, height: 400, maxHeight: "50vh", padding: "8px 10px", resize: "vertical", overflow: "auto" }}
                   value={createInstructions}
                   onChange={(e) => setCreateInstructions(e.target.value)}
                   placeholder="Markdown instructions"

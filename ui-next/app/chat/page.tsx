@@ -59,6 +59,8 @@ const styles = {
     display: "grid",
     gap: 20,
     minHeight: 500,
+    maxWidth: "100%",
+    overflow: "hidden",
   } as React.CSSProperties,
   sidebar: {
     background: "var(--card)",
@@ -79,7 +81,9 @@ const styles = {
     borderRadius: "var(--radius-lg)",
     display: "flex",
     flexDirection: "column" as const,
-    height: 500,
+    minHeight: 500,
+    maxHeight: "calc(100vh - 120px)",
+    overflow: "hidden",
   } as React.CSSProperties,
   cardTitle: {
     fontSize: 14,
@@ -151,16 +155,19 @@ const styles = {
   messagesArea: {
     flex: 1,
     overflow: "auto",
+    overflowX: "hidden",
     padding: 16,
     display: "flex",
     flexDirection: "column" as const,
     gap: 12,
+    minHeight: 0,
   } as React.CSSProperties,
   messageRow: {
     display: "flex",
     flexDirection: "column" as const,
     maxWidth: "80%",
     gap: 4,
+    width: "100%",
   } as React.CSSProperties,
   messageRowUser: {
     alignSelf: "flex-end",
@@ -177,6 +184,9 @@ const styles = {
     lineHeight: 1.5,
     whiteSpace: "pre-wrap" as const,
     wordBreak: "break-word" as const,
+    overflowWrap: "break-word" as const,
+    maxWidth: "100%",
+    overflow: "auto",
   } as React.CSSProperties,
   bubbleUser: {
     background: "var(--accent)",
@@ -291,6 +301,10 @@ const styles = {
     lineHeight: 1.6,
     color: "var(--text)",
     whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-word" as const,
+    overflowWrap: "break-word" as const,
+    overflowX: "auto",
+    maxWidth: "100%",
   } as React.CSSProperties,
   codeBlock: {
     marginTop: 8,
@@ -299,6 +313,8 @@ const styles = {
     borderWidth: 1,
     borderStyle: "solid",
     borderColor: "var(--border)",
+    maxWidth: "100%",
+    width: "100%",
   } as React.CSSProperties,
   codeHeader: {
     display: "flex",
@@ -310,6 +326,8 @@ const styles = {
     fontSize: 11,
     fontWeight: 600,
     color: "var(--muted)",
+    overflow: "hidden",
+    flexShrink: 0,
   } as React.CSSProperties,
   codeLanguage: {
     textTransform: "uppercase" as const,
@@ -340,6 +358,7 @@ const styles = {
   partialCodeContainer: {
     position: "relative" as const,
     overflow: "hidden",
+    maxWidth: "100%",
   } as React.CSSProperties,
   codeFadeOverlay: {
     position: "absolute" as const,
@@ -660,9 +679,12 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
             fontSize: 12,
             lineHeight: 1.6,
             borderRadius: 0,
+            maxWidth: "100%",
+            overflowX: "auto",
           }}
           showLineNumbers
           wrapLines
+          wrapLongLines
         >
           {displayCode}
         </SyntaxHighlighter>
@@ -808,8 +830,10 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<GatewaySessionRow[]>([]);
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [chatStream, setChatStream] = useState<string | null>(null);
+  // Store messages per session to prevent cross-session leakage
+  const [sessionMessages, setSessionMessages] = useState<Record<string, ChatMessage[]>>({});
+  // Store streaming state per session
+  const [sessionStreams, setSessionStreams] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState("");
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
   const [models, setModels] = useState<ModelChoice[]>([]);
@@ -877,11 +901,11 @@ export default function ChatPage() {
       });
       // Only update if session hasn't changed while we were fetching
       if (selectedSessionKeyRef.current === sessionKey) {
-        setMessages(res.messages ?? []);
+        setSessionMessages(prev => ({ ...prev, [sessionKey]: res.messages ?? [] }));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load chat history");
-      setMessages([]);
+      setSessionMessages(prev => ({ ...prev, [sessionKey]: [] }));
     } finally {
       setLoading(false);
     }
@@ -892,15 +916,19 @@ export default function ChatPage() {
   // ============================================
 
   const addSystemMessage = useCallback((content: string) => {
-    setMessages((prev) => [
+    if (!selectedSessionKey) return;
+    setSessionMessages((prev) => ({
       ...prev,
-      {
-        role: "system",
-        content,
-        timestamp: Date.now(),
-      },
-    ]);
-  }, []);
+      [selectedSessionKey]: [
+        ...(prev[selectedSessionKey] ?? []),
+        {
+          role: "system",
+          content,
+          timestamp: Date.now(),
+        },
+      ],
+    }));
+  }, [selectedSessionKey]);
 
   const handleCommand = useCallback(
     async (raw: string) => {
@@ -910,14 +938,18 @@ export default function ChatPage() {
       }
 
       const addSystem = (content: string) => {
-        setMessages((prev) => [
+        if (!selectedSessionKey) return;
+        setSessionMessages((prev) => ({
           ...prev,
-          {
-            role: "system",
-            content,
-            timestamp: Date.now(),
-          },
-        ]);
+          [selectedSessionKey]: [
+            ...(prev[selectedSessionKey] ?? []),
+            {
+              role: "system",
+              content,
+              timestamp: Date.now(),
+            },
+          ],
+        }));
       };
 
       try {
@@ -947,8 +979,11 @@ export default function ChatPage() {
             const newKey = `agent:main:${new Date().getTime()}`;
             const res = await request<{ key: string }>("sessions.reset", { key: newKey });
             if (res.key) {
-              setMessages([]);
-              setChatStream(null);
+              setSessionMessages(prev => ({ ...prev, [newKey]: [] }));
+              setSessionStreams(prev => {
+                const { [selectedSessionKey]: _, ...rest } = prev;
+                return rest;
+              });
               setError(null);
               setSelectedSessionKey(res.key);
               addSystem(`Session reset: ${res.key}`);
@@ -1118,8 +1153,6 @@ export default function ChatPage() {
               break;
             }
             setSelectedSessionKey(args);
-            setMessages([]);
-            setChatStream(null);
             setError(null);
             addSystem(`Session switched to ${args}`);
             void loadChatHistory();
@@ -1163,15 +1196,10 @@ export default function ChatPage() {
     let text = draft.trim();
     setDraft("");
 
-    // Spec-First Mode: Auto-prepend /spec clarify for task requests
+    // Spec-First Mode: Auto-prepend /spec clarify for ALL messages
     if (specFirstEnabled && !text.startsWith("/")) {
-      // Check if it looks like a task/build request
-      const taskKeywords = ['build', 'create', 'make', 'develop', 'implement', 'write', 'design', 'plan', 'setup', 'add'];
-      const isTaskRequest = taskKeywords.some(keyword => text.toLowerCase().includes(keyword));
-      
-      if (isTaskRequest) {
-        text = `/spec clarify "${text}"`;
-      }
+      // Always route through spec-first when enabled
+      text = `/spec clarify "${text}"`;
     }
 
     // Check if it's a command (starts with /)
@@ -1185,15 +1213,18 @@ export default function ChatPage() {
 
     setSending(true);
     setError(null);
-    setChatStream("");
+    setSessionStreams((prev) => ({ ...prev, [selectedSessionKey]: "" }));
 
-    // Optimistically add user message
+    // Optimistically add user message to the correct session
     const userMessage: ChatMessage = {
       role: "user",
       content: text,
       timestamp: Date.now(),
     };
-    setMessages((prev) => [...prev, userMessage]);
+    setSessionMessages((prev) => ({
+      ...prev,
+      [selectedSessionKey]: [...(prev[selectedSessionKey] ?? []), userMessage],
+    }));
 
     try {
       // chat.send only acknowledges receipt — actual response comes via "chat" events
@@ -1205,7 +1236,10 @@ export default function ChatPage() {
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send message");
-      setChatStream(null);
+      setSessionStreams((prev) => {
+        const { [selectedSessionKey]: _, ...rest } = prev;
+        return rest;
+      });
     } finally {
       setSending(false);
     }
@@ -1225,15 +1259,18 @@ export default function ChatPage() {
     if (!selectedSessionKey) {return;}
 
     try {
-      // Clear local messages
-      setMessages([]);
-      setChatStream(null);
+      // Clear local messages for this session only
+      setSessionMessages((prev) => ({ ...prev, [selectedSessionKey]: [] }));
+      setSessionStreams((prev) => {
+        const { [selectedSessionKey]: _, ...rest } = prev;
+        return rest;
+      });
       setError(null);
       setShowClearConfirm(false);
 
       // Optional: Send a system message to indicate chat was cleared
       // (commented out - can be enabled if desired)
-      // setMessages([{ role: "system", content: "Chat history cleared", timestamp: Date.now() }]);
+      // setSessionMessages(prev => ({ ...prev, [selectedSessionKey]: [{ role: "system", content: "Chat history cleared", timestamp: Date.now() }] }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to clear chat");
       setShowClearConfirm(false);
@@ -1277,14 +1314,13 @@ export default function ChatPage() {
       return;
     }
 
-    // Only process events for the currently selected session
-    const currentSessionKey = selectedSessionKeyRef.current;
-    if (payload.sessionKey !== currentSessionKey) {
+    const eventSessionKey = payload.sessionKey;
+    if (!eventSessionKey) {
       return;
     }
 
     if (payload.state === "delta") {
-      // Streaming text delta — accumulate into chatStream
+      // Streaming text delta — accumulate into session-specific stream
       const msg = payload.message as Record<string, unknown> | undefined;
       const content = msg?.content;
       let delta = "";
@@ -1299,13 +1335,13 @@ export default function ChatPage() {
         delta = msg.text;
       }
       if (typeof delta === "string") {
-        setChatStream((prev) =>
-          // Gateway sends cumulative text — use it directly if longer
-          delta.length >= (prev?.length ?? 0) ? delta : prev,
-        );
+        setSessionStreams((prev) => ({
+          ...prev,
+          [eventSessionKey]: delta.length >= (prev[eventSessionKey]?.length ?? 0) ? delta : prev[eventSessionKey],
+        }));
       }
     } else if (payload.state === "final") {
-      // Final message — commit to messages list, clear stream
+      // Final message — commit to session-specific messages list, clear stream
       const msg = payload.message as Record<string, unknown> | undefined;
       if (msg) {
         const finalMsg: ChatMessage = {
@@ -1320,25 +1356,42 @@ export default function ChatPage() {
                   : "",
           timestamp: typeof msg.timestamp === "number" ? msg.timestamp : Date.now(),
         };
-        setMessages((prev) => [...prev, finalMsg]);
+        setSessionMessages((prev) => ({
+          ...prev,
+          [eventSessionKey]: [...(prev[eventSessionKey] ?? []), finalMsg],
+        }));
       }
-      setChatStream(null);
+      setSessionStreams((prev) => {
+        const { [eventSessionKey]: _, ...rest } = prev;
+        return rest;
+      });
     } else if (payload.state === "aborted") {
-      // Aborted — if we had streamed text, save it
-      setChatStream((currentStream) => {
+      // Aborted — if we had streamed text, save it to the correct session
+      setSessionStreams((prev) => {
+        const currentStream = prev[eventSessionKey];
         if (currentStream?.trim()) {
           const abortedMsg: ChatMessage = {
             role: "assistant",
             content: currentStream,
             timestamp: Date.now(),
           };
-          setMessages((prev) => [...prev, abortedMsg]);
+          setSessionMessages((msgs) => ({
+            ...msgs,
+            [eventSessionKey]: [...(msgs[eventSessionKey] ?? []), abortedMsg],
+          }));
         }
-        return null;
+        const { [eventSessionKey]: _, ...rest } = prev;
+        return rest;
       });
     } else if (payload.state === "error") {
-      setError(payload.errorMessage ?? "Chat error");
-      setChatStream(null);
+      // Only show error if this is the currently selected session
+      if (eventSessionKey === selectedSessionKeyRef.current) {
+        setError(payload.errorMessage ?? "Chat error");
+      }
+      setSessionStreams((prev) => {
+        const { [eventSessionKey]: _, ...rest } = prev;
+        return rest;
+      });
     }
   });
 
@@ -1353,10 +1406,12 @@ export default function ChatPage() {
         key: `agent:main:${new Date().getTime()}`,
       });
       if (res.key) {
-        // Clear all chat state BEFORE switching session
-        // to prevent loadChatHistory from overwriting with old data
-        setMessages([]);
-        setChatStream(null);
+        // Clear chat state for the new session
+        setSessionMessages((prev) => ({ ...prev, [res.key]: [] }));
+        setSessionStreams((prev) => {
+          const { [selectedSessionKey]: _, ...rest } = prev;
+          return rest;
+        });
         setError(null);
         setSelectedSessionKey(res.key);
         void loadSessions();
@@ -1365,7 +1420,7 @@ export default function ChatPage() {
       setError(err instanceof Error ? err.message : "Failed to create session");
       alert(err instanceof Error ? err.message : "Failed to create session");
     }
-  }, [state, request, loadSessions]);
+  }, [state, request, loadSessions, selectedSessionKey]);
 
   const handleDeleteSession = useCallback(
     async (key: string, e: React.MouseEvent) => {
@@ -1386,10 +1441,17 @@ export default function ChatPage() {
         if (res.deleted) {
           if (selectedSessionKey === key) {
             setSelectedSessionKey(null);
-            setMessages([]);
-            setChatStream(null);
             setError(null);
           }
+          // Clean up session messages and streams
+          setSessionMessages((prev) => {
+            const { [key]: _, ...rest } = prev;
+            return rest;
+          });
+          setSessionStreams((prev) => {
+            const { [key]: _, ...rest } = prev;
+            return rest;
+          });
           void loadSessions();
         }
       } catch (err) {
@@ -1508,7 +1570,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, scrollToBottom]);
+  }, [sessionMessages, sessionStreams, selectedSessionKey, scrollToBottom]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // First check autocomplete shortcuts
@@ -1737,36 +1799,46 @@ export default function ChatPage() {
           ) : (
             <>
               <div style={styles.messagesArea}>
-                {messages.length === 0 && !chatStream ? (
-                  <div style={styles.emptyState}>No messages yet. Start the conversation!</div>
-                ) : (
-                  messages.map((msg, idx) => <Message key={idx} message={msg} />)
-                )}
-                {/* Streaming response — shown while AI is typing */}
-                {chatStream !== null && (
-                  <div
-                    style={{
-                      ...styles.messageRow,
-                      ...styles.messageRowAssistant,
-                    }}
-                  >
-                    <div
-                      style={{
-                        ...styles.bubble,
-                        ...styles.bubbleAssistant,
-                        opacity: 0.85,
-                      }}
-                    >
-                      {chatStream === "" ? (
-                        <span style={{ color: "var(--muted)", fontStyle: "italic" }}>
-                          ●●● typing…
-                        </span>
+                {(() => {
+                  const currentMessages = selectedSessionKey ? (sessionMessages[selectedSessionKey] ?? []) : [];
+                  const currentStream = selectedSessionKey ? sessionStreams[selectedSessionKey] : undefined;
+                  const hasStream = selectedSessionKey && currentStream !== undefined;
+                  
+                  return (
+                    <>
+                      {currentMessages.length === 0 && !hasStream ? (
+                        <div style={styles.emptyState}>No messages yet. Start the conversation!</div>
                       ) : (
-                        chatStream
+                        currentMessages.map((msg, idx) => <Message key={idx} message={msg} />)
                       )}
-                    </div>
-                  </div>
-                )}
+                      {/* Streaming response — shown while AI is typing */}
+                      {hasStream && (
+                        <div
+                          style={{
+                            ...styles.messageRow,
+                            ...styles.messageRowAssistant,
+                          }}
+                        >
+                          <div
+                            style={{
+                              ...styles.bubble,
+                              ...styles.bubbleAssistant,
+                              opacity: 0.85,
+                            }}
+                          >
+                            {currentStream === "" ? (
+                              <span style={{ color: "var(--muted)", fontStyle: "italic" }}>
+                                ●●● typing…
+                              </span>
+                            ) : (
+                              currentStream
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
                 <div ref={messagesEndRef} />
               </div>
 
