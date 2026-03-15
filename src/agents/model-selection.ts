@@ -99,6 +99,22 @@ export function normalizeProviderIdForAuth(provider: string): string {
   return normalized;
 }
 
+/**
+ * Map CLI-only providers to their API-backed equivalents for embedded/helper paths.
+ * CLI providers route through the CLI runner for interactive sessions but need
+ * their API-backed provider for embedded LLM calls (e.g. slug generator).
+ */
+export function normalizeCliProviderForEmbedded(provider: string): string {
+  const normalized = normalizeProviderId(provider);
+  if (normalized === "codex-cli") {
+    return "openai-codex";
+  }
+  if (normalized === "claude-cli") {
+    return "anthropic";
+  }
+  return normalized;
+}
+
 export function findNormalizedProviderValue<T>(
   entries: Record<string, T> | undefined,
   provider: string,
