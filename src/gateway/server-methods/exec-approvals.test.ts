@@ -168,4 +168,22 @@ describe("exec approvals trust handler", () => {
     expect(untrustResponse.error?.message).toContain("interactive CLI caller");
     expect(untrustResponse.warnSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects trust status queries from non-CLI callers", async () => {
+    const backendClient = createClient({
+      id: "openclaw-control-ui",
+      mode: "backend",
+      connId: "conn-backend",
+      deviceId: "dev-backend",
+    });
+    const statusResponse = await invokeHandler({
+      method: "exec.approvals.trust.status",
+      payload: { agentId: "main" },
+      client: backendClient,
+    });
+    expect(statusResponse.ok).toBe(false);
+    expect(statusResponse.error?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(statusResponse.error?.message).toContain("interactive CLI caller");
+    expect(statusResponse.warnSpy).toHaveBeenCalledTimes(1);
+  });
 });

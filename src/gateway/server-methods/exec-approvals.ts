@@ -220,7 +220,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       respond(true, payload, undefined);
     });
   },
-  "exec.approvals.trust.status": ({ params, respond }) => {
+  "exec.approvals.trust.status": ({ params, respond, client, context }) => {
     if (
       !assertValidParams(
         params,
@@ -229,6 +229,22 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
         respond,
       )
     ) {
+      return;
+    }
+    if (!isTrustGrantCallerAllowed(client)) {
+      const callerId = client?.connect?.client?.id ?? "unknown";
+      const callerMode = client?.connect?.client?.mode ?? "unknown";
+      context.logGateway.warn(
+        `exec.approvals.trust.status denied for non-CLI caller (id=${callerId} mode=${callerMode})`,
+      );
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "trust status queries require an interactive CLI caller",
+        ),
+      );
       return;
     }
     const agentId = normalizeExecApprovalAgentId((params as { agentId?: string }).agentId);
