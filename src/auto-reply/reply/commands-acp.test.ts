@@ -875,6 +875,22 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("ACP sessions");
   });
 
+  it("allows mutating /acp actions for internal operator.admin clients", async () => {
+    mockBoundThreadSession();
+
+    const result = await runInternalAcpCommand({
+      commandBody: "/acp set-mode plan",
+      scopes: ["operator.admin"],
+    });
+
+    expect(hoisted.setModeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "plan",
+      }),
+    );
+    expect(result?.reply?.text).toContain("Updated ACP runtime mode");
+  });
+
   it("updates ACP config options and keeps cwd local when using /acp set", async () => {
     mockBoundThreadSession();
 
