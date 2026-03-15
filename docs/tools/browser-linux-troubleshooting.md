@@ -25,7 +25,7 @@ Note, selecting 'chromium-browser' instead of 'chromium'
 chromium-browser is already the newest version (2:1snap1-0ubuntu2).
 ```
 
-This is NOT a real browser — it's just a wrapper.
+This is NOT a real browser - it's just a wrapper.
 
 ### Solution 1: Install Google Chrome (Recommended)
 
@@ -123,7 +123,7 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Problem: "Chrome extension relay is running, but no tab is connected"
 
-You’re using the `chrome` profile (extension relay). It expects the OpenClaw
+You're using an extension relay profile. It expects the OpenClaw
 browser extension to be attached to a live tab.
 
 Fix options:
@@ -135,5 +135,5 @@ Fix options:
 
 Notes:
 
-- The `chrome` profile uses your **system default Chromium browser** when possible.
+- The `chrome-relay` profile uses your **system default Chromium browser** when possible.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; only set those for remote CDP.

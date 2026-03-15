@@ -19,6 +19,7 @@ import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
   evaluateGroupRouteAccessForPolicy,
+  isDangerousNameMatchingEnabled,
   issuePairingChallenge,
   resolveOutboundMediaUrls,
   mergeAllowlist,
@@ -26,10 +27,12 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveSenderCommandAuthorization,
+  resolveSenderScopedGroupPolicy,
   sendMediaWithLeadingCaption,
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/zalouser";
+import { createDeferred } from "../../shared/deferred.js";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
@@ -128,16 +131,6 @@ function resolveInboundQueueKey(message: ZaloInboundMessage): string {
   return `direct:${senderId || threadId}`;
 }
 
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 function resolveZalouserDmSessionScope(config: OpenClawConfig) {
   const configured = config.session?.dmScope;
   return configured === "main" || !configured ? "per-channel-peer" : configured;
@@ -212,6 +205,7 @@ function resolveGroupRequireMention(params: {
   groupId: string;
   groupName?: string | null;
   groups: Record<string, { allow?: boolean; enabled?: boolean; requireMention?: boolean }>;
+  allowNameMatching?: boolean;
 }): boolean {
   const entry = findZalouserGroupEntry(
     params.groups ?? {},
@@ -220,6 +214,7 @@ function resolveGroupRequireMention(params: {
       groupName: params.groupName,
       includeGroupIdAlias: true,
       includeWildcard: true,
+      allowNameMatching: params.allowNameMatching,
     }),
   );
   if (typeof entry?.requireMention === "boolean") {
@@ -316,6 +311,7 @@ async function processMessage(
   });
 
   const groups = account.config.groups ?? {};
+  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
   if (isGroup) {
     const groupEntry = findZalouserGroupEntry(
       groups,
@@ -324,6 +320,7 @@ async function processMessage(
         groupName,
         includeGroupIdAlias: true,
         includeWildcard: true,
+        allowNameMatching,
       }),
     );
     const routeAccess = evaluateGroupRouteAccessForPolicy({
@@ -353,6 +350,10 @@ async function processMessage(
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
   const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((v) => String(v));
+  const senderGroupPolicy = resolveSenderScopedGroupPolicy({
+    groupPolicy,
+    groupAllowFrom: configGroupAllowFrom,
+  });
   const shouldComputeCommandAuth = core.channel.commands.shouldComputeCommandAuthorized(
     commandBody,
     config,
@@ -364,10 +365,11 @@ async function processMessage(
   const accessDecision = resolveDmGroupAccessWithLists({
     isGroup,
     dmPolicy,
-    groupPolicy,
+    groupPolicy: senderGroupPolicy,
     allowFrom: configAllowFrom,
     groupAllowFrom: configGroupAllowFrom,
     storeAllowFrom,
+    groupAllowFromFallbackToAllowFrom: false,
     isSenderAllowed: (allowFrom) => isSenderAllowed(senderId, allowFrom),
   });
   if (isGroup && accessDecision.decision !== "allow") {
@@ -466,6 +468,7 @@ async function processMessage(
         groupId: chatId,
         groupName,
         groups,
+        allowNameMatching,
       })
     : false;
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(config, route.agentId);

@@ -13,6 +13,7 @@ import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
+import { normalizeRegisteredProvider } from "./provider-validation.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import {
   isPluginHookName,
@@ -237,6 +238,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const existingHook = registry.hooks.find((entry) => entry.entry.hook.name === name);
+    if (existingHook) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `hook already registered: ${name} (${existingHook.pluginId})`,
+      });
+      return;
+    }
 
     const description = entry?.hook.description ?? opts?.description ?? "";
     const hookEntry: HookEntry = entry
@@ -418,6 +429,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const existing = registry.channels.find((entry) => entry.plugin.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `channel already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
     record.channelIds.push(id);
     registry.channels.push({
       pluginId: record.id,
@@ -428,16 +449,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const registerProvider = (record: PluginRecord, provider: ProviderPlugin) => {
-    const id = typeof provider?.id === "string" ? provider.id.trim() : "";
-    if (!id) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "provider registration missing id",
-      });
+    const normalizedProvider = normalizeRegisteredProvider({
+      pluginId: record.id,
+      source: record.source,
+      provider,
+      pushDiagnostic,
+    });
+    if (!normalizedProvider) {
       return;
     }
+    const id = normalizedProvider.id;
     const existing = registry.providers.find((entry) => entry.provider.id === id);
     if (existing) {
       pushDiagnostic({
@@ -451,7 +472,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.providerIds.push(id);
     registry.providers.push({
       pluginId: record.id,
-      provider,
+      provider: normalizedProvider,
       source: record.source,
     });
   };
@@ -462,6 +483,28 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     opts?: { commands?: string[] },
   ) => {
     const commands = (opts?.commands ?? []).map((cmd) => cmd.trim()).filter(Boolean);
+    if (commands.length === 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "cli registration missing explicit commands metadata",
+      });
+      return;
+    }
+    const existing = registry.cliRegistrars.find((entry) =>
+      entry.commands.some((command) => commands.includes(command)),
+    );
+    if (existing) {
+      const overlap = commands.find((command) => existing.commands.includes(command));
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `cli command already registered: ${overlap ?? commands[0]} (${existing.pluginId})`,
+      });
+      return;
+    }
     record.cliCommands.push(...commands);
     registry.cliRegistrars.push({
       pluginId: record.id,
@@ -474,6 +517,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
     const id = service.id.trim();
     if (!id) {
+      return;
+    }
+    const existing = registry.services.find((entry) => entry.service.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `service already registered: ${id} (${existing.pluginId})`,
+      });
       return;
     }
     record.services.push(id);
