@@ -127,7 +127,8 @@ async function executeModel(
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
       const model = session?.model || sessions?.defaults?.model || "default";
-      const available = models?.models?.map((m: ModelCatalogEntry) => m.id) ?? [];
+      const available =
+        models?.models?.map((m: ModelCatalogEntry) => `${m.provider}/${m.id}`) ?? [];
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
         lines.push(
