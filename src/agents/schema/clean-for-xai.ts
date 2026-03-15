@@ -59,3 +59,20 @@ export function isXaiProvider(modelProvider?: string, modelId?: string): boolean
   }
   return false;
 }
+
+/**
+ * Volcengine/Kimi models reject the same JSON Schema keywords as xAI (minLength,
+ * maxLength, etc.). Detect these providers so we can strip the keywords before
+ * sending tool definitions.
+ */
+export function isVolcengineOrKimiProvider(modelProvider?: string, modelId?: string): boolean {
+  const provider = modelProvider?.toLowerCase() ?? "";
+  if (provider.includes("volcengine") || provider === "ark") {
+    return true;
+  }
+  const lowerModelId = modelId?.toLowerCase() ?? "";
+  if (lowerModelId.includes("kimi")) {
+    return true;
+  }
+  return false;
+}
