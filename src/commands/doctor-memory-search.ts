@@ -1,5 +1,10 @@
 import fsSync from "node:fs";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import path from "node:path";
+import {
+  resolveAgentDir,
+  resolveDefaultAgentId,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -26,6 +31,7 @@ export async function noteMemorySearchHealth(
 ): Promise<void> {
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const resolved = resolveMemorySearchConfig(cfg, agentId);
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved?.remote?.apiKey);
 
@@ -39,6 +45,26 @@ export async function noteMemorySearchHealth(
   const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
   if (backendConfig.backend === "qmd") {
     return;
+  }
+
+  const missingExtraPaths = findMissingMemorySearchExtraPaths({
+    extraPaths: resolved.extraPaths ?? [],
+    workspaceDir,
+  });
+  if (missingExtraPaths.length > 0) {
+    note(
+      [
+        "Memory search is configured with extraPaths that do not exist.",
+        "File-backed continuity can look broken when these paths are missing because there is nothing to index or watch.",
+        "",
+        ...missingExtraPaths.map((entry) => `- ${entry}`),
+        "",
+        "Fix (pick one):",
+        "- Create the missing file/directory",
+        `- Remove the stale path from agents.defaults.memorySearch.extraPaths`,
+      ].join("\n"),
+      "Memory search",
+    );
   }
 
   // If a specific provider is configured (not "auto"), check only that one.
@@ -230,4 +256,21 @@ function buildGatewayProbeWarning(
   return detail
     ? `Gateway memory probe for default agent is not ready: ${detail}`
     : "Gateway memory probe for default agent is not ready.";
+}
+
+function findMissingMemorySearchExtraPaths(params: {
+  extraPaths: string[];
+  workspaceDir: string;
+}): string[] {
+  return params.extraPaths.filter((rawPath) => {
+    const trimmed = rawPath.trim();
+    if (!trimmed) {
+      return false;
+    }
+    const resolvedPath =
+      trimmed.startsWith("~") || path.isAbsolute(trimmed)
+        ? resolveUserPath(trimmed)
+        : path.resolve(params.workspaceDir, trimmed);
+    return !fsSync.existsSync(resolvedPath);
+  });
 }
