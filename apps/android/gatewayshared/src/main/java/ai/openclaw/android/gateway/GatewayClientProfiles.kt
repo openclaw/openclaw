@@ -11,6 +11,24 @@ object GatewayClientProfiles {
   const val AndroidDeviceFamily = "Android"
   const val WatchDeviceFamily = "watch"
 
+  fun normalizeGatewayHost(host: String): String {
+    return host.trim().removePrefix("[").removeSuffix("]")
+  }
+
+  fun formatHostForUrlAuthority(host: String): String {
+    val trimmedHost = normalizeGatewayHost(host)
+    if (trimmedHost.isEmpty()) return trimmedHost
+    return if (':' in trimmedHost) {
+      "[$trimmedHost]"
+    } else {
+      trimmedHost
+    }
+  }
+
+  fun buildGatewayUrl(scheme: String, host: String, port: Int): String {
+    return "$scheme://${formatHostForUrlAuthority(host)}:$port"
+  }
+
   fun resolveModelIdentifier(): String? {
     return listOfNotNull(Build.MANUFACTURER, Build.MODEL)
       .joinToString(" ")

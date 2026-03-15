@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.android.gateway.GatewayClientProfiles
 import java.util.Base64
 import java.util.Locale
 import java.net.URI
@@ -87,7 +88,7 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
 
   val normalized = if (raw.contains("://")) raw else "https://$raw"
   val uri = runCatching { URI(normalized) }.getOrNull() ?: return null
-  val host = uri.host?.trim().orEmpty()
+  val host = GatewayClientProfiles.normalizeGatewayHost(uri.host?.trim().orEmpty())
   if (host.isEmpty()) return null
 
   val scheme = uri.scheme?.trim()?.lowercase(Locale.US).orEmpty()
@@ -98,7 +99,12 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
       else -> true
     }
   val port = uri.port.takeIf { it in 1..65535 } ?: if (tls) 443 else 18789
-  val displayUrl = "${if (tls) "https" else "http"}://$host:$port"
+  val displayUrl =
+    GatewayClientProfiles.buildGatewayUrl(
+      scheme = if (tls) "https" else "http",
+      host = host,
+      port = port,
+    )
 
   return GatewayEndpointConfig(host = host, port = port, tls = tls, displayUrl = displayUrl)
 }
@@ -140,7 +146,7 @@ internal fun composeGatewayManualUrl(hostInput: String, portInput: String, tls: 
   val port = portInput.trim().toIntOrNull() ?: return null
   if (host.isEmpty() || port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
-  return "$scheme://$host:$port"
+  return GatewayClientProfiles.buildGatewayUrl(scheme = scheme, host = host, port = port)
 }
 
 private fun parseJsonObject(input: String): JsonObject? {
