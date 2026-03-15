@@ -186,22 +186,25 @@ describe("control UI routing", () => {
     }
   });
 
-  it("stacks the refreshed top navigation for narrow viewports", async () => {
+  it("keeps the refreshed top navigation in a single compact row on narrow viewports", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
     expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
 
     const shell = app.querySelector<HTMLElement>(".topnav-shell");
+    const actions = app.querySelector<HTMLElement>(".topnav-shell__actions");
     const content = app.querySelector<HTMLElement>(".topnav-shell__content");
     expect(shell).not.toBeNull();
+    expect(actions).not.toBeNull();
     expect(content).not.toBeNull();
-    if (!shell || !content) {
+    if (!shell || !actions || !content) {
       return;
     }
 
-    expect(getComputedStyle(shell).flexWrap).toBe("wrap");
-    expect(getComputedStyle(content).width).not.toBe("auto");
+    expect(getComputedStyle(shell).flexWrap).toBe("nowrap");
+    expect(getComputedStyle(actions).order).toBe("2");
+    expect(getComputedStyle(content).order).toBe("3");
   });
 
   it("keeps the mobile topbar nav toggle visible beside the search row", async () => {
@@ -226,6 +229,24 @@ describe("control UI routing", () => {
 
     expect(toggleWidth).toBeGreaterThan(0);
     expect(actionsWidth).toBeLessThan(shellWidth);
+  });
+
+  it("caps the mobile topbar search width before it hides the current tab", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
+
+    const search = app.querySelector<HTMLElement>(".topbar-search");
+    const searchShortcut = app.querySelector<HTMLElement>(".topbar-search__kbd");
+    expect(search).not.toBeNull();
+    expect(searchShortcut).not.toBeNull();
+    if (!search || !searchShortcut) {
+      return;
+    }
+
+    expect(getComputedStyle(search).maxWidth).toBe("108px");
+    expect(getComputedStyle(searchShortcut).display).toBe("none");
   });
 
   it("opens the mobile sidenav as a drawer from the topbar toggle", async () => {
