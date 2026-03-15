@@ -12,6 +12,12 @@ const TtsToolSchema = Type.Object({
   channel: Type.Optional(
     Type.String({ description: "Optional channel id to pick output format (e.g. telegram)." }),
   ),
+  deliveryMode: Type.Optional(
+    Type.Union([Type.Literal("send"), Type.Literal("return")], {
+      description:
+        "Delivery mode: 'send' (default) returns MEDIA output for normal delivery; 'return' returns metadata only without MEDIA output.",
+    }),
+  ),
 });
 
 export function createTtsTool(opts?: {
@@ -27,6 +33,25 @@ export function createTtsTool(opts?: {
       const params = args as Record<string, unknown>;
       const text = readStringParam(params, "text", { required: true });
       const channel = readStringParam(params, "channel");
+      const deliveryModeRaw = readStringParam(params, "deliveryMode");
+      const deliveryMode = deliveryModeRaw == null || deliveryModeRaw === "" ? "send" : deliveryModeRaw;
+      if (deliveryMode !== "send" && deliveryMode !== "return") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "deliveryMode must be one of: send, return",
+            },
+          ],
+          details: {
+            ok: false,
+            error: {
+              code: "VALIDATION_ERROR",
+              message: "deliveryMode must be one of: send, return",
+            },
+          },
+        };
+      }
       const cfg = opts?.config ?? loadConfig();
       const result = await textToSpeech({
         text,
@@ -35,6 +60,25 @@ export function createTtsTool(opts?: {
       });
 
       if (result.success && result.audioPath) {
+        if (deliveryMode === "return") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "TTS audio generated (return mode).",
+              },
+            ],
+            details: {
+              ok: true,
+              deliveryMode: "return",
+              audioPath: result.audioPath,
+              mimeType: result.voiceCompatible ? "audio/ogg" : "audio/mpeg",
+              sent: false,
+              provider: result.provider,
+            },
+          };
+        }
+
         const lines: string[] = [];
         // Tag Telegram Opus output as a voice bubble instead of a file attachment.
         if (result.voiceCompatible) {
@@ -43,7 +87,12 @@ export function createTtsTool(opts?: {
         lines.push(`MEDIA:${result.audioPath}`);
         return {
           content: [{ type: "text", text: lines.join("\n") }],
-          details: { audioPath: result.audioPath, provider: result.provider },
+          details: {
+            ok: true,
+            audioPath: result.audioPath,
+            provider: result.provider,
+            deliveryMode: "send",
+          },
         };
       }
 
@@ -54,7 +103,13 @@ export function createTtsTool(opts?: {
             text: result.error ?? "TTS conversion failed",
           },
         ],
-        details: { error: result.error },
+        details: {
+          ok: false,
+          error: {
+            code: "TTS_GENERATION_FAILED",
+            message: result.error ?? "TTS conversion failed",
+          },
+        },
       };
     },
   };
