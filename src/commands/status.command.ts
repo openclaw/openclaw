@@ -30,6 +30,7 @@ import {
   formatTokensCompact,
   shortenText,
 } from "./status.format.js";
+import { formatLastHeartbeatDetail } from "./status.last-heartbeat.js";
 import { scanStatus } from "./status.scan.js";
 import {
   formatUpdateAvailableHint,
@@ -346,10 +347,7 @@ export async function statusCommand(
     if (!lastHeartbeat) {
       return muted("none");
     }
-    const age = formatTimeAgo(Date.now() - lastHeartbeat.ts);
-    const channel = lastHeartbeat.channel ?? "unknown";
-    const accountLabel = lastHeartbeat.accountId ? `account ${lastHeartbeat.accountId}` : null;
-    return [lastHeartbeat.status, `${age} ago`, channel, accountLabel].filter(Boolean).join(" · ");
+    return formatLastHeartbeatDetail(lastHeartbeat);
   })();
 
   const storeLabel =
