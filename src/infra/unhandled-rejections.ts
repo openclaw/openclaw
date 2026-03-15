@@ -51,6 +51,16 @@ const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
   "TimeoutError",
 ]);
 
+// SQLite transient errors that shouldn't crash the gateway. These occur during
+// temporary filesystem contention, disk pressure, or lock conflicts and resolve
+// on their own. Crashing on these causes launchd/systemd restart loops.
+const TRANSIENT_SQLITE_CODES = new Set([
+  "SQLITE_CANTOPEN",
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+  "SQLITE_IOERR",
+]);
+
 const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
   /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|EPROTO|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
 
@@ -195,6 +205,26 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
+function isTransientSqliteError(err: unknown): boolean {
+  for (const candidate of collectErrorGraphCandidates(err, (current) => [
+    current.cause,
+    current.error,
+  ])) {
+    const code = extractErrorCodeOrErrno(candidate);
+    if (code && TRANSIENT_SQLITE_CODES.has(code)) {
+      return true;
+    }
+    // SQLite errors sometimes only appear in the message
+    if (candidate && typeof candidate === "object") {
+      const message = (candidate as { message?: unknown }).message;
+      if (typeof message === "string" && /\bSQLITE_(CANTOPEN|BUSY|LOCKED|IOERR)\b/.test(message)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
@@ -248,6 +278,11 @@ export function installUnhandledRejectionHandler(): void {
         "[openclaw] Non-fatal unhandled rejection (continuing):",
         formatUncaughtError(reason),
       );
+      return;
+    }
+
+    if (isTransientSqliteError(reason)) {
+      console.warn("[openclaw] Transient SQLite error (continuing):", formatUncaughtError(reason));
       return;
     }
 

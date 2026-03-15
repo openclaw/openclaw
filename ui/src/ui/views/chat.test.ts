@@ -123,6 +123,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onSessionKeyChange: () => undefined,
     thinkingLevel: null,
     showThinking: false,
+    showToolCalls: true,
     loading: false,
     sending: false,
     canAbort: false,
@@ -131,6 +132,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     messages: [],
     toolMessages: [],
     streamSegments: [],
+    streamSegmentOffset: 0,
     stream: null,
     streamStartedAt: null,
     assistantAvatarUrl: null,
@@ -646,5 +648,155 @@ describe("chat view", () => {
     );
     expect(rerendered?.value).toBe("gpt-5-mini");
     vi.unstubAllGlobals();
+  });
+
+  it("prefers the session label over displayName in the grouped chat session selector", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
+    state.settings.sessionKey = state.sessionKey;
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: state.sessionKey,
+          kind: "direct",
+          updatedAt: null,
+          label: "cron-config-check",
+          displayName: "webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(labels).toContain("Subagent: cron-config-check");
+    expect(labels).not.toContain(state.sessionKey);
+    expect(labels).not.toContain(
+      "subagent:4f2146de-887b-4176-9abe-91140082959b · webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
+    );
+  });
+
+  it("keeps a unique scoped fallback when the current grouped session is missing from sessions.list", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
+    state.settings.sessionKey = state.sessionKey;
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(labels).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
+    expect(labels).not.toContain("Subagent:");
+  });
+
+  it("keeps a unique scoped fallback when a grouped session row has no label or displayName", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
+    state.settings.sessionKey = state.sessionKey;
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: state.sessionKey,
+          kind: "direct",
+          updatedAt: null,
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(labels).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
+    expect(labels).not.toContain("Subagent:");
+  });
+
+  it("disambiguates duplicate grouped labels with the scoped key suffix", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
+    state.settings.sessionKey = state.sessionKey;
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
+          kind: "direct",
+          updatedAt: null,
+          label: "cron-config-check",
+        },
+        {
+          key: "agent:main:subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
+          kind: "direct",
+          updatedAt: null,
+          label: "cron-config-check",
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(labels).toContain(
+      "Subagent: cron-config-check · subagent:4f2146de-887b-4176-9abe-91140082959b",
+    );
+    expect(labels).toContain(
+      "Subagent: cron-config-check · subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
+    );
+    expect(labels).not.toContain("Subagent: cron-config-check");
+  });
+
+  it("strips segment offset from stream text to prevent duplicate growing bubbles (#47188)", () => {
+    const container = document.createElement("div");
+    // Simulate: 1 segment with "Hello " (text before tool call),
+    // then the current stream has full accumulated text "Hello world"
+    // with offset = 6 (length of "Hello ").
+    // The stream bubble should show only "world" (the delta).
+    render(
+      renderChat(
+        createProps({
+          messages: [],
+          streamSegments: [{ text: "Hello ", ts: 1000 }],
+          streamSegmentOffset: 6,
+          stream: "Hello world",
+          streamStartedAt: 2000,
+          assistantName: "Assistant",
+        }),
+      ),
+      container,
+    );
+
+    const streamBubbles = container.querySelectorAll(".chat-group.assistant .chat-bubble");
+    // Should have exactly 2 bubbles: one for the segment "Hello " and one for the stream "world"
+    expect(streamBubbles.length).toBe(2);
+
+    // The second bubble (current stream) should NOT contain the full accumulated text
+    const lastBubble = streamBubbles[streamBubbles.length - 1];
+    expect(lastBubble?.textContent).toContain("world");
+    expect(lastBubble?.textContent).not.toContain("Hello world");
   });
 });

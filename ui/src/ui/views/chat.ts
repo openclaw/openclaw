@@ -56,6 +56,7 @@ export type ChatProps = {
   onSessionKeyChange: (next: string) => void;
   thinkingLevel: string | null;
   showThinking: boolean;
+  showToolCalls: boolean;
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
@@ -64,6 +65,7 @@ export type ChatProps = {
   messages: unknown[];
   toolMessages: unknown[];
   streamSegments: Array<{ text: string; ts: number }>;
+  streamSegmentOffset: number;
   stream: string | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
@@ -932,6 +934,7 @@ export function renderChat(props: ChatProps) {
             return renderMessageGroup(item, {
               onOpenSidebar: props.onOpenSidebar,
               showReasoning,
+              showToolCalls: props.showToolCalls,
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
               basePath: props.basePath,
@@ -1409,7 +1412,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
-    if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
+    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
       continue;
     }
 
@@ -1438,7 +1441,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
         startedAt: segments[i].ts,
       });
     }
-    if (i < tools.length) {
+    if (i < tools.length && props.showToolCalls) {
       items.push({
         kind: "message",
         key: messageKey(tools[i], i + history.length),
@@ -1449,14 +1452,21 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
 
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
+    // The server sends the full accumulated assistant text in each delta.
+    // Strip text already represented by committed segments to avoid
+    // duplicate growing bubbles. See: #47188
+    const offset = props.streamSegmentOffset ?? 0;
+    const displayText = offset > 0 ? props.stream.slice(offset) : props.stream;
+    if (displayText.trim().length > 0) {
       items.push({
         kind: "stream",
         key,
-        text: props.stream,
+        text: displayText,
         startedAt: props.streamStartedAt ?? Date.now(),
       });
-    } else {
+    } else if (props.stream.trim().length === 0) {
+      // Only show reading indicator when the stream itself is empty/whitespace,
+      // not when display text is empty due to segment offset stripping.
       items.push({ kind: "reading-indicator", key });
     }
   }
