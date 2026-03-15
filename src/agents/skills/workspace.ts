@@ -620,10 +620,15 @@ function resolveWorkspaceSkillPromptState(
   );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
-  const { skillsForPrompt, truncated } = applySkillsPromptLimits({
+  const { skillsForPrompt, truncated, truncatedReason } = applySkillsPromptLimits({
     skills: resolvedSkills,
     config: opts?.config,
   });
+  if (truncated) {
+    skillsLogger.warn(
+      `Skills truncated to ${skillsForPrompt.length} of ${resolvedSkills.length} (reason: ${truncatedReason ?? "unknown"}). Run \`openclaw skills check\` to audit.`,
+    );
+  }
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
