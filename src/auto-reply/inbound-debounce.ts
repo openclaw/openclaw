@@ -124,5 +124,45 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey };
+  /**
+   * Reset the flush timer for an existing buffer without adding a new item.
+   * Useful for extending the debounce window when the sender is still typing.
+   * @param extendMs — if provided and greater than the buffer's current debounceMs,
+   *   temporarily use this value for the scheduled flush.
+   */
+  const touch = (key: string, extendMs?: number): boolean => {
+    const existing = buffers.get(key);
+    if (!existing) {
+      return false;
+    }
+    const origMs = existing.debounceMs;
+    if (typeof extendMs === "number" && extendMs > origMs) {
+      existing.debounceMs = extendMs;
+    }
+    scheduleFlush(key, existing);
+    existing.debounceMs = origMs;
+    return true;
+  };
+
+  /**
+   * Like {@link touch}, but matches all buffer keys starting with `prefix`.
+   * Returns true if at least one buffer was touched.
+   */
+  const touchByPrefix = (prefix: string, extendMs?: number): boolean => {
+    let touched = false;
+    for (const [key, buffer] of buffers) {
+      if (key.startsWith(prefix)) {
+        const origMs = buffer.debounceMs;
+        if (typeof extendMs === "number" && extendMs > origMs) {
+          buffer.debounceMs = extendMs;
+        }
+        scheduleFlush(key, buffer);
+        buffer.debounceMs = origMs;
+        touched = true;
+      }
+    }
+    return touched;
+  };
+
+  return { enqueue, flushKey, touch, touchByPrefix };
 }
