@@ -712,23 +712,37 @@ export async function restartScheduledTask({
   }
   const taskName = resolveTaskName(effectiveEnv);
   const restartPort = await resolveScheduledTaskPort(effectiveEnv);
-  // Spawn the restart script in a detached process BEFORE stopping the task,
-  // because `schtasks /End` will kill the current agent process on Windows.
-  // The script waits 1 s and then calls `schtasks /Run` (with retries) once
-  // the port is free again.
-  const attempt = relaunchGatewayScheduledTask(effectiveEnv);
-  if (!attempt.ok) {
-    throw new Error(`failed to prepare restart script: ${attempt.detail ?? "unknown error"}`);
-  }
-  await execSchtasks(["/End", "/TN", taskName]);
+
+  // Perform all cleanup BEFORE spawning the restart script and stopping the
+  // task.  On Windows, `schtasks /End` terminates the current process
+  // immediately (the agent runs inside the scheduled task), so any code after
+  // that call is unreliable dead code in the common path.
   await terminateScheduledTaskGatewayListeners(effectiveEnv);
   await terminateInstalledStartupRuntime(effectiveEnv);
   if (restartPort) {
     const released = await waitForGatewayPortRelease(restartPort);
     if (!released) {
       await terminateBusyPortListeners(restartPort);
+      // Second check: confirm the port is actually free before the detached
+      // restart script fires `schtasks /Run`.  If it is still busy the script
+      // will start a gateway that cannot bind, and since `/Run` returns 0 the
+      // retry loop will not re-fire.
+      const releasedAfterForce = await waitForGatewayPortRelease(restartPort, 2_000);
+      if (!releasedAfterForce) {
+        throw new Error(`gateway port ${restartPort} is still busy before restart`);
+      }
     }
   }
+
+  // Spawn the detached restart script BEFORE calling `schtasks /End`.
+  // The script waits ~1 s then calls `schtasks /Run` with retries, allowing
+  // the task to be fully stopped before the relaunch attempt.
+  const attempt = relaunchGatewayScheduledTask(effectiveEnv);
+  if (!attempt.ok) {
+    throw new Error(`failed to prepare restart script: ${attempt.detail ?? "unknown error"}`);
+  }
+
+  await execSchtasks(["/End", "/TN", taskName]);
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
   return { outcome: "completed" };
 }
