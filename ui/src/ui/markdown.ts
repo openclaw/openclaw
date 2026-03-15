@@ -126,7 +126,7 @@ function normalizeMarkdownImageLabel(text?: string | null): string {
 export const md = new MarkdownIt({
   html: false,
   breaks: true,
-  linkify: false,
+  linkify: true,
 });
 
 // Override html_block and html_inline to escape raw HTML (#13937)
