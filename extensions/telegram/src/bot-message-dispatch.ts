@@ -1,5 +1,5 @@
-import type { Bot } from "grammy";
 import { randomUUID } from "node:crypto";
+import type { Bot } from "grammy";
 import { resolveAgentDir } from "../../../src/agents/agent-scope.js";
 import {
   findModelInCatalog,
@@ -26,13 +26,13 @@ import type {
   ReplyToMode,
   TelegramAccountConfig,
 } from "../../../src/config/types.js";
-import { danger, logVerbose } from "../../../src/globals.js";
-import { getFallbackGatewayContext } from "../../../src/gateway/server-plugins.js";
 import { stripEnvelopeFromMessage } from "../../../src/gateway/chat-sanitize.js";
+import { getFallbackGatewayContext } from "../../../src/gateway/server-plugins.js";
 import { loadSessionEntry, readSessionMessages } from "../../../src/gateway/session-utils.js";
-import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../../src/utils/directive-tags.js";
+import { danger, logVerbose } from "../../../src/globals.js";
 import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
+import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../../src/utils/directive-tags.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -545,7 +545,9 @@ export const dispatchTelegramMessage = async ({
         const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
         preDispatchAssistantCount = messages.filter(
           (m: unknown) =>
-            typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
+            typeof m === "object" &&
+            m !== null &&
+            (m as Record<string, unknown>)?.role === "assistant",
         ).length;
       }
     } catch {
@@ -863,7 +865,9 @@ export const dispatchTelegramMessage = async ({
           const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
           const assistantMessages = messages.filter(
             (m: unknown) =>
-              typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
+              typeof m === "object" &&
+              m !== null &&
+              (m as Record<string, unknown>)?.role === "assistant",
           );
           const newAssistantMessages = assistantMessages.slice(preDispatchAssistantCount);
           message = newAssistantMessages.pop() as Record<string, unknown> | undefined;

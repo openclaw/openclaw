@@ -1,5 +1,5 @@
-import { ChannelType, type RequestClient } from "@buape/carbon";
 import { randomUUID } from "node:crypto";
+import { ChannelType, type RequestClient } from "@buape/carbon";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../../../src/agents/identity.js";
 import { EmbeddedBlockChunker } from "../../../../src/agents/pi-embedded-block-chunker.js";
 import { resolveChunkMode } from "../../../../src/auto-reply/chunk.js";
@@ -29,17 +29,17 @@ import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous
 import { resolveDiscordPreviewStreamMode } from "../../../../src/config/discord-preview-streaming.js";
 import { resolveMarkdownTableMode } from "../../../../src/config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../../src/config/sessions.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
-import { getFallbackGatewayContext } from "../../../../src/gateway/server-plugins.js";
 import { stripEnvelopeFromMessage } from "../../../../src/gateway/chat-sanitize.js";
+import { getFallbackGatewayContext } from "../../../../src/gateway/server-plugins.js";
 import { loadSessionEntry, readSessionMessages } from "../../../../src/gateway/session-utils.js";
-import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../../../src/utils/directive-tags.js";
+import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
 import { convertMarkdownTables } from "../../../../src/markdown/tables.js";
 import { getAgentScopedMediaLocalRoots } from "../../../../src/media/local-roots.js";
 import { buildAgentSessionKey } from "../../../../src/routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../../src/routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../../../src/shared/text/reasoning-tags.js";
 import { truncateUtf16Safe } from "../../../../src/utils.js";
+import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../../../src/utils/directive-tags.js";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
@@ -735,7 +735,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
         preDispatchAssistantCount = messages.filter(
           (m: unknown) =>
-            typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
+            typeof m === "object" &&
+            m !== null &&
+            (m as Record<string, unknown>)?.role === "assistant",
         ).length;
       }
     } catch {
@@ -887,7 +889,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
         const assistantMessages = messages.filter(
           (m: unknown) =>
-            typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
+            typeof m === "object" &&
+            m !== null &&
+            (m as Record<string, unknown>)?.role === "assistant",
         );
         const newAssistantMessages = assistantMessages.slice(preDispatchAssistantCount);
         message = newAssistantMessages.pop() as Record<string, unknown> | undefined;
