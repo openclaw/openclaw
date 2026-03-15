@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveLineAccount,
+  listLineAccountIds,
   resolveDefaultLineAccountId,
   normalizeAccountId,
   DEFAULT_ACCOUNT_ID,
@@ -103,6 +104,179 @@ describe("LINE accounts", () => {
       expect(account.name).toBe("Business Bot");
     });
 
+    it("resolves default account credentials from channels.line.accounts.default", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            accounts: {
+              default: {
+                channelAccessToken: "default-token",
+                channelSecret: "default-secret",
+                name: "Default Bot",
+                webhookPath: "/line/webhook",
+              },
+              twgreen: {
+                channelAccessToken: "twgreen-token",
+                channelSecret: "twgreen-secret",
+                webhookPath: "/line-twgreen/webhook",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.accountId).toBe(DEFAULT_ACCOUNT_ID);
+      expect(account.enabled).toBe(true);
+      expect(account.channelAccessToken).toBe("default-token");
+      expect(account.channelSecret).toBe("default-secret");
+      expect(account.name).toBe("Default Bot");
+      expect(account.config.webhookPath).toBe("/line/webhook");
+      expect(account.tokenSource).toBe("config");
+    });
+
+    it("treats named accounts as enabled unless explicitly disabled", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            accounts: {
+              twgreen: {
+                channelAccessToken: "twgreen-token",
+                channelSecret: "twgreen-secret",
+                webhookPath: "/line-twgreen/webhook",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg, accountId: "twgreen" });
+
+      expect(account.accountId).toBe("twgreen");
+      expect(account.enabled).toBe(true);
+      expect(account.channelAccessToken).toBe("twgreen-token");
+      expect(account.channelSecret).toBe("twgreen-secret");
+      expect(account.config.webhookPath).toBe("/line-twgreen/webhook");
+    });
+
+    it("falls back to channels.line.defaultAccount when no explicit account is provided", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            defaultAccount: "twgreen",
+            accounts: {
+              twgreen: {
+                channelAccessToken: "twgreen-token",
+                channelSecret: "twgreen-secret",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.accountId).toBe("twgreen");
+      expect(account.channelAccessToken).toBe("twgreen-token");
+      expect(account.channelSecret).toBe("twgreen-secret");
+    });
+
+    it("falls back to the first configured named account when the default account has no credentials", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            accounts: {
+              "Business Ops": {
+                channelAccessToken: "business-token",
+                channelSecret: "business-secret",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.accountId).toBe("business-ops");
+      expect(account.channelAccessToken).toBe("business-token");
+      expect(account.channelSecret).toBe("business-secret");
+    });
+
+    it("lets accounts.default override top-level default credentials", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            channelAccessToken: "base-token",
+            channelSecret: "base-secret",
+            accounts: {
+              default: {
+                channelAccessToken: "override-token",
+                channelSecret: "override-secret",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg, accountId: DEFAULT_ACCOUNT_ID });
+
+      expect(account.channelAccessToken).toBe("override-token");
+      expect(account.channelSecret).toBe("override-secret");
+    });
+
+    it("ignores malformed account keys when resolving the default account", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            channelAccessToken: "base-token",
+            channelSecret: "base-secret",
+            webhookPath: "/line/webhook",
+            accounts: {
+              "!!!": {
+                channelAccessToken: "bad-token",
+                channelSecret: "bad-secret",
+                webhookPath: "/line-bad/webhook",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.accountId).toBe(DEFAULT_ACCOUNT_ID);
+      expect(account.channelAccessToken).toBe("base-token");
+      expect(account.channelSecret).toBe("base-secret");
+      expect(account.config.webhookPath).toBe("/line/webhook");
+    });
+
+    it("respects explicit account-level disable for named accounts", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            accounts: {
+              twgreen: {
+                enabled: false,
+                channelAccessToken: "twgreen-token",
+                channelSecret: "twgreen-secret",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg, accountId: "twgreen" });
+
+      expect(account.enabled).toBe(false);
+      expect(account.channelAccessToken).toBe("twgreen-token");
+      expect(account.channelSecret).toBe("twgreen-secret");
+    });
+
     it("returns empty token when not configured", () => {
       const cfg: OpenClawConfig = {};
 
@@ -176,6 +350,54 @@ describe("LINE accounts", () => {
       expect(account.channelAccessToken).toBe("");
       expect(account.channelSecret).toBe("");
       expect(account.tokenSource).toBe("none");
+    });
+  });
+
+  describe("listLineAccountIds", () => {
+    it("normalizes and sorts configured account ids", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            accounts: {
+              "Business Ops": {},
+              Zebra: {},
+              alpha: {},
+            },
+          },
+        },
+      };
+
+      expect(listLineAccountIds(cfg)).toEqual(["alpha", "business-ops", "zebra"]);
+    });
+
+    it("keeps the default account when base-level credentials are configured", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            channelAccessToken: "base-token",
+            accounts: {
+              business: {},
+            },
+          },
+        },
+      };
+
+      expect(listLineAccountIds(cfg)).toEqual(["business", DEFAULT_ACCOUNT_ID]);
+    });
+
+    it("ignores malformed configured account ids", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            accounts: {
+              "!!!": {},
+              alpha: {},
+            },
+          },
+        },
+      };
+
+      expect(listLineAccountIds(cfg)).toEqual(["alpha"]);
     });
   });
 
