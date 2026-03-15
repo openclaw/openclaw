@@ -1,17 +1,31 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  commitPeekedSystemEvents,
+  drainFormattedSystemEvents,
+  peekFormattedSystemEvents,
+  restorePeekedSystemEvents,
+} from "../auto-reply/reply/session-updates.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { buildChannelSummary } from "./channel-summary.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import {
+  commitSystemEventReservation,
   drainSystemEventEntries,
+  consumeSystemEventEntries,
   enqueueSystemEvent,
   hasSystemEvents,
   isSystemEventContextChanged,
   peekSystemEventEntries,
   peekSystemEvents,
+  reserveSystemEventEntries,
   resetSystemEventsForTest,
+  restoreSystemEventReservation,
 } from "./system-events.js";
+
+vi.mock("./channel-summary.js", () => ({
+  buildChannelSummary: vi.fn(async () => []),
+}));
 
 const cfg = {} as unknown as OpenClawConfig;
 const mainKey = resolveMainSessionKey(cfg);
@@ -19,6 +33,8 @@ const mainKey = resolveMainSessionKey(cfg);
 describe("system events (session routing)", () => {
   beforeEach(() => {
     resetSystemEventsForTest();
+    vi.clearAllMocks();
+    vi.mocked(buildChannelSummary).mockResolvedValue([]);
   });
 
   it("does not leak session-scoped events into main", async () => {
@@ -154,6 +170,157 @@ describe("system events (session routing)", () => {
     });
     expect(result).toContain("Node: Mac Studio");
     expect(result).not.toContain("last input");
+  });
+
+  it("consumes only the previewed event snapshot, leaving newer events queued", () => {
+    const key = "agent:main:test-consume-preview";
+    enqueueSystemEvent("First event", { sessionKey: key });
+    const previewed = peekSystemEventEntries(key);
+    enqueueSystemEvent("Second event", { sessionKey: key });
+
+    const consumed = consumeSystemEventEntries(key, previewed);
+
+    expect(consumed.map((entry) => entry.text)).toEqual(["First event"]);
+    expect(peekSystemEvents(key)).toEqual(["Second event"]);
+  });
+
+  it("hides reserved events from concurrent readers until they are committed", () => {
+    const key = "agent:main:test-reserve";
+    enqueueSystemEvent("First event", { sessionKey: key });
+
+    const reservation = reserveSystemEventEntries(key);
+
+    expect(reservation?.entries.map((entry) => entry.text)).toEqual(["First event"]);
+    expect(peekSystemEvents(key)).toEqual([]);
+
+    enqueueSystemEvent("Second event", { sessionKey: key });
+    commitSystemEventReservation(reservation);
+
+    expect(peekSystemEvents(key)).toEqual(["Second event"]);
+  });
+
+  it("restores reserved events ahead of newer queued events when a turn is skipped", () => {
+    const key = "agent:main:test-restore";
+    enqueueSystemEvent("First event", { sessionKey: key });
+    const reservation = reserveSystemEventEntries(key);
+    enqueueSystemEvent("Second event", { sessionKey: key });
+
+    restoreSystemEventReservation(reservation);
+
+    expect(peekSystemEvents(key)).toEqual(["First event", "Second event"]);
+  });
+
+  it("preserves original event order across multiple restored reservations", () => {
+    const key = "agent:main:test-restore-order";
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1);
+    try {
+      enqueueSystemEvent("First event", { sessionKey: key });
+      const firstReservation = reserveSystemEventEntries(key);
+      enqueueSystemEvent("Second event", { sessionKey: key });
+      const secondReservation = reserveSystemEventEntries(key);
+      enqueueSystemEvent("Third event", { sessionKey: key });
+      const thirdReservation = reserveSystemEventEntries(key);
+
+      restoreSystemEventReservation(thirdReservation);
+      restoreSystemEventReservation(firstReservation);
+      restoreSystemEventReservation(secondReservation);
+
+      expect(peekSystemEvents(key)).toEqual(["First event", "Second event", "Third event"]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("reapplies the max queue cap when restoring reserved events", () => {
+    const key = "agent:main:test-restore-cap";
+    for (let index = 1; index <= 20; index += 1) {
+      enqueueSystemEvent(`event ${index}`, { sessionKey: key });
+    }
+    const reservation = reserveSystemEventEntries(key);
+    for (let index = 21; index <= 25; index += 1) {
+      enqueueSystemEvent(`event ${index}`, { sessionKey: key });
+    }
+
+    restoreSystemEventReservation(reservation);
+
+    expect(peekSystemEvents(key)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `event ${index + 6}`),
+    );
+  });
+
+  it("restores reserved events when formatting throws during peek", async () => {
+    const key = "agent:main:test-peek-restore-on-throw";
+    enqueueSystemEvent("First event", { sessionKey: key });
+    vi.mocked(buildChannelSummary).mockRejectedValueOnce(new Error("summary failed"));
+
+    await expect(
+      peekFormattedSystemEvents({
+        cfg,
+        sessionKey: key,
+        isMainSession: true,
+        isNewSession: true,
+      }),
+    ).rejects.toThrow("summary failed");
+
+    expect(peekSystemEvents(key)).toEqual(["First event"]);
+  });
+
+  it("restores first-turn main-session summaries when a peeked turn is skipped", async () => {
+    vi.mocked(buildChannelSummary).mockResolvedValueOnce(["Slack (configured)"]);
+
+    const preview = await peekFormattedSystemEvents({
+      cfg,
+      sessionKey: mainKey,
+      isMainSession: true,
+      isNewSession: true,
+    });
+
+    expect(preview.reservation).toBeUndefined();
+    expect(preview.text).toContain("System: Slack (configured)");
+
+    restorePeekedSystemEvents(preview);
+
+    const replayed = await peekFormattedSystemEvents({
+      cfg,
+      sessionKey: mainKey,
+      isMainSession: true,
+      isNewSession: false,
+    });
+
+    expect(replayed.text).toContain("System: Slack (configured)");
+    commitPeekedSystemEvents(replayed);
+  });
+
+  it("does not replay a consumed first-turn summary after another reservation restores", async () => {
+    vi.mocked(buildChannelSummary).mockResolvedValue(["Slack (configured)"]);
+
+    const committedPreview = await peekFormattedSystemEvents({
+      cfg,
+      sessionKey: mainKey,
+      isMainSession: true,
+      isNewSession: true,
+    });
+    const skippedPreview = await peekFormattedSystemEvents({
+      cfg,
+      sessionKey: mainKey,
+      isMainSession: true,
+      isNewSession: true,
+    });
+
+    expect(committedPreview.text).toContain("System: Slack (configured)");
+    expect(skippedPreview.text).toContain("System: Slack (configured)");
+
+    commitPeekedSystemEvents(committedPreview);
+    restorePeekedSystemEvents(skippedPreview);
+
+    const replayed = await peekFormattedSystemEvents({
+      cfg,
+      sessionKey: mainKey,
+      isMainSession: true,
+      isNewSession: false,
+    });
+
+    expect(replayed.text).toBeUndefined();
   });
 });
 

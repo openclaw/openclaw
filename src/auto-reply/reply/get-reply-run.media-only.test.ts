@@ -23,6 +23,18 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
+const hookMocks = vi.hoisted(() => ({
+  hasHooks: vi.fn(),
+  runBeforeAgentRun: vi.fn(),
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: vi.fn(() => ({
+    hasHooks: hookMocks.hasHooks,
+    runBeforeAgentRun: hookMocks.runBeforeAgentRun,
+  })),
+}));
+
 vi.mock("../../process/command-queue.js", () => ({
   clearCommandLane: vi.fn().mockReturnValue(0),
   getQueueSize: vi.fn().mockReturnValue(0),
@@ -45,7 +57,14 @@ vi.mock("./agent-runner.js", () => ({
 }));
 
 vi.mock("./body.js", () => ({
-  applySessionHints: vi.fn().mockImplementation(async ({ baseBody }) => baseBody),
+  buildSessionHintedBody: vi
+    .fn()
+    .mockImplementation(({ baseBody, abortedLastRun }) =>
+      abortedLastRun
+        ? `Note: The previous agent run was aborted by the user. Resume carefully or ask for clarification.\n\n${baseBody}`
+        : baseBody,
+    ),
+  commitSessionHintEffects: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./groups.js", () => ({
@@ -72,16 +91,28 @@ vi.mock("./session-updates.js", () => ({
     systemSent,
     skillsSnapshot: undefined,
   })),
-  drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
+  peekFormattedSystemEvents: vi.fn().mockResolvedValue({ reservation: undefined, text: undefined }),
+  commitPeekedSystemEvents: vi.fn().mockReturnValue([]),
+  restorePeekedSystemEvents: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock("./typing-mode.js", () => ({
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
 
+import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { runReplyAgent } from "./agent-runner.js";
+import { commitSessionHintEffects } from "./body.js";
+import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
-import { drainFormattedSystemEvents } from "./session-updates.js";
+import {
+  commitPeekedSystemEvents,
+  ensureSkillSnapshot,
+  peekFormattedSystemEvents,
+  restorePeekedSystemEvents,
+} from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 
 function baseParams(
@@ -159,6 +190,14 @@ function baseParams(
 describe("runPreparedReply media-only handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    hookMocks.hasHooks.mockReturnValue(false);
+    hookMocks.runBeforeAgentRun.mockReset();
+    vi.mocked(peekFormattedSystemEvents).mockResolvedValue({
+      reservation: undefined,
+      text: undefined,
+    });
+    vi.mocked(resolveQueueSettings).mockReturnValue({ mode: "followup" });
+    vi.mocked(getQueueSize).mockReturnValue(0);
   });
 
   it("allows media-only prompts and preserves thread context in queued followups", async () => {
@@ -281,6 +320,158 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.messageProvider).toBe("webchat");
   });
 
+  it("passes the final prepared prompt to before_agent_run", async () => {
+    hookMocks.hasHooks.mockReturnValue(true);
+    hookMocks.runBeforeAgentRun.mockResolvedValue({ skip: false });
+    vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
+      reservation: {
+        sessionKey: "session-key",
+        reservationId: "r0",
+        entries: [{ text: "Node connected", ts: 1 }],
+      },
+      text: "System: [t] Node connected.",
+    });
+
+    await runPreparedReply(
+      baseParams({
+        abortedLastRun: true,
+        sessionCtx: {
+          Body: "Use the skill",
+          BodyStripped: "Use the skill",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          UntrustedContext: ["screen this too"],
+        },
+        beforeAgentRunContext: {
+          agentId: "default",
+          sessionKey: "session-key",
+          sessionId: "session-id",
+          workspaceDir: "/tmp/workspace",
+          trigger: "user",
+          channelId: "slack",
+          messageProvider: "slack",
+        },
+      }),
+    );
+
+    expect(hookMocks.runBeforeAgentRun).toHaveBeenCalledWith(
+      {
+        prompt: expect.stringContaining("Use the skill"),
+      },
+      expect.objectContaining({
+        agentId: "default",
+        trigger: "user",
+      }),
+    );
+    expect(hookMocks.runBeforeAgentRun.mock.calls[0]?.[0]?.prompt).toContain("screen this too");
+    expect(hookMocks.runBeforeAgentRun.mock.calls[0]?.[0]?.prompt).toContain(
+      "System: [t] Node connected.",
+    );
+    expect(hookMocks.runBeforeAgentRun.mock.calls[0]?.[0]?.prompt).toContain(
+      "Note: The previous agent run was aborted by the user.",
+    );
+  });
+
+  it("skips the default run without triggering pre-run side effects", async () => {
+    hookMocks.hasHooks.mockReturnValue(true);
+    hookMocks.runBeforeAgentRun.mockResolvedValue({ skip: true, skipReason: "screened-out" });
+    vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
+      reservation: {
+        sessionKey: "session-key",
+        reservationId: "r0",
+        entries: [{ text: "Node connected", ts: 1 }],
+      },
+      text: "System: [t] Node connected.",
+    });
+    vi.mocked(resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    vi.mocked(getQueueSize).mockReturnValueOnce(3);
+
+    const result = await runPreparedReply(
+      baseParams({
+        abortedLastRun: true,
+        resetTriggered: true,
+        sessionEntry: {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          thinkingLevel: "xhigh",
+        },
+        sessionStore: {
+          "session-key": {
+            sessionId: "session-id",
+            updatedAt: Date.now(),
+            thinkingLevel: "xhigh",
+          },
+        },
+        storePath: "/tmp/sessions.json",
+        sessionCtx: {
+          Body: "hello",
+          BodyStripped: "hello",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+        beforeAgentRunContext: {
+          agentId: "default",
+          sessionKey: "session-key",
+          sessionId: "session-id",
+          workspaceDir: "/tmp/workspace",
+          trigger: "user",
+          channelId: "slack",
+          messageProvider: "slack",
+        },
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+    expect(vi.mocked(restorePeekedSystemEvents)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(commitSessionHintEffects)).not.toHaveBeenCalled();
+    expect(vi.mocked(commitPeekedSystemEvents)).not.toHaveBeenCalled();
+    expect(vi.mocked(ensureSkillSnapshot)).not.toHaveBeenCalled();
+    expect(vi.mocked(resolveSessionAuthProfileOverride)).not.toHaveBeenCalled();
+    expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
+    expect(vi.mocked(clearCommandLane)).not.toHaveBeenCalled();
+    expect(vi.mocked(abortEmbeddedPiRun)).not.toHaveBeenCalled();
+  });
+
+  it("restores previewed system events when session hint persistence fails", async () => {
+    vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
+      reservation: {
+        sessionKey: "session-key",
+        reservationId: "r0",
+        entries: [{ text: "Node connected", ts: 1 }],
+      },
+      text: "System: [t] Node connected.",
+    });
+    vi.mocked(commitSessionHintEffects).mockRejectedValueOnce(new Error("store write failed"));
+
+    await expect(
+      runPreparedReply(
+        baseParams({
+          abortedLastRun: true,
+          sessionEntry: {
+            sessionId: "session-id",
+            updatedAt: Date.now(),
+          },
+          sessionStore: {
+            "session-key": {
+              sessionId: "session-id",
+              updatedAt: Date.now(),
+            },
+          },
+          storePath: "/tmp/sessions.json",
+        }),
+      ),
+    ).rejects.toThrow("store write failed");
+
+    expect(vi.mocked(restorePeekedSystemEvents)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(commitPeekedSystemEvents)).not.toHaveBeenCalled();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
   it("prefers Provider over Surface when origin channel is missing", async () => {
     await runPreparedReply(
       baseParams({
@@ -328,7 +519,14 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("routes queued system events into user prompt text, not system prompt context", async () => {
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Model switched.");
+    vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
+      reservation: {
+        sessionKey: "session-key",
+        reservationId: "r0",
+        entries: [{ text: "Model switched.", ts: 1 }],
+      },
+      text: "System: [t] Model switched.",
+    });
 
     await runPreparedReply(baseParams());
 
@@ -339,10 +537,17 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("preserves first-token think hint when system events are prepended", async () => {
-    // drainFormattedSystemEvents returns just the events block; the caller prepends it.
+    // peekFormattedSystemEvents returns the events block; the caller prepends it.
     // The hint must be extracted from the user body BEFORE prepending, so "System:"
     // does not shadow the low|medium|high shorthand.
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
+    vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
+      reservation: {
+        sessionKey: "session-key",
+        reservationId: "r0",
+        entries: [{ text: "Node connected.", ts: 1 }],
+      },
+      text: "System: [t] Node connected.",
+    });
 
     await runPreparedReply(
       baseParams({
@@ -364,9 +569,16 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("carries system events into followupRun.prompt for deferred turns", async () => {
-    // drainFormattedSystemEvents returns the events block; the caller prepends it to
+    // peekFormattedSystemEvents returns the events block; the caller prepends it to
     // effectiveBaseBody for the queue path so deferred turns see events.
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
+    vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
+      reservation: {
+        sessionKey: "session-key",
+        reservationId: "r0",
+        entries: [{ text: "Node connected.", ts: 1 }],
+      },
+      text: "System: [t] Node connected.",
+    });
 
     await runPreparedReply(baseParams());
 
@@ -378,7 +590,10 @@ describe("runPreparedReply media-only handling", () => {
   it("does not strip think-hint token from deferred queue body", async () => {
     // In steer mode the inferred thinkLevel is never consumed, so the first token
     // must not be stripped from the queue/steer body (followupRun.prompt).
-    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(undefined);
+    vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
+      reservation: undefined,
+      text: undefined,
+    });
 
     await runPreparedReply(
       baseParams({

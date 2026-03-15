@@ -11,6 +11,7 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import type { PluginHookAgentContext } from "../../plugins/types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -52,6 +53,24 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   }
   const agentSet = new Set(agent);
   return channel.filter((name) => agentSet.has(name));
+}
+
+function resolveBeforeAgentRunTrigger(opts?: GetReplyOptions): PluginHookAgentContext["trigger"] {
+  if (opts?.isHeartbeat) {
+    return "heartbeat";
+  }
+  return "user";
+}
+
+function resolveBeforeAgentRunMessageProvider(
+  ctx: MsgContext,
+  sessionEntry: { origin?: { provider?: string } },
+): string | undefined {
+  return (
+    sessionEntry.origin?.provider ??
+    (typeof ctx.OriginatingChannel === "string" ? ctx.OriginatingChannel : undefined) ??
+    ctx.Provider
+  );
 }
 
 export async function getReplyFromConfig(
@@ -402,5 +421,19 @@ export async function getReplyFromConfig(
     storePath,
     workspaceDir,
     abortedLastRun,
+    beforeAgentRunContext: {
+      agentId,
+      sessionKey,
+      sessionId,
+      workspaceDir,
+      messageProvider: resolveBeforeAgentRunMessageProvider(finalized, sessionEntry),
+      trigger: resolveBeforeAgentRunTrigger(opts),
+      channelId:
+        groupResolution?.channel ??
+        sessionEntry.channel ??
+        sessionEntry.origin?.provider ??
+        (typeof ctx.OriginatingChannel === "string" ? ctx.OriginatingChannel : undefined) ??
+        ctx.Provider,
+    },
   });
 }

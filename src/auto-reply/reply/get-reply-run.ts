@@ -17,6 +17,8 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookAgentContext } from "../../plugins/types.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -35,7 +37,7 @@ import {
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyAgent } from "./agent-runner.js";
-import { applySessionHints } from "./body.js";
+import { buildSessionHintedBody, commitSessionHintEffects } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
@@ -45,7 +47,12 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
-import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
+import {
+  commitPeekedSystemEvents,
+  ensureSkillSnapshot,
+  peekFormattedSystemEvents,
+  restorePeekedSystemEvents,
+} from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -177,6 +184,7 @@ type RunPreparedReplyParams = {
   storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
+  beforeAgentRunContext?: PluginHookAgentContext;
 };
 
 export async function runPreparedReply(
@@ -219,6 +227,7 @@ export async function runPreparedReply(
     storePath,
     workspaceDir,
     sessionStore,
+    beforeAgentRunContext,
   } = params;
   let {
     sessionEntry,
@@ -322,14 +331,9 @@ export async function runPreparedReply(
   const effectiveBaseBody = baseBodyTrimmed
     ? baseBodyForPrompt
     : "[User sent media without caption]";
-  let prefixedBodyBase = await applySessionHints({
+  let prefixedBodyBase = buildSessionHintedBody({
     baseBody: effectiveBaseBody,
     abortedLastRun,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    abortKey: command.abortKey,
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
@@ -348,12 +352,13 @@ export async function runPreparedReply(
   // The queue/steer path uses effectiveBaseBody (unstripped, no session hints) to match
   // main's pre-PR behavior; the immediate-run path uses prefixedBodyBase (post-hints,
   // post-think-hint-strip) so the run sees the cleaned-up body.
-  const eventsBlock = await drainFormattedSystemEvents({
+  const previewedSystemEvents = await peekFormattedSystemEvents({
     cfg,
     sessionKey,
     isMainSession,
     isNewSession,
   });
+  const eventsBlock = previewedSystemEvents.text;
   const prependEvents = (body: string) => (eventsBlock ? `${eventsBlock}\n\n${body}` : body);
   const bodyWithEvents = prependEvents(effectiveBaseBody);
   prefixedBodyBase = prependEvents(prefixedBodyBase);
@@ -365,20 +370,6 @@ export async function runPreparedReply(
     : threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
-  const skillResult = await ensureSkillSnapshot({
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    sessionId,
-    isFirstTurnInSession,
-    workspaceDir,
-    cfg,
-    skillFilter: opts?.skillFilter,
-  });
-  sessionEntry = skillResult.sessionEntry ?? sessionEntry;
-  currentSystemSent = skillResult.systemSent;
-  const skillsSnapshot = skillResult.skillsSnapshot;
   const prefixedBody = [threadContextNote, prefixedBodyBase].filter(Boolean).join("\n\n");
   const mediaNote = buildInboundMediaNote(ctx);
   const mediaReplyHint = mediaNote
@@ -387,177 +378,226 @@ export async function runPreparedReply(
   let prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
-  if (!resolvedThinkLevel) {
-    resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
-  }
-  if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-    const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
-    if (explicitThink) {
-      typing.cleanup();
-      return {
-        text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}. Use /think high or switch to one of those models.`,
-      };
-    }
-    resolvedThinkLevel = "high";
-    if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
-      sessionEntry.thinkingLevel = "high";
-      sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = sessionEntry;
-      if (storePath) {
-        await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        });
-      }
-    }
-  }
-  if (resetTriggered && command.isAuthorizedSender) {
-    await sendResetSessionNotice({
-      ctx,
-      command,
-      sessionKey,
-      cfg,
-      accountId: ctx.AccountId,
-      threadId: ctx.MessageThreadId,
-      provider,
-      model,
-      defaultProvider,
-      defaultModel,
-    });
-  }
-  const sessionIdFinal = sessionId ?? crypto.randomUUID();
-  const sessionFile = resolveSessionFilePath(
-    sessionIdFinal,
-    sessionEntry,
-    resolveSessionFilePathOptions({ agentId, storePath }),
-  );
   // Use bodyWithEvents (events prepended, but no session hints / untrusted context) so
   // deferred turns receive system events while keeping the same scope as effectiveBaseBody did.
   const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
     : queueBodyBase;
-  const resolvedQueue = resolveQueueSettings({
-    cfg,
-    channel: sessionCtx.Provider,
-    sessionEntry,
-    inlineMode: perMessageQueueMode,
-    inlineOptions: perMessageQueueOptions,
-  });
-  const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
-  const laneSize = getQueueSize(sessionLaneKey);
-  if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
-    const cleared = clearCommandLane(sessionLaneKey);
-    const aborted = abortEmbeddedPiRun(sessionIdFinal);
-    logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
+
+  const hookRunner = getGlobalHookRunner();
+  if (beforeAgentRunContext && hookRunner?.hasHooks("before_agent_run")) {
+    try {
+      const beforeAgentRunResult = await hookRunner.runBeforeAgentRun(
+        { prompt: prefixedCommandBody },
+        beforeAgentRunContext,
+      );
+      if (beforeAgentRunResult?.skip) {
+        restorePeekedSystemEvents(previewedSystemEvents);
+        typing.cleanup();
+        return undefined;
+      }
+    } catch (error) {
+      restorePeekedSystemEvents(previewedSystemEvents);
+      throw error;
+    }
   }
-  const queueKey = sessionKey ?? sessionIdFinal;
-  const isActive = isEmbeddedPiRunActive(sessionIdFinal);
-  const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
-  const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
-  const shouldFollowup =
-    resolvedQueue.mode === "followup" ||
-    resolvedQueue.mode === "collect" ||
-    resolvedQueue.mode === "steer-backlog";
-  const authProfileId = await resolveSessionAuthProfileOverride({
-    cfg,
-    provider,
-    agentDir,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    isNewSession,
-  });
-  const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
-  const followupRun = {
-    prompt: queuedBody,
-    messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-    summaryLine: baseBodyTrimmedRaw,
-    enqueuedAt: Date.now(),
-    // Originating channel for reply routing.
-    originatingChannel: ctx.OriginatingChannel,
-    originatingTo: ctx.OriginatingTo,
-    originatingAccountId: ctx.AccountId,
-    originatingThreadId: ctx.MessageThreadId,
-    originatingChatType: ctx.ChatType,
-    run: {
-      agentId,
-      agentDir,
-      sessionId: sessionIdFinal,
+
+  try {
+    await commitSessionHintEffects({
+      abortedLastRun,
+      sessionEntry,
+      sessionStore,
       sessionKey,
-      messageProvider: resolveOriginMessageProvider({
-        originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
-        // Prefer Provider over Surface for fallback channel identity.
-        // Surface can carry relayed metadata (for example "webchat") while Provider
-        // still reflects the active channel that should own tool routing.
-        provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
-      }),
-      agentAccountId: sessionCtx.AccountId,
-      groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
-      groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
-      groupSpace: sessionCtx.GroupSpace?.trim() ?? undefined,
-      senderId: sessionCtx.SenderId?.trim() || undefined,
-      senderName: sessionCtx.SenderName?.trim() || undefined,
-      senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
-      senderE164: sessionCtx.SenderE164?.trim() || undefined,
-      senderIsOwner: command.senderIsOwner,
-      sessionFile,
+      storePath,
+      abortKey: command.abortKey,
+    });
+    const skillResult = await ensureSkillSnapshot({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      sessionId,
+      isFirstTurnInSession,
       workspaceDir,
-      config: cfg,
-      skillsSnapshot,
-      provider,
-      model,
-      authProfileId,
-      authProfileIdSource,
-      thinkLevel: resolvedThinkLevel,
-      fastMode: resolveFastModeState({
+      cfg,
+      skillFilter: opts?.skillFilter,
+    });
+    sessionEntry = skillResult.sessionEntry ?? sessionEntry;
+    currentSystemSent = skillResult.systemSent;
+    const skillsSnapshot = skillResult.skillsSnapshot;
+    if (!resolvedThinkLevel) {
+      resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
+    }
+    if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+      const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
+      if (explicitThink) {
+        restorePeekedSystemEvents(previewedSystemEvents);
+        typing.cleanup();
+        return {
+          text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}. Use /think high or switch to one of those models.`,
+        };
+      }
+      resolvedThinkLevel = "high";
+      if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
+        sessionEntry.thinkingLevel = "high";
+        sessionEntry.updatedAt = Date.now();
+        sessionStore[sessionKey] = sessionEntry;
+        if (storePath) {
+          const nextSessionEntry = sessionEntry;
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = nextSessionEntry;
+          });
+        }
+      }
+    }
+    if (resetTriggered && command.isAuthorizedSender) {
+      await sendResetSessionNotice({
+        ctx,
+        command,
+        sessionKey,
         cfg,
+        accountId: ctx.AccountId,
+        threadId: ctx.MessageThreadId,
         provider,
         model,
-        sessionEntry,
-      }).enabled,
-      verboseLevel: resolvedVerboseLevel,
-      reasoningLevel: resolvedReasoningLevel,
-      elevatedLevel: resolvedElevatedLevel,
-      execOverrides,
-      bashElevated: {
-        enabled: elevatedEnabled,
-        allowed: elevatedAllowed,
-        defaultLevel: resolvedElevatedLevel ?? "off",
+        defaultProvider,
+        defaultModel,
+      });
+    }
+    const sessionIdFinal = sessionId ?? crypto.randomUUID();
+    const sessionFile = resolveSessionFilePath(
+      sessionIdFinal,
+      sessionEntry,
+      resolveSessionFilePathOptions({ agentId, storePath }),
+    );
+    const resolvedQueue = resolveQueueSettings({
+      cfg,
+      channel: sessionCtx.Provider,
+      sessionEntry,
+      inlineMode: perMessageQueueMode,
+      inlineOptions: perMessageQueueOptions,
+    });
+    const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
+    const laneSize = getQueueSize(sessionLaneKey);
+    if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
+      const cleared = clearCommandLane(sessionLaneKey);
+      const aborted = abortEmbeddedPiRun(sessionIdFinal);
+      logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
+    }
+    const queueKey = sessionKey ?? sessionIdFinal;
+    const isActive = isEmbeddedPiRunActive(sessionIdFinal);
+    const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
+    const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
+    const shouldFollowup =
+      resolvedQueue.mode === "followup" ||
+      resolvedQueue.mode === "collect" ||
+      resolvedQueue.mode === "steer-backlog";
+    const authProfileId = await resolveSessionAuthProfileOverride({
+      cfg,
+      provider,
+      agentDir,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isNewSession,
+    });
+    const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+    const followupRun = {
+      prompt: queuedBody,
+      messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+      summaryLine: baseBodyTrimmedRaw,
+      enqueuedAt: Date.now(),
+      // Originating channel for reply routing.
+      originatingChannel: ctx.OriginatingChannel,
+      originatingTo: ctx.OriginatingTo,
+      originatingAccountId: ctx.AccountId,
+      originatingThreadId: ctx.MessageThreadId,
+      originatingChatType: ctx.ChatType,
+      run: {
+        agentId,
+        agentDir,
+        sessionId: sessionIdFinal,
+        sessionKey,
+        messageProvider: resolveOriginMessageProvider({
+          originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+          // Prefer Provider over Surface for fallback channel identity.
+          // Surface can carry relayed metadata (for example "webchat") while Provider
+          // still reflects the active channel that should own tool routing.
+          provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
+        }),
+        agentAccountId: sessionCtx.AccountId,
+        groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
+        groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
+        groupSpace: sessionCtx.GroupSpace?.trim() ?? undefined,
+        senderId: sessionCtx.SenderId?.trim() || undefined,
+        senderName: sessionCtx.SenderName?.trim() || undefined,
+        senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
+        senderE164: sessionCtx.SenderE164?.trim() || undefined,
+        senderIsOwner: command.senderIsOwner,
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        skillsSnapshot,
+        provider,
+        model,
+        authProfileId,
+        authProfileIdSource,
+        thinkLevel: resolvedThinkLevel,
+        fastMode: resolveFastModeState({
+          cfg,
+          provider,
+          model,
+          sessionEntry,
+        }).enabled,
+        verboseLevel: resolvedVerboseLevel,
+        reasoningLevel: resolvedReasoningLevel,
+        elevatedLevel: resolvedElevatedLevel,
+        execOverrides,
+        bashElevated: {
+          enabled: elevatedEnabled,
+          allowed: elevatedAllowed,
+          defaultLevel: resolvedElevatedLevel ?? "off",
+        },
+        timeoutMs,
+        blockReplyBreak: resolvedBlockStreamingBreak,
+        ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
+        inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
+        extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+        ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
       },
-      timeoutMs,
-      blockReplyBreak: resolvedBlockStreamingBreak,
-      ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
-      inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
-      extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
-      ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
-    },
-  };
+    };
 
-  return runReplyAgent({
-    commandBody: prefixedCommandBody,
-    followupRun,
-    queueKey,
-    resolvedQueue,
-    shouldSteer,
-    shouldFollowup,
-    isActive,
-    isStreaming,
-    opts,
-    typing,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    defaultModel,
-    agentCfgContextTokens: agentCfg?.contextTokens,
-    resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-    isNewSession,
-    blockStreamingEnabled,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
-    sessionCtx,
-    shouldInjectGroupIntro,
-    typingMode,
-  });
+    commitPeekedSystemEvents(previewedSystemEvents);
+    return runReplyAgent({
+      commandBody: prefixedCommandBody,
+      followupRun,
+      queueKey,
+      resolvedQueue,
+      shouldSteer,
+      shouldFollowup,
+      isActive,
+      isStreaming,
+      opts,
+      typing,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel,
+      agentCfgContextTokens: agentCfg?.contextTokens,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      isNewSession,
+      blockStreamingEnabled,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
+      sessionCtx,
+      shouldInjectGroupIntro,
+      typingMode,
+    });
+  } catch (error) {
+    restorePeekedSystemEvents(previewedSystemEvents);
+    throw error;
+  }
 }

@@ -11,15 +11,31 @@ import {
   formatZonedTimestamp,
 } from "../../infra/format-time/format-datetime.ts";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
-import { drainSystemEventEntries } from "../../infra/system-events.js";
+import {
+  commitSystemEventReservation,
+  commitSystemEventSummaryReservation,
+  createSystemEventSummaryReservation,
+  drainSystemEventEntries,
+  type SystemEvent,
+  type SystemEventReservation,
+  type SystemEventSummaryReservation,
+  reserveSystemEventSummary,
+  reserveSystemEventEntries,
+  restoreSystemEventReservation,
+  restoreSystemEventSummaryReservation,
+} from "../../infra/system-events.js";
 
 /** Drain queued system events, format as `System:` lines, return the block (or undefined). */
-export async function drainFormattedSystemEvents(params: {
+type FormattedSystemEventParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
-}): Promise<string | undefined> {
+};
+
+async function formatSystemEvents(
+  params: FormattedSystemEventParams & { queued: SystemEvent[]; summaryLines?: string[] },
+): Promise<string | undefined> {
   const compactSystemEvent = (line: string): string | null => {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -85,9 +101,8 @@ export async function drainFormattedSystemEvents(params: {
   };
 
   const systemLines: string[] = [];
-  const queued = drainSystemEventEntries(params.sessionKey);
   systemLines.push(
-    ...queued
+    ...params.queued
       .map((event) => {
         const compacted = compactSystemEvent(event.text);
         if (!compacted) {
@@ -97,11 +112,8 @@ export async function drainFormattedSystemEvents(params: {
       })
       .filter((v): v is string => Boolean(v)),
   );
-  if (params.isMainSession && params.isNewSession) {
-    const summary = await buildChannelSummary(params.cfg);
-    if (summary.length > 0) {
-      systemLines.unshift(...summary);
-    }
+  if (params.summaryLines?.length) {
+    systemLines.unshift(...params.summaryLines);
   }
   if (systemLines.length === 0) {
     return undefined;
@@ -136,6 +148,79 @@ async function persistSessionEntryUpdate(params: {
   await updateSessionStore(params.storePath, (store) => {
     store[params.sessionKey!] = { ...store[params.sessionKey!], ...params.nextEntry };
   });
+}
+
+export type PeekedSystemEvents = {
+  reservation?: SystemEventReservation;
+  summaryReservation?: SystemEventSummaryReservation;
+  text?: string;
+};
+
+async function reserveSessionSummary(
+  params: FormattedSystemEventParams,
+): Promise<SystemEventSummaryReservation | undefined> {
+  const reserved = reserveSystemEventSummary(params.sessionKey);
+  if (reserved) {
+    return reserved;
+  }
+  if (!params.isMainSession || !params.isNewSession) {
+    return undefined;
+  }
+  const summary = await buildChannelSummary(params.cfg);
+  return createSystemEventSummaryReservation(params.sessionKey, summary);
+}
+
+export async function peekFormattedSystemEvents(
+  params: FormattedSystemEventParams,
+): Promise<PeekedSystemEvents> {
+  const reservation = reserveSystemEventEntries(params.sessionKey);
+  let summaryReservation: SystemEventSummaryReservation | undefined;
+  try {
+    summaryReservation = await reserveSessionSummary(params);
+    return {
+      reservation,
+      summaryReservation,
+      text: await formatSystemEvents({
+        ...params,
+        queued: reservation?.entries ?? [],
+        summaryLines: summaryReservation?.lines,
+      }),
+    };
+  } catch (error) {
+    restoreSystemEventReservation(reservation);
+    restoreSystemEventSummaryReservation(summaryReservation);
+    throw error;
+  }
+}
+
+export function commitPeekedSystemEvents(preview: PeekedSystemEvents): SystemEvent[] {
+  commitSystemEventSummaryReservation(preview.summaryReservation);
+  return commitSystemEventReservation(preview.reservation);
+}
+
+export function restorePeekedSystemEvents(preview: PeekedSystemEvents): SystemEvent[] {
+  restoreSystemEventSummaryReservation(preview.summaryReservation);
+  return restoreSystemEventReservation(preview.reservation);
+}
+
+/** Drain queued system events, format as `System:` lines, return the block (or undefined). */
+export async function drainFormattedSystemEvents(
+  params: FormattedSystemEventParams,
+): Promise<string | undefined> {
+  const queued = drainSystemEventEntries(params.sessionKey);
+  const summaryReservation = await reserveSessionSummary(params);
+  try {
+    const text = await formatSystemEvents({
+      ...params,
+      queued,
+      summaryLines: summaryReservation?.lines,
+    });
+    commitSystemEventSummaryReservation(summaryReservation);
+    return text;
+  } catch (error) {
+    restoreSystemEventSummaryReservation(summaryReservation);
+    throw error;
+  }
 }
 
 export async function ensureSkillSnapshot(params: {

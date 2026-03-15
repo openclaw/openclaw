@@ -746,6 +746,7 @@ Important hooks for prompt construction:
 - `before_model_resolve`: runs before session load (`messages` are not available). Use this to deterministically override `modelOverride` or `providerOverride`.
 - `before_prompt_build`: runs after session load (`messages` are available). Use this to shape prompt input.
 - `before_agent_start`: legacy compatibility hook. Prefer the two explicit hooks above.
+- `before_agent_run`: runs after preprocessing/directives/inline actions but before the default agent run begins. Use this to skip the default run when a plugin has already decided the turn should be ignored or handled elsewhere.
 
 Core-enforced hook policy:
 

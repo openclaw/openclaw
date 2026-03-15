@@ -12,6 +12,8 @@ import type {
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
+  PluginHookBeforeAgentRunEvent,
+  PluginHookBeforeAgentRunResult,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveEvent,
@@ -55,6 +57,8 @@ import type {
 // Re-export types for consumers
 export type {
   PluginHookAgentContext,
+  PluginHookBeforeAgentRunEvent,
+  PluginHookBeforeAgentRunResult,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveEvent,
@@ -266,6 +270,26 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   // =========================================================================
   // Agent Hooks
   // =========================================================================
+
+  /**
+   * Run before_agent_run hook.
+   * Allows plugins to skip the default agent run after preprocessing/directives.
+   * Like other modifying hooks, the highest-priority defined skip decision wins.
+   */
+  async function runBeforeAgentRun(
+    event: PluginHookBeforeAgentRunEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeAgentRunResult | undefined> {
+    return runModifyingHook<"before_agent_run", PluginHookBeforeAgentRunResult>(
+      "before_agent_run",
+      event,
+      ctx,
+      (acc, next) => ({
+        skip: acc?.skip ?? next.skip,
+        skipReason: acc?.skipReason ?? next.skipReason,
+      }),
+    );
+  }
 
   /**
    * Run before_model_resolve hook.
@@ -724,6 +748,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   return {
     // Agent hooks
+    runBeforeAgentRun,
     runBeforeModelResolve,
     runBeforePromptBuild,
     runBeforeAgentStart,
