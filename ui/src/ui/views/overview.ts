@@ -204,11 +204,7 @@ export function renderOverview(props: OverviewProps) {
               .value=${props.settings.gatewayUrl}
               @input=${(e: Event) => {
                 const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({
-                  ...props.settings,
-                  gatewayUrl: v,
-                  token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
-                });
+                props.onSettingsChange({ ...props.settings, gatewayUrl: v });
               }}
               placeholder="ws://100.x.y.z:18789"
             />
