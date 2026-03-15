@@ -5,7 +5,7 @@ import { basename } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
-import { listEnabledFeishuAccounts } from "./accounts.js";
+import { listEnabledFeishuAccountConfigs } from "./accounts.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";
 import { updateColorText } from "./docx-color-text.js";
@@ -1233,7 +1233,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   }
 
   // Check if any account is configured
-  const accounts = listEnabledFeishuAccounts(api.config);
+  const accounts = listEnabledFeishuAccountConfigs(api.config);
   if (accounts.length === 0) {
     api.logger.debug?.("feishu_doc: No Feishu accounts configured, skipping doc tools");
     return;
