@@ -171,10 +171,17 @@ describe("GatewayBrowserClient", () => {
     const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
       id?: string;
       method?: string;
-      params?: { auth?: { token?: string } };
+      params?: { auth?: { token?: string }; scopes?: string[] };
     };
     expect(typeof connectFrame.id).toBe("string");
     expect(connectFrame.method).toBe("connect");
+    expect(connectFrame.params?.scopes).toEqual([
+      "operator.read",
+      "operator.write",
+      "operator.admin",
+      "operator.approvals",
+      "operator.pairing",
+    ]);
     expect(connectFrame.params?.auth?.token).toBe("shared-auth-token");
     expect(signDevicePayloadMock).toHaveBeenCalledWith("private-key", expect.any(String));
     const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
