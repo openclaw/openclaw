@@ -228,7 +228,7 @@
     "dialogueForm": "linear_qa",
     "seed": 116,
     "taskId": "wp_launch_blog_outline",
-    "taskObjective": "规划 Layer0 发布博客提纲与证据映射。",
+    "taskObjective": "规划 structured-context 发布博客提纲与证据映射。",
     "acceptanceChecks": ["提纲结构完整且顺序清晰", "每个主张有证据来源", "避免夸张营销措辞"]
   },
   {

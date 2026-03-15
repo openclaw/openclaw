@@ -36,7 +36,7 @@ function loadMatrixCases(): MatrixCase[] {
     process.cwd(),
     "test",
     "context-engine",
-    "layer0-matrix",
+    "structured-context-matrix",
     "cases.json",
   );
   return JSON.parse(readFileSync(filePath, "utf8")) as MatrixCase[];
@@ -47,13 +47,13 @@ function loadTaskDefinitions(): TaskDefinition[] {
     process.cwd(),
     "test",
     "context-engine",
-    "layer0-matrix",
+    "structured-context-matrix",
     "tasks.json",
   );
   return JSON.parse(readFileSync(filePath, "utf8")) as TaskDefinition[];
 }
 
-describe("layer0 matrix coverage", () => {
+describe("structured-context matrix coverage", () => {
   it("keeps exactly 30 fixed samples", () => {
     const cases = loadMatrixCases();
     expect(cases).toHaveLength(30);
@@ -109,7 +109,7 @@ describe("layer0 matrix coverage", () => {
   });
 });
 
-describe("layer0 task catalog integrity", () => {
+describe("structured-context task catalog integrity", () => {
   it("keeps unique task IDs with required execution fields", () => {
     const tasks = loadTaskDefinitions();
     const ids = new Set<string>();

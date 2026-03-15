@@ -49,7 +49,7 @@
     "objective": "Investigate why identifiers are rewritten after context compaction and ensure exact identifier preservation.",
     "inputArtifacts": [
       "src/plugins/structured-context/src/context-engine.ts",
-      "test/context-engine/layer0-matrix/cases.json",
+      "test/context-engine/structured-context-matrix/cases.json",
       "Issue #24902"
     ],
     "hardConstraints": [
@@ -142,7 +142,11 @@
       "Keep comparisons falsifiable"
     ],
     "deliverables": ["Gap matrix", "Evidence citations", "Priority shortlist"],
-    "primaryIdentifiers": ["plans/README.md", "Layer0", "state-aware context engineering"],
+    "primaryIdentifiers": [
+      "plans/README.md",
+      "structured-context",
+      "state-aware context engineering"
+    ],
     "toolProfile": "light"
   },
   {
@@ -150,7 +154,7 @@
     "taskType": "research",
     "title": "Audit docs coverage for context engine",
     "objective": "Audit whether docs cover context engine slot config, rollout, and rollback paths.",
-    "inputArtifacts": ["docs/configuration.md", "plans/layer0-context-eval.md", "Issue #24911"],
+    "inputArtifacts": ["docs/configuration.md", "plans/structured-context-eval.md", "Issue #24911"],
     "hardConstraints": [
       "Use repo-local evidence only",
       "Flag missing sections explicitly",
@@ -160,7 +164,7 @@
     "primaryIdentifiers": [
       "plugins.entries.structured-context.config.context.enabled",
       "Issue #24911",
-      "plans/layer0-context-eval.md"
+      "plans/structured-context-eval.md"
     ],
     "toolProfile": "light"
   },
@@ -206,7 +210,7 @@
     "inputArtifacts": [
       "openclaw channels status --probe",
       "openclaw gateway status --deep --require-rpc",
-      "plans/layer0-context-eval.md"
+      "plans/structured-context-eval.md"
     ],
     "hardConstraints": [
       "Digest must be deterministic",
@@ -240,15 +244,15 @@
     "taskId": "wp_launch_blog_outline",
     "taskType": "writing_planning",
     "title": "Draft launch blog outline",
-    "objective": "Plan a launch blog outline for Layer0 context engine with clear sections and evidence links.",
-    "inputArtifacts": ["plans/README.md", "plans/layer0-context-eval.md", "docs/testing.md"],
+    "objective": "Plan a launch blog outline for structured-context context engine with clear sections and evidence links.",
+    "inputArtifacts": ["plans/README.md", "plans/structured-context-eval.md", "docs/testing.md"],
     "hardConstraints": [
       "No hype wording",
       "Every claim maps to evidence",
       "Keep section order logical"
     ],
     "deliverables": ["Blog outline", "Claim-to-evidence map", "Open questions"],
-    "primaryIdentifiers": ["Layer0", "A/B report", "zero regression"],
+    "primaryIdentifiers": ["structured-context", "A/B report", "zero regression"],
     "toolProfile": "light"
   },
   {
@@ -316,7 +320,7 @@
     "inputArtifacts": [
       "/tmp/incident-logs/*.log",
       "gh issue view #24840",
-      "scripts/context-engine/layer0-eval.ts"
+      "scripts/context-engine/structured-context-eval.ts"
     ],
     "hardConstraints": [
       "Externalize oversized tool output as artifact refs",
