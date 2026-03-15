@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSlackThreadBindingManager } from "../../../../extensions/slack/src/monitor/thread-bindings.manager.js";
+import { resetSlackThreadBindingsForTests } from "../../../../extensions/slack/src/monitor/thread-bindings.state.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   __testing as sessionBindingTesting,
   getSessionBindingService,
 } from "../../../infra/outbound/session-binding-service.js";
-import { createSlackThreadBindingManager } from "../../../../extensions/slack/src/monitor/thread-bindings.manager.js";
-import { resetSlackThreadBindingsForTests } from "../../../../extensions/slack/src/monitor/thread-bindings.state.js";
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
 import { resolveBoundAcpThreadSessionKey } from "./targets.js";

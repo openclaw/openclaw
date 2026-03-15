@@ -143,15 +143,17 @@ function resolveAcpResetBindingContext(ctx: MsgContext): {
     }
   }
   if (channelRaw === "slack" && normalizedThreadId) {
-    const fromContext = normalizeSessionText(ctx.ThreadParentId);
+    const fromContext = normalizeConversationText(ctx.ThreadParentId);
     if (fromContext && fromContext !== conversationId) {
       parentConversationId = fromContext;
     } else {
-      const fromNativeConversationId = normalizeSessionText(ctx.NativeChannelId);
+      const fromNativeConversationId = normalizeConversationText(ctx.NativeChannelId);
       if (fromNativeConversationId && fromNativeConversationId !== conversationId) {
         parentConversationId = fromNativeConversationId;
       } else {
-        const fromOriginatingConversationId = normalizeSessionText(ctx.OriginatingConversationId);
+        const fromOriginatingConversationId = normalizeConversationText(
+          ctx.OriginatingConversationId,
+        );
         if (fromOriginatingConversationId && fromOriginatingConversationId !== conversationId) {
           parentConversationId = fromOriginatingConversationId;
         } else {
