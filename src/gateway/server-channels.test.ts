@@ -46,6 +46,7 @@ function createTestPlugin(params?: {
   account?: TestAccount;
   startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
   includeDescribeAccount?: boolean;
+  describeAccount?: ChannelPlugin<TestAccount>["config"]["describeAccount"];
   resolveAccount?: ChannelPlugin<TestAccount>["config"]["resolveAccount"];
   isConfigured?: ChannelPlugin<TestAccount>["config"]["isConfigured"];
 }): ChannelPlugin<TestAccount> {
@@ -59,11 +60,13 @@ function createTestPlugin(params?: {
     ...(params?.isConfigured ? { isConfigured: params.isConfigured } : {}),
   };
   if (includeDescribeAccount) {
-    config.describeAccount = (resolved) => ({
-      accountId: DEFAULT_ACCOUNT_ID,
-      enabled: resolved.enabled !== false,
-      configured: resolved.configured !== false,
-    });
+    config.describeAccount =
+      params?.describeAccount ??
+      ((resolved) => ({
+        accountId: DEFAULT_ACCOUNT_ID,
+        enabled: resolved.enabled !== false,
+        configured: resolved.configured !== false,
+      }));
   }
   const gateway: NonNullable<ChannelPlugin<TestAccount>["gateway"]> = {};
   if (params?.startAccount) {
@@ -196,6 +199,23 @@ describe("server-channels auto restart", () => {
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.enabled).toBe(true);
     expect(account?.configured).toBe(true);
+  });
+
+  it("forwards described mode into runtime snapshots", () => {
+    installTestRegistry(
+      createTestPlugin({
+        describeAccount: (resolved) => ({
+          accountId: DEFAULT_ACCOUNT_ID,
+          enabled: resolved.enabled !== false,
+          configured: resolved.configured !== false,
+          mode: "webhook",
+        }),
+      }),
+    );
+    const manager = createManager();
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.mode).toBe("webhook");
   });
 
   it("passes channelRuntime through channel gateway context when provided", async () => {
