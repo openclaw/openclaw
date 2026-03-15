@@ -252,13 +252,15 @@ function parseGuardianResponse(content: string, fallback: GuardianDecision): Gua
     if (!line) continue;
     const upper = line.toUpperCase();
 
-    if (upper.startsWith("ALLOW")) {
+    // Require a delimiter after ALLOW/BLOCK to avoid matching words like
+    // "ALLOWING" or "BLOCKED" which are not valid verdicts.
+    if (upper === "ALLOW" || upper.startsWith("ALLOW:") || upper.startsWith("ALLOW ")) {
       const colonIndex = line.indexOf(":");
       const reason = colonIndex >= 0 ? line.slice(colonIndex + 1).trim() : line.slice(5).trim();
       return { action: "allow", reason: reason || undefined };
     }
 
-    if (upper.startsWith("BLOCK")) {
+    if (upper === "BLOCK" || upper.startsWith("BLOCK:") || upper.startsWith("BLOCK ")) {
       const colonIndex = line.indexOf(":");
       const reason = colonIndex >= 0 ? line.slice(colonIndex + 1).trim() : line.slice(5).trim();
       return { action: "block", reason: reason || "Blocked by guardian" };
