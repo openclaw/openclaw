@@ -15,6 +15,7 @@ import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { defaultSlotIdForKey } from "./slots.js";
 import {
   isPluginHookName,
   isPromptInjectionHookName,
@@ -653,7 +654,26 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       registerService: (service) => registerService(record, service),
       registerCommand: (command) => registerCommand(record, command),
-      registerContextEngine: (id, factory) => registerContextEngine(id, factory),
+      registerContextEngine: (id, factory) => {
+        if (id === defaultSlotIdForKey("contextEngine")) {
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: `context engine id reserved by core: ${id}`,
+          });
+          return;
+        }
+        const result = registerContextEngine(id, factory, { owner: `plugin:${record.id}` });
+        if (!result.ok) {
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: `context engine already registered: ${id} (${result.existingOwner})`,
+          });
+        }
+      },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
         registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
