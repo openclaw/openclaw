@@ -9,6 +9,7 @@ const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_MODEL_IDS = [
   "claude-sonnet-4.6",
   "claude-sonnet-4.5",
+  "gpt-5.4",
   "gpt-4o",
   "gpt-4.1",
   "gpt-4.1-mini",
