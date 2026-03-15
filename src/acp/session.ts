@@ -37,8 +37,15 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     if (!session) {
       return false;
     }
-    if (session.activeRunId) {
-      runIdToSessionId.delete(session.activeRunId);
+    // Sweep all runId → sessionId entries that still reference this session.
+    // Stale entries can accumulate when setActiveRun is called multiple times
+    // for the same session without an intervening clearActiveRun: the previous
+    // runId is silently overwritten in session.activeRunId, leaving its map
+    // entry orphaned.
+    for (const [runId, sid] of runIdToSessionId) {
+      if (sid === sessionId) {
+        runIdToSessionId.delete(runId);
+      }
     }
     session.abortController?.abort();
     sessions.delete(sessionId);
