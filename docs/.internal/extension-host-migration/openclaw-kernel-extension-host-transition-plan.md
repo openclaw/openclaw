@@ -88,7 +88,7 @@ What has landed:
 - plugin provider projection from registry entries into runtime provider objects now routes through `src/extension-host/provider-runtime.ts`
 - plugin provider discovery filtering, order grouping, and result normalization now route through `src/extension-host/provider-discovery.ts`
 - provider matching, auth-method selection, config-patch merging, and default-model application now route through `src/extension-host/provider-auth.ts`
-- embedding-provider auto-selection, provider creation, local-setup guidance, and primary and fallback routing now route through `src/extension-host/embedding-runtime-registry.ts`, and the public embedding runtime surface plus result typing now route through `src/extension-host/embedding-runtime.ts` and `src/extension-host/embedding-runtime-types.ts` while `src/memory/embeddings.ts` remains the compatibility facade
+- embedding-provider auto-selection, provider creation, local-setup guidance, and primary and fallback routing now route through `src/extension-host/embedding-runtime-registry.ts`, the public embedding runtime surface plus result typing now route through `src/extension-host/embedding-runtime.ts` and `src/extension-host/embedding-runtime-types.ts`, and manager-side batch policy plus fallback activation now route through `src/extension-host/embedding-manager-runtime.ts` while `src/memory/embeddings.ts` remains the compatibility facade
 - media-provider normalization, built-in registry construction, override merging, and runtime lookup now route through `src/extension-host/media-runtime-registry.ts`; provider and CLI entry execution, output parsing, provider query normalization, provider auth/context shaping, and proxy-aware fetch handling now route through `src/extension-host/media-runtime-execution.ts`; local-binary probing, auto-entry selection, active-model fallback, and top-level capability orchestration now route through `src/extension-host/media-runtime-auto.ts` and `src/extension-host/media-runtime-orchestration.ts`; and media prompt, timeout, scope, model-entry, concurrency, and decision helpers now route through `src/extension-host/media-runtime-config.ts` and `src/extension-host/media-runtime-decision.ts` while `src/media-understanding/providers/index.ts`, `src/media-understanding/runner.ts`, `src/media-understanding/runner.entries.ts`, and `src/media-understanding/resolve.ts` remain compatibility facades
 - TTS provider metadata, provider ordering, API-key resolution, configuration checks, and telephony support now route through `src/extension-host/tts-runtime-registry.ts`, provider execution loops, output-format selection, telephony synthesis, and provider-error shaping now route through `src/extension-host/tts-runtime-execution.ts`, provider selection plus request setup now route through `src/extension-host/tts-runtime-setup.ts`, prefs-path resolution, auto-mode policy, and persisted TTS preference reads and writes now route through `src/extension-host/tts-preferences.ts`, and auto-TTS gating, directive cleanup, truncation, summarization, and payload planning now route through `src/extension-host/tts-payload.ts` while `src/tts/tts.ts` remains the compatibility facade plus config and attempt-status surface
 - provider onboarding option building, model-picker entry building, and provider-method choice resolution now route through `src/extension-host/provider-wizard.ts`
@@ -231,6 +231,7 @@ Committed implementation slices so far:
 - `b7868d06ba` `ACP: extract runtime backend registry`
 - `df0cb8193c` `Memory: extract embedding runtime registry`
 - `edae8761b3` `Memory: extract embedding runtime surface`
+- `bbe97e886f` `Memory: extract embedding manager runtime`
 - `e592f60fa7` `Media: extract runtime provider registry`
 - `9305a235b3` `Media: extract runtime execution`
 - `37ee04e9b0` `Media: extract runtime auto and orchestration`
@@ -248,7 +249,7 @@ What has not landed:
 - keeping the cutover inventory current as more surfaces move
 - broader lifecycle ownership beyond the loader state machine, session-owned activation state, and explicit discovery-policy, activation-policy, and finalization-policy outcomes, plus remaining policy semantics
 - host-owned registration surfaces beyond the first normalization helpers and low-risk channel, provider, gateway-method, HTTP-route, tool, CLI, service, command, context-engine, and hook compatibility write slices
-- remaining embedding manager and execution ownership, remaining media compatibility-facade cleanup, plus remaining TTS config/status and facade cleanup
+- remaining embedding sync and indexing execution ownership, remaining media compatibility-facade cleanup, plus remaining TTS config/status and facade cleanup
 - SDK compatibility translation work
 - canonical event stages
 - canonical capability catalogs

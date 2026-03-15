@@ -42,7 +42,7 @@ What has been implemented:
 - context-engine registration and runtime resolution now delegate through `src/extension-host/context-engine-runtime.ts` while `src/context-engine/registry.ts` remains the compatibility facade
 - exclusive-slot selection and default-slot resolution now delegate through `src/extension-host/slot-arbitration.ts` while `src/plugins/slots.ts` remains the compatibility facade
 - ACP backend registration and runtime resolution now delegate through `src/extension-host/acp-runtime-backend-registry.ts` while `src/acp/runtime/registry.ts` remains the compatibility facade
-- embedding-provider auto-selection, provider creation, local-setup guidance, and primary and fallback routing now delegate through `src/extension-host/embedding-runtime-registry.ts`, and the public embedding runtime surface plus result typing now delegate through `src/extension-host/embedding-runtime.ts` and `src/extension-host/embedding-runtime-types.ts` while `src/memory/embeddings.ts` remains the compatibility facade
+- embedding-provider auto-selection, provider creation, local-setup guidance, and primary and fallback routing now delegate through `src/extension-host/embedding-runtime-registry.ts`, the public embedding runtime surface plus result typing now delegate through `src/extension-host/embedding-runtime.ts` and `src/extension-host/embedding-runtime-types.ts`, and manager-side batch policy plus fallback activation now delegate through `src/extension-host/embedding-manager-runtime.ts` while `src/memory/embeddings.ts` remains the compatibility facade
 - TTS provider metadata, provider ordering, API-key resolution, configuration checks, and telephony support now delegate through `src/extension-host/tts-runtime-registry.ts`, provider execution loops, output-format selection, telephony synthesis, and provider-error shaping now delegate through `src/extension-host/tts-runtime-execution.ts`, provider selection plus request setup now delegate through `src/extension-host/tts-runtime-setup.ts`, prefs-path resolution, auto-mode policy, and persisted TTS preference reads and writes now delegate through `src/extension-host/tts-preferences.ts`, and auto-TTS gating, directive cleanup, truncation, summarization, and payload planning now delegate through `src/extension-host/tts-payload.ts` while `src/tts/tts.ts` remains the compatibility facade plus config and attempt-status surface
 - legacy internal-hook bridging and typed prompt-injection compatibility policy now delegate through `src/extension-host/hook-compat.ts`
 - compatibility `OpenClawPluginApi` composition and logger shaping now delegate through `src/extension-host/plugin-api.ts`
@@ -146,7 +146,7 @@ What is still pending from this spec:
 - broader extension-host lifecycle ownership beyond the loader state machine, service-lifecycle boundary, CLI-lifecycle boundary, session-owned activation state, and explicit discovery-policy, activation-policy, and finalization-policy outcomes
 - activation pipeline ownership
 - host-owned registries for setup, CLI, routes, services, slots, and backends
-- remaining embedding manager and execution ownership, remaining media compatibility-facade cleanup, plus remaining TTS config/status and facade cleanup, including explicit fallback and override policy instead of plugin-era capability reads
+- remaining embedding sync and indexing execution ownership, remaining media compatibility-facade cleanup, plus remaining TTS config/status and facade cleanup, including explicit fallback and override policy instead of plugin-era capability reads
 - a clear host-owned split for extension-backed search between agent-visible tool publication and any optional runtime-internal search backend registry
 - permission-mode enforcement
 - per-extension state ownership and migration
@@ -745,7 +745,7 @@ The host must emit structured telemetry for:
 4. Add a policy evaluator that understands advisory versus enforced permission modes.
 5. Add host-owned credential and per-extension state boundaries for extension services.
 6. Generalize backend registration into a host-managed `capability.runtime-backend` registry.
-7. Finish remaining embedding manager and execution ownership, remaining media compatibility-facade cleanup, plus remaining TTS config/status and facade cleanup, instead of widening `registerProvider(...)`.
+7. Finish remaining embedding sync and indexing execution ownership, remaining media compatibility-facade cleanup, plus remaining TTS config/status and facade cleanup, instead of widening `registerProvider(...)`.
 8. Keep extension-backed search generic by publishing agent-visible search through tool contracts and using runtime-backend only for search backends consumed internally by the host or another subsystem.
 9. Add slot-backed provider management for context engines and other exclusive runtime providers.
 10. Preserve provenance, origin precedence, and current workspace and bundled enablement rules in host policy.
