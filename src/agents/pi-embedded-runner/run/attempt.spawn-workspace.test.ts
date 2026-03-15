@@ -531,6 +531,76 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
   });
 });
 
+describe("runEmbeddedAttempt tool result payload reset on compaction retry", () => {
+  const tempPaths: string[] = [];
+
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness();
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
+  });
+
+  it("drops pre-compaction tool result payloads before the retry finishes", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-tool-result-workspace-"),
+    );
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-result-agent-"));
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
+    tempPaths.push(workspaceDir, agentDir);
+    await fs.writeFile(sessionFile, "", "utf8");
+
+    let subscriptionParams:
+      | {
+          onToolResult?: (payload: { text?: string }) => void | Promise<void>;
+          onCompactionRetryReset?: () => void;
+        }
+      | undefined;
+    hoisted.subscribeEmbeddedPiSessionMock.mockReset().mockImplementation((params) => {
+      subscriptionParams = params;
+      return createSubscriptionMock();
+    });
+
+    hoisted.createAgentSessionMock.mockImplementation(async () => {
+      const session = createDefaultEmbeddedSession();
+      session.prompt = async () => {
+        await subscriptionParams?.onToolResult?.({ text: "before retry" });
+        subscriptionParams?.onCompactionRetryReset?.();
+        await subscriptionParams?.onToolResult?.({ text: "after retry" });
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      };
+      return { session };
+    });
+
+    const result = await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:tool-result-reset",
+      sessionFile,
+      workspaceDir,
+      agentDir,
+      config: {},
+      prompt: "hello",
+      timeoutMs: 10_000,
+      runId: "run-tool-result-reset",
+      provider: "openai",
+      modelId: "gpt-test",
+      model: testModel,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(result.toolResultPayloads).toEqual([{ text: "after retry" }]);
+  });
+});
+
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const tempPaths: string[] = [];
   const sessionKey = "agent:main:discord:channel:test-ctx-engine";

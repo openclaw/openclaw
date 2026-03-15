@@ -105,6 +105,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   messagesSnapshot: [],
   assistantTexts: [],
   toolMetas: [],
+  toolResultPayloads: [],
   lastAssistant: undefined,
   didSendViaMessagingTool: false,
   messagingToolSentTexts: [],
@@ -488,6 +489,192 @@ async function runTurnWithCooldownSeed(params: {
     return { usageStats: await readUsageStats(agentDir), now };
   });
 }
+
+describe("runEmbeddedPiAgent tool-result payload preservation", () => {
+  it("returns preserved tool-result payloads ahead of assistant payloads", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          toolResultPayloads: [
+            {
+              text: "generated image",
+              mediaUrls: ["https://example.com/generated.png"],
+            },
+          ],
+          assistantTexts: ["ok"],
+          lastAssistant: buildAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "ok" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:tool-result-payloads",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        runId: "run:tool-result-payloads",
+      });
+
+      expect(result.payloads).toEqual([
+        {
+          text: "generated image",
+          mediaUrls: ["https://example.com/generated.png"],
+        },
+        {
+          text: "ok",
+          mediaUrls: undefined,
+          mediaUrl: undefined,
+          isError: undefined,
+          replyToId: undefined,
+          replyToTag: false,
+          replyToCurrent: false,
+          audioAsVoice: false,
+        },
+      ]);
+    });
+  });
+
+  it("preserves singular mediaUrl tool-result payloads", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          toolResultPayloads: [
+            {
+              mediaUrl: "https://example.com/generated.png",
+            },
+          ],
+          timedOut: true,
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:tool-result-mediaurl",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        runId: "run:tool-result-mediaurl",
+      });
+
+      expect(result.payloads).toEqual([
+        {
+          mediaUrl: "https://example.com/generated.png",
+        },
+      ]);
+    });
+  });
+
+  it("preserves tool-result metadata in final payloads when the caller is not streaming them", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          toolResultPayloads: [
+            {
+              text: "Approval required.",
+              channelData: {
+                execApproval: {
+                  approvalId: "117ba06d-1111-2222-3333-444444444444",
+                  approvalSlug: "117ba06d",
+                  allowedDecisions: ["allow-once", "allow-always", "deny"],
+                },
+              },
+            },
+          ],
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:tool-result-metadata",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        runId: "run:tool-result-metadata",
+      });
+
+      expect(result.payloads).toEqual([
+        {
+          text: "Approval required.",
+          channelData: {
+            execApproval: {
+              approvalId: "117ba06d-1111-2222-3333-444444444444",
+              approvalSlug: "117ba06d",
+              allowedDecisions: ["allow-once", "allow-always", "deny"],
+            },
+          },
+        },
+      ]);
+    });
+  });
+
+  it("does not re-emit buffered tool-result payloads when the caller already streamed them", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      const onToolResult = vi.fn();
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          toolResultPayloads: [
+            {
+              text: "generated image",
+              mediaUrls: ["https://example.com/generated.png"],
+            },
+          ],
+          assistantTexts: ["ok"],
+          lastAssistant: buildAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "ok" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:tool-result-streamed",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        runId: "run:tool-result-streamed",
+        onToolResult,
+      });
+
+      expect(result.payloads).toEqual([
+        {
+          text: "ok",
+          mediaUrls: undefined,
+          mediaUrl: undefined,
+          isError: undefined,
+          replyToId: undefined,
+          replyToTag: false,
+          replyToCurrent: false,
+          audioAsVoice: false,
+        },
+      ]);
+      expect(onToolResult).not.toHaveBeenCalled();
+    });
+  });
+});
 
 describe("runEmbeddedPiAgent auth profile rotation", () => {
   it("refreshes copilot token after auth error and retries once", async () => {

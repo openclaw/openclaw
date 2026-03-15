@@ -600,6 +600,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.successfulCronAdds = 0;
     state.pendingMessagingMediaUrls.clear();
     state.deterministicApprovalPromptSent = false;
+    params.onCompactionRetryReset?.();
     resetAssistantMessageState(0);
   };
 
