@@ -2,7 +2,11 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
-import { PRUNED_HISTORY_IMAGE_MARKER, pruneProcessedHistoryImages } from "./history-image-prune.js";
+import {
+  NO_VISION_IMAGE_MARKER,
+  PRUNED_HISTORY_IMAGE_MARKER,
+  pruneProcessedHistoryImages,
+} from "./history-image-prune.js";
 
 describe("pruneProcessedHistoryImages", () => {
   const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
@@ -86,5 +90,48 @@ describe("pruneProcessedHistoryImages", () => {
     expect(didMutate).toBe(false);
     const firstUser = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
     expect(firstUser?.content).toBe("noop");
+  });
+
+  it("strips images from ALL turns when modelHasVision is false (no assistant reply)", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "user",
+        content: [{ type: "text", text: "Here is an image" }, { ...image }],
+      }),
+    ];
+
+    const didMutate = pruneProcessedHistoryImages(messages, { modelHasVision: false });
+
+    expect(didMutate).toBe(true);
+    const firstUser = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    const content = firstUser?.content as Array<{ type: string; text?: string }>;
+    expect(content[1]).toMatchObject({ type: "text", text: NO_VISION_IMAGE_MARKER });
+  });
+
+  it("strips images from ALL turns when modelHasVision is false (with assistant reply)", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "user",
+        content: [{ type: "text", text: "image 1" }, { ...image }],
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: "got it",
+      }),
+      castAgentMessage({
+        role: "user",
+        content: [{ type: "text", text: "image 2" }, { ...image }],
+      }),
+    ];
+
+    const didMutate = pruneProcessedHistoryImages(messages, { modelHasVision: false });
+
+    expect(didMutate).toBe(true);
+    const firstContent = (messages[0] as Extract<AgentMessage, { role: "user" }>)
+      ?.content as Array<{ type: string; text?: string }>;
+    const thirdContent = (messages[2] as Extract<AgentMessage, { role: "user" }>)
+      ?.content as Array<{ type: string; text?: string }>;
+    expect(firstContent[1]).toMatchObject({ type: "text", text: NO_VISION_IMAGE_MARKER });
+    expect(thirdContent[1]).toMatchObject({ type: "text", text: NO_VISION_IMAGE_MARKER });
   });
 });
