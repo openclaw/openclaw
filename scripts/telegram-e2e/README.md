@@ -94,6 +94,37 @@ node dist/index.js gateway run --bind loopback --port 18789 --force
 
 If another checkout/global runtime is serving Telegram, your E2E result is invalid for this branch.
 
+## Deterministic gateway recovery (main runtime)
+
+When gateway health is flaky during live E2E, use the deterministic recovery helper.
+
+```bash
+scripts/gateway-recover-main.sh
+```
+
+What it does:
+
+1. Captures baseline evidence (`status --require-rpc`, listener, launchctl state).
+2. Performs aggressive clean stop (`bootout`, `pkill`).
+3. Rebuilds/reinstalls from `/Users/user/Programming_Projects/openclaw`.
+4. Bootstraps gateway + watchdog launch agents.
+5. Waits with readiness gates:
+   - listener gate on `18789` (poll every 2s, timeout 300s),
+   - RPC gate (`openclaw gateway status --deep --require-rpc`) after listener.
+6. Runs one controlled kickstart retry if listener is still down after 30s.
+7. On timeout/failure, prints exact failing command output plus:
+   - last 120 lines of `~/.openclaw/logs/gateway.err.log`
+   - last 120 lines of `/tmp/openclaw/gateway-watchdog.err.log`
+
+Optional env overrides:
+
+- `OPENCLAW_MAIN_REPO` (default: `/Users/user/Programming_Projects/openclaw`)
+- `OPENCLAW_GATEWAY_PORT` (default: `18789`)
+- `OPENCLAW_GATEWAY_LISTENER_TIMEOUT_SECONDS` (default: `300`)
+- `OPENCLAW_GATEWAY_RPC_TIMEOUT_SECONDS` (default: `120`)
+- `OPENCLAW_GATEWAY_RETRY_KICKSTART_AFTER_SECONDS` (default: `30`)
+- `OPENCLAW_GATEWAY_POLL_INTERVAL_SECONDS` (default: `2`)
+
 ## Run E2E checks
 
 ### Group forum inheritance (A -> new B, C unchanged)
