@@ -990,3 +990,6 @@
   background: var(--panel-strong);
   border-color: var(--accent);
 }
+
+/* Mobile dropdown toggle — hidden on desktop */
+/* Mobile gear toggle + dropdown are hidden by default in layout.css */

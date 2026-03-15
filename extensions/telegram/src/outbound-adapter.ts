@@ -7,7 +7,7 @@ import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
-} from "../../../src/infra/outbound/deliver.js";
+} from "../../../src/infra/outbound/send-deps.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
@@ -115,6 +115,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     deps,
     replyToId,
     threadId,
+    forceDocument,
   }) => {
     const { send, baseOpts } = resolveTelegramSendContext({
       cfg,
@@ -127,6 +128,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       ...baseOpts,
       mediaUrl,
       mediaLocalRoots,
+      forceDocument: forceDocument ?? false,
     });
     return { channel: "telegram", ...result };
   },
@@ -139,6 +141,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     deps,
     replyToId,
     threadId,
+    forceDocument,
   }) => {
     const { send, baseOpts } = resolveTelegramSendContext({
       cfg,
@@ -154,6 +157,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       baseOpts: {
         ...baseOpts,
         mediaLocalRoots,
+        forceDocument: forceDocument ?? false,
       },
     });
     return { channel: "telegram", ...result };

@@ -95,6 +95,7 @@ openclaw gateway health --url ws://127.0.0.1:18789
 ```bash
 openclaw gateway status
 openclaw gateway status --json
+openclaw gateway status --require-rpc
 ```
 
 Options:
@@ -105,11 +106,13 @@ Options:
 - `--timeout <ms>`: probe timeout (default `10000`).
 - `--no-probe`: skip the RPC probe (service-only view).
 - `--deep`: scan system-level services too.
+- `--require-rpc`: exit non-zero when the RPC probe fails. Cannot be combined with `--no-probe`.
 
 Notes:
 
 - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
 - If a required auth SecretRef is unresolved in this command path, probe auth can fail; pass `--token`/`--password` explicitly or resolve the secret source first.
+- Use `--require-rpc` in scripts and automation when a listening service is not enough and you need the Gateway RPC itself to be healthy.
 - On Linux systemd installs, service auth drift checks read both `Environment=` and `EnvironmentFile=` values from the unit (including `%h`, quoted paths, multiple files, and optional `-` files).
 
 ### `gateway probe`

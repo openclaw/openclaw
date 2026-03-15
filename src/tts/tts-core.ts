@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { rmSync, statSync } from "node:fs";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
@@ -10,7 +10,7 @@ import {
   type ModelRef,
 } from "../agents/model-selection.js";
 import { createConfiguredOllamaStreamFn } from "../agents/ollama-stream.js";
-import { resolveModel } from "../agents/pi-embedded-runner/model.js";
+import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
   ResolvedTtsConfig,
@@ -592,7 +592,7 @@ export async function summarizeText(params: {
 
   const startTime = Date.now();
   const { ref } = resolveSummaryModelRef(cfg, config);
-  const resolved = resolveModel(ref.provider, ref.model, undefined, cfg);
+  const resolved = await resolveModelAsync(ref.provider, ref.model, undefined, cfg);
   if (!resolved.model) {
     throw new Error(resolved.error ?? `Unknown summary model: ${ref.provider}/${ref.model}`);
   }
@@ -1012,4 +1012,10 @@ export async function edgeTTS(params: {
     timeout: config.timeoutMs ?? timeoutMs,
   });
   await tts.ttsPromise(text, outputPath);
+
+  const { size } = statSync(outputPath);
+
+  if (size === 0) {
+    throw new Error("Edge TTS produced empty audio file");
+  }
 }
