@@ -19,14 +19,10 @@ export function buildImageResizeSideGrid(maxSide: number, sideStart: number): nu
     .toSorted((a, b) => b - a);
 }
 
-function isBun(): boolean {
-  return typeof (process.versions as { bun?: unknown }).bun === "string";
-}
-
-function prefersSips(): boolean {
+export function prefersSips(): boolean {
   return (
     process.env.OPENCLAW_IMAGE_BACKEND === "sips" ||
-    (process.env.OPENCLAW_IMAGE_BACKEND !== "sharp" && isBun() && process.platform === "darwin")
+    (process.env.OPENCLAW_IMAGE_BACKEND !== "sharp" && process.platform === "darwin")
   );
 }
 
