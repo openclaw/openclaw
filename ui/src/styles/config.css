@@ -604,6 +604,8 @@
 
 .config-raw-field textarea {
   min-height: 500px;
+  max-height: 80vh;
+  overflow-y: auto;
   font-family: var(--mono);
   font-size: 13px;
   line-height: 1.55;

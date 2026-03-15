@@ -457,6 +457,11 @@ export class OpenClawApp extends LitElement {
         this.paletteActiveIndex = 0;
       }
     }
+    if (e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && e.key === "Escape") {
+      e.preventDefault();
+      const textarea = this.querySelector<HTMLTextAreaElement>(".agent-chat__input textarea");
+      textarea?.focus();
+    }
   };
 
   createRenderRoot() {

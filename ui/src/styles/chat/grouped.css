@@ -73,14 +73,27 @@
   justify-content: center;
 }
 
-.chat-group:hover .chat-group-footer button {
+.chat-group:hover .chat-group-footer button,
+.chat-group:focus-within .chat-group-footer button {
   opacity: 0.6;
   pointer-events: auto;
 }
 
-.chat-group-footer button:hover {
+.chat-group-footer button:hover,
+.chat-group-footer button:focus-visible {
   opacity: 1 !important;
   background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.chat-group-footer button:focus-visible {
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .chat-group-footer button {
+    opacity: 0.6;
+    pointer-events: auto;
+  }
 }
 
 .chat-group-footer button svg {

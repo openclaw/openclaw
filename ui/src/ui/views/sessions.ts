@@ -193,10 +193,11 @@ export function renderSessions(props: SessionsProps) {
       <th
         data-sortable
         data-sort-dir=${isActive ? props.sortDir : ""}
+        aria-sort=${isActive ? (props.sortDir === "asc" ? "ascending" : "descending") : "none"}
         @click=${() => props.onSortChange(col, isActive ? nextDir : "desc")}
       >
         ${label}
-        <span class="data-table-sort-icon">${icons.arrowUpDown}</span>
+        <span class="data-table-sort-icon" aria-hidden="true">${icons.arrowUpDown}</span>
       </th>
     `;
   };

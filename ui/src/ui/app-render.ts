@@ -411,6 +411,7 @@ export function renderApp(state: AppViewState) {
           state.navDrawerOpen = false;
         }}
       ></button>
+      <a href="#main-content" class="skip-link">Skip to main content</a>
       <header class="topbar">
         <div class="topnav-shell">
           <button
@@ -562,7 +563,7 @@ export function renderApp(state: AppViewState) {
           </div>
         </aside>
       </div>
-      <main class="content ${isChat ? "content--chat" : ""}">
+      <main id="main-content" class="content ${isChat ? "content--chat" : ""}">
         ${
           state.updateAvailable &&
           state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
@@ -598,9 +599,9 @@ export function renderApp(state: AppViewState) {
                 ${
                   isChat
                     ? renderChatSessionSelect(state)
-                    : html`<div class="page-title">${titleForTab(state.tab)}</div>`
+                    : html`<h1 class="page-title">${titleForTab(state.tab)}</h1>`
                 }
-                ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
+                ${isChat ? nothing : html`<p class="page-sub">${subtitleForTab(state.tab)}</p>`}
               </div>
               <div class="page-meta">
                 ${state.lastError ? html`<div class="pill danger">${state.lastError}</div>` : nothing}

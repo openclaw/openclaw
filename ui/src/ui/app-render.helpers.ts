@@ -251,7 +251,7 @@ export function renderChatControls(state: AppViewState) {
       >
         ${refreshIcon}
       </button>
-      <span class="chat-controls__separator">|</span>
+      <span class="chat-controls__separator" aria-hidden="true">|</span>
       <button
         class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
         ?disabled=${disableThinkingToggle}

@@ -160,6 +160,14 @@
   color: var(--muted);
 }
 
+.dashboard-header__breadcrumb-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
 .topnav-shell .dashboard-header__breadcrumb-current {
   color: var(--text-strong);
   font-weight: 650;
@@ -901,6 +909,7 @@
 }
 
 .page-title {
+  margin: 0;
   font-size: 22px;
   font-weight: 650;
   letter-spacing: -0.03em;
@@ -912,7 +921,7 @@
   color: var(--muted);
   font-size: 13px;
   font-weight: 400;
-  margin-top: 4px;
+  margin: 4px 0 0;
   letter-spacing: -0.005em;
 }
 
