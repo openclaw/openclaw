@@ -2,6 +2,8 @@
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "experimentalSortImports": {
     "newlinesBetween": false,
+    // Blank line between import groups keeps order (TDZ: anthropic aliases before heavy graph).
+    "partitionByNewline": true,
   },
   "experimentalSortPackageJson": {
     "sortScripts": true,

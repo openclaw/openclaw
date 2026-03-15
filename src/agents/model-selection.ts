@@ -1,3 +1,5 @@
+import { ANTHROPIC_MODEL_ALIASES } from "./anthropic-model-aliases.js";
+
 import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
