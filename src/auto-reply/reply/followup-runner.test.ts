@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, type SessionEntry, saveSessionStore } from "../../config/sessions.js";
-import type { FollowupRun } from "./queue.js";
+import { buildCollectPrompt } from "../../utils/queue-helpers.js";
+import type { FollowupRun } from "./queue/types.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -34,6 +35,10 @@ vi.mock("./route-reply.js", async (importOriginal) => {
 });
 
 import { createFollowupRunner } from "./followup-runner.js";
+import {
+  applyDeferredMediaToQueuedRuns,
+  buildMediaAwareQueueSummaryPrompt,
+} from "./queue/drain.js";
 
 const ROUTABLE_TEST_CHANNELS = new Set([
   "telegram",
@@ -755,6 +760,69 @@ describe("createFollowupRunner media understanding", () => {
     expect(agentCall?.prompt).not.toContain("[media attached: /tmp/voice.ogg");
 
     expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "Got it!" }));
+  });
+
+  it("propagates the queued message provider into deferred media context", async () => {
+    const transcriptText = "Provider-aware transcript";
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        expect(params.ctx.Provider).toBe("telegram");
+        params.ctx.MediaUnderstanding = [
+          {
+            kind: "audio.transcription",
+            text: transcriptText,
+            attachmentIndex: 0,
+            provider: "whisper",
+          },
+        ];
+        params.ctx.Transcript = transcriptText;
+        params.ctx.Body = `[Audio]\nTranscript:\n${transcriptText}`;
+        return {
+          outputs: [
+            {
+              kind: "audio.transcription",
+              text: transcriptText,
+              attachmentIndex: 0,
+              provider: "whisper",
+            },
+          ],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: true,
+          appliedVideo: false,
+          appliedFile: false,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt: "[User sent media without caption]",
+        run: { messageProvider: "telegram" },
+        mediaContext: {
+          Body: "",
+          MediaPaths: ["/tmp/voice.ogg"],
+          MediaTypes: ["audio/ogg"],
+        },
+      }),
+    );
+
+    expect(applyMediaUnderstandingMock).toHaveBeenCalledTimes(1);
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain(transcriptText);
   });
 
   it("applies media understanding for URL-only attachments", async () => {
@@ -1677,5 +1745,160 @@ describe("createFollowupRunner media understanding", () => {
     // The body should not be duplicated (would happen if originalBody didn't match)
     const matches = agentCall?.prompt?.match(/summarize this/g);
     expect(matches?.length).toBe(1);
+  });
+
+  it("does not re-apply file extraction when the stored media body already has a file block", async () => {
+    const fileBlock = '<file name="report.pdf" mime="application/pdf">\nreport content\n</file>';
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "processed" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt: `[media attached: /tmp/report.pdf]\n${MEDIA_REPLY_HINT}\nsummarize this\n\n${fileBlock}`,
+        mediaContext: {
+          Body: `summarize this\n\n${fileBlock}`,
+          CommandBody: "summarize this",
+          RawBody: "summarize this",
+          MediaPaths: ["/tmp/report.pdf"],
+          MediaTypes: ["application/pdf"],
+        },
+      }),
+    );
+
+    expect(applyMediaUnderstandingMock).not.toHaveBeenCalled();
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt?.match(/<file\s+name="report\.pdf"/g)).toHaveLength(1);
+  });
+});
+
+describe("followup queue drain deferred media understanding", () => {
+  it("preprocesses collect batches before synthesizing the followup prompt", async () => {
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.MediaUnderstanding = [
+          {
+            kind: "audio.transcription",
+            text: "collect transcript",
+            attachmentIndex: 0,
+            provider: "whisper",
+          },
+        ];
+        params.ctx.Transcript = "collect transcript";
+        params.ctx.Body = "[Audio]\nTranscript:\ncollect transcript";
+        return {
+          outputs: [
+            {
+              kind: "audio.transcription",
+              text: "collect transcript",
+              attachmentIndex: 0,
+              provider: "whisper",
+            },
+          ],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: true,
+          appliedVideo: false,
+          appliedFile: false,
+        };
+      },
+    );
+    const items: FollowupRun[] = [
+      createQueuedRun({
+        prompt: "[media attached: /tmp/voice.ogg (audio/ogg)]\nsome text",
+        summaryLine: "some text",
+        originatingChannel: "telegram",
+        originatingTo: "chat:1",
+        run: { messageProvider: "telegram" },
+        mediaContext: {
+          Body: "some text",
+          MediaPaths: ["/tmp/voice.ogg"],
+          MediaTypes: ["audio/ogg"],
+        },
+      }),
+      createQueuedRun({
+        prompt: "second text",
+        summaryLine: "second text",
+        originatingChannel: "telegram",
+        originatingTo: "chat:1",
+        run: { messageProvider: "telegram" },
+      }),
+    ];
+
+    await applyDeferredMediaToQueuedRuns(items);
+
+    const prompt = buildCollectPrompt({
+      title: "[Queued messages while agent was busy]",
+      items,
+      renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
+    });
+
+    expect(prompt).toContain("collect transcript");
+    expect(prompt).toContain("Queued #2\nsecond text");
+    expect(prompt).not.toContain("[media attached: /tmp/voice.ogg");
+  });
+
+  it("preprocesses dropped media items before building overflow summaries", async () => {
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.MediaUnderstanding = [
+          {
+            kind: "audio.transcription",
+            text: "overflow transcript",
+            attachmentIndex: 0,
+            provider: "whisper",
+          },
+        ];
+        params.ctx.Transcript = "overflow transcript";
+        params.ctx.Body = "[Audio]\nTranscript:\noverflow transcript";
+        return {
+          outputs: [
+            {
+              kind: "audio.transcription",
+              text: "overflow transcript",
+              attachmentIndex: 0,
+              provider: "whisper",
+            },
+          ],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: true,
+          appliedVideo: false,
+          appliedFile: false,
+        };
+      },
+    );
+    const summaryPrompt = await buildMediaAwareQueueSummaryPrompt({
+      dropPolicy: "summarize",
+      droppedCount: 1,
+      summaryLines: ["[media attached: /tmp/voice.ogg (audio/ogg)]"],
+      summaryItems: [
+        createQueuedRun({
+          prompt: "[media attached: /tmp/voice.ogg (audio/ogg)]",
+          summaryLine: "",
+          run: { messageProvider: "telegram" },
+          mediaContext: {
+            Body: "",
+            MediaPaths: ["/tmp/voice.ogg"],
+            MediaTypes: ["audio/ogg"],
+          },
+        }),
+      ],
+      noun: "message",
+    });
+
+    expect(summaryPrompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(summaryPrompt).toContain("overflow transcript");
+    expect(summaryPrompt).not.toContain("[media attached: /tmp/voice.ogg");
   });
 });

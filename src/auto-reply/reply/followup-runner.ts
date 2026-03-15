@@ -9,16 +9,14 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { buildInboundMediaNote } from "../media-note.js";
-import type { MsgContext, OriginatingChannelType } from "../templating.js";
+import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
-import { parseInlineDirectives } from "./directive-handling.js";
+import { applyDeferredMediaUnderstandingToQueuedRun } from "./followup-media.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
@@ -36,113 +34,6 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
-
-const MEDIA_ONLY_PLACEHOLDER = "[User sent media without caption]";
-const MEDIA_REPLY_HINT_PREFIX = "To send an image back, prefer the message tool";
-const LEADING_MEDIA_ATTACHED_LINE_RE = /^\[media attached(?: \d+\/\d+)?: [^\r\n]*\]$/;
-const FILE_BLOCK_RE = /<file\s+name="/i;
-
-function stripLeadingMediaAttachedLines(prompt: string): string {
-  const lines = prompt.split("\n");
-  let index = 0;
-  while (index < lines.length) {
-    const trimmed = lines[index]?.trim() ?? "";
-    if (!LEADING_MEDIA_ATTACHED_LINE_RE.test(trimmed)) {
-      break;
-    }
-    index += 1;
-  }
-  return lines.slice(index).join("\n").trim();
-}
-
-function stripLeadingMediaReplyHint(prompt: string): string {
-  const lines = prompt.split("\n");
-  if ((lines[0] ?? "").startsWith(MEDIA_REPLY_HINT_PREFIX)) {
-    return lines.slice(1).join("\n").trim();
-  }
-  return prompt.trim();
-}
-
-function replaceLastOccurrence(
-  value: string,
-  search: string,
-  replacement: string,
-): string | undefined {
-  if (!search) {
-    return undefined;
-  }
-  const index = value.lastIndexOf(search);
-  if (index < 0) {
-    return undefined;
-  }
-  return `${value.slice(0, index)}${replacement}${value.slice(index + search.length)}`;
-}
-
-function stripInlineDirectives(text: string | undefined): string {
-  return parseInlineDirectives(text ?? "").cleaned.trim();
-}
-
-function normalizeUpdatedBody(params: { originalBody?: string; updatedBody?: string }): string {
-  const updatedBody = params.updatedBody?.trim();
-  if (!updatedBody) {
-    return "";
-  }
-  const originalBody = params.originalBody?.trim();
-  if (!originalBody) {
-    return updatedBody;
-  }
-
-  const cleanedOriginalBody = stripInlineDirectives(originalBody);
-  if (!cleanedOriginalBody) {
-    return updatedBody;
-  }
-  if (updatedBody === originalBody) {
-    return cleanedOriginalBody;
-  }
-  return (
-    replaceLastOccurrence(updatedBody, originalBody, cleanedOriginalBody) ?? updatedBody
-  ).trim();
-}
-
-function rebuildQueuedPromptWithMediaUnderstanding(params: {
-  prompt: string;
-  originalBody?: string;
-  updatedBody?: string;
-  mediaNote?: string;
-}): string {
-  let stripped = stripLeadingMediaAttachedLines(params.prompt);
-  if (!params.mediaNote) {
-    stripped = stripLeadingMediaReplyHint(stripped);
-  }
-
-  const updatedBody = normalizeUpdatedBody({
-    originalBody: params.originalBody,
-    updatedBody: params.updatedBody,
-  });
-  if (!updatedBody) {
-    return [params.mediaNote?.trim(), stripped].filter(Boolean).join("\n").trim();
-  }
-
-  const replacementTargets = [
-    params.originalBody?.trim(),
-    stripInlineDirectives(params.originalBody),
-    MEDIA_ONLY_PLACEHOLDER,
-  ].filter(
-    (value, index, list): value is string => Boolean(value) && list.indexOf(value) === index,
-  );
-
-  let rebuilt = stripped;
-  for (const target of replacementTargets) {
-    const replaced = replaceLastOccurrence(rebuilt, target, updatedBody);
-    if (replaced !== undefined) {
-      rebuilt = replaced;
-      return [params.mediaNote?.trim(), rebuilt.trim()].filter(Boolean).join("\n").trim();
-    }
-  }
-
-  rebuilt = [rebuilt, updatedBody].filter(Boolean).join("\n\n");
-  return [params.mediaNote?.trim(), rebuilt.trim()].filter(Boolean).join("\n").trim();
-}
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -264,72 +155,7 @@ export function createFollowupRunner(params: {
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
-
-      // Apply media understanding for followup-queued messages when it was
-      // not applied (or failed) in the primary path.  This ensures voice
-      // notes that arrived while the agent was mid-turn still get transcribed.
-      if (queued.mediaContext && !queued.mediaContext.MediaUnderstanding?.length) {
-        const hasMedia = Boolean(
-          queued.mediaContext.MediaPath?.trim() ||
-          queued.mediaContext.MediaUrl?.trim() ||
-          (Array.isArray(queued.mediaContext.MediaPaths) &&
-            queued.mediaContext.MediaPaths.length > 0) ||
-          (Array.isArray(queued.mediaContext.MediaUrls) &&
-            queued.mediaContext.MediaUrls.length > 0),
-        );
-        if (hasMedia) {
-          try {
-            const resolvedOriginalBody =
-              queued.mediaContext.CommandBody ??
-              queued.mediaContext.RawBody ??
-              queued.mediaContext.Body;
-            const mediaCtx = {
-              ...queued.mediaContext,
-              Body: resolvedOriginalBody,
-            } as MsgContext;
-            const originalBody = resolvedOriginalBody;
-            // Capture whether the resolved body already contains a file block
-            // BEFORE applyMediaUnderstanding mutates it — this detects prior
-            // extraction so we avoid double-inserting.  Checking the body
-            // (not the full queued.prompt) avoids false positives from user
-            // messages that happen to contain literal "<file path=" text.
-            const bodyAlreadyHasFileBlock = FILE_BLOCK_RE.test(resolvedOriginalBody ?? "");
-            const muResult = await applyMediaUnderstanding({
-              ctx: mediaCtx,
-              cfg: queued.run.config,
-              agentDir: queued.run.agentDir,
-              activeModel: {
-                provider: queued.run.provider,
-                model: queued.run.model,
-              },
-            });
-            const shouldRebuildPrompt =
-              muResult.outputs.length > 0 ||
-              muResult.appliedAudio ||
-              muResult.appliedImage ||
-              muResult.appliedVideo ||
-              (muResult.appliedFile && !bodyAlreadyHasFileBlock);
-            if (shouldRebuildPrompt) {
-              // Rebuild the queued prompt from the mutated media context so the
-              // deferred path matches the primary path's prompt shape.
-              const newMediaNote = buildInboundMediaNote(mediaCtx);
-              queued.prompt = rebuildQueuedPromptWithMediaUnderstanding({
-                prompt: queued.prompt,
-                originalBody,
-                updatedBody: mediaCtx.Body,
-                mediaNote: newMediaNote,
-              });
-              logVerbose(
-                `followup: applied media understanding (audio=${muResult.appliedAudio}, image=${muResult.appliedImage}, video=${muResult.appliedVideo}, file=${muResult.appliedFile})`,
-              );
-            }
-          } catch (err) {
-            logVerbose(
-              `followup: media understanding failed, proceeding with raw content: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        }
-      }
+      await applyDeferredMediaUnderstandingToQueuedRun(queued, { logLabel: "followup" });
 
       try {
         const fallbackResult = await runWithModelFallback({

@@ -490,6 +490,8 @@ export async function runPreparedReply(
         Body: ctx.Body,
         CommandBody: ctx.CommandBody,
         RawBody: ctx.RawBody,
+        Provider: ctx.Provider ?? sessionCtx.Provider,
+        Surface: ctx.Surface ?? sessionCtx.Surface,
         MediaPath: ctx.MediaPath,
         MediaUrl: ctx.MediaUrl,
         MediaType: ctx.MediaType,

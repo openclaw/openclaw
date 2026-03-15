@@ -32,6 +32,8 @@ export type FollowupMediaContext = {
   Body?: string;
   CommandBody?: string;
   RawBody?: string;
+  Provider?: string;
+  Surface?: string;
   MediaPath?: string;
   MediaUrl?: string;
   MediaType?: string;
@@ -47,6 +49,7 @@ export type FollowupMediaContext = {
   OriginatingTo?: string;
   AccountId?: string;
   MessageThreadId?: string | number;
+  DeferredMediaApplied?: boolean;
 };
 
 export type FollowupRun = {
