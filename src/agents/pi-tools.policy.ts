@@ -245,7 +245,11 @@ function hasExplicitToolSection(section: unknown): boolean {
 function resolveImplicitProfileAlsoAllow(params: {
   globalTools?: OpenClawConfig["tools"];
   agentTools?: AgentToolsConfig;
+  profile?: string;
 }): string[] | undefined {
+  if (params.profile?.trim().toLowerCase() === "minimal") {
+    return undefined;
+  }
   const implicit = new Set<string>();
   if (
     hasExplicitToolSection(params.agentTools?.exec) ||
@@ -297,7 +301,11 @@ export function resolveEffectiveToolPolicy(params: {
   });
   const explicitProfileAlsoAllow =
     resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
-  const implicitProfileAlsoAllow = resolveImplicitProfileAlsoAllow({ globalTools, agentTools });
+  const implicitProfileAlsoAllow = resolveImplicitProfileAlsoAllow({
+    globalTools,
+    agentTools,
+    profile,
+  });
   const profileAlsoAllow =
     explicitProfileAlsoAllow || implicitProfileAlsoAllow
       ? Array.from(
