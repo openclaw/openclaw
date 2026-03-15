@@ -7,7 +7,26 @@ export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
 export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 
-function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
+/** Check whether `hostname` is excluded by the NO_PROXY / no_proxy env var. */
+function isNoProxy(hostname: string): boolean {
+  const noProxy = process.env.NO_PROXY || process.env.no_proxy;
+  if (!noProxy) return false;
+
+  const host = hostname.toLowerCase();
+  for (const raw of noProxy.split(",")) {
+    const entry = raw.trim().toLowerCase();
+    if (!entry) continue;
+    if (entry === "*") return true;
+    // Strip leading dot/wildcard: "*.feishu.cn" / ".feishu.cn" → suffix match
+    const suffix = entry.replace(/^\*?\./u, ".");
+    if (host === suffix.replace(/^\./u, "") || host.endsWith(suffix)) return true;
+  }
+  return false;
+}
+
+function getWsProxyAgent(targetDomain?: string): HttpsProxyAgent<string> | undefined {
+  if (targetDomain && isNoProxy(targetDomain)) return undefined;
+
   const proxyUrl =
     process.env.https_proxy ||
     process.env.HTTPS_PROXY ||
@@ -157,7 +176,15 @@ export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSCli
     throw new Error(`Feishu credentials not configured for account "${accountId}"`);
   }
 
-  const agent = getWsProxyAgent();
+  // Resolve the target hostname so NO_PROXY is checked correctly.
+  const resolvedDomain = resolveDomain(domain);
+  const targetHost =
+    resolvedDomain === Lark.Domain.Feishu
+      ? "open.feishu.cn"
+      : resolvedDomain === Lark.Domain.Lark
+        ? "open.larksuite.com"
+        : new URL(resolvedDomain).hostname;
+  const agent = getWsProxyAgent(targetHost);
   return new Lark.WSClient({
     appId,
     appSecret,
