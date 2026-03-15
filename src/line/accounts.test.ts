@@ -228,6 +228,32 @@ describe("LINE accounts", () => {
       expect(account.channelSecret).toBe("override-secret");
     });
 
+    it("ignores malformed account keys when resolving the default account", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            channelAccessToken: "base-token",
+            channelSecret: "base-secret",
+            webhookPath: "/line/webhook",
+            accounts: {
+              "!!!": {
+                channelAccessToken: "bad-token",
+                channelSecret: "bad-secret",
+                webhookPath: "/line-bad/webhook",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.accountId).toBe(DEFAULT_ACCOUNT_ID);
+      expect(account.channelAccessToken).toBe("base-token");
+      expect(account.channelSecret).toBe("base-secret");
+      expect(account.config.webhookPath).toBe("/line/webhook");
+    });
+
     it("respects explicit account-level disable for named accounts", () => {
       const cfg: OpenClawConfig = {
         channels: {
@@ -357,6 +383,21 @@ describe("LINE accounts", () => {
       };
 
       expect(listLineAccountIds(cfg)).toEqual(["business", DEFAULT_ACCOUNT_ID]);
+    });
+
+    it("ignores malformed configured account ids", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            accounts: {
+              "!!!": {},
+              alpha: {},
+            },
+          },
+        },
+      };
+
+      expect(listLineAccountIds(cfg)).toEqual(["alpha"]);
     });
   });
 

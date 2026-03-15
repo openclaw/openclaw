@@ -1,9 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
-import {
-  listConfiguredAccountIds as listConfiguredAccountIdsFromSection,
-  resolveAccountWithDefaultFallback,
-} from "../plugin-sdk/account-resolution.js";
+import { resolveAccountWithDefaultFallback } from "../plugin-sdk/account-resolution.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId as normalizeSharedAccountId,
@@ -31,6 +28,17 @@ function readFileIfExists(filePath: string | undefined): string | undefined {
 
 function resolveLineConfig(cfg: OpenClawConfig): LineConfig | undefined {
   return cfg.channels?.line as LineConfig | undefined;
+}
+
+function listConfiguredLineAccountIds(cfg: OpenClawConfig): string[] {
+  const ids = new Set<string>();
+  for (const key of Object.keys(resolveLineConfig(cfg)?.accounts ?? {})) {
+    const normalized = normalizeOptionalAccountId(key);
+    if (normalized) {
+      ids.add(normalized);
+    }
+  }
+  return [...ids];
 }
 
 function resolveToken(params: {
@@ -119,7 +127,7 @@ function resolveLineAccountConfig(
     return directMatch;
   }
   const matchKey = Object.keys(accounts ?? {}).find(
-    (key) => normalizeSharedAccountId(key) === accountId,
+    (key) => normalizeOptionalAccountId(key) === accountId,
   );
   return matchKey ? accounts?.[matchKey] : undefined;
 }
@@ -188,12 +196,7 @@ export function resolveLineAccount(params: {
 
 export function listLineAccountIds(cfg: OpenClawConfig): string[] {
   const lineConfig = resolveLineConfig(cfg);
-  const ids = new Set(
-    listConfiguredAccountIdsFromSection({
-      accounts: lineConfig?.accounts,
-      normalizeAccountId: normalizeSharedAccountId,
-    }),
-  );
+  const ids = new Set(listConfiguredLineAccountIds(cfg));
 
   // Add default account if configured at base level
   if (
