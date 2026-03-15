@@ -2,16 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import type { DiscordProbe } from "../../../extensions/discord/src/probe.js";
+import type { DiscordTokenResolution } from "../../../extensions/discord/src/token.js";
+import type { IMessageProbe } from "../../../extensions/imessage/src/probe.js";
+import type { SignalProbe } from "../../../extensions/signal/src/probe.js";
+import type { SlackProbe } from "../../../extensions/slack/src/probe.js";
+import type { TelegramProbe } from "../../../extensions/telegram/src/probe.js";
+import type { TelegramTokenResolution } from "../../../extensions/telegram/src/token.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { DiscordProbe } from "../../discord/probe.js";
-import type { DiscordTokenResolution } from "../../discord/token.js";
-import type { IMessageProbe } from "../../imessage/probe.js";
 import type { LineProbeResult } from "../../line/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { SignalProbe } from "../../signal/probe.js";
-import type { SlackProbe } from "../../slack/probe.js";
-import type { TelegramProbe } from "../../telegram/probe.js";
-import type { TelegramTokenResolution } from "../../telegram/token.js";
 import {
   createChannelTestPluginBase,
   createMSTeamsTestPluginBase,

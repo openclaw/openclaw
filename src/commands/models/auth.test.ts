@@ -21,6 +21,16 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
+  loadAuthProfileStoreForRuntime: vi.fn(),
+  listProfilesForProvider: vi.fn(),
+  clearAuthProfileCooldown: vi.fn(),
+}));
+
+vi.mock("../../agents/auth-profiles.js", () => ({
+  loadAuthProfileStoreForRuntime: mocks.loadAuthProfileStoreForRuntime,
+  listProfilesForProvider: mocks.listProfilesForProvider,
+  clearAuthProfileCooldown: mocks.clearAuthProfileCooldown,
+  upsertAuthProfile: mocks.upsertAuthProfile,
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -39,10 +49,6 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: mocks.resolveDefaultAgentWorkspaceDir,
-}));
-
-vi.mock("../../agents/auth-profiles.js", () => ({
-  upsertAuthProfile: mocks.upsertAuthProfile,
 }));
 
 vi.mock("../../plugins/providers.js", () => ({
@@ -155,6 +161,9 @@ describe("modelsAuthLoginCommand", () => {
     });
     mocks.writeOAuthCredentials.mockResolvedValue("openai-codex:user@example.com");
     mocks.resolvePluginProviders.mockReturnValue([]);
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {}, usageStats: {} });
+    mocks.listProfilesForProvider.mockReturnValue([]);
+    mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -196,6 +205,60 @@ describe("modelsAuthLoginCommand", () => {
       primary: "openai-codex/gpt-5.4",
     });
     expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.4");
+  });
+
+  it("clears stale auth lockouts before attempting openai-codex login", async () => {
+    const runtime = createRuntime();
+    const fakeStore = {
+      profiles: {
+        "openai-codex:user@example.com": {
+          type: "oauth",
+          provider: "openai-codex",
+        },
+      },
+      usageStats: {
+        "openai-codex:user@example.com": {
+          disabledUntil: Date.now() + 3_600_000,
+          disabledReason: "auth_permanent",
+          errorCount: 3,
+        },
+      },
+    };
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue(fakeStore);
+    mocks.listProfilesForProvider.mockReturnValue(["openai-codex:user@example.com"]);
+
+    await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
+      store: fakeStore,
+      profileId: "openai-codex:user@example.com",
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    // Verify clearing happens before login attempt
+    const clearOrder = mocks.clearAuthProfileCooldown.mock.invocationCallOrder[0];
+    const loginOrder = mocks.loginOpenAICodexOAuth.mock.invocationCallOrder[0];
+    expect(clearOrder).toBeLessThan(loginOrder);
+  });
+
+  it("survives lockout clearing failure without blocking login", async () => {
+    const runtime = createRuntime();
+    mocks.loadAuthProfileStoreForRuntime.mockImplementation(() => {
+      throw new Error("corrupt auth-profiles.json");
+    });
+
+    await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.loginOpenAICodexOAuth).toHaveBeenCalledOnce();
+  });
+
+  it("loads lockout state from the agent-scoped store", async () => {
+    const runtime = createRuntime();
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {}, usageStats: {} });
+    mocks.listProfilesForProvider.mockReturnValue([]);
+
+    await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main");
   });
 
   it("keeps existing plugin error behavior for non built-in providers", async () => {
