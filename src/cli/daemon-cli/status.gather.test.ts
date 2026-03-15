@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
+import type { GatewayRestartSnapshot } from "./restart-health.js";
 
 const callGatewayStatusProbe = vi.fn(async (_opts?: unknown) => ({ ok: true as const }));
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
@@ -18,6 +19,14 @@ const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null)
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
 const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
+const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSnapshot>>(
+  async (_opts?: unknown) => ({
+    runtime: { status: "running", pid: 1234 },
+    portUsage: { port: 19001, status: "busy", listeners: [], hints: [] },
+    healthy: true,
+    staleGatewayPids: [],
+  }),
+);
 const serviceReadCommand = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<{
     programArguments: string[];
@@ -117,6 +126,10 @@ vi.mock("./probe.js", () => ({
   probeGatewayStatus: (opts: unknown) => callGatewayStatusProbe(opts),
 }));
 
+vi.mock("./restart-health.js", () => ({
+  inspectGatewayRestart: (opts: unknown) => inspectGatewayRestart(opts),
+}));
+
 const { gatherDaemonStatus } = await import("./status.gather.js");
 
 describe("gatherDaemonStatus", () => {
@@ -139,6 +152,7 @@ describe("gatherDaemonStatus", () => {
     delete process.env.DAEMON_GATEWAY_PASSWORD;
     callGatewayStatusProbe.mockClear();
     loadGatewayTlsRuntime.mockClear();
+    inspectGatewayRestart.mockClear();
     daemonLoadedConfig = {
       gateway: {
         bind: "lan",
@@ -361,5 +375,35 @@ describe("gatherDaemonStatus", () => {
     expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
     expect(callGatewayStatusProbe).not.toHaveBeenCalled();
     expect(status.rpc).toBeUndefined();
+  });
+
+  it("surfaces stale gateway listener pids from restart health inspection", async () => {
+    inspectGatewayRestart.mockResolvedValueOnce({
+      runtime: { status: "running", pid: 8000 },
+      portUsage: {
+        port: 19001,
+        status: "busy",
+        listeners: [{ pid: 9000, ppid: 8999, commandLine: "openclaw-gateway" }],
+        hints: [],
+      },
+      healthy: false,
+      staleGatewayPids: [9000],
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(inspectGatewayRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        port: 19001,
+      }),
+    );
+    expect(status.health).toEqual({
+      healthy: false,
+      staleGatewayPids: [9000],
+    });
   });
 });

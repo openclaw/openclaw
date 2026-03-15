@@ -1,5 +1,6 @@
 import type { RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/irc";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 import { ircOnboardingAdapter } from "./onboarding.js";
 import type { CoreConfig } from "./types.js";
 
@@ -63,13 +64,7 @@ describe("irc onboarding", () => {
       }),
     });
 
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number): never => {
-        throw new Error(`exit ${code}`);
-      }),
-    };
+    const runtime: RuntimeEnv = createRuntimeEnv();
 
     const result = await ircOnboardingAdapter.configure({
       cfg: {} as CoreConfig,

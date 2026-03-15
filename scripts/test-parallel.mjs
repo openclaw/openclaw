@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { channelTestPrefixes } from "../vitest.channel-paths.mjs";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
 // (especially under GitHub Actions + Git Bash). Use `shell: true` and let the shell resolve pnpm.
@@ -42,8 +43,8 @@ const unitIsolatedFilesRaw = [
   "src/commands/agent.test.ts",
   "src/media/store.test.ts",
   "src/media/store.header-ext.test.ts",
-  "src/web/media.test.ts",
-  "src/web/auto-reply.web-auto-reply.falls-back-text-media-send-fails.test.ts",
+  "extensions/whatsapp/src/media.test.ts",
+  "extensions/whatsapp/src/auto-reply.web-auto-reply.falls-back-text-media-send-fails.test.ts",
   "src/browser/server.covers-additional-endpoint-branches.test.ts",
   "src/browser/server.post-tabs-open-profile-unknown-returns-404.test.ts",
   "src/browser/server.agent-contract-snapshot-endpoints.test.ts",
@@ -80,15 +81,15 @@ const unitIsolatedFilesRaw = [
   "src/auto-reply/reply.triggers.trigger-handling.targets-active-session-native-stop.test.ts",
   "src/auto-reply/reply.triggers.group-intro-prompts.test.ts",
   "src/auto-reply/reply.triggers.trigger-handling.handles-inline-commands-strips-it-before-agent.test.ts",
-  "src/web/auto-reply.web-auto-reply.compresses-common-formats-jpeg-cap.test.ts",
+  "extensions/whatsapp/src/auto-reply.web-auto-reply.compresses-common-formats-jpeg-cap.test.ts",
   // Setup-heavy bot bootstrap suite.
-  "src/telegram/bot.create-telegram-bot.test.ts",
+  "extensions/telegram/src/bot.create-telegram-bot.test.ts",
   // Medium-heavy bot behavior suite; move off unit-fast critical path.
-  "src/telegram/bot.test.ts",
+  "extensions/telegram/src/bot.test.ts",
   // Slack slash registration tests are setup-heavy and can bottleneck unit-fast.
-  "src/slack/monitor/slash.test.ts",
+  "extensions/slack/src/monitor/slash.test.ts",
   // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
-  "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
+  "extensions/imessage/src/monitor.shutdown.unhandled-rejection.test.ts",
   // Mutates process.cwd() and mocks core module loaders; isolate from the shared fast lane.
   "src/infra/git-commit.test.ts",
 ];
@@ -303,7 +304,6 @@ const passthroughRequiresSingleRun = passthroughOptionArgs.some((arg) => {
   const [flag] = arg.split("=", 1);
   return SINGLE_RUN_ONLY_FLAGS.has(flag);
 });
-const channelPrefixes = ["src/telegram/", "src/discord/", "src/web/", "src/browser/", "src/line/"];
 const baseConfigPrefixes = ["src/agents/", "src/auto-reply/", "src/commands/", "test/", "ui/"];
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 const walkTestFiles = (rootDir) => {
@@ -347,14 +347,14 @@ const inferTarget = (fileFilter) => {
   if (fileFilter.endsWith(".e2e.test.ts")) {
     return { owner: "e2e", isolated };
   }
+  if (channelTestPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
+    return { owner: "channels", isolated };
+  }
   if (fileFilter.startsWith("extensions/")) {
     return { owner: "extensions", isolated };
   }
   if (fileFilter.startsWith("src/gateway/")) {
     return { owner: "gateway", isolated };
-  }
-  if (channelPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
-    return { owner: "channels", isolated };
   }
   if (baseConfigPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
     return { owner: "base", isolated };

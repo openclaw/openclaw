@@ -143,10 +143,38 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
   let lastPartial = "";
+  let reasoningText = "";
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   type StreamTextUpdateMode = "snapshot" | "delta";
+
+  const formatReasoningPrefix = (thinking: string): string => {
+    if (!thinking) return "";
+    const withoutLabel = thinking.replace(/^Reasoning:\n/, "");
+    const plain = withoutLabel.replace(/^_(.*)_$/gm, "$1");
+    const lines = plain.split("\n").map((line) => `> ${line}`);
+    return `> 💭 **Thinking**\n${lines.join("\n")}`;
+  };
+
+  const buildCombinedStreamText = (thinking: string, answer: string): string => {
+    const parts: string[] = [];
+    if (thinking) parts.push(formatReasoningPrefix(thinking));
+    if (thinking && answer) parts.push("\n\n---\n\n");
+    if (answer) parts.push(answer);
+    return parts.join("");
+  };
+
+  const flushStreamingCardUpdate = (combined: string) => {
+    partialUpdateQueue = partialUpdateQueue.then(async () => {
+      if (streamingStartPromise) {
+        await streamingStartPromise;
+      }
+      if (streaming?.isActive()) {
+        await streaming.update(combined);
+      }
+    });
+  };
 
   const queueStreamingUpdate = (
     nextText: string,
@@ -167,14 +195,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const mode = options?.mode ?? "snapshot";
     streamText =
       mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
-    partialUpdateQueue = partialUpdateQueue.then(async () => {
-      if (streamingStartPromise) {
-        await streamingStartPromise;
-      }
-      if (streaming?.isActive()) {
-        await streaming.update(streamText);
-      }
-    });
+    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+  };
+
+  const queueReasoningUpdate = (nextThinking: string) => {
+    if (!nextThinking) return;
+    reasoningText = nextThinking;
+    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };
 
   const startStreaming = () => {
@@ -202,6 +229,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
         streaming = null;
+        streamingStartPromise = null; // allow retry on next deliver
       }
     })();
   };
@@ -212,7 +240,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     await partialUpdateQueue;
     if (streaming?.isActive()) {
-      let text = streamText;
+      let text = buildCombinedStreamText(reasoningText, streamText);
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
@@ -222,6 +250,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamingStartPromise = null;
     streamText = "";
     lastPartial = "";
+    reasoningText = "";
   };
 
   const sendChunkedTextReply = async (params: {
@@ -391,6 +420,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             });
           }
         : undefined,
+      onReasoningStream: streamingEnabled
+        ? (payload: ReplyPayload) => {
+            if (!payload.text) {
+              return;
+            }
+            startStreaming();
+            queueReasoningUpdate(payload.text);
+          }
+        : undefined,
+      onReasoningEnd: streamingEnabled ? () => {} : undefined,
     },
     markDispatchIdle,
   };

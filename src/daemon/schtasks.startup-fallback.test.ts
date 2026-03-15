@@ -10,6 +10,7 @@ import {
   resetSchtasksBaseMocks,
   schtasksResponses,
   withWindowsEnv,
+  writeGatewayScript,
 } from "./test-helpers/schtasks-fixtures.js";
 const childUnref = vi.hoisted(() => vi.fn());
 const spawn = vi.hoisted(() => vi.fn(() => ({ unref: childUnref })));
@@ -43,20 +44,6 @@ function resolveStartupEntryPath(env: Record<string, string>) {
   );
 }
 
-async function writeGatewayScript(env: Record<string, string>, port = 18789) {
-  const scriptPath = resolveTaskScriptPath(env);
-  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  await fs.writeFile(
-    scriptPath,
-    [
-      "@echo off",
-      `set "OPENCLAW_GATEWAY_PORT=${port}"`,
-      `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port ${port}`,
-      "",
-    ].join("\r\n"),
-    "utf8",
-  );
-}
 async function writeStartupFallbackEntry(env: Record<string, string>) {
   const startupEntryPath = resolveStartupEntryPath(env);
   await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
@@ -70,6 +57,14 @@ function expectStartupFallbackSpawn(env: Record<string, string>) {
     ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
     expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
   );
+}
+
+function expectGatewayTermination(pid: number) {
+  if (process.platform === "win32") {
+    expect(killProcessTree).not.toHaveBeenCalled();
+    return;
+  }
+  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
 }
 
 function addStartupFallbackMissingResponses(
@@ -192,7 +187,7 @@ describe("Windows startup fallback", () => {
       await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
         outcome: "completed",
       });
-      expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
+      expectGatewayTermination(5151);
       expectStartupFallbackSpawn(env);
     });
   });
@@ -227,7 +222,7 @@ describe("Windows startup fallback", () => {
       delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
       await stopScheduledTask({ env: envWithoutPort, stdout });
 
-      expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
+      expectGatewayTermination(5151);
     });
   });
 });
