@@ -139,6 +139,30 @@ describe("resolveWhatsAppOutboundTarget", () => {
       expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "implicit" });
     });
 
+    it("returns actionable allowFrom error when target is valid but not in allowList (#35580)", () => {
+      // allowFrom list normalization runs first (one call per entry),
+      // then the to-target is normalized.  With allowFrom: [SECONDARY_TARGET],
+      // normalizeWhatsAppTarget is called: (1) for SECONDARY_TARGET entry → PRIMARY_TARGET,
+      // (2) for the to-value → SECONDARY_TARGET (the normalizedTo used in the error message).
+      vi.mocked(normalize.normalizeWhatsAppTarget)
+        .mockReturnValueOnce(PRIMARY_TARGET) // allowFrom[0] normalization
+        .mockReturnValueOnce(SECONDARY_TARGET); // to-value normalization → normalizedTo
+      vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
+
+      const result = resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: [SECONDARY_TARGET],
+        mode: "implicit",
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected error");
+      }
+      // Error message should use normalizedTo (the canonical E.164 form), not trimmed.
+      expect(result.error.message).toContain(SECONDARY_TARGET);
+      expect(result.error.message).toContain("allowFrom");
+    });
+
     it("handles mixed numeric and string allowList entries", () => {
       vi.mocked(normalize.normalizeWhatsAppTarget)
         .mockReturnValueOnce("+11234567890") // for 'to' param

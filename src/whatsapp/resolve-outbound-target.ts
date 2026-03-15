@@ -41,7 +41,10 @@ export function resolveWhatsAppOutboundTarget(params: {
     }
     return {
       ok: false,
-      error: missingTargetError("WhatsApp", "<E.164|group JID>"),
+      error: new Error(
+        `Target "${normalizedTo}" is not listed in the configured WhatsApp allowFrom policy. ` +
+          `Add it to the allowFrom list in your openclaw.json to permit outbound messages to this number.`,
+      ),
     };
   }
 
