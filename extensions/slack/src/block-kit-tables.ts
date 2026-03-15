@@ -38,7 +38,12 @@ export function markdownTableToBlockKit(table: MarkdownTableData): SlackTableBlo
       text: cells[i] ?? "",
     }));
 
-  const rows = [makeRow(table.headers), ...table.rows.map(makeRow)];
+  // Only include a header row if there are actual headers with content.
+  const hasHeaders = table.headers.some((h) => h.length > 0);
+  const rows = [
+    ...(hasHeaders ? [makeRow(table.headers)] : []),
+    ...table.rows.map(makeRow),
+  ];
 
   return { type: "table", column_settings, rows };
 }

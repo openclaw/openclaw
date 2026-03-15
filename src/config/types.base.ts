@@ -34,7 +34,7 @@ export type BlockStreamingChunkConfig = {
 export type MarkdownTableMode = "off" | "bullets" | "code" | "block";
 
 export type MarkdownConfig = {
-  /** Table rendering mode (off|bullets|code). */
+  /** Table rendering mode (off|bullets|code|block). */
   tables?: MarkdownTableMode;
 };
 
