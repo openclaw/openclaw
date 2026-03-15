@@ -160,8 +160,7 @@ export async function resolveTelegramInboundBody(params: {
     ? sanitizeInlineMediaLabel(allMedia[0]?.animationMetadata?.fileName)
     : undefined;
   if (safeAnimationName) {
-    const safeName = safeAnimationName;
-    placeholder = `<media:gif "${safeName}">`;
+    placeholder = `<media:gif "${safeAnimationName}">`;
   }
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
   const stickerSupportsVision = msg.sticker
@@ -173,16 +172,18 @@ export async function resolveTelegramInboundBody(params: {
   const isMetadataOnlySticker = msg.sticker && allMedia[0]?.stickerMetadata && !allMedia[0]?.path;
   if (isMetadataOnlySticker) {
     const emoji = allMedia[0]?.stickerMetadata?.emoji;
-    const setName = allMedia[0]?.stickerMetadata?.setName;
+    const setName = sanitizeInlineMediaLabel(allMedia[0]?.stickerMetadata?.setName);
     const stickerContext = [emoji, setName ? `from "${setName}"` : null].filter(Boolean).join(" ");
-    const desc = cachedStickerDescription ? ` ${cachedStickerDescription}` : "";
+    const safeDesc = sanitizeInlineMediaLabel(cachedStickerDescription);
+    const desc = safeDesc ? ` ${safeDesc}` : "";
     placeholder = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}${desc}]`;
   } else if (stickerCacheHit) {
     // Format cached description with sticker context
     const emoji = allMedia[0]?.stickerMetadata?.emoji;
-    const setName = allMedia[0]?.stickerMetadata?.setName;
+    const setName = sanitizeInlineMediaLabel(allMedia[0]?.stickerMetadata?.setName);
     const stickerContext = [emoji, setName ? `from "${setName}"` : null].filter(Boolean).join(" ");
-    placeholder = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${cachedStickerDescription}`;
+    const safeDesc = sanitizeInlineMediaLabel(cachedStickerDescription);
+    placeholder = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${safeDesc ?? cachedStickerDescription}`;
   }
 
   const locationData = extractTelegramLocation(msg);

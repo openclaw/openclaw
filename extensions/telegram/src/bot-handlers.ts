@@ -1035,12 +1035,6 @@ export const registerTelegramHandlers = ({
     }
 
     const hasText = Boolean(getTelegramTextParts(msg).text.trim());
-    // Animated/video stickers now return metadata-only (no media path but stickerMetadata present).
-    // Only skip if there's truly no media AND no metadata AND no text.
-    if (msg.sticker && !media && !hasText) {
-      logVerbose("telegram: skipping sticker-only message (no media or metadata resolved)");
-      return;
-    }
 
     const allMedia = media
       ? [
