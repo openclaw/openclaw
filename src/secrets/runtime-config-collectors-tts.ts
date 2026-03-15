@@ -43,4 +43,19 @@ export function collectTtsApiKeyAssignments(params: {
       },
     });
   }
+  const minimax = params.tts.minimax;
+  if (isRecord(minimax)) {
+    collectSecretInputAssignment({
+      value: minimax.apiKey,
+      path: `${params.pathPrefix}.minimax.apiKey`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      apply: (value) => {
+        minimax.apiKey = value;
+      },
+    });
+  }
 }
