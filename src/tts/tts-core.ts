@@ -10,7 +10,7 @@ import {
   type ModelRef,
 } from "../agents/model-selection.js";
 import { createConfiguredOllamaStreamFn } from "../agents/ollama-stream.js";
-import { resolveModel } from "../agents/pi-embedded-runner/model.js";
+import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
   ResolvedTtsConfig,
@@ -592,7 +592,7 @@ export async function summarizeText(params: {
 
   const startTime = Date.now();
   const { ref } = resolveSummaryModelRef(cfg, config);
-  const resolved = resolveModel(ref.provider, ref.model, undefined, cfg);
+  const resolved = await resolveModelAsync(ref.provider, ref.model, undefined, cfg);
   if (!resolved.model) {
     throw new Error(resolved.error ?? `Unknown summary model: ${ref.provider}/${ref.model}`);
   }
