@@ -578,7 +578,7 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
-  it("handles tool-start typing before and after active text mode", async () => {
+  it("does not start typing on tool-start in message mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -588,16 +588,40 @@ describe("createTypingSignaler", () => {
 
     await signaler.signalToolStart();
 
-    expect(typing.startTypingLoop).toHaveBeenCalled();
-    expect(typing.refreshTypingTtl).toHaveBeenCalled();
-    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    // In message mode, tool calls alone should NOT trigger typing.
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
+  });
+
+  it("refreshes ttl on tool-start in message mode when already active", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    // Simulate typing already started by a prior text delta.
     (typing.isActive as ReturnType<typeof vi.fn>).mockReturnValue(true);
-    (typing.startTypingLoop as ReturnType<typeof vi.fn>).mockClear();
-    (typing.refreshTypingTtl as ReturnType<typeof vi.fn>).mockClear();
     await signaler.signalToolStart();
 
+    // Should refresh TTL but not restart the loop.
     expect(typing.refreshTypingTtl).toHaveBeenCalled();
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  });
+
+  it("starts typing on tool-start in instant mode", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "instant",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalToolStart();
+
+    expect(typing.startTypingLoop).toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).toHaveBeenCalled();
   });
 
   it("suppresses typing when disabled", async () => {
