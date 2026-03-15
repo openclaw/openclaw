@@ -460,6 +460,18 @@ export function cosineSimilarity(a: number[], b: number[]): number {
     normA += av * av;
     normB += bv * bv;
   }
+  // Include remaining dimensions of the longer vector in its norm.
+  // When vectors differ in length, the shorter one is implicitly zero-padded;
+  // those zeros contribute nothing to the dot product but the extra dimensions
+  // of the longer vector still affect its magnitude.
+  for (let i = len; i < a.length; i += 1) {
+    const av = a[i] ?? 0;
+    normA += av * av;
+  }
+  for (let i = len; i < b.length; i += 1) {
+    const bv = b[i] ?? 0;
+    normB += bv * bv;
+  }
   if (normA === 0 || normB === 0) {
     return 0;
   }
