@@ -32,6 +32,8 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { applyAuthProfileConfig, writeOAuthCredentials } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "../openai-codex-model-default.js";
+import { loginOpenAICodexOAuth } from "../openai-codex-oauth.js";
 import {
   applyOpenAICodexModelDefault,
   OPENAI_CODEX_DEFAULT_MODEL,
@@ -386,6 +388,40 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
       prompter,
       agentDir,
     });
+    return;
+  }
+
+  // Handle openai-codex — built-in OAuth flow, not a plugin provider
+  if (normalizeProviderId(opts.provider ?? "") === "openai-codex") {
+    const prompter = createClackPrompter();
+    const creds = await loginOpenAICodexOAuth({
+      prompter,
+      runtime,
+      isRemote: isRemoteEnvironment(),
+      openUrl: async (url) => {
+        await openUrl(url);
+      },
+    });
+    if (!creds) {
+      return;
+    }
+    await writeOAuthCredentials("openai-codex", creds, agentDir);
+    await updateConfig((cfg) => {
+      let next = applyAuthProfileConfig(cfg, {
+        profileId: "openai-codex:default",
+        provider: "openai-codex",
+        mode: "oauth",
+      });
+      if (opts.setDefault) {
+        next = applyDefaultModel(next, OPENAI_CODEX_DEFAULT_MODEL);
+      }
+      return next;
+    });
+    logConfigUpdated(runtime);
+    runtime.log("Auth profile: openai-codex:default (openai-codex/oauth)");
+    if (opts.setDefault) {
+      runtime.log(`Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`);
+    }
     return;
   }
 
