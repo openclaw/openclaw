@@ -360,7 +360,7 @@ export class GatewayBridge {
             completedAt: new Date().toISOString(),
           });
           if (state === 'error' || state === 'aborted') {
-            console.log('[dashboard] dry-diff next check:', `node /Volumes/2TB/MAS/VioDashboard/scripts/check-run-index.mjs ${runId}`);
+            console.log('[dashboard] dry-diff next check:', `node /Users/visen24/MAS/openclaw_fork/apps/viodashboard/scripts/check-run-index.mjs ${runId}`);
           }
         }
         if (state === 'final' || state === 'error' || state === 'aborted') {

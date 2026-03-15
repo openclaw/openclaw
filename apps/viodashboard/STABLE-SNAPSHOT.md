@@ -3,7 +3,7 @@
 Version: 2026-03-11-ui-v1
 
 ## Scope locked in this snapshot
-- Workspace-backed launchd startup (`/Volumes/2TB/MAS/VioDashboard`)
+- Repo-backed launchd startup (`/Users/visen24/MAS/openclaw_fork/apps/viodashboard`)
 - Ultra-wide dashboard layout tuned for 32-inch ultrawide usage
 - Real websocket-driven mood / routing / telemetry / debug panels
 - Token totals sourced from `sessions.usage`

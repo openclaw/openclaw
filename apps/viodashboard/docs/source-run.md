@@ -4,7 +4,7 @@
 
 VioDashboard now supports two launch modes:
 
-- `source` — run live directly from `/Volumes/2TB/MAS/VioDashboard`
+- `source` — run live directly from `/Users/visen24/MAS/openclaw_fork/apps/viodashboard`
 - `runtime` — run from `~/Library/Application Support/VioDashboardRuntime`
 
 The default mode is `source`.

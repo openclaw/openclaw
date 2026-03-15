@@ -264,13 +264,13 @@ Wrong historical runtime path:
 - `~/Library/Application Support/VioDashboardRuntime/public/styles.css`
 
 Correct live source now:
-- `/Volumes/2TB/MAS/VioDashboard/public/styles.css`
+- `/Users/visen24/MAS/openclaw_fork/apps/viodashboard/public/styles.css`
 
 If changes appear ignored:
 1. Open `http://127.0.0.1:8789/styles.css?v=2`
 2. Confirm the response contains the rule you just added
 3. Check `~/Library/LaunchAgents/com.vio.dashboard.plist`
-4. Confirm launchd starts from `/Volumes/2TB/MAS/VioDashboard`
+4. Confirm launchd starts from `/Users/visen24/MAS/openclaw_fork/apps/viodashboard`
 
 ### 2) Cache busting broke CSS
 The wrapper server must resolve `requestUrl.pathname`, not raw `req.url`, otherwise `styles.css?v=2` becomes a fake filename and returns 404.
