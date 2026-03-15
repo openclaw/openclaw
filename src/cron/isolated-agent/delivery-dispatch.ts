@@ -1,4 +1,4 @@
-import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
+import { listDescendantRunsForRequester } from "../../agents/subagent-registry.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
@@ -416,7 +416,25 @@ export async function dispatchCronDelivery(
       return null;
     }
     const initialSynthesizedText = synthesizedText.trim();
-    let activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
+    const windowStart = params.runStartedAt;
+    const getActiveSubagentRunsInWindow = (): number => {
+      const runs = listDescendantRunsForRequester(params.agentSessionKey).filter((entry) => {
+        if (typeof entry.endedAt === "number") {
+          return false;
+        }
+        if (typeof windowStart !== "number" || !Number.isFinite(windowStart)) {
+          return true;
+        }
+        const timestamp =
+          typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)
+            ? entry.startedAt
+            : entry.createdAt;
+        return Number.isFinite(timestamp) && timestamp >= windowStart;
+      });
+      return runs.length;
+    };
+
+    let activeSubagentRuns = getActiveSubagentRunsInWindow();
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
     // Also check for already-completed descendants. If the subagent finished
     // before delivery-dispatch runs, activeSubagentRuns is 0 and
@@ -437,8 +455,9 @@ export async function dispatchCronDelivery(
         initialReply: initialSynthesizedText,
         timeoutMs: params.timeoutMs,
         observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
+        runStartedAt: params.runStartedAt,
       });
-      activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
+      activeSubagentRuns = getActiveSubagentRunsInWindow();
       if (!finalReply && activeSubagentRuns === 0) {
         finalReply = await readDescendantSubagentFallbackReply({
           sessionKey: params.agentSessionKey,
