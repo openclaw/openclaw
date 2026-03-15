@@ -94,11 +94,27 @@ function buildOwnerIdentityLine(
   return `Authorized senders: ${displayOwnerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`;
 }
 
-function buildTimeSection(params: { userTimezone?: string }) {
+function buildTimeSection(params: { userTimezone?: string; userTimeFormat?: ResolvedTimeFormat }) {
   if (!params.userTimezone) {
     return [];
   }
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  try {
+    const now = new Date();
+    const formatted = now.toLocaleString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: params.userTimeFormat !== "24",
+      timeZone: params.userTimezone,
+      timeZoneName: "short",
+    });
+    return ["## Current Date & Time", `${formatted} (${params.userTimezone})`, ""];
+  } catch {
+    return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  }
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
@@ -564,6 +580,7 @@ export function buildAgentSystemPrompt(params: {
     ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildTimeSection({
       userTimezone,
+      userTimeFormat: params.userTimeFormat,
     }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
