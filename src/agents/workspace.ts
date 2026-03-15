@@ -14,11 +14,13 @@ export function resolveDefaultAgentWorkspaceDir(
   homedir: () => string = os.homedir,
 ): string {
   const home = resolveRequiredHomeDir(env, homedir);
+  const stateRoot =
+    path.basename(home).toLowerCase() === ".openclaw" ? home : path.join(home, ".openclaw");
   const profile = env.OPENCLAW_PROFILE?.trim();
   if (profile && profile.toLowerCase() !== "default") {
-    return path.join(home, ".openclaw", `workspace-${profile}`);
+    return path.join(stateRoot, `workspace-${profile}`);
   }
-  return path.join(home, ".openclaw", "workspace");
+  return path.join(stateRoot, "workspace");
 }
 
 export const DEFAULT_AGENT_WORKSPACE_DIR = resolveDefaultAgentWorkspaceDir();
@@ -31,7 +33,6 @@ export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = "MEMORY.md";
 export const DEFAULT_MEMORY_ALT_FILENAME = "memory.md";
-const WORKSPACE_STATE_DIRNAME = ".openclaw";
 const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 const WORKSPACE_STATE_VERSION = 1;
 
@@ -204,7 +205,11 @@ async function fileExists(filePath: string): Promise<boolean> {
 }
 
 function resolveWorkspaceStatePath(dir: string): string {
-  return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
+  return path.join(dir, WORKSPACE_STATE_FILENAME);
+}
+
+function resolveLegacyWorkspaceStatePath(dir: string): string {
+  return path.join(dir, ".openclaw", WORKSPACE_STATE_FILENAME);
 }
 
 function parseWorkspaceOnboardingState(raw: string): WorkspaceOnboardingState | null {
@@ -248,8 +253,36 @@ async function readWorkspaceOnboardingState(statePath: string): Promise<Workspac
 }
 
 async function readWorkspaceOnboardingStateForDir(dir: string): Promise<WorkspaceOnboardingState> {
-  const statePath = resolveWorkspaceStatePath(resolveUserPath(dir));
-  return await readWorkspaceOnboardingState(statePath);
+  const resolvedDir = resolveUserPath(dir);
+  const statePath = resolveWorkspaceStatePath(resolvedDir);
+  const legacyStatePath = resolveLegacyWorkspaceStatePath(resolvedDir);
+  const state = await readWorkspaceOnboardingState(statePath);
+  if (state.bootstrapSeededAt || state.onboardingCompletedAt) {
+    return state;
+  }
+  return await readWorkspaceOnboardingState(legacyStatePath);
+}
+
+async function readWorkspaceOnboardingStateWithSource(
+  dir: string,
+): Promise<{ state: WorkspaceOnboardingState; source: "current" | "legacy" | "none" }> {
+  const statePath = resolveWorkspaceStatePath(dir);
+  const legacyStatePath = resolveLegacyWorkspaceStatePath(dir);
+  const state = await readWorkspaceOnboardingState(statePath);
+  if (state.bootstrapSeededAt || state.onboardingCompletedAt) {
+    return { state, source: "current" };
+  }
+  const legacy = await readWorkspaceOnboardingState(legacyStatePath);
+  if (legacy.bootstrapSeededAt || legacy.onboardingCompletedAt) {
+    return { state: legacy, source: "legacy" };
+  }
+  return { state, source: "none" };
+}
+
+async function deleteLegacyWorkspaceOnboardingState(dir: string): Promise<void> {
+  const legacyStatePath = resolveLegacyWorkspaceStatePath(dir);
+  await fs.unlink(legacyStatePath).catch(() => {});
+  await fs.rmdir(path.dirname(legacyStatePath)).catch(() => {});
 }
 
 export async function isWorkspaceOnboardingCompleted(dir: string): Promise<boolean> {
@@ -382,7 +415,8 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(userPath, userTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
 
-  let state = await readWorkspaceOnboardingState(statePath);
+  const stateRead = await readWorkspaceOnboardingStateWithSource(dir);
+  let state = stateRead.state;
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceOnboardingState>) => {
     state = { ...state, ...next };
@@ -441,8 +475,11 @@ export async function ensureAgentWorkspace(params?: {
     }
   }
 
-  if (stateDirty) {
+  if (stateDirty || stateRead.source === "legacy") {
     await writeWorkspaceOnboardingState(statePath, state);
+    if (stateRead.source === "legacy") {
+      await deleteLegacyWorkspaceOnboardingState(dir);
+    }
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
 
