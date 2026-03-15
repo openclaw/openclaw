@@ -563,7 +563,10 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    // Include provider prefix in the value so the server receives the full
+    // provider/model string and doesn't re-attach the default provider.
+    const qualifiedId = provider ? `${provider}/${entry.id}` : entry.id;
+    addOption(qualifiedId, provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
   if (currentOverride) {
@@ -603,10 +606,19 @@ function renderChatModelSelect(state: AppViewState) {
         ${repeat(
           options,
           (entry) => entry.value,
-          (entry) =>
-            html`<option value=${entry.value} ?selected=${entry.value === currentOverride}>
+          (entry) => {
+            // Match by exact value or by model suffix only when the override
+            // is a bare model name (no provider prefix) and this is the only
+            // option with that model name.
+            const isSelected =
+              entry.value === currentOverride ||
+              (!currentOverride.includes("/") &&
+                entry.value.endsWith(`/${currentOverride}`) &&
+                options.filter((o) => o.value.endsWith(`/${currentOverride}`)).length === 1);
+            return html`<option value=${entry.value} ?selected=${isSelected}>
               ${entry.label}
-            </option>`,
+            </option>`;
+          },
         )}
       </select>
     </label>
