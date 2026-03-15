@@ -500,7 +500,13 @@ final class TalkModeManager: NSObject {
         #endif
 
         self.stopRecognition()
-        self.speechRecognizer = SFSpeechRecognizer()
+        let speechLocaleRaw = UserDefaults.standard.string(forKey: "talk.speechLocale")
+            ?? TalkDefaults.speechLocale
+        let resolvedLocale = TalkDefaults.resolvedSpeechLocale(speechLocaleRaw)
+        self.speechRecognizer = SFSpeechRecognizer(locale: resolvedLocale)
+        GatewayDiagnostics.log(
+            "talk speech: locale=\(resolvedLocale.identifier) "
+                + "(configured=\(speechLocaleRaw))")
         guard let recognizer = self.speechRecognizer else {
             throw NSError(domain: "TalkMode", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Speech recognizer unavailable",
@@ -1008,7 +1014,8 @@ final class TalkModeManager: NSObject {
                 self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
             }
 
-            let configuredKey = self.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? self.apiKey : nil
+            let trimmedKey = self.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let configuredKey = trimmedKey.isEmpty ? nil : self.apiKey
             #if DEBUG
             let resolvedKey = configuredKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"]
             #else
@@ -1514,7 +1521,8 @@ final class TalkModeManager: NSObject {
                 "talk output_format unsupported for local playback: \(requestedOutputFormat, privacy: .public)")
         }
 
-        let configuredKey = self.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? self.apiKey : nil
+        let trimmedKey2 = self.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let configuredKey = trimmedKey2.isEmpty ? nil : self.apiKey
         #if DEBUG
         let resolvedKey = configuredKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"]
         #else
