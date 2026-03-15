@@ -9,8 +9,8 @@ describe("markdownToIRWithMeta tableMode block", () => {
     expect(hasTables).toBe(true);
     expect(ir.tables).toBeDefined();
     expect(ir.tables).toHaveLength(1);
-    expect(ir.tables![0]!.headers).toEqual(["Name", "Age"]);
-    expect(ir.tables![0]!.rows).toEqual([["Alice", "30"]]);
+    expect(ir.tables![0].headers).toEqual(["Name", "Age"]);
+    expect(ir.tables![0].rows).toEqual([["Alice", "30"]]);
   });
 
   it("does not inline table text in the IR", () => {
@@ -30,8 +30,8 @@ describe("markdownToIRWithMeta tableMode block", () => {
     const { ir } = markdownToIRWithMeta(md, { tableMode: "block" });
 
     expect(ir.tables).toHaveLength(1);
-    expect(typeof ir.tables![0]!.placeholderOffset).toBe("number");
-    expect(ir.tables![0]!.placeholderOffset).toBeGreaterThanOrEqual(0);
+    expect(typeof ir.tables![0].placeholderOffset).toBe("number");
+    expect(ir.tables![0].placeholderOffset).toBeGreaterThanOrEqual(0);
   });
 
   it("handles multiple tables", () => {
@@ -39,8 +39,8 @@ describe("markdownToIRWithMeta tableMode block", () => {
     const { ir } = markdownToIRWithMeta(md, { tableMode: "block" });
 
     expect(ir.tables).toHaveLength(2);
-    expect(ir.tables![0]!.headers).toEqual(["A"]);
-    expect(ir.tables![1]!.headers).toEqual(["B"]);
+    expect(ir.tables![0].headers).toEqual(["A"]);
+    expect(ir.tables![1].headers).toEqual(["B"]);
   });
 
   it("does not populate tables in non-block modes", () => {
@@ -54,7 +54,7 @@ describe("markdownToIRWithMeta tableMode block", () => {
     const { ir } = markdownToIRWithMeta(md, { tableMode: "block" });
 
     expect(ir.tables).toHaveLength(1);
-    expect(ir.tables![0]!.headers).toEqual(["Col"]);
+    expect(ir.tables![0].headers).toEqual(["Col"]);
     // Text should be empty or whitespace-only
     expect(ir.text.trim()).toBe("");
   });
