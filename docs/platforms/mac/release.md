@@ -13,12 +13,9 @@ This app now ships Sparkle auto-updates. Release builds must be Developer ID–s
 ## Prereqs
 
 - Developer ID Application cert installed (example: `Developer ID Application: <Developer Name> (<TEAMID>)`).
-- Sparkle private key path set in the environment as `SPARKLE_PRIVATE_KEY_FILE` (path to your Sparkle ed25519 private key; public key baked into Info.plist). If it is missing, check `~/.profile`.
+- Sparkle private key path set in the environment as `SPARKLE_PRIVATE_KEY_FILE` (path to your Sparkle ed25519 private key; public key baked into Info.plist).
 - Notary credentials (keychain profile or API key) for `xcrun notarytool` if you want Gatekeeper-safe DMG/zip distribution.
-  - We use a Keychain profile named `openclaw-notary`, created from App Store Connect API key env vars in your shell profile:
-    - `APP_STORE_CONNECT_API_KEY_P8`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`
-    - `echo "$APP_STORE_CONNECT_API_KEY_P8" | sed 's/\\n/\n/g' > /tmp/openclaw-notary.p8`
-    - `xcrun notarytool store-credentials "openclaw-notary" --key /tmp/openclaw-notary.p8 --key-id "$APP_STORE_CONNECT_KEY_ID" --issuer "$APP_STORE_CONNECT_ISSUER_ID"`
+  - Maintainers: keep local key paths, profile names, and bootstrap commands in the private [maintainer release docs](https://github.com/openclaw/maintainers/tree/main/release).
 - `pnpm` deps installed (`pnpm install --config.node-linker=hoisted`).
 - Sparkle tools are fetched automatically via SwiftPM at `apps/macos/.build/artifacts/sparkle/Sparkle/bin/` (`sign_update`, `generate_appcast`, etc.).
 
@@ -30,7 +27,7 @@ Notes:
 - If `APP_BUILD` is omitted, `scripts/package-mac-app.sh` derives a Sparkle-safe default from `APP_VERSION` (`YYYYMMDDNN`: stable defaults to `90`, prereleases use a suffix-derived lane) and uses the higher of that value and git commit count.
 - You can still override `APP_BUILD` explicitly when release engineering needs a specific monotonic value.
 - For `BUILD_CONFIG=release`, `scripts/package-mac-app.sh` now defaults to universal (`arm64 x86_64`) automatically. You can still override with `BUILD_ARCHS=arm64` or `BUILD_ARCHS=x86_64`. For local/dev builds (`BUILD_CONFIG=debug`), it defaults to the current architecture (`$(uname -m)`).
-- Use `scripts/package-mac-dist.sh` for release artifacts (zip + DMG + notarization). Use `scripts/package-mac-app.sh` for local/dev packaging.
+- Use [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh) for release artifacts (zip + DMG + notarization). Use [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) for local/dev packaging.
 
 ```bash
 # From repo root; set release IDs so Sparkle feed is enabled.
@@ -53,10 +50,10 @@ ditto -c -k --sequesterRsrc --keepParent dist/OpenClaw.app dist/OpenClaw-2026.3.
 scripts/create-dmg.sh dist/OpenClaw.app dist/OpenClaw-2026.3.13.dmg
 
 # Recommended: build + notarize/staple zip + DMG
-# First, create a keychain profile once:
-#   xcrun notarytool store-credentials "openclaw-notary" \
+# First, create or select a keychain profile once:
+#   xcrun notarytool store-credentials "<profile-name>" \
 #     --apple-id "<apple-id>" --team-id "<team-id>" --password "<app-specific-password>"
-NOTARIZE=1 NOTARYTOOL_PROFILE=openclaw-notary \
+NOTARIZE=1 NOTARYTOOL_PROFILE=<profile-name> \
 BUNDLE_ID=ai.openclaw.mac \
 APP_VERSION=2026.3.13 \
 BUILD_CONFIG=release \

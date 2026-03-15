@@ -262,8 +262,7 @@
 - **Device checks:** before testing, verify connected real devices (iOS/Android) before reaching for simulators/emulators.
 - iOS Team ID lookup: `security find-identity -p codesigning -v` → use Apple Development (…) TEAMID. Fallback: `defaults read com.apple.dt.Xcode IDEProvisioningTeamIdentifiers`.
 - A2UI bundle hash: `src/canvas-host/a2ui/.bundle.hash` is auto-generated; ignore unexpected changes, and only regenerate via `pnpm canvas:a2ui:bundle` (or `scripts/bundle-a2ui.sh`) when needed. Commit the hash as a separate commit.
-- Release signing/notary keys are managed outside the repo; follow internal release docs.
-- Notary auth env vars (`APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_API_KEY_P8`) are expected in your environment (per internal release docs).
+- Release signing/notary credentials are managed outside the repo; use the private [maintainer release docs](https://github.com/openclaw/maintainers/tree/main/release) for local setup and access notes.
 - **Multi-agent safety:** do **not** create/apply/drop `git stash` entries unless explicitly requested (this includes `git pull --rebase --autostash`). Assume other agents may be working; keep unrelated WIP untouched and avoid cross-cutting state changes.
 - **Multi-agent safety:** when the user says "push", you may `git pull --rebase` to integrate latest changes (never discard other agents' work). When the user says "commit", scope to your changes only. When the user says "commit all", commit everything in grouped chunks.
 - **Multi-agent safety:** do **not** create/remove/modify `git worktree` checkouts (or edit `.worktrees/*`) unless explicitly requested.
@@ -290,35 +289,12 @@
 - Release guardrails: do not change version numbers without operator’s explicit consent; always ask permission before running any npm publish/release step.
 - Beta release guardrail: when using a beta Git tag (for example `vYYYY.M.D-beta.N`), publish npm with a matching beta version suffix (for example `YYYY.M.D-beta.N`) rather than a plain version on `--tag beta`; otherwise the plain version name gets consumed/blocked.
 
-## NPM + 1Password (publish/verify)
+## Release Auth
 
-- Use the 1password skill; all `op` commands must run inside a fresh tmux session.
-- Correct 1Password path for npm release auth: `op://Private/Npmjs` (use that item; OTP stays `op://Private/Npmjs/one-time password?attribute=otp`).
-- Sign in: `eval "$(op signin --account my.1password.com)"` (app unlocked + integration on).
-- OTP: `op read 'op://Private/Npmjs/one-time password?attribute=otp'`.
-- Publish: `npm publish --access public --otp="<otp>"` (run from the package dir).
-- Verify without local npmrc side effects: `npm view <pkg> version --userconfig "$(mktemp)"`.
-- Kill the tmux session after publish.
-
-## Plugin Release Fast Path (no core `openclaw` publish)
-
-- Release only already-on-npm plugins. Source list is in `docs/reference/RELEASING.md` under "Current npm plugin list".
-- Run all CLI `op` calls and `npm publish` inside tmux to avoid hangs/interruption:
-  - `tmux new -d -s release-plugins-$(date +%Y%m%d-%H%M%S)`
-  - `eval "$(op signin --account my.1password.com)"`
-- 1Password helpers:
-  - password used by `npm login`:
-    `op item get Npmjs --format=json | jq -r '.fields[] | select(.id=="password").value'`
-  - OTP:
-    `op read 'op://Private/Npmjs/one-time password?attribute=otp'`
-- Fast publish loop (local helper script in `/tmp` is fine; keep repo clean):
-  - compare local plugin `version` to `npm view <name> version`
-  - only run `npm publish --access public --otp="<otp>"` when versions differ
-  - skip if package is missing on npm or version already matches.
-- Keep `openclaw` untouched: never run publish from repo root unless explicitly requested.
-- Post-check for each release:
-  - per-plugin: `npm view @openclaw/<name> version --userconfig "$(mktemp)"` should be `2026.2.17`
-  - core guard: `npm view openclaw version --userconfig "$(mktemp)"` should stay at previous version unless explicitly requested.
+- Core `openclaw` publish uses GitHub trusted publishing; do not use `NPM_TOKEN` or the plugin OTP flow for core releases.
+- Separate `@openclaw/*` plugin publishes use a different maintainer-only auth flow.
+- Plugin scope is public: only publish already-on-npm plugins listed in [`docs/reference/RELEASING.md`](https://github.com/openclaw/openclaw/blob/main/docs/reference/RELEASING.md).
+- Maintainers: private 1Password item names, tmux rules, plugin publish helpers, and local mac signing/notary setup live in the private [maintainer release docs](https://github.com/openclaw/maintainers/tree/main/release).
 
 ## Changelog Release Notes
 

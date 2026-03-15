@@ -15,9 +15,9 @@ Use `pnpm` from the repo root with Node 24 by default. Node 22 LTS, currently `2
 
 When the operator says “release”, immediately do this preflight (no extra questions unless blocked):
 
-- Read this doc and `docs/platforms/mac/release.md`.
-- Load env from `~/.profile` and confirm `SPARKLE_PRIVATE_KEY_FILE` + App Store Connect vars are set (SPARKLE_PRIVATE_KEY_FILE should live in `~/.profile`).
-- Use Sparkle keys from `~/Library/CloudStorage/Dropbox/Backup/Sparkle` if needed.
+- Read this doc and [macOS release](/platforms/mac/release).
+- Confirm the required signing, Sparkle, and notary credentials are available in your environment.
+- Maintainers: keep operator-only credential setup, local secret locations, and approval notes in the private [maintainer release docs](https://github.com/openclaw/maintainers/tree/main/release).
 
 ## Versioning
 
@@ -93,14 +93,14 @@ Historical note:
 - [ ] Keep the app zip (and optional dSYM zip) ready to attach to the GitHub release.
 - [ ] Follow [macOS release](/platforms/mac/release) for the exact commands and required env vars.
   - `APP_BUILD` must be numeric + monotonic (no `-beta`) so Sparkle compares versions correctly.
-  - If notarizing, use the `openclaw-notary` keychain profile created from App Store Connect API env vars (see [macOS release](/platforms/mac/release)).
+  - If notarizing, use your configured `notarytool` keychain profile (see [macOS release](/platforms/mac/release)).
 
 6. **Publish (npm)**
 
 - [ ] Confirm git status is clean; commit and push as needed.
 - [ ] Confirm npm trusted publishing is configured for the `openclaw` package.
 - [ ] Do not rely on an `NPM_TOKEN` secret for this workflow; the publish job uses GitHub OIDC trusted publishing.
-- [ ] Push the matching git tag to trigger the preview run in `.github/workflows/openclaw-npm-release.yml`.
+- [ ] Push the matching git tag to trigger the preview run in [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml).
 - [ ] Run `OpenClaw NPM Release` manually with the same tag to publish after `npm-release` environment approval.
   - Stable tags publish to npm `latest`.
   - Beta tags publish to npm `beta`.
