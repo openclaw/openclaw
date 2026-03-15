@@ -11,7 +11,6 @@ export type TimestampStyle = "short" | "medium" | "long";
 export interface UnifiedTimestampOptions {
   style?: TimestampStyle;
   timeZone?: string;
-  displayMilliseconds?: boolean;
 }
 
 function isValidTimeZone(tz: string): boolean {

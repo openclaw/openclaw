@@ -82,7 +82,7 @@ export function formatLogTimestamp(
     timeString = parsed.toISOString();
   }
   if (mode === "pretty") {
-    return timeString.slice(11, 19);
+    return formatTimestamp(parsed, { style: "short" });
   }
   return timeString;
 }
