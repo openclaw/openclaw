@@ -835,6 +835,21 @@ export const OpenClawSchema = z
           .optional(),
       })
       .strict()
+      .superRefine((gateway, ctx) => {
+        if (
+          gateway.channelStaleEventThresholdMinutes != null &&
+          gateway.channelHealthCheckMinutes != null &&
+          gateway.channelHealthCheckMinutes !== 0 &&
+          gateway.channelStaleEventThresholdMinutes < gateway.channelHealthCheckMinutes
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["channelStaleEventThresholdMinutes"],
+            message:
+              "channelStaleEventThresholdMinutes should be >= channelHealthCheckMinutes to avoid delayed stale detection",
+          });
+        }
+      })
       .optional(),
     memory: MemorySchema,
     skills: z

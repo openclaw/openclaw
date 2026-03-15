@@ -131,9 +131,22 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         }
       | undefined;
     const accountOverride = resolvedAccount?.healthMonitor?.enabled;
+    const channelOverride = (
+      cfg.channels?.[channelId] as
+        | {
+            healthMonitor?: {
+              enabled?: boolean;
+            };
+          }
+        | undefined
+    )?.healthMonitor?.enabled;
 
     if (typeof accountOverride === "boolean") {
       return accountOverride;
+    }
+
+    if (typeof channelOverride === "boolean") {
+      return channelOverride;
     }
 
     return true;

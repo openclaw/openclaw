@@ -235,4 +235,27 @@ describe("server-channels auto restart", () => {
 
     expect(manager.isHealthMonitorEnabled("discord", "router-d")).toBe(false);
   });
+
+  it("falls back to channel-level health monitor overrides when account resolution omits them", () => {
+    installTestRegistry(
+      createTestPlugin({
+        resolveAccount: () => ({
+          enabled: true,
+          configured: true,
+        }),
+      }),
+    );
+
+    const manager = createManager({
+      loadConfig: () => ({
+        channels: {
+          discord: {
+            healthMonitor: { enabled: false },
+          },
+        },
+      }),
+    });
+
+    expect(manager.isHealthMonitorEnabled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+  });
 });
