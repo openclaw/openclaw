@@ -417,7 +417,9 @@ export function resolveTelegramTransport(
   });
 
   const explicitProxyUrl = proxyFetch ? getProxyUrlFromFetch(proxyFetch) : undefined;
-  const undiciSourceFetch = resolveWrappedFetch(undiciFetch as unknown as typeof fetch);
+  const undiciSourceFetch = resolveWrappedFetch(
+    (globalThis.fetch as typeof fetch) ?? (undiciFetch as unknown as typeof fetch),
+  );
   const sourceFetch = explicitProxyUrl
     ? undiciSourceFetch
     : proxyFetch
