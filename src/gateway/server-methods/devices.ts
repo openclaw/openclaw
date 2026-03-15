@@ -3,6 +3,7 @@ import {
   getPairedDevice,
   listDevicePairing,
   removePairedDevice,
+  updatePairedDeviceMetadata,
   type DeviceAuthToken,
   type RotateDeviceTokenDenyReason,
   rejectDevicePairing,
@@ -108,11 +109,15 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { requestId } = params as { requestId: string };
+    const { requestId, displayName } = params as { requestId: string; displayName?: string };
     const approved = await approveDevicePairing(requestId);
     if (!approved) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
       return;
+    }
+    if (displayName) {
+      await updatePairedDeviceMetadata(approved.device.deviceId, { displayName });
+      approved.device.displayName = displayName;
     }
     context.logGateway.info(
       `device pairing approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
