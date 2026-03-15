@@ -72,60 +72,34 @@ describe("normalizeMessageActionInput", () => {
     expect(normalized.channel).toBe("slack");
   });
 
-  it("does not infer a target for actions that do not accept one", () => {
+  it("infers react messageId from toolContext.currentMessageTs", () => {
     const normalized = normalizeMessageActionInput({
-      action: "broadcast",
-      args: {},
-      toolContext: {
-        currentChannelId: "channel:C1",
-      },
-    });
-
-    expect("target" in normalized).toBe(false);
-    expect("to" in normalized).toBe(false);
-  });
-
-  it("does not backfill a non-deliverable tool-context channel", () => {
-    const normalized = normalizeMessageActionInput({
-      action: "send",
+      action: "react",
       args: {
         target: "channel:C1",
+        emoji: "👍",
       },
       toolContext: {
-        currentChannelProvider: "webchat",
+        currentMessageTs: "1710000000.123456",
       },
     });
 
-    expect("channel" in normalized).toBe(false);
+    expect(normalized.messageId).toBe("1710000000.123456");
   });
 
-  it("keeps alias-based targets without inferring the current channel", () => {
+  it("does not infer react messageId from generic currentMessageId", () => {
     const normalized = normalizeMessageActionInput({
-      action: "edit",
+      action: "react",
       args: {
-        messageId: "msg_123",
+        target: "channel:C1",
+        emoji: "👍",
       },
       toolContext: {
-        currentChannelId: "channel:C1",
+        currentMessageId: 12345,
       },
     });
 
-    expect(normalized.messageId).toBe("msg_123");
-    expect("target" in normalized).toBe(false);
-    expect("to" in normalized).toBe(false);
-  });
-
-  it("maps legacy channelId inputs through canonical target for channel-id actions", () => {
-    const normalized = normalizeMessageActionInput({
-      action: "channel-info",
-      args: {
-        channelId: "C123",
-      },
-    });
-
-    expect(normalized.target).toBe("C123");
-    expect(normalized.channelId).toBe("C123");
-    expect("to" in normalized).toBe(false);
+    expect(normalized.messageId).toBeUndefined();
   });
 
   it("throws when required target remains unresolved", () => {

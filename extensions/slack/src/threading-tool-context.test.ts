@@ -104,6 +104,31 @@ describe("buildSlackThreadingToolContext", () => {
     ).toBe("all");
   });
 
+  it("only sets currentMessageTs when CurrentMessageId looks like a Slack timestamp", () => {
+    const cfg = {
+      channels: {
+        slack: { replyToMode: "first" },
+      },
+    } as OpenClawConfig;
+
+    const fromMessageEvent = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: { ChatType: "direct", CurrentMessageId: "1710000000.123456" },
+    });
+    expect(fromMessageEvent.currentMessageTs).toBe("1710000000.123456");
+
+    const fromSlashCommand = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: {
+        ChatType: "direct",
+        CurrentMessageId: "13345224609.738474920.8088930838d88f008e0",
+      },
+    });
+    expect(fromSlashCommand.currentMessageTs).toBeUndefined();
+  });
+
   it("does not force all mode from ThreadLabel alone", () => {
     expect(
       resolveReplyToModeWithConfig({

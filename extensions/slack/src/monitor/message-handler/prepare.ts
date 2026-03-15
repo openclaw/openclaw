@@ -639,7 +639,7 @@ export async function prepareSlackMessage(params: {
     });
   }
 
-  const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
+  const slackTo = `channel:${message.channel}`;
 
   const { untrustedChannelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
     isRoomish,
