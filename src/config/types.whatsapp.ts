@@ -79,6 +79,10 @@ type WhatsAppSharedConfig = {
   ackReaction?: WhatsAppAckReactionConfig;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
+  /** Extend the debounce window (ms) while the sender is typing (default: 0 — disabled).
+   *  Recommended value: 15000. WhatsApp emits composing indicators roughly every 10 seconds,
+   *  so the configured value should exceed that interval. */
+  composingDebounceMs?: number;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */
