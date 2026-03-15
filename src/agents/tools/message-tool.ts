@@ -771,6 +771,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           : undefined;
 
+      // Map schema `target` to runner `to` when `to` is not explicitly provided.
+      if (typeof params.target === "string" && params.target.trim() && !params.to) {
+        params.to = params.target;
+      }
+
       const result = await runMessageAction({
         cfg,
         action,
