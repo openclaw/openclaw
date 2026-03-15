@@ -29,6 +29,20 @@ function isAnthropic1MModel(modelId: string): boolean {
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
+/**
+ * Bedrock extended TTL (1-hour cache) is only supported by Anthropic Claude 4.5+
+ * models. Older models (Opus 4.0/4.1, Sonnet 4.0, 3.x) only support 5-min TTL.
+ */
+export function supportsBedrockExtendedTTL(modelId?: string): boolean {
+  if (!modelId) {
+    return false;
+  }
+  const id = modelId.toLowerCase();
+  // Match claude-{tier}-4-{minor} where minor >= 5 (i.e. Claude 4.5+)
+  const match = id.match(/claude-(?:opus|sonnet|haiku)-4-(\d+)/);
+  return match ? parseInt(match[1], 10) >= 5 : false;
+}
+
 function parseHeaderList(value: unknown): string[] {
   if (typeof value !== "string") {
     return [];
@@ -195,6 +209,7 @@ function normalizeOpenAiStringModeAnthropicToolChoice(toolChoice: unknown): unkn
 export function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  modelId?: string,
 ): CacheRetention | undefined {
   const isAnthropicDirect = provider === "anthropic";
   const hasBedrockOverride =
@@ -205,20 +220,32 @@ export function resolveCacheRetention(
     return undefined;
   }
 
+  let resolved: CacheRetention | undefined;
+
   const newVal = extraParams?.cacheRetention;
   if (newVal === "none" || newVal === "short" || newVal === "long") {
-    return newVal;
+    resolved = newVal;
+  } else {
+    const legacy = extraParams?.cacheControlTtl;
+    if (legacy === "5m") {
+      resolved = "short";
+    } else if (legacy === "1h") {
+      resolved = "long";
+    } else {
+      resolved = isAnthropicDirect ? "short" : undefined;
+    }
   }
 
-  const legacy = extraParams?.cacheControlTtl;
-  if (legacy === "5m") {
-    return "short";
-  }
-  if (legacy === "1h") {
-    return "long";
+  // Bedrock extended TTL (1h) is only supported by Claude 4.5+ models.
+  // Downgrade "long" → "short" for unsupported models to avoid API errors.
+  if (resolved === "long" && isAnthropicBedrock && !supportsBedrockExtendedTTL(modelId)) {
+    log.warn(
+      `downgrading cacheRetention "long" → "short" for ${provider}/${modelId ?? "unknown"}: model does not support 1-hour TTL`,
+    );
+    resolved = "short";
   }
 
-  return isAnthropicDirect ? "short" : undefined;
+  return resolved;
 }
 
 export function resolveAnthropicBetas(
