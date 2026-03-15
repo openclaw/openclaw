@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeSignalAccountInput, parseSignalAllowFromEntries } from "./signal.js";
+import {
+  normalizeSignalAccountInput,
+  parseSignalAllowFromEntries,
+} from "../../../../extensions/signal/src/onboarding.js";
 
 describe("normalizeSignalAccountInput", () => {
   it("normalizes valid E.164 numbers", () => {
