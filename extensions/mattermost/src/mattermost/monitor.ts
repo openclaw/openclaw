@@ -570,6 +570,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       authorizeButtonClick: async ({ payload, post }) => {
         const channelInfo = await resolveChannelInfo(payload.channel_id);
         const isDirect = channelInfo?.type?.trim().toUpperCase() === "D";
+        const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+          cfg,
+          surface: "mattermost",
+        });
         const decision = authorizeMattermostCommandInvocation({
           account,
           cfg,
@@ -585,8 +589,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 readStore: pairing.readStoreForDmPolicy,
               })
             : undefined,
-          allowTextCommands: true,
-          hasControlCommand: true,
+          allowTextCommands,
+          hasControlCommand: false,
         });
         if (decision.ok) {
           return { ok: true };
