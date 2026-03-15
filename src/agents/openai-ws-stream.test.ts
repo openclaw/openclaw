@@ -687,6 +687,20 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.stopReason).toBe("stop");
   });
 
+  it("skips malformed (null/non-object) content entries without crashing", () => {
+    const response = makeResponseObject("resp_mal", "Valid text");
+    // Inject malformed entries into the content array
+    const msgItem = response.output.find((o) => o.type === "message") as {
+      content: unknown[];
+    };
+    msgItem.content.unshift(null, undefined, 42, "bad");
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.content).toHaveLength(1);
+    const textBlock = msg.content[0] as { type: string; text: string };
+    expect(textBlock.type).toBe("text");
+    expect(textBlock.text).toBe("Valid text");
+  });
+
   it("preserves phase from assistant message output items", () => {
     const response = makeResponseObject("resp_8", "Final answer", undefined, "final_answer");
     const msg = buildAssistantMessageFromResponse(response, modelInfo) as {

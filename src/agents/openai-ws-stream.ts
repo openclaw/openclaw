@@ -451,6 +451,9 @@ export function buildAssistantMessageFromResponse(
         assistantPhase = itemPhase;
       }
       for (const part of item.content ?? []) {
+        if (!part || typeof part !== "object") {
+          continue;
+        }
         if (part.type === "output_text" && part.text) {
           content.push({
             type: "text",
