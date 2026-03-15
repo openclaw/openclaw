@@ -279,6 +279,31 @@ openclaw cron add \
 - Use `target: "none"` on heartbeat if you only want internal processing.
 - Use isolated cron with a cheaper model for routine tasks.
 
+## Pattern: Autonomous improvement loop (multi-hop questions)
+
+For long-running dev projects, use heartbeat/cron as the scheduler for a **question loop**:
+
+1. **Discover questions** (scan TODO/FIXME, test gaps, audit issues, regressions)
+2. **Decompose multi-hop** (diagnose -> fix -> verify -> discover follow-up)
+3. **Dispatch execution** (isolated subagents)
+4. **Verify outcomes** (tests + performance checks)
+5. **Feed results back** into the next scan cycle
+
+### Recommended split
+
+- **Heartbeat (main):** light triage and context-aware prioritization
+- **Cron (isolated):** heavy scan/solve/verify runs on a fixed cadence
+- **Board sync (optional):** map discovered questions to Kanban lanes (Inbox/Ready/Doing/Review/Done)
+
+### Example cadence
+
+- Every 30m heartbeat: identify urgent/new regressions only
+- Hourly isolated cron: run scanner + synthesize ranked questions
+- Every 2-4h isolated cron: dispatch/verify top ready questions
+- Daily cron: generate summary report (solved, stuck, regressions)
+
+This pattern keeps chat noise low, preserves deterministic timing for heavy work, and scales across multiple projects without overloading the main session.
+
 ## Related
 
 - [Heartbeat](/gateway/heartbeat) - full heartbeat configuration
