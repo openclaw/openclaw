@@ -15,7 +15,13 @@ export async function fetchGeminiUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
   provider: UsageProviderId,
+  projectId?: string,
 ): Promise<ProviderUsageSnapshot> {
+  const body: Record<string, unknown> = {};
+  if (projectId) {
+    body.project = projectId;
+  }
+
   const res = await fetchJson(
     "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
     {
@@ -24,7 +30,7 @@ export async function fetchGeminiUsage(
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: "{}",
+      body: JSON.stringify(body),
     },
     timeoutMs,
     fetchFn,
