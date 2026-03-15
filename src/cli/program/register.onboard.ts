@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
+import { formatStaticAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.static.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
 import type {
@@ -41,7 +41,7 @@ function resolveInstallDaemonFlag(
   return undefined;
 }
 
-const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
+const AUTH_CHOICE_HELP = formatStaticAuthChoiceChoicesForCli({
   includeLegacyAliases: true,
   includeSkip: true,
 });

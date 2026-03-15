@@ -9,8 +9,8 @@ const runtime = {
   exit: vi.fn(),
 };
 
-vi.mock("../../commands/auth-choice-options.js", () => ({
-  formatAuthChoiceChoicesForCli: () => "token|oauth",
+vi.mock("../../commands/auth-choice-options.static.js", () => ({
+  formatStaticAuthChoiceChoicesForCli: () => "token|oauth",
 }));
 
 vi.mock("../../commands/onboard-provider-auth-flags.js", () => ({
