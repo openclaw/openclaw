@@ -65,7 +65,8 @@ export async function noteSyntheticAllowlistGaps(cfg: OpenClawConfig): Promise<v
     lines.push(`  - ${modelKey(entry.provider, entry.id)}`);
   }
   lines.push(
-    `To add: ${formatCliCommand("openclaw models allowlist add <model-id>")}`,
+    `To add: ${formatCliCommand("openclaw config set agents.defaults.models.<provider>/<model> '{}'")}`,
+    `Or edit the config file directly: ${formatCliCommand("openclaw config file")}`,
     "(Models are functional but hidden from agents until allowlisted)",
   );
   note(lines.join("\n"), "Synthetic model allowlist");
