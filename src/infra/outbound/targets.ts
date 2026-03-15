@@ -302,36 +302,76 @@ export function resolveHeartbeatDeliveryTarget(params: {
     }
   }
 
-  if (!resolvedTarget.channel || !resolvedTarget.to) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "no-target",
-      accountId: effectiveAccountId,
-      lastChannel: resolvedTarget.lastChannel,
-      lastAccountId: resolvedTarget.lastAccountId,
-    });
+  // Determine effective channel/to, falling back to lastChannel/lastTo when primary
+  // resolution fails (e.g., plugin registry not bootstrapped yet). Refs #43216.
+  let effectiveChannel = resolvedTarget.channel;
+  let effectiveTo = resolvedTarget.to;
+
+  if (!effectiveChannel || !effectiveTo) {
+    if (resolvedTarget.lastChannel && resolvedTarget.lastTo) {
+      effectiveChannel = resolvedTarget.lastChannel;
+      effectiveTo = resolvedTarget.lastTo;
+    } else {
+      return buildNoHeartbeatDeliveryTarget({
+        reason: "no-target",
+        accountId: effectiveAccountId,
+        lastChannel: resolvedTarget.lastChannel,
+        lastAccountId: resolvedTarget.lastAccountId,
+      });
+    }
   }
 
   const resolved = resolveOutboundTarget({
-    channel: resolvedTarget.channel,
-    to: resolvedTarget.to,
+    channel: effectiveChannel,
+    to: effectiveTo,
     cfg,
     accountId: effectiveAccountId,
     mode: "heartbeat",
   });
   if (!resolved.ok) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "no-target",
-      accountId: effectiveAccountId,
-      lastChannel: resolvedTarget.lastChannel,
-      lastAccountId: resolvedTarget.lastAccountId,
-    });
+    // If primary channel failed and a different lastChannel is available, try that.
+    if (
+      resolvedTarget.lastChannel &&
+      resolvedTarget.lastTo &&
+      (resolvedTarget.lastChannel !== effectiveChannel || resolvedTarget.lastTo !== effectiveTo)
+    ) {
+      const fallback = resolveOutboundTarget({
+        channel: resolvedTarget.lastChannel,
+        to: resolvedTarget.lastTo,
+        cfg,
+        accountId: resolvedTarget.lastAccountId ?? effectiveAccountId,
+        mode: "heartbeat",
+      });
+      if (fallback.ok) {
+        effectiveChannel = resolvedTarget.lastChannel;
+        effectiveTo = fallback.to;
+        effectiveAccountId = resolvedTarget.lastAccountId ?? effectiveAccountId;
+        // Continue with fallback resolution below
+      } else {
+        return buildNoHeartbeatDeliveryTarget({
+          reason: "no-target",
+          accountId: effectiveAccountId,
+          lastChannel: resolvedTarget.lastChannel,
+          lastAccountId: resolvedTarget.lastAccountId,
+        });
+      }
+    } else {
+      return buildNoHeartbeatDeliveryTarget({
+        reason: "no-target",
+        accountId: effectiveAccountId,
+        lastChannel: resolvedTarget.lastChannel,
+        lastAccountId: resolvedTarget.lastAccountId,
+      });
+    }
+  } else {
+    effectiveTo = resolved.to;
   }
 
   const sessionChatTypeHint =
     target === "last" && !heartbeat?.to ? normalizeChatType(entry?.chatType) : undefined;
   const deliveryChatType = resolveHeartbeatDeliveryChatType({
-    channel: resolvedTarget.channel,
-    to: resolved.to,
+    channel: effectiveChannel,
+    to: effectiveTo,
     sessionChatType: sessionChatTypeHint,
   });
   if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
@@ -345,25 +385,25 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   let reason: string | undefined;
   const plugin = resolveOutboundChannelPlugin({
-    channel: resolvedTarget.channel,
+    channel: effectiveChannel,
     cfg,
   });
   if (plugin?.config.resolveAllowFrom) {
     const explicit = resolveOutboundTarget({
-      channel: resolvedTarget.channel,
-      to: resolvedTarget.to,
+      channel: effectiveChannel,
+      to: effectiveTo,
       cfg,
       accountId: effectiveAccountId,
       mode: "explicit",
     });
-    if (explicit.ok && explicit.to !== resolved.to) {
+    if (explicit.ok && explicit.to !== effectiveTo) {
       reason = "allowFrom-fallback";
     }
   }
 
   return {
-    channel: resolvedTarget.channel,
-    to: resolved.to,
+    channel: effectiveChannel,
+    to: effectiveTo,
     reason,
     accountId: effectiveAccountId,
     threadId: resolvedTarget.threadId,
