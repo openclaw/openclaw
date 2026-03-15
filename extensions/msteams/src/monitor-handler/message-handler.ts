@@ -211,6 +211,29 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
       });
       if (access.decision === "pairing") {
+        // Persist conversation reference before returning so that
+        // `--notify` can reach the user after pairing is approved.
+        const agent = activity.recipient;
+        const pairingRef: StoredConversationReference = {
+          activityId: activity.id,
+          user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
+          agent,
+          bot: agent ? { id: agent.id, name: agent.name } : undefined,
+          conversation: {
+            id: conversationId,
+            conversationType,
+            tenantId: conversation?.tenantId,
+          },
+          channelId: activity.channelId,
+          serviceUrl: activity.serviceUrl,
+          locale: activity.locale,
+        };
+        conversationStore.upsert(conversationId, pairingRef).catch((err) => {
+          log.debug?.("failed to save pairing conversation reference", {
+            error: formatUnknownError(err),
+          });
+        });
+
         const request = await pairing.upsertPairingRequest({
           id: senderId,
           meta: { name: senderName },
