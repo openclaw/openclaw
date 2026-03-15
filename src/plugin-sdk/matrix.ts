@@ -109,6 +109,8 @@ export { runPluginCommandWithTimeout } from "./run-command.js";
 export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-dispatch.js";
 export { createLoggerBackedRuntime, resolveRuntimeEnv } from "./runtime.js";
 export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
+export { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
+export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 export {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,

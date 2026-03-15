@@ -27,6 +27,7 @@ import {
   projectCredentialSnapshotFields,
   resolveConfiguredFromRequiredCredentialStatuses,
   resolveDefaultSlackAccountId,
+  resolveOutboundSendDep,
   resolveSlackAccount,
   resolveSlackReplyToMode,
   isSlackInteractiveRepliesEnabled,
@@ -38,7 +39,6 @@ import {
   type ChannelPlugin,
   type ResolvedSlackAccount,
 } from "openclaw/plugin-sdk/slack";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { getSlackRuntime } from "./runtime.js";
 

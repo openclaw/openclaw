@@ -28,3 +28,5 @@ export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export { collectStatusIssuesFromLastError } from "./status-helpers.js";
+export { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
+export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";

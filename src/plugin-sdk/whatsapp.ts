@@ -46,3 +46,5 @@ export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js
 export { createActionGate, readStringParam } from "../agents/tools/common.js";
 
 export { normalizeE164 } from "../utils.js";
+export { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
+export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";

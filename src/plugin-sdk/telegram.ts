@@ -67,3 +67,5 @@ export { telegramOnboardingAdapter } from "../channels/plugins/onboarding/telegr
 export { TelegramConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { buildTokenChannelStatusSummary } from "./status-helpers.js";
+export { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
+export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";

@@ -110,6 +110,8 @@ export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
 export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
+export { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
+export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 export {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
