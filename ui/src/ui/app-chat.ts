@@ -141,6 +141,9 @@ async function sendChatMessageNow(
   if (ok && opts?.restoreAttachments && opts.previousAttachments?.length) {
     host.chatAttachments = opts.previousAttachments;
   }
+  if (ok) {
+    (host as any).chatUserScrolledUp = false;
+  }
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   if (ok && !host.chatRunId) {
     void flushChatQueue(host);

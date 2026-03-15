@@ -94,8 +94,8 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
           latest.scrollHeight - latest.scrollTop - latest.clientHeight;
         const shouldStickRetry =
           effectiveForce ||
-          host.chatUserNearBottom ||
-          latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+          (!host.chatUserScrolledUp && host.chatUserNearBottom) ||
+          (!host.chatUserScrolledUp && latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD);
         if (!shouldStickRetry) {
           return;
         }
