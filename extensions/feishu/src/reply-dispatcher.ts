@@ -273,7 +273,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
         streaming = null;
-        streamingStartPromise = null; // allow retry on next deliver
+        streamingStartPromise = null;
+        streamingStarted = false; // allow retry on next deliver after transient failure
       }
     })();
   };
