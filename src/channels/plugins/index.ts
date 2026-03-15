@@ -114,4 +114,4 @@ export {
   type AllowlistMatch,
   type AllowlistMatchSource,
 } from "./allowlist-match.js";
-export type { ChannelId, ChannelPlugin } from "./types.js";
+export type { ChannelId, ChannelPlugin, OutboundDispatcher } from "./types.js";

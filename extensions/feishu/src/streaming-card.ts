@@ -8,13 +8,13 @@ import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
-type CardState = {
+interface CardState {
   cardId: string;
   messageId: string;
   sequence: number;
   currentText: string;
   hasNote: boolean;
-};
+}
 
 /** Options for customising the initial streaming card appearance. */
 export type StreamingCardOptions = {
@@ -166,7 +166,7 @@ export class FeishuStreamingSession {
   private closed = false;
   private log?: (msg: string) => void;
   private lastUpdateTime = 0;
-  private pendingText: string | null = null;
+  private pendingText: string | undefined = undefined;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private updateThrottleMs = 100; // Throttle updates to max 10/sec
 
@@ -286,7 +286,7 @@ export class FeishuStreamingSession {
       cardId,
       messageId: sendRes.data.message_id,
       sequence: 1,
-      currentText: "",
+      currentText: "⏳ Thinking...",
       hasNote: !!options?.note,
     };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
@@ -307,7 +307,7 @@ export class FeishuStreamingSession {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          content: text,
+          content: text ?? "",
           sequence: this.state.sequence,
           uuid: `s_${this.state.cardId}_${this.state.sequence}`,
         }),
@@ -321,6 +321,7 @@ export class FeishuStreamingSession {
       .catch((error) => onError?.(error));
   }
 
+  /** Normal streaming update (append/merge) */
   async update(text: string): Promise<void> {
     if (!this.state || this.closed) {
       return;
@@ -330,13 +331,12 @@ export class FeishuStreamingSession {
       return;
     }
 
-    // Throttle: skip if updated recently, but remember pending text
     const now = Date.now();
     if (now - this.lastUpdateTime < this.updateThrottleMs) {
       this.pendingText = mergedInput;
       return;
     }
-    this.pendingText = null;
+    this.pendingText = undefined;
     this.lastUpdateTime = now;
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
@@ -348,11 +348,27 @@ export class FeishuStreamingSession {
         return;
       }
       const mergedText = mergeStreamingText(this.state.currentText, mergedInput);
-      if (!mergedText || mergedText === this.state.currentText) {
+      if (mergedText === this.state.currentText) {
         return;
       }
       this.state.currentText = mergedText;
       await this.updateCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`));
+    });
+    await this.queue;
+  }
+
+  /** Direct replacement (snapshot) update - allows shrinking or clearing content */
+  async replaceContent(text: string): Promise<void> {
+    if (!this.state || this.closed) {
+      return;
+    }
+    this.pendingText = undefined; // Drop pending async updates
+    this.queue = this.queue.then(async () => {
+      if (!this.state || this.closed) {
+        return;
+      }
+      this.state.currentText = text;
+      await this.updateCardContent(text, (e) => this.log?.(`ReplaceContent failed: ${String(e)}`));
     });
     await this.queue;
   }
@@ -397,12 +413,11 @@ export class FeishuStreamingSession {
     }
     await this.queue;
 
-    const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
-    const text = finalText ? mergeStreamingText(pendingMerged, finalText) : pendingMerged;
+    const currentText = this.state.currentText;
+    const text = finalText ?? currentText;
     const apiBase = resolveApiBase(this.creds.domain);
 
-    // Only send final update if content differs from what's already displayed
-    if (text && text !== this.state.currentText) {
+    if (text !== currentText) {
       await this.updateCardContent(text);
       this.state.currentText = text;
     }
@@ -439,7 +454,7 @@ export class FeishuStreamingSession {
       .catch((e) => this.log?.(`Close failed: ${String(e)}`));
     const finalState = this.state;
     this.state = null;
-    this.pendingText = null;
+    this.pendingText = undefined;
 
     this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
   }
