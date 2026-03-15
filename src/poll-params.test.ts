@@ -1,53 +1,99 @@
 import { describe, expect, it } from "vitest";
-import { hasPollCreationParams, resolveTelegramPollVisibility } from "./poll-params.js";
+import {
+  hasPollCreationParams,
+  resolveTelegramPollVisibility,
+  stripPollCreationParams,
+} from "./poll-params.js";
 
 describe("poll params", () => {
-  it("does not treat explicit false booleans as poll creation params", () => {
+  // --- hasPollCreationParams: now gates on pollQuestion ---
+
+  it("returns false when no poll params are present", () => {
+    expect(hasPollCreationParams({})).toBe(false);
+  });
+
+  it("returns false when only non-question poll params are present (model auto-fill)", () => {
+    // This is the core bug fix: models auto-fill these defaults on action="send"
+    expect(hasPollCreationParams({ pollMulti: false })).toBe(false);
+    expect(hasPollCreationParams({ pollMulti: true })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationHours: 0 })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationHours: 24 })).toBe(false);
+    expect(hasPollCreationParams({ pollAnonymous: false })).toBe(false);
+    expect(hasPollCreationParams({ pollPublic: true })).toBe(false);
+    expect(hasPollCreationParams({ pollOption: ["Pizza", "Sushi"] })).toBe(false);
+  });
+
+  it("returns true when pollQuestion has a non-empty value", () => {
+    expect(hasPollCreationParams({ pollQuestion: "Lunch?" })).toBe(true);
+  });
+
+  it("returns false when pollQuestion is empty or whitespace", () => {
+    expect(hasPollCreationParams({ pollQuestion: "" })).toBe(false);
+    expect(hasPollCreationParams({ pollQuestion: "   " })).toBe(false);
+  });
+
+  it("detects snake_case poll_question as poll creation intent", () => {
+    expect(hasPollCreationParams({ poll_question: "Lunch?" })).toBe(true);
+    expect(hasPollCreationParams({ poll_question: "" })).toBe(false);
+  });
+
+  it("returns true when pollQuestion is present alongside other poll params", () => {
     expect(
       hasPollCreationParams({
-        pollMulti: false,
-        pollAnonymous: false,
-        pollPublic: false,
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+        pollMulti: true,
+        pollDurationHours: 24,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it.each([{ key: "pollMulti" }, { key: "pollAnonymous" }, { key: "pollPublic" }])(
-    "treats $key=true as poll creation intent",
-    ({ key }) => {
-      expect(
-        hasPollCreationParams({
-          [key]: true,
-        }),
-      ).toBe(true);
-    },
-  );
+  // --- stripPollCreationParams ---
 
-  it("treats finite numeric poll params as poll creation intent", () => {
-    expect(hasPollCreationParams({ pollDurationHours: 0 })).toBe(true);
-    expect(hasPollCreationParams({ pollDurationSeconds: 60 })).toBe(true);
-    expect(hasPollCreationParams({ pollDurationSeconds: "60" })).toBe(true);
-    expect(hasPollCreationParams({ pollDurationSeconds: "1e3" })).toBe(true);
-    expect(hasPollCreationParams({ pollDurationHours: Number.NaN })).toBe(false);
-    expect(hasPollCreationParams({ pollDurationSeconds: Infinity })).toBe(false);
-    expect(hasPollCreationParams({ pollDurationSeconds: "60abc" })).toBe(false);
+  it("strips all poll creation params from a params object", () => {
+    const params: Record<string, unknown> = {
+      action: "send",
+      channel: "discord",
+      message: "Hello",
+      filePath: "/tmp/image.png",
+      pollQuestion: "Lunch?",
+      pollOption: ["Pizza", "Sushi"],
+      pollDurationHours: 24,
+      pollMulti: true,
+    };
+    stripPollCreationParams(params);
+    expect(params).toEqual({
+      action: "send",
+      channel: "discord",
+      message: "Hello",
+      filePath: "/tmp/image.png",
+    });
   });
 
-  it("treats string-encoded boolean poll params as poll creation intent when true", () => {
-    expect(hasPollCreationParams({ pollPublic: "true" })).toBe(true);
-    expect(hasPollCreationParams({ pollAnonymous: "false" })).toBe(false);
+  it("strips snake_case poll params", () => {
+    const params: Record<string, unknown> = {
+      message: "Hello",
+      poll_question: "Lunch?",
+      poll_option: ["A", "B"],
+      poll_duration_hours: 12,
+      poll_multi: false,
+    };
+    stripPollCreationParams(params);
+    expect(params).toEqual({ message: "Hello" });
   });
 
-  it("treats string poll options as poll creation intent", () => {
-    expect(hasPollCreationParams({ pollOption: "Yes" })).toBe(true);
+  it("is a no-op when no poll params are present", () => {
+    const params: Record<string, unknown> = {
+      action: "send",
+      channel: "discord",
+      message: "Hello",
+    };
+    const original = { ...params };
+    stripPollCreationParams(params);
+    expect(params).toEqual(original);
   });
 
-  it("detects snake_case poll fields as poll creation intent", () => {
-    expect(hasPollCreationParams({ poll_question: "Lunch?" })).toBe(true);
-    expect(hasPollCreationParams({ poll_option: ["Pizza", "Sushi"] })).toBe(true);
-    expect(hasPollCreationParams({ poll_duration_seconds: "60" })).toBe(true);
-    expect(hasPollCreationParams({ poll_public: "true" })).toBe(true);
-  });
+  // --- resolveTelegramPollVisibility (unchanged) ---
 
   it("resolves telegram poll visibility flags", () => {
     expect(resolveTelegramPollVisibility({ pollAnonymous: true })).toBe(true);
