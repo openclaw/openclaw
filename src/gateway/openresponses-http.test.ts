@@ -4,7 +4,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -501,18 +500,45 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const port = enabledPort;
     try {
       agentCommand.mockClear();
-      agentCommand.mockImplementationOnce((async (opts: unknown) =>
-        buildAssistantDeltaResult({
-          opts,
-          emit: emitAgentEvent,
-          deltas: ["he", "llo"],
-          text: "hello",
-        })) as never);
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        const onReasoningStream = (
+          opts as { onReasoningStream?: (payload: { text?: string }) => void }
+        )?.onReasoningStream;
+        onReasoningStream?.({ text: "thinking..." });
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "browser",
+            toolCallId: "call_tool_1",
+            args: { action: "open", targetUrl: "https://example.com" },
+          },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: {
+            phase: "result",
+            name: "browser",
+            toolCallId: "call_tool_1",
+            result: {
+              content: [{ type: "text", text: "ok" }],
+              ok: true,
+            },
+          },
+        });
+        return { payloads: [{ text: "hello" }] } as never;
+      }) as never);
 
       const resDelta = await postResponses(port, {
         stream: true,
         model: "openclaw",
         input: "hi",
+        reasoning: { summary: "auto" },
       });
       expect(resDelta.status).toBe(200);
       expect(resDelta.headers.get("content-type") ?? "").toContain("text/event-stream");
@@ -539,6 +565,21 @@ describe("OpenResponses HTTP API (e2e)", () => {
         })
         .join("");
       expect(deltas).toBe("hello");
+
+      agentCommand.mockClear();
+      const outputItems = deltaEvents
+        .filter((e) => e.event === "response.output_item.added")
+        .map((e) => JSON.parse(e.data) as { item?: { type?: string } })
+        .map((parsed) => parsed.item?.type);
+      expect(outputItems).toContain("function_call");
+      expect(outputItems).toContain("function_call_output");
+      expect(outputItems).toContain("reasoning");
+      const reasoningItem = deltaEvents
+        .filter((e) => e.event === "response.output_item.added")
+        .map((e) => JSON.parse(e.data) as { item?: { type?: string; summary?: string } })
+        .map((parsed) => parsed.item)
+        .find((item) => item?.type === "reasoning");
+      expect(reasoningItem?.summary).toBe("thinking...");
 
       agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({

@@ -15,6 +15,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
+  /** Optional max decoded bytes to include for base64 data in tool results. */
+  toolResultMaxDataBytes?: number;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;

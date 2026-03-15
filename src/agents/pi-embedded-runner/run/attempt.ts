@@ -2218,6 +2218,7 @@ export async function runEmbeddedAttempt(
         verboseLevel: params.verboseLevel,
         reasoningMode: params.reasoningLevel ?? "off",
         toolResultFormat: params.toolResultFormat,
+        toolResultMaxDataBytes: params.toolResultMaxDataBytes,
         shouldEmitToolResult: params.shouldEmitToolResult,
         shouldEmitToolOutput: params.shouldEmitToolOutput,
         onToolResult: params.onToolResult,

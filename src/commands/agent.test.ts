@@ -415,6 +415,18 @@ describe("agentCommand", () => {
     });
   });
 
+  it("forwards reasoning level override to embedded runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      await agentCommand({ message: "hi", to: "+1222", reasoningLevel: "stream" }, runtime);
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.reasoningLevel).toBe("stream");
+    });
+  });
+
   it("resumes when session-id is provided", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
