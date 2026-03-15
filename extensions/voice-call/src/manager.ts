@@ -281,6 +281,17 @@ export class CallManager {
       return;
     }
 
+    // Streaming mode: the initial message is spoken via the media stream's
+    // onConnect callback once the WebSocket connects.  The "answered" status
+    // callback arrives *before* the media stream is established, so
+    // callStreamMap has no entry yet and playTts() falls through to the
+    // TwiML <Say> fallback.  That Calls REST API update overwrites the
+    // <Connect><Stream> TwiML Twilio is currently executing, tearing down
+    // the media stream connection ~1 s after it starts.
+    if (this.config.streaming.enabled) {
+      return;
+    }
+
     void this.speakInitialMessage(call.providerCallId);
   }
 
