@@ -145,7 +145,19 @@ function resolveAdapterCapabilities(
   };
 }
 
-const ADAPTERS_BY_CHANNEL_ACCOUNT = new Map<string, SessionBindingAdapter>();
+// Use globalThis to share the adapter registry across module-loading boundaries
+// (built dist/ chunks and jiti-loaded extension source may each load this module
+// independently, resulting in separate module-level Maps).
+const GLOBAL_ADAPTERS_KEY = "__openclaw_session_binding_adapters__";
+const ADAPTERS_BY_CHANNEL_ACCOUNT: Map<string, SessionBindingAdapter> =
+  ((globalThis as Record<string, unknown>)[GLOBAL_ADAPTERS_KEY] as
+    | Map<string, SessionBindingAdapter>
+    | undefined) ??
+  (() => {
+    const map = new Map<string, SessionBindingAdapter>();
+    (globalThis as Record<string, unknown>)[GLOBAL_ADAPTERS_KEY] = map;
+    return map;
+  })();
 
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
   const normalizedAdapter = {

@@ -40,6 +40,7 @@ import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { parseDiscordParentChannelFromSessionKey } from "./discord-parent-channel.js";
+import { resolveFeishuConversationId } from "./feishu-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import {
@@ -104,6 +105,31 @@ function resolveAcpResetBindingContext(ctx: MsgContext): {
     }
     if (!conversationId) {
       return null;
+    }
+    return {
+      channel: channelRaw,
+      accountId,
+      conversationId,
+      ...(parentConversationId ? { parentConversationId } : {}),
+    };
+  }
+
+  if (channelRaw === "feishu") {
+    const conversationId = resolveFeishuConversationId({
+      ctx: {
+        MessageThreadId: normalizedThreadId || undefined,
+        ChatType: ctx.ChatType || undefined,
+        OriginatingTo: ctx.OriginatingTo || undefined,
+        To: ctx.To || undefined,
+      },
+      command: {},
+    });
+    if (!conversationId) {
+      return null;
+    }
+    let parentConversationId: string | undefined;
+    if (normalizedThreadId && conversationId.includes(":topic:")) {
+      parentConversationId = conversationId.split(":topic:")[0];
     }
     return {
       channel: channelRaw,

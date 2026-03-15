@@ -144,6 +144,8 @@ export function spawnWithResolvedCommand(
     params.stripProviderAuthEnvVars ? listKnownProviderAuthEnvVarNames() : [],
   );
   childEnv.OPENCLAW_SHELL = "acp";
+  // Strip CLAUDECODE env var so spawned ACP processes don't inherit it.
+  delete childEnv.CLAUDECODE;
 
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,

@@ -81,6 +81,12 @@ export type ReplyDispatcher = {
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
+  /** When true, ACP dispatch promotes block payloads to finals so they
+   *  reach the user through the channel's normal final-reply path instead
+   *  of being dropped by a block-suppression filter. Channels that handle
+   *  block payloads natively (e.g. Discord draft streams) should leave this
+   *  unset (defaults to false). */
+  promoteAcpBlocksToFinals?: boolean;
 };
 
 type NormalizeReplyPayloadInternalOptions = Pick<
