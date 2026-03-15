@@ -5,6 +5,16 @@ import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { hasArchiveSuffix } from "../config/sessions/artifacts.js";
+
+/**
+ * Returns true for `.reset` and `.deleted` archive files, but NOT `.bak` files.
+ * Compaction `.bak` files overlap with the rewritten active `.jsonl` and must be
+ * excluded to avoid double-counting cost/usage.
+ */
+function isCostRelevantArchive(fileName: string): boolean {
+  return hasArchiveSuffix(fileName, "reset") || hasArchiveSuffix(fileName, "deleted");
+}
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
@@ -164,7 +174,9 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
 };
 
 const formatDayKey = (date: Date): string =>
-  date.toLocaleDateString("en-CA", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+  date.toLocaleDateString("en-CA", {
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
 
 const computeLatencyStats = (values: number[]): SessionLatencyStats | undefined => {
   if (!values.length) {
@@ -216,7 +228,10 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
 
 async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
   const fileStream = fs.createReadStream(filePath, { encoding: "utf-8" });
-  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+  const rl = readline.createInterface({
+    input: fileStream,
+    crlfDelay: Infinity,
+  });
   try {
     for await (const line of rl) {
       const trimmed = line.trim();
@@ -318,7 +333,10 @@ export async function loadCostUsageSummary(params?: {
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .filter(
+          (entry) =>
+            entry.isFile() && (entry.name.endsWith(".jsonl") || isCostRelevantArchive(entry.name)),
+        )
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);

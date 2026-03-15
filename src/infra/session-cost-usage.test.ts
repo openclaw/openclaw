@@ -211,6 +211,167 @@ describe("session cost usage", () => {
     expect(summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.2");
   });
 
+  it("includes archived .jsonl.reset.* files in cost summary", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-archive-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const now = new Date();
+    const entry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 10,
+          output: 10,
+          totalTokens: 20,
+          cost: { total: 0.05 },
+        },
+      },
+    };
+
+    // Active session file
+    const activeFile = path.join(sessionsDir, "sess-active.jsonl");
+    await fs.writeFile(activeFile, JSON.stringify(entry), "utf-8");
+
+    // Archived session file (created by /new or /reset)
+    const archiveFile = path.join(sessionsDir, "sess-old.jsonl.reset.2026-03-14T20-28-29.627Z");
+    await fs.writeFile(archiveFile, JSON.stringify(entry), "utf-8");
+
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.2",
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      // Both files should be included: 20 + 20 = 40 tokens, $0.05 + $0.05 = $0.10
+      expect(summary.totals.totalTokens).toBe(40);
+      expect(summary.totals.totalCost).toBeCloseTo(0.1, 5);
+    });
+  });
+
+  it("includes archived .jsonl.deleted.* files in cost summary", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-deleted-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const now = new Date();
+    const entry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 10,
+          output: 10,
+          totalTokens: 20,
+          cost: { total: 0.05 },
+        },
+      },
+    };
+
+    // Active session file
+    const activeFile = path.join(sessionsDir, "sess-active.jsonl");
+    await fs.writeFile(activeFile, JSON.stringify(entry), "utf-8");
+
+    // Deleted session archive
+    const deletedFile = path.join(
+      sessionsDir,
+      "sess-removed.jsonl.deleted.2026-03-14T20-28-29.627Z",
+    );
+    await fs.writeFile(deletedFile, JSON.stringify(entry), "utf-8");
+
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.2",
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.totals.totalTokens).toBe(40);
+      expect(summary.totals.totalCost).toBeCloseTo(0.1, 5);
+    });
+  });
+
+  it("excludes .jsonl.bak.* compaction archives from cost summary", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-bak-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const now = new Date();
+    const entry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 10,
+          output: 10,
+          totalTokens: 20,
+          cost: { total: 0.05 },
+        },
+      },
+    };
+
+    // Active session file (compacted, only recent data)
+    const activeFile = path.join(sessionsDir, "sess-compacted.jsonl");
+    await fs.writeFile(activeFile, JSON.stringify(entry), "utf-8");
+
+    // Bak archive (full pre-compaction transcript — overlaps with active)
+    const bakFile = path.join(sessionsDir, "sess-compacted.jsonl.bak.2026-03-14T20-28-29.627Z");
+    await fs.writeFile(bakFile, JSON.stringify(entry), "utf-8");
+
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.2",
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      // Only the active file should be counted, not the bak archive
+      expect(summary.totals.totalTokens).toBe(20);
+      expect(summary.totals.totalCost).toBeCloseTo(0.05, 5);
+    });
+  });
+
   it("does not exclude sessions with mtime after endMs during discovery", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -289,7 +450,12 @@ describe("session cost usage", () => {
             role: "assistant",
             provider: "openai",
             model: "gpt-5.2",
-            usage: { input: 5, output: 3, totalTokens: 8, cost: { total: 0.001 } },
+            usage: {
+              input: 5,
+              output: 3,
+              totalTokens: 8,
+              cost: { total: 0.001 },
+            },
           },
         }),
       ].join("\n"),
