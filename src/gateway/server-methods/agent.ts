@@ -257,6 +257,21 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    if (
+      allowInterSessionSentinel &&
+      isInterSessionChannel(request.replyChannel) &&
+      !isInterSessionChannel(request.channel)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          'invalid agent params: replyChannel cannot use "inter_session" without channel',
+        ),
+      );
+      return;
+    }
 
     const agentIdRaw = typeof request.agentId === "string" ? request.agentId.trim() : "";
     const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
