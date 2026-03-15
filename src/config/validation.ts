@@ -157,6 +157,21 @@ function quoteIssueKeys(keys: string[]): string {
   return keys.map((key) => `"${key}"`).join(", ");
 }
 
+function getRemainingUnrecognizedKeys(keys: string[], handledKeys: string[]): string[] {
+  if (handledKeys.length === 0) {
+    return keys;
+  }
+  const handled = new Set(handledKeys);
+  return keys.filter((key) => !handled.has(key));
+}
+
+function formatRemainingUnrecognizedKeysSuffix(keys: string[]): string {
+  if (keys.length === 0) {
+    return "";
+  }
+  return ` Also remove unsupported ${keys.length === 1 ? "key" : "keys"} ${quoteIssueKeys(keys)}.`;
+}
+
 function resolveCustomConfigIssueForUnrecognizedKeys(
   record: UnknownIssueRecord | null,
   pathSegments: ConfigPathSegment[],
@@ -180,11 +195,13 @@ function resolveCustomConfigIssueForUnrecognizedKeys(
   if (isAgentsListSubagentsPath) {
     const aliasKeys = keys.filter((key) => SUBAGENT_ALLOW_ALIAS_KEYS.has(key));
     if (aliasKeys.length > 0) {
+      const remainingKeys = getRemainingUnrecognizedKeys(keys, aliasKeys);
       return {
-        path: aliasKeys.length === 1 ? `${path}.${aliasKeys[0]}` : path,
+        path: aliasKeys.length === 1 && remainingKeys.length === 0 ? `${path}.${aliasKeys[0]}` : path,
         message:
           `Use agents.list[].subagents.allowAgents to allow target agent ids ("*" allows any). ` +
-          `${quoteIssueKeys(aliasKeys)} ${aliasKeys.length === 1 ? "is" : "are"} not valid under subagents.`,
+          `${quoteIssueKeys(aliasKeys)} ${aliasKeys.length === 1 ? "is" : "are"} not valid under subagents.` +
+          formatRemainingUnrecognizedKeysSuffix(remainingKeys),
       };
     }
   }
@@ -199,12 +216,17 @@ function resolveCustomConfigIssueForUnrecognizedKeys(
       (key) => key === "allowAgents" || SUBAGENT_ALLOW_ALIAS_KEYS.has(key),
     );
     if (misplacedAllowKeys.length > 0) {
+      const remainingKeys = getRemainingUnrecognizedKeys(keys, misplacedAllowKeys);
       return {
-        path: misplacedAllowKeys.length === 1 ? `${path}.${misplacedAllowKeys[0]}` : path,
+        path:
+          misplacedAllowKeys.length === 1 && remainingKeys.length === 0
+            ? `${path}.${misplacedAllowKeys[0]}`
+            : path,
         message:
           "agents.defaults.subagents does not accept per-agent target allowlists. " +
           "Put allowAgents on each caller agent under agents.list[].subagents.allowAgents. " +
-          "defaults.subagents is only for spawned-agent defaults like model, thinking, depth/concurrency, and timeout/archive settings.",
+          "defaults.subagents is only for spawned-agent defaults like model, thinking, depth/concurrency, and timeout/archive settings." +
+          formatRemainingUnrecognizedKeysSuffix(remainingKeys),
       };
     }
   }
@@ -214,11 +236,13 @@ function resolveCustomConfigIssueForUnrecognizedKeys(
   if (isAgentsDefaultsPath) {
     const entryOnlyKeys = keys.filter((key) => AGENT_DEFAULTS_ENTRY_ONLY_KEYS.has(key));
     if (entryOnlyKeys.length > 0) {
+      const remainingKeys = getRemainingUnrecognizedKeys(keys, entryOnlyKeys);
       return {
         path,
         message:
           `agents.defaults is for shared defaults only; received unsupported per-agent keys ${quoteIssueKeys(entryOnlyKeys)}. ` +
-          "Move per-agent fields into agents.list[] entries, and configure tool policy at top-level tools.*.",
+          "Move per-agent fields into agents.list[] entries, and configure tool policy at top-level tools.*." +
+          formatRemainingUnrecognizedKeysSuffix(remainingKeys),
       };
     }
   }

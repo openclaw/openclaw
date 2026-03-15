@@ -243,6 +243,23 @@ describe("config schema regressions", () => {
     }
   });
 
+  it("reports invalid subagent aliases and other unsupported keys in one pass", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [{ id: "main", subagents: { allow: ["*"], someBadField: true } }],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("agents.list.0.subagents");
+      expect(res.issues[0]?.message).toContain("allowAgents");
+      expect(res.issues[0]?.message).toContain('"allow"');
+      expect(res.issues[0]?.message).toContain('"someBadField"');
+      expect(res.issues[0]?.message).toContain("unsupported key");
+    }
+  });
+
   it.each([
     { key: "allowAgents", expectedPath: "agents.defaults.subagents.allowAgents" },
     { key: "allowlist", expectedPath: "agents.defaults.subagents.allowlist" },
@@ -276,7 +293,9 @@ describe("config schema regressions", () => {
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("agents.defaults");
       expect(res.issues[0]?.message).toContain("shared defaults only");
-      expect(res.issues[0]?.message).toContain('"id", "name", "tools"');
+      expect(res.issues[0]?.message).toContain('"id"');
+      expect(res.issues[0]?.message).toContain('"name"');
+      expect(res.issues[0]?.message).toContain('"tools"');
       expect(res.issues[0]?.message).toContain("agents.list[]");
       expect(res.issues[0]?.message).toContain("top-level tools.*");
     }
