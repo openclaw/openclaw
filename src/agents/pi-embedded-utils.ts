@@ -10,6 +10,30 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
 }
 
 /**
+ * Strip raw `<tool_call>` / `<tool_result>` XML blocks that some models
+ * emit as plain text instead of structured tool-use events.
+ * Without this, the markup leaks into user-facing channel messages
+ * (Discord, Telegram, etc.).
+ */
+export function stripToolCallXml(text: string): string {
+  if (!text) {
+    return text;
+  }
+  if (!/<\/?tool_(?:call|result)/i.test(text)) {
+    return text;
+  }
+
+  // Remove <tool_call ...>...</tool_call> and <tool_result ...>...</tool_result> blocks.
+  let cleaned = text.replace(/<tool_call\b[^>]*>[\s\S]*?<\/tool_call>/gi, "");
+  cleaned = cleaned.replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, "");
+
+  // Remove stray opening/closing tags left behind.
+  cleaned = cleaned.replace(/<\/?tool_(?:call|result)\b[^>]*>/gi, "");
+
+  return cleaned;
+}
+
+/**
  * Strip malformed Minimax tool invocations that leak into text content.
  * Minimax sometimes embeds tool calls as XML in text blocks instead of
  * proper structured tool calls. This removes:
@@ -238,7 +262,9 @@ export function extractAssistantText(msg: AssistantMessage): string {
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+          stripDowngradedToolCallText(
+            stripToolCallXml(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+          ),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
