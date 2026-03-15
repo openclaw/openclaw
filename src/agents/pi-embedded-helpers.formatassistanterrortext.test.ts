@@ -108,6 +108,19 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("API provider");
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
+  it("returns a friendly message for connection errors", () => {
+    const msg = makeAssistantError("Connection error.");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service encountered a connection error. Please try again in a moment.",
+    );
+  });
+  it("returns a friendly message for APIConnectionError", () => {
+    const msg = makeAssistantError("APIConnectionError: Connection error.");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service encountered a connection error. Please try again in a moment.",
+    );
+  });
+
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
