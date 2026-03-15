@@ -71,6 +71,16 @@ export function registerPluginHttpRoute(params: {
       `plugin: replacing stale webhook path ${normalizedPath} (${routeMatch})${suffix}${pluginHint}`,
     );
     routes.splice(existingIndex, 1);
+    // Also remove from the process-level bridge so stale handlers don't shadow replacements.
+    const sharedArr = (
+      process as NodeJS.Process & { __openclawPluginHttpRoutes?: PluginHttpRouteRegistration[] }
+    ).__openclawPluginHttpRoutes;
+    if (sharedArr) {
+      const sharedIdx = sharedArr.indexOf(existing);
+      if (sharedIdx >= 0) {
+        sharedArr.splice(sharedIdx, 1);
+      }
+    }
   }
 
   const entry: PluginHttpRouteRegistration = {
@@ -83,10 +93,21 @@ export function registerPluginHttpRoute(params: {
   };
   routes.push(entry);
 
+  // Bridge routes via process so they remain visible across jiti VM contexts
+  // where globalThis (and therefore the plugin registry singleton) may differ.
+  const shared = ((
+    process as NodeJS.Process & { __openclawPluginHttpRoutes?: PluginHttpRouteRegistration[] }
+  ).__openclawPluginHttpRoutes ??= []);
+  shared.push(entry);
+
   return () => {
     const index = routes.indexOf(entry);
     if (index >= 0) {
       routes.splice(index, 1);
+    }
+    const sharedIndex = shared.indexOf(entry);
+    if (sharedIndex >= 0) {
+      shared.splice(sharedIndex, 1);
     }
   };
 }
