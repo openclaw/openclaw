@@ -9,6 +9,7 @@ describe("bash-tools exec restart notify", () => {
   it("detects direct openclaw gateway restart commands", () => {
     expect(isOpenClawGatewayRestartCommand("openclaw gateway restart")).toBe(true);
     expect(isOpenClawGatewayRestartCommand("openclaw --profile prod gateway restart")).toBe(true);
+    expect(isOpenClawGatewayRestartCommand("openclaw.cmd gateway restart")).toBe(true);
     expect(isOpenClawGatewayRestartCommand("openclaw gateway status")).toBe(false);
     expect(isOpenClawGatewayRestartCommand("echo hi && openclaw gateway restart")).toBe(false);
   });
@@ -40,5 +41,18 @@ describe("bash-tools exec restart notify", () => {
     expect(env.OPENCLAW_RESTART_NOTIFY_CHANNEL).toBe("slack");
     expect(env.OPENCLAW_RESTART_NOTIFY_TO).toBe("user:U123");
     expect(env.OPENCLAW_RESTART_NOTIFY_ACCOUNT_ID).toBe("workspace-1");
+  });
+
+  it("does not infer thread ids from direct session keys that contain :thread:", () => {
+    const env: Record<string, string> = {};
+
+    applyExecRestartNotifyEnv({
+      command: "openclaw gateway restart",
+      env,
+      sessionKey: "agent:main:telegram:dm:user:thread:abc",
+    });
+
+    expect(env.OPENCLAW_RESTART_NOTIFY_TO).toBe("user:thread:abc");
+    expect(env.OPENCLAW_RESTART_NOTIFY_THREAD_ID).toBeUndefined();
   });
 });

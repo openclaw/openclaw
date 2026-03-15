@@ -175,10 +175,10 @@ describe("runServiceRestart token drift", () => {
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });
 
-  it("invokes the restart completion hook before a successful direct restart", async () => {
+  it("invokes the before-restart hook before a successful direct restart", async () => {
     const events: string[] = [];
-    const onRestartComplete = vi.fn(async () => {
-      events.push("hook");
+    const onBeforeRestart = vi.fn(async () => {
+      events.push("before");
     });
     service.restart.mockImplementation(async (...args) => {
       void args;
@@ -188,11 +188,11 @@ describe("runServiceRestart token drift", () => {
 
     await runServiceRestart({
       ...createServiceRunArgs(true),
-      onRestartComplete,
+      onBeforeRestart,
     });
 
-    expect(onRestartComplete).toHaveBeenCalledTimes(1);
-    expect(events.slice(0, 2)).toEqual(["hook", "restart"]);
+    expect(onBeforeRestart).toHaveBeenCalledTimes(1);
+    expect(events.slice(0, 2)).toEqual(["before", "restart"]);
   });
 
   it("invokes the restart completion hook for scheduled restarts", async () => {
@@ -205,6 +205,23 @@ describe("runServiceRestart token drift", () => {
     });
 
     expect(onRestartComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("invokes the restart-failed hook when a prepared direct restart throws", async () => {
+    const onBeforeRestart = vi.fn();
+    const onRestartFailed = vi.fn();
+    service.restart.mockRejectedValue(new Error("boom"));
+
+    await expect(
+      runServiceRestart({
+        ...createServiceRunArgs(),
+        onBeforeRestart,
+        onRestartFailed,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(onBeforeRestart).toHaveBeenCalledTimes(1);
+    expect(onRestartFailed).toHaveBeenCalledTimes(1);
   });
 
   it("emits scheduled when service start routes through a scheduled restart", async () => {

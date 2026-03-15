@@ -4,7 +4,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { writeRestartSentinelFromEnvIfPresent } from "./restart-notify.js";
+import {
+  clearRestartSentinelFromEnvIfPresent,
+  writeRestartSentinelFromEnvIfPresent,
+} from "./restart-notify.js";
 
 describe("writeRestartSentinelFromEnvIfPresent", () => {
   it("writes a restart sentinel when restart notify env is present", async () => {
@@ -27,6 +30,29 @@ describe("writeRestartSentinelFromEnvIfPresent", () => {
             to: "user:ou_123",
           });
           expect(sentinel?.payload.message).toBe("restart finished");
+        },
+      );
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears a restart sentinel when restart notify env is present", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-notify-clear-"));
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_RESTART_NOTIFY_SESSION_KEY: "agent:main:feishu:direct:ou_123",
+        },
+        async () => {
+          await fs.writeFile(
+            path.join(stateDir, "restart-sentinel.json"),
+            JSON.stringify({ version: 1, payload: { kind: "restart", status: "ok", ts: 1 } }),
+            "utf-8",
+          );
+          await expect(clearRestartSentinelFromEnvIfPresent(process.env)).resolves.toBe(true);
+          await expect(readRestartSentinel(process.env)).resolves.toBeNull();
         },
       );
     } finally {

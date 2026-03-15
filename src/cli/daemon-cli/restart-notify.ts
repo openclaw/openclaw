@@ -1,6 +1,8 @@
+import fs from "node:fs/promises";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
+  resolveRestartSentinelPath,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 
@@ -40,6 +42,22 @@ export async function writeRestartSentinelFromEnvIfPresent(
 
   try {
     await writeRestartSentinel(payload, env);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function clearRestartSentinelFromEnvIfPresent(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const sessionKey = env.OPENCLAW_RESTART_NOTIFY_SESSION_KEY?.trim();
+  if (!sessionKey) {
+    return false;
+  }
+
+  try {
+    await fs.rm(resolveRestartSentinelPath(env), { force: true });
     return true;
   } catch {
     return false;

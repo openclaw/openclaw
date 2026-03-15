@@ -10,12 +10,21 @@ function isTopLevelOpenClawOption(arg: string): boolean {
   return arg === "--profile" || arg === "-p" || arg === "--config" || arg === "-c";
 }
 
+function isDirectSessionKey(sessionKey: string): boolean {
+  const rawParts = sessionKey.split(":").filter(Boolean);
+  const parts = rawParts.length >= 3 && rawParts[0] === "agent" ? rawParts.slice(2) : rawParts;
+  return parts[1] === "direct" || parts[1] === "dm" || parts[2] === "direct" || parts[2] === "dm";
+}
+
 export function isOpenClawGatewayRestartCommand(command: string): boolean {
   const argv = splitShellArgs(command);
   if (!argv || argv.length < 3) {
     return false;
   }
-  const binary = path.basename(argv[0]);
+  const binary = path
+    .basename(argv[0])
+    .toLowerCase()
+    .replace(/\.(cmd|exe|bat|ps1)$/i, "");
   if (binary !== "openclaw") {
     return false;
   }
@@ -40,7 +49,9 @@ export function applyExecRestartNotifyEnv(params: {
   const notifyChannel = deliveryContext?.channel ?? fallbackTarget?.channel;
   const notifyTo = deliveryContext?.to ?? fallbackTarget?.to;
   const notifyAccountId = deliveryContext?.accountId ?? fallbackTarget?.accountId;
-  const notifyThreadId = threadId ?? fallbackTarget?.threadId;
+  const notifyThreadId = isDirectSessionKey(params.sessionKey)
+    ? undefined
+    : (threadId ?? fallbackTarget?.threadId);
 
   params.env.OPENCLAW_RESTART_NOTIFY_SESSION_KEY = params.sessionKey;
   if (notifyChannel) {
