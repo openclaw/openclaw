@@ -449,7 +449,10 @@ export async function monitorWebInbox(options: {
       const group = isJidGroup(remoteJid) === true;
       const reactorJid = userJid ?? key?.participant ?? (group ? undefined : remoteJid);
       const senderE164 = reactorJid ? await resolveInboundJid(reactorJid) : null;
-      const from = group ? remoteJid : (senderE164 ?? reactorJid ?? remoteJid);
+      // In DMs, `from` must represent the conversation peer (remoteJid), not the reactor.
+      // Using reactorJid here would make self-reactions appear as isSamePhone and leak to onMessage.
+      // This matches how normalizeInboundMessage derives `from` for regular messages.
+      const from = group ? remoteJid : (await resolveInboundJid(remoteJid) ?? remoteJid);
       if (!from) continue;
 
       // Deduplicate reaction events (e.g. reconnect re-delivery).
