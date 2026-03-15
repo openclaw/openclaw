@@ -468,5 +468,40 @@ describe("applyPluginAutoEnable", () => {
       expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.apn).toBeUndefined();
     });
+
+    it("does not auto-enable built-in feishu when third-party openclaw-lark is already enabled", () => {
+      // This is the regression test for issue #44722:
+      // When openclaw-lark (third-party plugin) is explicitly enabled for the feishu channel,
+      // doctor --fix should NOT auto-enable the built-in feishu plugin.
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { feishu: { appId: "test-app-id", appSecret: "test-secret" } },
+          plugins: { entries: { "openclaw-lark": { enabled: true } } },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([{ id: "openclaw-lark", channels: ["feishu"] }]),
+      });
+
+      // The built-in feishu channel should NOT be auto-enabled
+      expect(result.config.channels?.feishu?.enabled).toBeUndefined();
+      // No changes should be made since openclaw-lark is already handling it
+      expect(result.changes).toHaveLength(0);
+    });
+
+    it("auto-enables built-in feishu when no third-party plugin is handling it", () => {
+      // When no third-party plugin is enabled, doctor --fix should auto-enable built-in feishu
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { feishu: { appId: "test-app-id", appSecret: "test-secret" } },
+        },
+        env: {},
+        // Include built-in feishu in the registry
+        manifestRegistry: makeRegistry([{ id: "feishu", channels: ["feishu"] }]),
+      });
+
+      // The built-in feishu plugin should be auto-enabled
+      expect(result.config.plugins?.entries?.feishu?.enabled).toBe(true);
+      expect(result.changes.join("\n")).toContain("feishu configured, enabled automatically.");
+    });
   });
 });
