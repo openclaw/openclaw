@@ -1636,6 +1636,12 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
+      resemble: {
+        apiKey: "resemble_api_key", // pragma: allowlist secret
+        voiceUuid: "voice_uuid",
+        sampleRate: 22050,
+        outputFormat: "mp3",
+      },
     },
   },
 }
@@ -1644,7 +1650,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 - `auto` controls auto-TTS. `/tts off|always|inbound|tagged` overrides per session.
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
 - `modelOverrides` is enabled by default; `modelOverrides.allowProvider` defaults to `false` (opt-in).
-- API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+- API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`, and `RESEMBLE_API_KEY`.
 - `openai.baseUrl` overrides the OpenAI TTS endpoint. Resolution order is config, then `OPENAI_TTS_BASE_URL`, then `https://api.openai.com/v1`.
 - When `openai.baseUrl` points to a non-OpenAI endpoint, OpenClaw treats it as an OpenAI-compatible TTS server and relaxes model/voice validation.
 

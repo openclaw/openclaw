@@ -696,6 +696,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.inbound.debounceMs": "Inbound Message Debounce (ms)",
   "messages.inbound.byChannel": "Inbound Debounce by Channel (ms)",
   "messages.tts": "Message Text-to-Speech",
+  "messages.tts.resemble": "Resemble",
+  "messages.tts.resemble.apiKey": "Resemble API Key", // pragma: allowlist secret
+  "messages.tts.resemble.voiceUuid": "Resemble Voice UUID",
+  "messages.tts.resemble.sampleRate": "Resemble Sample Rate",
+  "messages.tts.resemble.outputFormat": "Resemble Output Format",
   "talk.provider": "Talk Active Provider",
   "talk.providers": "Talk Provider Settings",
   "talk.providers.*.voiceId": "Talk Provider Voice ID",

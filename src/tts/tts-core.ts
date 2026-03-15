@@ -722,3 +722,47 @@ export async function edgeTTS(params: {
     throw new Error("Edge TTS produced empty audio file");
   }
 }
+
+export async function resembleTTS(params: {
+  text: string;
+  apiKey: string;
+  voiceUuid: string;
+  sampleRate: number;
+  outputFormat: "wav" | "mp3";
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, voiceUuid, sampleRate, outputFormat, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch("https://f.cluster.resemble.ai/synthesize", {
+      method: "POST",
+      headers: {
+        Authorization: apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        voice_uuid: voiceUuid,
+        data: text,
+        sample_rate: sampleRate,
+        output_format: outputFormat,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Resemble API error (${response.status})`);
+    }
+
+    const result = (await response.json()) as { success: boolean; audio_content?: string };
+    if (!result.success || !result.audio_content) {
+      throw new Error("Resemble synthesis failed");
+    }
+
+    return Buffer.from(result.audio_content, "base64");
+  } finally {
+    clearTimeout(timeout);
+  }
+}

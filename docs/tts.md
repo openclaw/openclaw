@@ -9,12 +9,13 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, Resemble AI, or Edge TTS.
 It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
+- **Resemble AI** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
 
