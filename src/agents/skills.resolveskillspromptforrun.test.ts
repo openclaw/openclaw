@@ -32,13 +32,13 @@ describe("resolveSkillsPromptForRun", () => {
     expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
   });
 
-  it("rewrites snapshot skill paths for sandbox when resolvedSkills available", () => {
+  it("rewrites snapshot skill paths for sandbox via string replacement", () => {
     const resolvedSkills: Skill[] = [
       {
         name: "github",
         description: "GitHub integration",
-        filePath: "/home/user/.npm-global/lib/node_modules/openclaw/skills/github/SKILL.md",
-        baseDir: "/home/user/.npm-global/lib/node_modules/openclaw/skills/github",
+        filePath: "/opt/openclaw/skills/github/SKILL.md",
+        baseDir: "/opt/openclaw/skills/github",
         source: "openclaw-bundled",
         disableModelInvocation: false,
       },
@@ -46,7 +46,7 @@ describe("resolveSkillsPromptForRun", () => {
     const prompt = resolveSkillsPromptForRun({
       skillsSnapshot: {
         prompt:
-          "<available_skills><location>~/.npm-global/lib/node_modules/openclaw/skills/github/SKILL.md</location></available_skills>",
+          "<available_skills>\n  <skill>\n    <name>github</name>\n    <description>GitHub integration</description>\n    <location>/opt/openclaw/skills/github/SKILL.md</location>\n  </skill>\n</available_skills>",
         skills: [{ name: "github" }],
         resolvedSkills,
       },
@@ -54,7 +54,48 @@ describe("resolveSkillsPromptForRun", () => {
       sandboxSkillsDir: "/workspace/skills",
     });
     expect(prompt).toContain("/workspace/skills/github/SKILL.md");
-    expect(prompt).not.toContain(".npm-global");
+    expect(prompt).not.toContain("/opt/openclaw");
+    // Verify snapshot structure is preserved (not rebuilt)
+    expect(prompt).toContain("<name>github</name>");
+  });
+
+  it("preserves snapshot truncation when rewriting sandbox paths", () => {
+    // Snapshot prompt only contains skill-a (skill-b was truncated)
+    const resolvedSkills: Skill[] = [
+      {
+        name: "skill-a",
+        description: "A",
+        filePath: "/opt/skills/skill-a/SKILL.md",
+        baseDir: "/opt/skills/skill-a",
+        source: "openclaw-bundled",
+        disableModelInvocation: false,
+      },
+      {
+        name: "skill-b",
+        description: "B",
+        filePath: "/opt/skills/skill-b/SKILL.md",
+        baseDir: "/opt/skills/skill-b",
+        source: "openclaw-bundled",
+        disableModelInvocation: false,
+      },
+    ];
+    const truncatedPrompt =
+      "⚠️ Skills truncated\n<available_skills>\n  <skill>\n    <name>skill-a</name>\n    <location>/opt/skills/skill-a/SKILL.md</location>\n  </skill>\n</available_skills>";
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: {
+        prompt: truncatedPrompt,
+        skills: [{ name: "skill-a" }],
+        resolvedSkills,
+      },
+      workspaceDir: "/tmp/openclaw",
+      sandboxSkillsDir: "/workspace/skills",
+    });
+    // skill-a path rewritten
+    expect(prompt).toContain("/workspace/skills/skill-a/SKILL.md");
+    // skill-b NOT added back (truncation preserved)
+    expect(prompt).not.toContain("skill-b");
+    // Truncation warning preserved
+    expect(prompt).toContain("⚠️ Skills truncated");
   });
 
   it("falls back to snapshot prompt when no resolvedSkills for sandbox", () => {

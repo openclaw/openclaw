@@ -78,6 +78,34 @@ export function rewriteSkillPathsForSandbox(skills: Skill[], sandboxSkillsDir: s
   });
 }
 
+/**
+ * Rewrite skill `<location>` paths in a pre-rendered snapshot prompt string
+ * so they point to the sandbox workspace copy.  Unlike rebuilding from
+ * {@link rewriteSkillPathsForSandbox} + {@link formatSkillsForPrompt}, this
+ * preserves the snapshot's truncation limits, ordering, and metadata notes.
+ */
+function rewriteSnapshotPromptForSandbox(
+  prompt: string,
+  resolvedSkills: Skill[],
+  sandboxSkillsDir: string,
+): string {
+  let result = prompt;
+  const home = os.homedir();
+  for (const skill of resolvedSkills) {
+    const dirName = path.basename(skill.baseDir);
+    const fileName = path.basename(skill.filePath);
+    const sandboxPath = path.posix.join(sandboxSkillsDir, dirName, fileName);
+    // Replace original host path
+    result = result.replaceAll(skill.filePath, sandboxPath);
+    // Replace compacted ~/... version (produced by compactSkillPaths)
+    if (home && skill.filePath.startsWith(home)) {
+      const compacted = "~" + skill.filePath.slice(home.length);
+      result = result.replaceAll(compacted, sandboxPath);
+    }
+  }
+  return result;
+}
+
 function debugSkillCommandOnce(
   messageKey: string,
   message: string,
@@ -678,14 +706,11 @@ export function resolveSkillsPromptForRun(params: {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
     if (params.sandboxSkillsDir && params.skillsSnapshot?.resolvedSkills?.length) {
-      const rewritten = rewriteSkillPathsForSandbox(
+      return rewriteSnapshotPromptForSandbox(
+        snapshotPrompt,
         params.skillsSnapshot.resolvedSkills,
         params.sandboxSkillsDir,
       );
-      const rebuilt = formatSkillsForPrompt(rewritten);
-      if (rebuilt.trim()) {
-        return rebuilt;
-      }
     }
     return snapshotPrompt;
   }
