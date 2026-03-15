@@ -277,16 +277,19 @@ function Main {
     if (!(Ensure-ExecutionPolicy)) {
         Write-Host ""
         Write-Host "Installation cannot continue due to execution policy restrictions" -Level error
-        exit 1
+        $script:InstallFailed = $true
+        return
     }
     
     if (!(Ensure-Node)) {
-        exit 1
+        $script:InstallFailed = $true
+        return
     }
     
     if ($InstallMethod -eq "git") {
         if (!(Ensure-Git)) {
-            exit 1
+            $script:InstallFailed = $true
+            return
         }
         
         if ($DryRun) {
@@ -304,7 +307,8 @@ function Main {
             Write-Host "[DRY RUN] Would install OpenClaw via npm (tag: $Tag)" -Level info
         } else {
             if (!(Install-OpenClawNpm -Version $Tag)) {
-                exit 1
+                $script:InstallFailed = $true
+                return
             }
         }
     }
@@ -326,4 +330,16 @@ function Main {
     Write-Host "🦞 OpenClaw installed successfully!" -Level success
 }
 
+$script:InstallFailed = $false
 Main
+if ($script:InstallFailed) {
+    if ($PSCommandPath) {
+        # Running as a script file — exit sets the process exit code.
+        exit 1
+    }
+    # iwr|iex, scriptblock, or dot-sourced — throw terminates the pipeline
+    # with a non-zero exit in -Command mode and shows the error in interactive
+    # sessions without closing the host.
+    $global:LASTEXITCODE = 1
+    throw "OpenClaw installation failed. See errors above for details."
+}
