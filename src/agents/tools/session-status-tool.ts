@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
+import { supportsXHighThinking } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -34,6 +35,7 @@ import {
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "../model-selection.js";
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
@@ -366,6 +368,23 @@ export function createSessionStatusTool(opts?: {
 
       const agentDir = resolveAgentDir(cfg, agentId);
       const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
+      const modelForCard = resolved.entry.modelOverride?.trim() || configured.model;
+      let resolvedThinkForCard = resolved.entry.thinkingLevel;
+      if (!resolvedThinkForCard) {
+        const catalog = await loadModelCatalog({ config: cfg });
+        resolvedThinkForCard = resolveThinkingDefault({
+          cfg,
+          provider: providerForCard,
+          model: modelForCard,
+          catalog,
+        });
+      }
+      if (
+        resolvedThinkForCard === "xhigh" &&
+        !supportsXHighThinking(providerForCard, modelForCard)
+      ) {
+        resolvedThinkForCard = "high";
+      }
       const usageProvider = resolveUsageProviderId(providerForCard);
       let usageLine: string | undefined;
       if (usageProvider) {
@@ -435,6 +454,7 @@ export function createSessionStatusTool(opts?: {
         sessionKey: resolved.key,
         sessionStorePath: storePath,
         groupActivation,
+        resolvedThink: resolvedThinkForCard,
         modelAuth: resolveModelAuthLabel({
           provider: providerForCard,
           cfg,
