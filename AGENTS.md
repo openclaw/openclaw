@@ -155,6 +155,16 @@
 - PR submission template (canonical): `.github/pull_request_template.md`
 - Issue submission templates (canonical): `.github/ISSUE_TEMPLATE/`
 
+## AI-Assisted PRs
+
+- Follow `CONTRIBUTING.md` for the current AI-assisted PR expectations.
+- Mark the PR as AI-assisted in the PR title or description.
+- In the PR description, state the testing level truthfully (`untested`, `lightly tested`, or `fully tested`).
+- Confirm you understand the code you are submitting; do not present generated code as reviewed if you have not validated it.
+- Include prompts or session logs when practical.
+- If Codex is available, run `codex review --base origin/main` before opening or updating the PR and address the findings.
+- Resolve or reply to bot review conversations you addressed before asking for review again.
+
 ## Shorthand Commands
 
 - `sync`: if working tree is dirty, commit all changes (pick a sensible Conventional Commit message), then `git pull --rebase`; if rebase conflicts and cannot resolve, stop; otherwise `git push`.
