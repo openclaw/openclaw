@@ -290,7 +290,6 @@ async function retryTransientDirectCronDelivery<T>(params: {
 const RAW_ERROR_OUTPUT_PATTERNS: readonly RegExp[] = [
   /^\s*\{[\s\S]*"(?:type|error|code)":\s*"(?:error|server_error|invalid_request)/,
   /^\s*(?:Error|TypeError|RangeError|SyntaxError|ReferenceError):/,
-  /\b(?:error|Error)\b.*\b(?:status|code)\b.*\b(?:5\d{2}|4\d{2})\b/,
   /^\s*\{[\s\S]*"(?:message|error)":\s*"An error occurred/,
   /\berror"?:\s*\{[\s\S]*"(?:type|code)":\s*"(?:server_error|invalid_request|rate_limit)/,
 ];
@@ -319,43 +318,6 @@ export async function dispatchCronDelivery(
   let outputText = params.outputText;
   let synthesizedText = params.synthesizedText;
   let deliveryPayloads = params.deliveryPayloads;
-
-  // Guard: never deliver raw error output (provider JSON errors, runtime
-  // exceptions) to user-facing channels. The error is still logged internally
-  // and visible via `cron runs`, but should not be posted to channels.
-  //
-  // The delivery path prefers deliveryPayloads when non-empty, so we only
-  // suppress based on synthesizedText when there are no valid payloads that
-  // would take priority (e.g., media or structured content).  When payloads
-  // exist, we check whether ALL of them contain error text instead.
-  // See: https://github.com/openclaw/openclaw/issues/42243
-  const hasActivePayloads = deliveryPayloads.length > 0;
-  const errorInSynthesized =
-    !hasActivePayloads && synthesizedText && isLikelyRawErrorOutput(synthesizedText);
-  const errorInPayloads =
-    hasActivePayloads &&
-    deliveryPayloads.every((p) => typeof p.text === "string" && isLikelyRawErrorOutput(p.text));
-  if (errorInSynthesized || errorInPayloads) {
-    const source = errorInSynthesized ? "synthesizedText" : "deliveryPayloads";
-    const chars = errorInSynthesized
-      ? synthesizedText!.length
-      : deliveryPayloads.reduce((n, p) => n + (p.text?.length ?? 0), 0);
-    logWarn(
-      `[cron:${params.job.id}] suppressed announce delivery of raw error output (${source}, ${chars} chars)`,
-    );
-    // Preserve shared-delivery state: when skipMessagingToolDelivery is true,
-    // the agent already sent via the message tool — suppressing the error
-    // guard's announce delivery should not overwrite that existing delivery
-    // state in cron logs/metadata.
-    return {
-      delivered: skipMessagingToolDelivery,
-      deliveryAttempted: skipMessagingToolDelivery,
-      summary,
-      outputText,
-      synthesizedText,
-      deliveryPayloads,
-    };
-  }
 
   // Shared callers can treat a matching message-tool send as the completed
   // delivery path. Cron-owned callers keep this false so direct cron delivery
@@ -390,6 +352,19 @@ export async function dispatchCronDelivery(
             ? [{ text: synthesizedText }]
             : [];
       if (payloadsForDelivery.length === 0) {
+        return null;
+      }
+      // Guard: never deliver raw error output (provider JSON errors, runtime
+      // exceptions) to user-facing channels.  Runs AFTER subagent orchestration
+      // so interim error-shaped parent messages don't suppress valid final output.
+      // See: https://github.com/openclaw/openclaw/issues/42243
+      const allPayloadsAreErrors = payloadsForDelivery.every(
+        (p) => typeof p.text === "string" && isLikelyRawErrorOutput(p.text),
+      );
+      if (allPayloadsAreErrors) {
+        logWarn(
+          `[cron:${params.job.id}] suppressed delivery of raw error output (${payloadsForDelivery.length} payloads)`,
+        );
         return null;
       }
       if (params.isAborted()) {

@@ -149,9 +149,10 @@ describe("isLikelyRawErrorOutput", () => {
     expect(isLikelyRawErrorOutput(text)).toBe(true);
   });
 
-  it("detects HTTP status code error patterns", () => {
-    expect(isLikelyRawErrorOutput("error: status code 500 from upstream")).toBe(true);
-    expect(isLikelyRawErrorOutput("Error response with code 429 - rate limited")).toBe(true);
+  it("does not flag HTTP status code error patterns in prose", () => {
+    expect(isLikelyRawErrorOutput("error: status code 500 from upstream")).toBe(false);
+    expect(isLikelyRawErrorOutput("Error response with code 429 - rate limited")).toBe(false);
+    expect(isLikelyRawErrorOutput("Server returned error code 503")).toBe(false);
   });
 
   it("does not flag normal agent output", () => {
@@ -211,11 +212,10 @@ describe("dispatchCronDelivery — error output guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(state.delivered).toBe(false);
-    expect(state.deliveryAttempted).toBe(false);
     expect(state.result).toBeUndefined();
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(logWarn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressed announce delivery of raw error output"),
+      expect.stringContaining("suppressed delivery of raw error output"),
     );
   });
 
@@ -226,7 +226,6 @@ describe("dispatchCronDelivery — error output guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(state.delivered).toBe(false);
-    expect(state.deliveryAttempted).toBe(false);
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
@@ -248,17 +247,6 @@ describe("dispatchCronDelivery — error output guard", () => {
     expect(state.result).toBeUndefined();
   });
 
-  it("skips delivery for HTTP 500 error pattern in text", async () => {
-    const params = makeBaseParams({
-      synthesizedText: "error: status code 500 from model provider",
-    });
-    const state = await dispatchCronDelivery(params);
-
-    expect(state.delivered).toBe(false);
-    expect(state.deliveryAttempted).toBe(false);
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
   it("preserves summary and outputText in the returned state even when skipping", async () => {
     const errorText = "Error: ECONNREFUSED 127.0.0.1:18789";
     const params = makeBaseParams({ synthesizedText: errorText });
@@ -276,17 +264,17 @@ describe("dispatchCronDelivery — error output guard", () => {
       error: { type: "server_error", message: "fail" },
     });
     const params = makeBaseParams({ synthesizedText: undefined });
-    // Override deliveryPayloads directly with error text
+    // Override deliveryPayloads directly with error text and route through
+    // deliverViaDirect (structured content path) so the guard is reached.
     params.deliveryPayloads = [{ text: errorJson }];
+    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
     const state = await dispatchCronDelivery(params);
 
     expect(state.delivered).toBe(false);
-    expect(state.deliveryAttempted).toBe(false);
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(logWarn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressed announce delivery of raw error output"),
+      expect.stringContaining("suppressed delivery of raw error output"),
     );
-    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("deliveryPayloads"));
   });
 
   it("allows delivery when only some payloads match error patterns", async () => {
@@ -304,22 +292,6 @@ describe("dispatchCronDelivery — error output guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
-  it("guard fires even when delivery is not explicitly requested", async () => {
-    const errorJson = JSON.stringify({
-      type: "error",
-      error: { type: "server_error", message: "fail" },
-    });
-    const params = makeBaseParams({
-      synthesizedText: errorJson,
-      deliveryRequested: false,
-    });
-    const state = await dispatchCronDelivery(params);
-
-    expect(state.delivered).toBe(false);
-    expect(state.deliveryAttempted).toBe(false);
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
   it("allows delivery when synthesizedText has error but deliveryPayloads has valid content", async () => {
     const errorJson = JSON.stringify({
       type: "error",
@@ -334,22 +306,5 @@ describe("dispatchCronDelivery — error output guard", () => {
     // suppress delivery of non-error payload content.
     expect(state.delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves shared-delivery flags when skipMessagingToolDelivery is true", async () => {
-    const errorJson = JSON.stringify({
-      type: "error",
-      error: { type: "server_error", message: "fail" },
-    });
-    const params = makeBaseParams({ synthesizedText: errorJson });
-    // Simulate shared-delivery path: agent already sent via message tool
-    (params as Record<string, unknown>).skipMessagingToolDelivery = true;
-    const state = await dispatchCronDelivery(params);
-
-    // Error guard should suppress announce delivery but preserve the
-    // existing message-tool delivery state.
-    expect(state.delivered).toBe(true);
-    expect(state.deliveryAttempted).toBe(true);
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 });
