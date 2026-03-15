@@ -590,14 +590,13 @@ function collectTableAsBlock(state: RenderState) {
     return;
   }
 
-  // Record the offset where this table occurs in the text stream.
-  const placeholderOffset = state.text.length;
-
   // Ensure a blank line separates tables from surrounding text.
-  if (placeholderOffset > 0 && !state.text.endsWith("\n\n")) {
+  if (state.text.length > 0 && !state.text.endsWith("\n\n")) {
     state.text += state.text.endsWith("\n") ? "\n" : "\n\n";
   }
 
+  // Record the offset after separator adjustment so it reflects the
+  // actual position in the final text stream.
   state.collectedTables.push({
     headers: headers.map((c) => c.text),
     rows: rows.map((row) => row.map((c) => c.text)),
