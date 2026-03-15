@@ -113,6 +113,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
+    quoteBody?: string;
+    quoteId?: string;
+    quoteSender?: string;
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -215,6 +218,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: "signal" as const,
       OriginatingTo: signalTo,
+      ReplyToId: entry.quoteId,
+      ReplyToBody: entry.quoteBody,
+      ReplyToSender: entry.quoteSender,
     });
 
     await recordInboundSession({
@@ -796,6 +802,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
+      quoteBody: dataMessage.quote?.text?.trim() || undefined,
+      quoteId: dataMessage.quote?.id != null ? String(dataMessage.quote.id) : undefined,
+      quoteSender:
+        dataMessage.quote?.authorNumber ??
+        dataMessage.quote?.author ??
+        dataMessage.quote?.authorUuid ??
+        undefined,
     });
   };
 }

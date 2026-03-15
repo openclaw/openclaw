@@ -235,6 +235,56 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
+  it("injects reply context from dataMessage.quote", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "yes I agree",
+          attachments: [],
+          quote: {
+            id: 1700000099000,
+            text: "what do you think?",
+            authorNumber: "+15550002222",
+          },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx!.ReplyToId).toBe("1700000099000");
+    expect(capture.ctx!.ReplyToBody).toBe("what do you think?");
+    expect(capture.ctx!.ReplyToSender).toBe("+15550002222");
+  });
+
+  it("omits reply context when no quote is present", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: { message: "hello", attachments: [] },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx!.ReplyToId).toBeUndefined();
+    expect(capture.ctx!.ReplyToBody).toBeUndefined();
+    expect(capture.ctx!.ReplyToSender).toBeUndefined();
+  });
+
   it("drops sync envelopes when syncMessage is present but null", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
