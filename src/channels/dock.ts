@@ -244,6 +244,10 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       blockStreaming: true,
     },
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
+    elevated: {
+      allowFromFallback: ({ cfg }) =>
+        cfg.channels?.telegram?.allowFrom ?? cfg.channels?.telegram?.dm?.allowFrom,
+    },
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
         mapAllowFromEntries(inspectTelegramAccount({ cfg, accountId }).config.allowFrom),
