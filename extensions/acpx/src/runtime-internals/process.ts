@@ -139,10 +139,14 @@ export function spawnWithResolvedCommand(
     options,
   );
 
-  const childEnv = omitEnvKeysCaseInsensitive(
-    process.env,
-    params.stripProviderAuthEnvVars ? listKnownProviderAuthEnvVarNames() : [],
-  );
+  const keysToStrip = [
+    // CLAUDECODE=1 is set by the parent OpenClaw process. If inherited by
+    // child processes it causes the Claude Agent SDK to refuse startup,
+    // which kills the queue-owner process immediately.
+    "CLAUDECODE",
+    ...(params.stripProviderAuthEnvVars ? listKnownProviderAuthEnvVarNames() : []),
+  ];
+  const childEnv = omitEnvKeysCaseInsensitive(process.env, keysToStrip);
   childEnv.OPENCLAW_SHELL = "acp";
 
   return spawn(resolved.command, resolved.args, {

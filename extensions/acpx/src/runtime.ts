@@ -77,6 +77,20 @@ function formatPermissionModeGuidance(): string {
   return "Configure plugins.entries.acpx.config.permissionMode to one of: approve-reads, approve-all, deny-all.";
 }
 
+const SESSION_ENSURE_FALLBACK_PATTERNS = [
+  /RESOURCE_NOT_FOUND/i,
+  /AcpResourceNotFoundError/i,
+  /Query closed before response received/i,
+];
+
+function shouldFallbackToNewSession(err: unknown): boolean {
+  if (!(err instanceof AcpRuntimeError)) {
+    return false;
+  }
+  const message = err.message;
+  return SESSION_ENSURE_FALLBACK_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 function formatAcpxExitMessage(params: {
   stderr: string;
   exitCode: number | null | undefined;
@@ -273,11 +287,21 @@ export class AcpxRuntime implements AcpRuntime {
       command: ensureSubcommand,
     });
 
-    let events = await this.runControlCommand({
-      args: ensureCommand,
-      cwd,
-      fallbackCode: "ACP_SESSION_INIT_FAILED",
-    });
+    let events: AcpxJsonObject[];
+    let ensureError: unknown = null;
+    try {
+      events = await this.runControlCommand({
+        args: ensureCommand,
+        cwd,
+        fallbackCode: "ACP_SESSION_INIT_FAILED",
+      });
+    } catch (err) {
+      if (resumeSessionId || !shouldFallbackToNewSession(err)) {
+        throw err;
+      }
+      ensureError = err;
+      events = [];
+    }
     let ensuredEvent = events.find(
       (event) =>
         asOptionalString(event.agentSessionId) ||
@@ -285,7 +309,7 @@ export class AcpxRuntime implements AcpRuntime {
         asOptionalString(event.acpxRecordId),
     );
 
-    if (!ensuredEvent && !resumeSessionId) {
+    if ((!ensuredEvent || ensureError) && !resumeSessionId) {
       const newCommand = await this.buildVerbArgs({
         agent,
         cwd,
