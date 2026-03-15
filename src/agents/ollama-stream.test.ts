@@ -54,6 +54,32 @@ describe("convertToOllamaMessages", () => {
     ]);
   });
 
+  it("parses stringified JSON arguments from OpenAI-compat tool calls", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_2", name: "bash", arguments: '{"command":"ls -la"}' },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "bash", arguments: { command: "ls -la" } } },
+    ]);
+  });
+
+  it("handles malformed JSON string arguments gracefully", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_3", name: "bash", arguments: "not-json" }],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([{ function: { name: "bash", arguments: {} } }]);
+  });
+
   it("converts tool result messages with 'tool' role", () => {
     const messages = [{ role: "tool", content: "file1.txt\nfile2.txt" }];
     const result = convertToOllamaMessages(messages);
