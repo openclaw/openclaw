@@ -7,7 +7,8 @@ export type PlanStep = {
   done: boolean;
 };
 
-const TASK_LIST_RE = /^[-*]\s+\[([ xX])\]\s+(.+)$/gm;
+// Match both markdown task lists (- [ ] / - [x]) and Unicode checkbox variants (☐ / ☑ / ✅ / ✓)
+const TASK_LIST_RE = /^[-*]\s+(?:\[([ xX])\]|([☐☑✅✓]))\s+(.+)$/gmu;
 
 /**
  * Check whether the checklist looks intentional (a plan) vs incidental
@@ -22,11 +23,11 @@ function looksLikeIntentionalPlan(text: string): boolean {
   if (!firstMatch) {
     return false;
   }
-  // Allow the checklist to start within the first ~300 chars (room for a heading + blank line)
+  // Allow the checklist to start within the first ~500 chars (room for a heading + intro paragraph)
   const preamble = text.slice(0, firstMatch.index);
-  // Strip whitespace and short headings — a plan preamble is brief
+  // Strip whitespace and short headings — a plan preamble may include a brief intro
   const substantiveChars = preamble.replace(/^#+\s+.*$/gm, "").replace(/\s+/g, "").length;
-  return substantiveChars < 120;
+  return substantiveChars < 250;
 }
 
 /**
@@ -44,31 +45,60 @@ export function extractPlanSteps(text: string): { steps: PlanStep[]; rest: strin
   if (!looksLikeIntentionalPlan(text)) {
     return { steps: [], rest: text };
   }
-  TASK_LIST_RE.lastIndex = 0; // reset global regex state before use
+  // Extract only the FIRST contiguous block of checklist items.
+  // Stop at the first non-checklist, non-blank line after the block starts.
+  // This prevents feature lists and secondary checklists in the body from
+  // being absorbed into the plan card.
+  const lines = text.split("\n");
   const steps: PlanStep[] = [];
-  const seen = new Map<string, number>(); // step text -> index in steps[]
-  let match: RegExpExecArray | null;
-  while ((match = TASK_LIST_RE.exec(text)) !== null) {
-    const stepText = match[2].trim();
-    const done = match[1] !== " ";
-    const existingIdx = seen.get(stepText);
-    if (existingIdx !== undefined) {
-      // Update to the latest done state (agent re-emitted the plan with progress)
-      steps[existingIdx].done = done;
-    } else {
-      seen.set(stepText, steps.length);
-      steps.push({ text: stepText, done });
+  const seen = new Map<string, number>();
+  let blockStarted = false;
+  let blockEndLine = -1;
+  let blockStartLine = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    TASK_LIST_RE.lastIndex = 0;
+    const match = TASK_LIST_RE.exec(lines[i]);
+    if (match) {
+      if (!blockStarted) {
+        blockStarted = true;
+        blockStartLine = i;
+      }
+      const stepText = (match[3] ?? "").trim();
+      const done = match[1] !== undefined ? match[1] !== " " : match[2] !== "☐";
+      const existingIdx = seen.get(stepText);
+      if (existingIdx !== undefined) {
+        steps[existingIdx].done = done;
+      } else {
+        seen.set(stepText, steps.length);
+        steps.push({ text: stepText, done });
+      }
+      blockEndLine = i;
+    } else if (blockStarted && lines[i].trim() !== "") {
+      // Non-checklist, non-blank line after block started — stop
+      break;
     }
   }
+
   if (steps.length === 0) {
     return { steps: [], rest: text };
   }
-  // Remove task list lines from the text so they don't render twice
-  TASK_LIST_RE.lastIndex = 0;
-  const rest = text
-    .replace(TASK_LIST_RE, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  // Remove only the first contiguous checklist block from the text.
+  const beforeBlock = lines.slice(0, blockStartLine).join("\n");
+  const afterBlock = lines.slice(blockEndLine + 1).join("\n");
+  let rest = `${beforeBlock}\n${afterBlock}`;
+
+  // Strip headings that label the plan block (must be on their own line)
+  rest = rest.replace(/^#{1,4}\s+(?:(?:Updated\s+)?Plan(?:ning)?)\s*$/gim, "");
+
+  // Strip orphaned horizontal rules left around the removed plan block.
+  // First collapse any sequence of blank-lines-and-rules into one rule.
+  rest = rest.replace(/(?:(?:^|\n)\s*---\s*(?:\n|$)\s*){2,}/g, "\n\n---\n\n");
+  // Remove leading/trailing --- (plan was at start or end of message)
+  rest = rest.replace(/^\s*---\s*\n/, "");
+  rest = rest.replace(/\n\s*---\s*$/, "");
+
+  rest = rest.replace(/\n{3,}/g, "\n\n").trim();
   return { steps, rest };
 }
 

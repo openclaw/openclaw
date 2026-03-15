@@ -17,8 +17,9 @@ dart_project_id:
 # Operator1Hub — Curated Registry
 
 **Created:** 2026-03-13
+**Updated:** 2026-03-15
 **Status:** Planning
-**Depends on:** Skills system (done), Commands system (done), Slash commands (done)
+**Depends on:** Skills system (done), Commands system (done), Slash commands (done), Agent Personas (done)
 **Supersedes:** `Project-tasks/agent-personas-marketplace.md` (personas delivery now via Hub)
 
 ---
@@ -50,20 +51,23 @@ sources, but Operator1Hub is independent and self-contained.
 - Paid/premium content
 - ClawHub integration or adapter layer
 - Self-hosted hub instances
-- Auto-update of installed items (manual refresh for now)
+- Auto-update of installed items (user-triggered refresh; UI shows "update available" badge)
 
 ---
 
 ## 4. Design Decisions
 
-| Decision                | Options Considered                             | Chosen                                     | Reason                                                                                    |
-| ----------------------- | ---------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| Hosting                 | Custom API server / npm registry / GitHub repo | GitHub repo                                | Zero infra cost, PR-based curation, raw content URLs for fetching, familiar workflow      |
-| Registry protocol       | REST API / GraphQL / Static manifest           | Static `registry.json` manifest            | Single fetch to know everything available; no server needed; GitHub CDN handles delivery  |
-| Relationship to ClawHub | Replace / Adapter / Independent                | Independent                                | No dependency on external infra; user can connect either or both                          |
-| Default behavior        | Opt-in / Opt-out / Built-in                    | Built-in                                   | Hub URL baked into operator1 config; works on first launch                                |
-| Content format          | Custom schema / Reuse SKILL.md / Mixed         | Unified manifest + native formats per type | Skills use SKILL.md, agents use AGENT.md, commands use command .md — manifest indexes all |
-| Install location        | Global / Per-agent / Per-workspace             | Per-agent (default) with global option     | Matches current skills directory pattern `~/.openclaw/{agentId}/skills/`                  |
+| Decision                | Options Considered                             | Chosen                                     | Reason                                                                                                        |
+| ----------------------- | ---------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| Hosting                 | Custom API server / npm registry / GitHub repo | GitHub repo                                | Zero infra cost, PR-based curation, raw content URLs for fetching, familiar workflow                          |
+| Registry protocol       | REST API / GraphQL / Static manifest           | Static `registry.json` manifest            | Single fetch to know everything available; no server needed; GitHub CDN handles delivery                      |
+| Relationship to ClawHub | Replace / Adapter / Independent                | Independent                                | No dependency on external infra; user can connect either or both                                              |
+| Default behavior        | Opt-in / Opt-out / Built-in                    | Built-in                                   | Hub URL baked into operator1 config; works on first launch                                                    |
+| Content format          | Custom schema / Reuse SKILL.md / Mixed         | Unified manifest + native formats per type | Skills use SKILL.md, agents use AGENT.md, commands use command .md — manifest indexes all                     |
+| Install location        | Global / Per-agent / Per-workspace             | Per-agent (default) with global option     | Matches current skills directory pattern `~/.openclaw/{agentId}/skills/`                                      |
+| Agent personas          | Duplicate in hub / Reference local library     | **Reference local `agents/personas/`**     | 147 personas already ship locally with `_index.json` + full RPC support; hub indexes them, not duplicates     |
+| Hub URL for dev/testing | Remote-only / Local file path fallback         | **Support `file://` and `http(s)://`**     | Enables development and testing without the GitHub repo being live                                            |
+| FK constraints          | Strict FK / Application-level checks           | **No FK on `op1_hub_installed`**           | Catalog gets replaced on `hub.sync`; strict FK breaks if a previously-installed item is removed from registry |
 
 ---
 
@@ -139,52 +143,128 @@ operator1hub/
 }
 ```
 
-### 5.3 Operator1 Integration Architecture
+### 5.3 Command File Format
+
+Commands use the same `.md` frontmatter format as `~/.openclaw/commands/*.md`
+(parsed by `commands-scanner.ts` on gateway startup). Hub commands are installed
+to `~/.openclaw/commands/{slug}.md` and picked up by the existing scanner.
+
+```markdown
+---
+name: review-pr
+description: Review a GitHub PR with security, correctness, and style checks
+emoji: "🔍"
+category: engineering
+user-command: true
+model-invocation: true
+long-running: true
+args:
+  - name: pr_url
+    description: "GitHub PR URL or number"
+    required: true
+tags: [code-review, github, pr]
+---
+
+Review the GitHub PR at {{pr_url}}.
+
+## Instructions
+
+1. Fetch the PR diff
+2. Check for security issues (OWASP top 10)
+3. Review code style and correctness
+4. Summarize findings with severity levels
+```
+
+**Frontmatter fields:**
+
+| Field              | Type     | Required | Description                                           |
+| ------------------ | -------- | -------- | ----------------------------------------------------- |
+| `name`             | string   | yes      | Slash command name (e.g., `review-pr` → `/review-pr`) |
+| `description`      | string   | yes      | One-line summary                                      |
+| `emoji`            | string   | no       | Display emoji                                         |
+| `category`         | string   | no       | Organizational category                               |
+| `user-command`     | boolean  | no       | Can be invoked by user (default: true)                |
+| `model-invocation` | boolean  | no       | Can be invoked by the model/agent (default: false)    |
+| `long-running`     | boolean  | no       | Expect long execution time (default: false)           |
+| `args`             | object[] | no       | Arguments with `name`, `description`, `required`      |
+| `tags`             | string[] | no       | Searchable tags                                       |
+
+The markdown body is the command prompt template. Supports `{{arg_name}}`
+substitution from declared args.
+
+### 5.4 Persona Deduplication
+
+147 personas already ship locally in `agents/personas/` with `_index.json` and
+full RPC support (`personas.list/get/search/categories/expand/apply`). The hub
+**does not duplicate these**. Instead:
+
+- Hub `type: "agent"` items in `registry.json` reference the same persona slug
+- `hub.install` for agents checks if the persona already exists locally in
+  `agents/personas/` — if yes, it creates a symlink or config reference rather
+  than downloading a copy
+- Hub can ship NEW personas not yet in the local library (e.g., community
+  contributions) — these get downloaded to `~/.openclaw/{agentId}/agents/`
+- `hub.sync` compares hub agent slugs against the local `_index.json` and marks
+  matching ones as `"bundled": true` in the catalog (no install needed)
+
+### 5.5 Operator1 Integration Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    operator1                         │
-│                                                     │
-│  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │
-│  │ hub.sync    │  │ hub.catalog │  │ hub.install│  │
-│  │ hub.inspect │  │ hub.search  │  │ hub.remove │  │
-│  └──────┬──────┘  └──────┬──────┘  └─────┬──────┘  │
-│         │                │               │          │
-│         ▼                ▼               ▼          │
-│  ┌─────────────────────────────────────────────┐    │
-│  │         op1_hub_catalog (SQLite)            │    │
-│  │  slug | type | name | version | installed  │    │
-│  └─────────────────────────────────────────────┘    │
-│                                                     │
-│  Installed content goes to:                         │
-│  • skills → ~/.openclaw/{agentId}/skills/{slug}/    │
-│  • agents → ~/.openclaw/{agentId}/agents/{slug}.md  │
-│  • commands → ~/.openclaw/commands/{slug}.md         │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                       operator1                           │
+│                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
+│  │ hub.sync     │  │ hub.catalog  │  │ hub.install   │  │
+│  │ hub.inspect  │  │ hub.search   │  │ hub.remove    │  │
+│  │ hub.updates  │  │              │  │               │  │
+│  └──────┬───────┘  └──────┬───────┘  └───────┬───────┘  │
+│         │                 │                  │           │
+│         ▼                 ▼                  ▼           │
+│  ┌──────────────────────────────────────────────────┐    │
+│  │          op1_hub_catalog (SQLite)                │    │
+│  │  slug | type | name | version | bundled         │    │
+│  ├──────────────────────────────────────────────────┤    │
+│  │          op1_hub_installed (SQLite)              │    │
+│  │  slug | type | version | install_path           │    │
+│  └──────────────────────────────────────────────────┘    │
+│                                                          │
+│  Installed content goes to:                              │
+│  • skills   → ~/.openclaw/{agentId}/skills/{slug}/       │
+│  • agents   → ~/.openclaw/{agentId}/agents/{slug}.md     │
+│  • commands → ~/.openclaw/commands/{slug}.md              │
+│                                                          │
+│  Bundled personas (already local):                       │
+│  • agents/personas/{category}/{slug}.md (read-only)      │
+└──────────────────────────────────────────────────────────┘
          │
          │ fetch registry.json + raw content
+         │ supports file:// for local dev/testing
          ▼
-┌─────────────────────────────────────────────────────┐
-│  github.com/operator1ai/operator1hub                │
-│  (static files, GitHub CDN, no server)              │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  github.com/operator1ai/operator1hub                     │
+│  (static files, GitHub CDN, no server)                   │
+└──────────────────────────────────────────────────────────┘
 ```
 
-### 5.4 RPC Methods
+### 5.6 RPC Methods
 
-| Method                  | Description                                                           |
-| ----------------------- | --------------------------------------------------------------------- |
-| `hub.sync`              | Fetch `registry.json` from GitHub, upsert into `op1_hub_catalog`      |
-| `hub.catalog`           | Query cached catalog — filter by type, category, search term          |
-| `hub.search`            | Full-text search across name, description, tags                       |
-| `hub.inspect`           | Fetch README/preview for a specific item                              |
-| `hub.install`           | Download item content to local agent directory, record in locks table |
-| `hub.remove`            | Delete installed item, remove lock                                    |
-| `hub.installed`         | List locally installed hub items with version info                    |
-| `hub.collections`       | List available collections                                            |
-| `hub.installCollection` | Install all items in a collection                                     |
+| Method                  | Description                                                                                        |
+| ----------------------- | -------------------------------------------------------------------------------------------------- |
+| `hub.sync`              | Fetch `registry.json` from hub URL, upsert into `op1_hub_catalog`, mark bundled personas           |
+| `hub.catalog`           | Query cached catalog — filter by type, category, search term                                       |
+| `hub.search`            | Full-text search across name, description, tags                                                    |
+| `hub.inspect`           | Fetch README/preview for a specific item from hub                                                  |
+| `hub.install`           | Download item content to local directory, record in `op1_hub_installed`. For bundled agents: no-op |
+| `hub.remove`            | Delete installed item files and remove from `op1_hub_installed`                                    |
+| `hub.installed`         | List locally installed hub items with version info                                                 |
+| `hub.updates`           | Compare installed versions vs catalog — return items where catalog version > installed version     |
+| `hub.collections`       | List available collections                                                                         |
+| `hub.installCollection` | Install all items in a collection (skips already-installed, reports results per item)              |
 
-### 5.5 SQLite Schema
+**Integrity verification:** `hub.install` computes SHA-256 of downloaded content
+and compares against `sha256` from `registry.json`. Install fails if mismatch.
+
+### 5.7 SQLite Schema
 
 ```sql
 -- Hub catalog cache (refreshed on hub.sync)
@@ -199,18 +279,18 @@ CREATE TABLE IF NOT EXISTS op1_hub_catalog (
   tags_json   TEXT DEFAULT '[]',
   emoji       TEXT,
   sha256      TEXT,
+  bundled     INTEGER NOT NULL DEFAULT 0,  -- 1 = persona already ships locally
   synced_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Installed items tracking
+-- Installed items tracking (no FK — catalog gets replaced on sync)
 CREATE TABLE IF NOT EXISTS op1_hub_installed (
   slug          TEXT PRIMARY KEY,
   type          TEXT NOT NULL,
   version       TEXT NOT NULL,
   install_path  TEXT NOT NULL,
   agent_id      TEXT,           -- NULL = global (commands)
-  installed_at  TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (slug) REFERENCES op1_hub_catalog(slug)
+  installed_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Collections cache
@@ -222,7 +302,7 @@ CREATE TABLE IF NOT EXISTS op1_hub_collections (
 );
 ```
 
-### 5.6 Default Hub URL Config
+### 5.8 Default Hub URL Config
 
 ```typescript
 // src/config/defaults.ts
@@ -232,7 +312,16 @@ export const DEFAULT_HUB_URL =
 
 Configurable via `operator1 config set hub.url <url>` for custom/private hubs.
 
-### 5.7 Initial Curated Content (Launch Set)
+**Supported URL schemes:**
+
+- `https://` — production (GitHub raw content CDN)
+- `file:///path/to/registry.json` — local dev/testing without the GitHub repo
+
+The `hub.sync` fetcher detects the scheme and uses `fetch()` for HTTP(S) or
+`fs.readFile()` for `file://`. Content item paths in `registry.json` are
+resolved relative to the manifest location (works for both remote and local).
+
+### 5.9 Initial Curated Content (Launch Set)
 
 **Skills** (adapted from agency-agents + original):
 | Slug | Name | Source |
@@ -281,19 +370,23 @@ Create the GitHub repo and populate with initial curated content.
 
 ### Task 2: Phase 2 — Backend RPCs & SQLite
 
-**Status:** To-do | **Priority:** High | **Assignee:** rohit sharma | **Est:** 4h
+**Status:** To-do | **Priority:** High | **Assignee:** rohit sharma | **Est:** 5h
 
 Build the operator1 gateway integration — sync, catalog, install/remove.
 
-- [ ] 2.1 SQLite schema — add `op1_hub_catalog`, `op1_hub_installed`, `op1_hub_collections` tables per §5.5
-- [ ] 2.2 `hub.sync` RPC — fetch registry.json from GitHub raw URL, upsert catalog, cache collections
-- [ ] 2.3 `hub.catalog` + `hub.search` RPCs — query cached catalog with type/category/text filters
-- [ ] 2.4 `hub.inspect` RPC — fetch item README from GitHub for preview
-- [ ] 2.5 `hub.install` + `hub.remove` RPCs — download content to correct local directory, manage locks
-- [ ] 2.6 `hub.installed` RPC — list installed items with version info
-- [ ] 2.7 `hub.collections` + `hub.installCollection` RPCs — collection listing and bulk install
-- [ ] 2.8 Register all hub methods — add to `server-methods.ts`, `server-methods-list.ts`, `method-scopes.ts`
-- [ ] 2.9 Default hub URL config — bake in GitHub raw URL, allow override via `config set hub.url`
+- [ ] 2.1 SQLite schema — add `op1_hub_catalog`, `op1_hub_installed`, `op1_hub_collections` tables per §5.7 (add migration to `schema.ts`)
+- [ ] 2.2 Hub SQLite adapter — `hub-sqlite.ts` with CRUD ops, test-overridable DB access pattern (mirror `clawhub-sqlite.ts`)
+- [ ] 2.3 Hub URL fetcher — support both `https://` and `file://` schemes per §5.8, resolve relative content paths
+- [ ] 2.4 `hub.sync` RPC — fetch registry.json, upsert catalog, mark `bundled=1` for personas matching local `_index.json`, cache collections
+- [ ] 2.5 `hub.catalog` + `hub.search` RPCs — query cached catalog with type/category/text filters
+- [ ] 2.6 `hub.inspect` RPC — fetch item README from hub for preview
+- [ ] 2.7 `hub.install` + `hub.remove` RPCs — download content, verify SHA-256 integrity, write to correct local directory, manage installed tracking
+- [ ] 2.8 `hub.installed` RPC — list installed items with version info
+- [ ] 2.9 `hub.updates` RPC — compare installed versions vs catalog, return items with available updates
+- [ ] 2.10 `hub.collections` + `hub.installCollection` RPCs — collection listing and bulk install (skip already-installed, report per-item results)
+- [ ] 2.11 Register all hub methods — add to `server-methods.ts`, `server-methods-list.ts`, `method-scopes.ts`
+- [ ] 2.12 Default hub URL config — bake in GitHub raw URL, allow override via `config set hub.url`
+- [ ] 2.13 Tests — unit tests for hub-sqlite adapter, sync logic, SHA-256 verification, file:// URL support
 
 ### Task 3: Phase 3 — UI Hub Page
 
@@ -304,9 +397,11 @@ Build the Hub page in ui-next — browse, search, preview, install.
 - [ ] 3.1 Hub page route — add `/hub` page to ui-next with sidebar navigation entry
 - [ ] 3.2 Catalog browser — grid/list view of available items with type/category filters and search
 - [ ] 3.3 Item detail panel — preview with README content, metadata, install/remove button
-- [ ] 3.4 Collections view — show bundled sets with "Install All" action
-- [ ] 3.5 Installed tab — show currently installed items with version, remove action
-- [ ] 3.6 Auto-sync on page load — trigger `hub.sync` if catalog is stale (>24h)
+- [ ] 3.4 "Update available" badges — show version badge on installed items where catalog version > installed version (uses `hub.updates` RPC)
+- [ ] 3.5 Bundled indicator — show "bundled" badge on agent personas that ship locally (no install needed)
+- [ ] 3.6 Collections view — show bundled sets with "Install All" action
+- [ ] 3.7 Installed tab — show currently installed items with version, update/remove actions
+- [ ] 3.8 Auto-sync on page load — trigger `hub.sync` if catalog is stale (>24h)
 
 ### Task 4: Phase 4 — CLI Integration
 
@@ -319,32 +414,40 @@ CLI commands for hub interaction without UI.
 - [ ] 4.3 `operator1 hub remove <slug>` — remove an installed item
 - [ ] 4.4 `operator1 hub search <query>` — search the catalog
 
-### Task 5: Phase 5 — Agent Persona Integration
+### Task 5: Phase 5 — Hub-Installed Persona Integration
 
 **Status:** To-do | **Priority:** Medium | **Assignee:** rohit sharma | **Est:** 3h
 
-Wire installed agent personas into the system prompt and subagent system.
+Wire hub-installed agent personas (non-bundled) into the existing persona
+system. Bundled personas already work via `personas.*` RPCs — this phase covers
+NEW personas installed from the hub that don't exist in `agents/personas/`.
 
-- [ ] 5.1 Persona loader — load installed agent .md files as system prompt fragments
-- [ ] 5.2 Subagent persona param — extend `sessions_spawn` to accept persona slug, inject into minimal prompt
-- [ ] 5.3 SOUL.md activation — let users set an installed persona as their workspace SOUL.md
-- [ ] 5.4 Active persona display — show current persona in chat header and status
+- [ ] 5.1 Persona discovery — extend `personas.list/search` to also scan `~/.openclaw/{agentId}/agents/*.md` for hub-installed personas alongside bundled ones
+- [ ] 5.2 Unified persona source — add `source: "bundled" | "hub"` field to persona list results so UI can distinguish origin
+- [ ] 5.3 Hub persona expansion — ensure `personas.expand` works with hub-installed `.md` files (not just bundled ones)
+- [ ] 5.4 Active persona display — show current persona + source in chat header and agent detail page
 
 ---
 
 ## 7. References
 
 - Hub inspiration: https://github.com/msitarzewski/agency-agents (MIT, persona templates)
-- Existing registry pattern: `src/gateway/server-methods/clawhub.ts` (reference only, not reused)
+- Existing registry pattern: `src/gateway/server-methods/clawhub.ts` (reference — adapt sync/catalog/install patterns)
 - Key source files:
   - `src/gateway/server-methods/skills.ts` — existing skills RPCs
+  - `src/gateway/server-methods/personas.ts` — existing persona RPCs (list/get/search/categories/expand/apply)
   - `src/infra/state-db/commands-sqlite.ts` — commands storage pattern
-  - `src/infra/state-db/clawhub-sqlite.ts` — catalog caching pattern (reference)
+  - `src/infra/state-db/commands-scanner.ts` — command `.md` frontmatter parser (defines command file format)
+  - `src/infra/state-db/clawhub-sqlite.ts` — catalog caching + lock pattern (adapt for hub-sqlite.ts)
+  - `src/infra/state-db/schema.ts` — SQLite migration system (add hub tables here)
+  - `src/agents/persona-expansion.ts` — persona expansion engine
   - `src/agents/system-prompt.ts` — persona injection point
+  - `agents/personas/_index.json` — local persona manifest (used for bundled detection during hub.sync)
   - `ui-next/src/pages/skills.tsx` — existing skills UI (hub page modeled after)
-- Related task: `Project-tasks/agent-personas-marketplace.md` (superseded — personas now delivered via Hub)
+- Related tasks:
+  - `Project-tasks/Done/agent-personas-marketplace.md` (done — 147 personas, unified AGENT.md, RPCs, wizard)
 - Dart project: _(filled after first sync)_
 
 ---
 
-_Template version: 1.0_
+_Template version: 2.0 — updated 2026-03-15 with persona deduplication, command schema, integrity checks, update detection, file:// support_

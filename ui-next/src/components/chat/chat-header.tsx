@@ -11,6 +11,7 @@ import {
   FolderOpen,
   Send,
   Search,
+  Copy,
   X,
 } from "lucide-react";
 import { useRef, useState, useMemo, useCallback, useEffect } from "react";
@@ -21,7 +22,7 @@ import { useToast } from "@/components/ui/custom/toast";
 import { Separator } from "@/components/ui/separator";
 import { useGateway } from "@/hooks/use-gateway";
 import { cn } from "@/lib/utils";
-import { useChatStore, type SessionEntry } from "@/store/chat-store";
+import { useChatStore, getMessageText, type SessionEntry } from "@/store/chat-store";
 import { useGatewayStore } from "@/store/gateway-store";
 import type { AgentRow } from "@/types/agents";
 
@@ -740,6 +741,40 @@ export function ChatHeader({
     }
   }, [activeSessionKey, isArchiving, sendRpc, loadSessions, switchSession, toast]);
 
+  // Copy chat transcript
+  const handleCopyChat = useCallback(() => {
+    const store = useChatStore.getState();
+    const sessionKey = store.activeSessionKey;
+    const messages = sessionKey ? store.getSessionState(sessionKey).messages : [];
+    if (messages.length === 0) {
+      toast("No messages to copy", "error");
+      return;
+    }
+    const lines: string[] = [];
+    for (const msg of messages) {
+      if (msg.__openclaw?.kind) {
+        continue;
+      } // skip system dividers
+      const role =
+        msg.role === "user"
+          ? "USER"
+          : msg.role === "assistant"
+            ? "ASSISTANT"
+            : msg.role.toUpperCase();
+      const text = getMessageText(msg);
+      if (!text.trim()) {
+        continue;
+      }
+      const ts = msg.timestamp ? new Date(msg.timestamp).toISOString().slice(0, 19) : "";
+      lines.push(`[${ts}] ${role}:\n${text}\n`);
+    }
+    const transcript = lines.join("\n---\n\n");
+    navigator.clipboard.writeText(transcript).then(
+      () => toast("Chat copied to clipboard", "success"),
+      () => toast("Failed to copy", "error"),
+    );
+  }, [toast]);
+
   // Shell header portal targets
   const headerPortal =
     typeof document !== "undefined" ? document.getElementById("shell-header-extra") : null;
@@ -960,6 +995,20 @@ export function ChatHeader({
                     title="Search in chat (Ctrl+F)"
                   >
                     <Search className="h-3 w-3" />
+                  </button>
+                </>
+              )}
+
+              {/* Copy chat button */}
+              {activeSessionKey && (
+                <>
+                  <Separator orientation="vertical" className="h-3.5" />
+                  <button
+                    onClick={handleCopyChat}
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors shrink-0 hover:bg-primary/15 hover:text-primary cursor-pointer"
+                    title="Copy full chat transcript to clipboard"
+                  >
+                    <Copy className="h-3 w-3" />
                   </button>
                 </>
               )}

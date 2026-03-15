@@ -473,6 +473,8 @@ export function buildAgentSystemPrompt(params: {
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",
     "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+    "## Plan Checklist",
+    "When you create a step-by-step plan, always use markdown task list syntax: `- [ ]` for incomplete and `- [x]` for complete. Do NOT use Unicode checkboxes (☐/☑/✅). Re-emit the **full checklist** with updated check marks every time you complete a step. When all work is done, verify every step is complete and emit a final checklist with all steps `- [x]` checked — do not end a planned session without this final verification.",
     "",
     ...safetySection,
     "## OpenClaw CLI Quick Reference",

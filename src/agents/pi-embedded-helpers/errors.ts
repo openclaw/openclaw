@@ -977,6 +977,14 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   return null;
 }
 
+const NETWORK_ERROR_RE =
+  /network_error|ECONNRESET|ETIMEDOUT|WebSocket closed|socket hang up|fetch failed/i;
+
+/** Transient network/connection errors that are safe to auto-retry. */
+export function isNetworkError(raw: string): boolean {
+  return NETWORK_ERROR_RE.test(raw);
+}
+
 export function isFailoverErrorMessage(raw: string): boolean {
   return classifyFailoverReason(raw) !== null;
 }
@@ -1021,7 +1029,7 @@ export function classifySubagentOutcome(
     isRateLimitErrorMessage(raw) ||
     isOverloadedErrorMessage(raw) ||
     isTransientHttpError(raw) ||
-    /network_error|ECONNRESET|ETIMEDOUT|WebSocket closed|socket hang up|fetch failed/i.test(raw)
+    isNetworkError(raw)
   ) {
     return "interrupted";
   }

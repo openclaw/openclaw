@@ -59,6 +59,21 @@ export function useChat(sendRpc: SendRpc) {
       if (!exactMatch) {
         const canonical = sessions.find((s) => s.key.endsWith(`:${currentKey}`));
         if (canonical) {
+          // Migrate optimistic state (user message + sendPending) to the canonical key
+          // so the user's message isn't lost when the session key resolves.
+          const oldState = store.getSessionState(currentKey);
+          if (oldState.messages.length > 0 || oldState.isSendPending || oldState.isStreaming) {
+            const newState = store.getSessionState(canonical.key);
+            if (newState.messages.length === 0) {
+              store.setMessages(oldState.messages, undefined, canonical.key);
+              if (oldState.isSendPending) {
+                store.setSendPending(true, canonical.key);
+              }
+              if (oldState.isStreaming && oldState.streamRunId) {
+                store.startStream(oldState.streamRunId, canonical.key);
+              }
+            }
+          }
           store.setActiveSessionKey(canonical.key);
         } else if (sessions.length > 0 && !initialSessionResolvedRef.current) {
           // First load only — auto-select the most recently active session (sessions are
@@ -88,9 +103,10 @@ export function useChat(sendRpc: SendRpc) {
     const capKey = activeSessionKey;
     const seq = ++historySeqRef.current;
     const store = useChatStore.getState();
-    // Only show loading spinner when there are no messages yet (initial load).
-    // Reconnect-triggered reloads should not flash the spinner.
-    const isInitialLoad = store.getSessionState(capKey).messages.length === 0;
+    // Only show loading spinner when there are no messages yet AND no send is
+    // pending (the user just sent an optimistic message — don't flash a spinner).
+    const sessState = store.getSessionState(capKey);
+    const isInitialLoad = sessState.messages.length === 0 && !sessState.isSendPending;
     if (isInitialLoad) {
       store.setMessagesLoading(true, capKey);
     }
@@ -198,6 +214,8 @@ export function useChat(sendRpc: SendRpc) {
         }
         // Refresh session list so the new session appears in the sidebar immediately.
         void loadSessions();
+        // Re-fetch after a short delay so the derived title (from transcript) is available.
+        setTimeout(() => void loadSessions(), 2500);
         // Capture runId so abort works before the first delta event.
         // Guard: only start the stream if the gateway event handler hasn't
         // already started AND finalized it while we awaited the RPC response.

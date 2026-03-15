@@ -30,8 +30,9 @@ behavioral role, personality, rules, and workflow for an agent — it is the
 seed from which the full agent workspace grows.
 
 When a user creates a new agent (via onboarding wizard, CLI, or UI), they
-select a persona from the available library (143 personas adapted from
-[agency-agents](https://github.com/msitarzewski/agency-agents), MIT). The
+select a persona from the available library (147 personas: 143 adapted from
+[agency-agents](https://github.com/msitarzewski/agency-agents), MIT, plus 4
+custom leadership personas). The
 persona template then drives generation of all workspace bootstrap files:
 `SOUL.md`, `IDENTITY.md`, `HEARTBEAT.md`, `USER.md`, etc.
 
@@ -54,7 +55,7 @@ Future delivery via Operator1Hub — see `Project-tasks/operator1hub.md`.
 ## 2. Goals
 
 - Unify agent definition into a single `AGENT.md` (YAML frontmatter + markdown body), retiring `agent.yaml`
-- Provide 143 ready-made persona blueprints covering engineering, marketing, sales, design, testing, and more
+- Provide 147 ready-made persona blueprints (143 from agency-agents + 4 custom leadership: coo, cto, cmo, cfo)
 - Drive agent workspace file generation from persona templates during agent setup
 - Integrate persona selection into the agent creation wizard (onboarding, CLI, and UI)
 - Rebuild 4 core agents (Operator1, Neo, Morpheus, Trinity) from persona templates in the new unified format
@@ -63,10 +64,14 @@ Future delivery via Operator1Hub — see `Project-tasks/operator1hub.md`.
 
 ## 3. Out of Scope
 
-- Runtime persona switching (persona is set at agent creation time; changing = recreating the agent)
+- Mid-session persona switching (persona changes require a new agent run, not a hot-swap during an active session)
 - Operator1Hub integration (separate task — `Project-tasks/operator1hub.md`)
 - Paid/premium personas
 - Community submission pipeline (future — requires Hub + review process)
+
+**Note:** Persona re-assignment (Task 7, `personas.apply`) is in scope — it
+regenerates workspace files and updates the agent file, but does not affect
+active sessions. Only mid-session switching is out of scope.
 
 ---
 
@@ -401,7 +406,7 @@ Generated manifest listing all available personas for the wizard/UI.
       "tags": ["security", "owasp", "audit"],
       "path": "engineering/security-engineer.md",
     },
-    // ... 143 entries
+    // ... 147 entries (143 agency-agents + 4 leadership)
   ],
   "categories": [
     { "slug": "engineering", "name": "Engineering", "count": 23 },
@@ -499,7 +504,46 @@ const PersonaFrontmatterSchema = z
 What stays the same: workspace bootstrap pipeline, system prompt injection,
 subagent spawning, tier system, bundle system, all structural config fields.
 
-### 5.11 Persona Catalog (Full List)
+**Migration transition behavior:**
+
+- If both `AGENT.md` (with frontmatter) and `agent.yaml` exist in the same
+  folder, the loader prefers `AGENT.md` frontmatter and ignores `agent.yaml`.
+- If only `agent.yaml` exists (legacy), the loader reads it as before
+  (backward compatible).
+- Partially migrated agents (e.g., `AGENT.md` with no frontmatter +
+  `agent.yaml`) use `agent.yaml` for structural config and `AGENT.md` body
+  for behavioral instructions (original two-file behavior).
+- The `agents/_archive/` directory is excluded from agent loading entirely
+  (`EXCLUDED_DIRS` in `server-startup-agent-sync.ts`).
+
+**Schema relationship post-migration:**
+
+- `AgentManifestSchema` (`zod-schema.agent-manifest.ts`) validates the YAML
+  frontmatter in `AGENT.md` — this is the on-disk source of truth.
+- `AgentEntrySchema` (`zod-schema.agent-runtime.ts`) validates the runtime
+  config entries in `agents.list` — these are reconciled from manifests on
+  gateway startup by `agent-config-sync.ts`. Manifests are authoritative;
+  runtime entries are derived.
+
+### 5.11 Template Variable Support
+
+Supported variables in persona expansion (markdown body only, not frontmatter):
+
+| Variable         | Value                               |
+| ---------------- | ----------------------------------- |
+| `{{agent_name}}` | Display name of the agent           |
+| `{{agent_id}}`   | Agent ID (lowercase, used in paths) |
+| `{{role}}`       | Role from persona frontmatter       |
+| `{{department}}` | Department from persona frontmatter |
+| `{{emoji}}`      | Emoji from persona frontmatter      |
+
+**Unknown variables:** left as-is (not expanded, no error). This allows
+workspace files to contain other template syntaxes without interference.
+
+**Missing variables:** if a declared variable has no value (e.g., `{{role}}`
+but persona has no `role` field), it is replaced with an empty string.
+
+### 5.12 Persona Catalog (Full List)
 
 See appendix at end of document.
 
@@ -546,8 +590,8 @@ Define persona file format and convert agency-agents templates. See §5.2, §5.3
 - [ ] 2.4 Convert priority personas (engineering, 23) — adapt from agency-agents with all required sections
 - [ ] 2.5 Convert remaining categories (~97 more) — design, marketing, testing, sales, product, project-management, game-dev, spatial-computing, paid-media, specialized, support
 - [ ] 2.6 Generate `_index.json` manifest — script to parse all persona frontmatter and produce the index per §5.6
-- [ ] 2.7 Validate all personas — run Zod schema validation across all 143 persona files
-- [ ] 2.8 CI persona validation — add vitest test that runs Zod validator against all `agents/personas/**/*.md` files and checks `_index.json` is up-to-date
+- [ ] 2.7 Validate all personas — run Zod schema validation across all 147 persona files (143 agency-agents + 4 leadership)
+- [ ] 2.8 CI persona validation — add vitest test that runs Zod validator against all `agents/personas/**/*.md` files, checks `_index.json` is up-to-date, and validates that per-category `count` fields match actual file counts on disk
 
 ### Task 3: Phase 3 — Workspace Expansion Engine
 
@@ -598,8 +642,8 @@ Wire persona selection into agent creation flow. See §5.7.
 
 - [ ] 6.1 CLI wizard — extend `operator1 agent create` with persona selection (category browse -> persona pick -> name -> create)
 - [ ] 6.2 UI agent creation dialog — persona grid/list grouped by category, preview panel, create button
-- [ ] 6.3 Agent creation backend — wire `personas.expand` into agent creation pipeline, write unified agent file + workspace files
-- [ ] 6.4 Onboarding integration — include persona selection step in fresh install onboarding for default agent setup
+- [ ] 6.3 Agent creation backend — use `personas.expand` for preview, then `personas.apply` (or direct `writeExpansionResult()`) to write unified agent file + workspace files to disk
+- [ ] 6.4 Onboarding integration — include persona selection step in fresh install onboarding; pre-select a general-purpose persona (e.g., `senior-developer` from engineering) for the default agent, with option to skip or change
 - [ ] 6.5 High-privilege tool warning — when a persona's `tools` includes `exec` or `browser`, surface a confirmation prompt in the wizard before proceeding
 - [ ] 6.6 "No persona" option — allow creating agents without a persona (uses generic templates as today)
 - [ ] 6.7 Record persona origin — store persona slug in agent file frontmatter (`persona: slug`)
@@ -842,6 +886,15 @@ file body.
 | `legal-compliance-checker`    | Legal Compliance Checker    |
 | `support-responder`           | Support Responder           |
 
+### Leadership (4 personas — custom, not from agency-agents)
+
+| Slug  | Name                     |
+| ----- | ------------------------ |
+| `coo` | Chief Operating Officer  |
+| `cto` | Chief Technology Officer |
+| `cmo` | Chief Marketing Officer  |
+| `cfo` | Chief Financial Officer  |
+
 ---
 
-_Template version: 2.0 — do not remove the frontmatter or alter heading levels_
+_Template version: 2.1 — updated 2026-03-15: fixed persona count (147), clarified scope on re-assignment, added migration transition behavior, template variables, schema relationship, CI count validation, Leadership appendix_

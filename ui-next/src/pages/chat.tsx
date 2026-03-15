@@ -828,6 +828,7 @@ export function ChatPage() {
                       runTokens={runTokenTotal}
                       activityLabel={activityLabel || lastToolLabel}
                       onAbort={abortRun}
+                      showPlanCard={lastPlanMessageIndex === -1}
                     />
                   )}
                   <div ref={scrollToRef} className="h-4" />

@@ -436,6 +436,7 @@ export function StreamingBubble({
   runTokens = 0,
   activityLabel = "",
   onAbort,
+  showPlanCard = true,
 }: {
   content: string;
   isGroupFirst?: boolean;
@@ -446,6 +447,8 @@ export function StreamingBubble({
   runTokens?: number;
   activityLabel?: string;
   onAbort?: () => void;
+  /** Suppress plan card when a finalized message already shows one. */
+  showPlanCard?: boolean;
 }) {
   const hasEnoughContent = content.length >= STREAM_BUBBLE_MIN_CHARS;
   const elapsed = useElapsedTimer();
@@ -494,12 +497,13 @@ export function StreamingBubble({
         >
           {(() => {
             const { steps: planSteps, rest: planRest } = extractPlanSteps(content);
+            const hasPlan = showPlanCard && planSteps.length >= 2;
             return (
               <>
-                {planSteps.length >= 2 && <PlanCard steps={planSteps} className="mb-3" />}
-                {planRest && (
+                {hasPlan && <PlanCard steps={planSteps} className="mb-3" />}
+                {(hasPlan ? planRest : content) && (
                   <div className="prose prose-sm prose-chat max-w-none break-words leading-relaxed font-sans">
-                    <Markdown>{planSteps.length >= 2 ? planRest : content}</Markdown>
+                    <Markdown>{hasPlan ? planRest : content}</Markdown>
                   </div>
                 )}
               </>

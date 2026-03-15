@@ -43,6 +43,7 @@ import {
   isFailoverErrorMessage,
   parseImageSizeError,
   parseImageDimensionError,
+  isNetworkError,
   isRateLimitAssistantError,
   isTimeoutErrorMessage,
   pickFallbackThinkingLevel,
@@ -698,8 +699,11 @@ export async function runEmbeddedPiAgent(
           agentDir,
         });
       };
+      const MAX_NETWORK_RETRIES = 3;
+      const NETWORK_RETRY_DELAY_MS = 2_000;
       try {
         let authRetryPending = false;
+        let networkRetryCount = 0;
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
             const message =
@@ -1132,6 +1136,21 @@ export async function runEmbeddedPiAgent(
               `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
             );
             thinkLevel = fallbackThinking;
+            continue;
+          }
+
+          // Auto-retry on transient network errors (connection drops, timeouts mid-stream).
+          if (
+            !aborted &&
+            lastAssistant?.stopReason === "error" &&
+            isNetworkError(lastAssistant.errorMessage ?? "") &&
+            networkRetryCount < MAX_NETWORK_RETRIES
+          ) {
+            networkRetryCount++;
+            log.warn(
+              `network error, retrying (attempt ${networkRetryCount}/${MAX_NETWORK_RETRIES}): ${(lastAssistant.errorMessage ?? "").slice(0, 80)}`,
+            );
+            await new Promise((r) => setTimeout(r, NETWORK_RETRY_DELAY_MS));
             continue;
           }
 
