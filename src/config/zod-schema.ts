@@ -146,6 +146,19 @@ const SkillEntrySchema = z
   })
   .strict();
 
+const McpSchema = z
+  .object({
+    clientsHub: z
+      .object({
+        preferClientsHub: z.boolean().optional(),
+        path: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const PluginEntrySchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -469,6 +482,7 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     models: ModelsConfigSchema,
+    mcp: McpSchema,
     nodeHost: NodeHostSchema,
     agents: AgentsSchema,
     tools: ToolsSchema,
