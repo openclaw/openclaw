@@ -1000,6 +1000,47 @@ describe("thread binding lifecycle", () => {
     expect(manager.getByThreadId("thread-acp-uncertain")).toBeDefined();
   });
 
+  it("does not reconcile plugin-owned direct bindings as stale ACP sessions", async () => {
+    const manager = createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    await manager.bindTarget({
+      threadId: "user:1177378744822943744",
+      channelId: "user:1177378744822943744",
+      targetKind: "acp",
+      targetSessionKey: "plugin-binding:openclaw-codex-app-server:dm",
+      agentId: "codex",
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      },
+    });
+
+    hoisted.readAcpSessionEntry.mockReturnValue(null);
+
+    const result = await reconcileAcpThreadBindingsOnStartup({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+    });
+
+    expect(result.checked).toBe(0);
+    expect(result.removed).toBe(0);
+    expect(result.staleSessionKeys).toEqual([]);
+    expect(manager.getByThreadId("user:1177378744822943744")).toMatchObject({
+      threadId: "user:1177378744822943744",
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+      },
+    });
+  });
+
   it("removes ACP bindings when health probe marks running session as stale", async () => {
     const manager = createThreadBindingManager({
       accountId: "default",

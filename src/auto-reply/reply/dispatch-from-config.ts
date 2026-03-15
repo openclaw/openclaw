@@ -233,19 +233,6 @@ export async function dispatchReplyFromConfig(params: {
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
-  let pluginClaimedInbound = false;
-  if (hookRunner?.hasHooks("inbound_claim")) {
-    const inboundClaim = await hookRunner.runInboundClaim(
-      toPluginInboundClaimEvent(hookContext, {
-        commandAuthorized:
-          typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
-        wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
-      }),
-      inboundClaimContext,
-    );
-    pluginClaimedInbound = inboundClaim?.handled === true;
-  }
-
   // Trigger plugin hooks (fire-and-forget)
   if (hookRunner?.hasHooks("message_received")) {
     fireAndForgetHook(
@@ -268,12 +255,6 @@ export async function dispatchReplyFromConfig(params: {
       ),
       "dispatch-from-config: message_received internal hook failed",
     );
-  }
-
-  if (pluginClaimedInbound) {
-    markIdle("plugin_claim");
-    recordProcessed("completed", { reason: "plugin-claimed" });
-    return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
   // Check if we should route replies to originating channel instead of dispatcher.

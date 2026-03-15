@@ -351,12 +351,13 @@ export async function preflightDiscordMessage(
     }),
     parentConversationId: earlyThreadParentId,
   });
+  const bindingConversationId = isDirectMessage ? `user:${author.id}` : messageChannelId;
   let threadBinding: SessionBindingRecord | undefined;
   threadBinding =
     getSessionBindingService().resolveByConversation({
       channel: "discord",
       accountId: params.accountId,
-      conversationId: messageChannelId,
+      conversationId: bindingConversationId,
       parentConversationId: earlyThreadParentId,
     }) ?? undefined;
   const configuredRoute =

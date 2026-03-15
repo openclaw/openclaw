@@ -323,7 +323,12 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
     };
   }
 
-  const acpBindings = manager.listBindings().filter((binding) => binding.targetKind === "acp");
+  const acpBindings = manager.listBindings().filter((binding) => {
+    if (binding.targetKind !== "acp") {
+      return false;
+    }
+    return binding.metadata?.pluginBindingOwner !== "plugin";
+  });
   const staleBindings: ThreadBindingRecord[] = [];
   const probeTargets: Array<{
     binding: ThreadBindingRecord;

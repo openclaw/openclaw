@@ -1879,7 +1879,7 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("lets a plugin claim inbound traffic before core commands and agent dispatch", async () => {
+  it("does not broadcast inbound claims without a core-owned plugin binding", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
@@ -1906,31 +1906,12 @@ describe("dispatchReplyFromConfig", () => {
       MessageSid: "msg-claim-1",
       SessionKey: "agent:main:telegram:group:-10099:77",
     });
-    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+    const replyResolver = vi.fn(async () => ({ text: "core reply" }) satisfies ReplyPayload);
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
-    expect(hookMocks.runner.runInboundClaim).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "who are you",
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-10099:topic:77",
-        parentConversationId: "-10099",
-        senderId: "user-9",
-        commandAuthorized: true,
-        wasMentioned: true,
-      }),
-      expect.objectContaining({
-        channelId: "telegram",
-        accountId: "default",
-        conversationId: "-10099:topic:77",
-        parentConversationId: "-10099",
-        senderId: "user-9",
-        messageId: "msg-claim-1",
-      }),
-    );
+    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
+    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledWith(
       expect.objectContaining({
         from: ctx.From,
@@ -1957,8 +1938,10 @@ describe("dispatchReplyFromConfig", () => {
         sessionKey: "agent:main:telegram:group:-10099:77",
       }),
     );
-    expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "core reply" }),
+    );
   });
 
   it("emits internal message:received hook when a session key is available", async () => {
