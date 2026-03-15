@@ -50,6 +50,8 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -81,6 +83,8 @@ export type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchResult,
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
@@ -427,6 +431,55 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Dispatch Hooks
+  // =========================================================================
+
+  /**
+   * Run before_dispatch hook.
+   * Allows plugins to block the entire message dispatch before LLM invocation
+   * and optionally send a reply text directly to the user.
+   * Runs sequentially — first handler that returns { block: true } wins.
+   *
+   * **Error semantics:** Like all hooks, errors are caught and logged when
+   * `catchErrors` is true (the default). This means a throwing handler
+   * results in permit-by-default (fail-open). Security-critical plugins
+   * should handle errors internally to implement fail-closed behavior.
+   */
+  async function runBeforeDispatch(
+    event: PluginHookBeforeDispatchEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<PluginHookBeforeDispatchResult | undefined> {
+    const hooks = getHooksForName(registry, "before_dispatch");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(`[hooks] running before_dispatch (${hooks.length} handlers, sequential)`);
+
+    for (const hook of hooks) {
+      try {
+        const result = await (
+          hook.handler as (
+            event: PluginHookBeforeDispatchEvent,
+            ctx: PluginHookMessageContext,
+          ) =>
+            | Promise<PluginHookBeforeDispatchResult | void>
+            | PluginHookBeforeDispatchResult
+            | void
+        )(event, ctx);
+
+        if (result?.block) {
+          return result;
+        }
+      } catch (err) {
+        handleHookError({ hookName: "before_dispatch", pluginId: hook.pluginId, error: err });
+      }
+    }
+
+    return undefined;
+  }
+
+  // =========================================================================
   // Tool Hooks
   // =========================================================================
 
@@ -737,6 +790,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runMessageReceived,
     runMessageSending,
     runMessageSent,
+    // Dispatch hooks
+    runBeforeDispatch,
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,

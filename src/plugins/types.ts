@@ -444,6 +444,7 @@ export type PluginHookName =
   | "subagent_delivery_target"
   | "subagent_spawned"
   | "subagent_ended"
+  | "before_dispatch"
   | "gateway_start"
   | "gateway_stop";
 
@@ -470,6 +471,7 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_delivery_target",
   "subagent_spawned",
   "subagent_ended",
+  "before_dispatch",
   "gateway_start",
   "gateway_stop",
 ] as const satisfies readonly PluginHookName[];
@@ -771,6 +773,26 @@ export type PluginHookBeforeMessageWriteResult = {
   message?: AgentMessage; // Optional: modified message to write instead
 };
 
+// before_dispatch hook — fired in dispatchReplyFromConfig before LLM invocation.
+// Allows plugins to block the entire dispatch (preventing LLM processing) and
+// optionally send a direct reply to the user.
+export type PluginHookBeforeDispatchEvent = {
+  sessionKey: string;
+  channelId: string;
+  senderId?: string;
+  conversationId?: string;
+  isGroup: boolean;
+  content: string;
+  messageId?: string;
+};
+
+export type PluginHookBeforeDispatchResult = {
+  /** If true, the dispatch is aborted — no LLM invocation occurs. */
+  block?: boolean;
+  /** If block is true, this text is sent as a direct reply to the user. */
+  replyText?: string;
+};
+
 // Session context
 export type PluginHookSessionContext = {
   agentId?: string;
@@ -976,6 +998,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookSubagentEndedEvent,
     ctx: PluginHookSubagentContext,
   ) => Promise<void> | void;
+  before_dispatch: (
+    event: PluginHookBeforeDispatchEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<PluginHookBeforeDispatchResult | void> | PluginHookBeforeDispatchResult | void;
   gateway_start: (
     event: PluginHookGatewayStartEvent,
     ctx: PluginHookGatewayContext,

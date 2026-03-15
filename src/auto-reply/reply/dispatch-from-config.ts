@@ -215,6 +215,31 @@ export async function dispatchReplyFromConfig(params: {
     );
   }
 
+  // Run before_dispatch plugin hooks (blocking — can abort dispatch before LLM).
+  // This lets security plugins (e.g. authentication gates) prevent LLM invocation
+  // entirely for unauthenticated sessions, saving tokens and enforcing access.
+  if (hookRunner?.hasHooks("before_dispatch") && sessionKey) {
+    const beforeDispatchResult = await hookRunner.runBeforeDispatch(
+      {
+        sessionKey,
+        channelId: channel,
+        senderId: ctx.SenderId,
+        conversationId: hookContext.conversationId,
+        isGroup,
+        content: hookContext.content,
+        messageId: messageIdForHook,
+      },
+      toPluginMessageContext(hookContext),
+    );
+    if (beforeDispatchResult?.block) {
+      const queuedFinal = beforeDispatchResult.replyText
+        ? dispatcher.sendFinalReply({ text: beforeDispatchResult.replyText })
+        : false;
+      recordProcessed("skipped", { reason: "before_dispatch_blocked" });
+      return { queuedFinal, counts: dispatcher.getQueuedCounts() };
+    }
+  }
+
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
   // This handles cross-provider routing (e.g., message from Telegram being processed
