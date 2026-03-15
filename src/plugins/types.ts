@@ -436,6 +436,7 @@ export type PluginHookName =
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
+  | "tool_result_before_model"
   | "tool_result_persist"
   | "before_message_write"
   | "session_start"
@@ -462,6 +463,7 @@ export const PLUGIN_HOOK_NAMES = [
   "message_sent",
   "before_tool_call",
   "after_tool_call",
+  "tool_result_before_model",
   "tool_result_persist",
   "before_message_write",
   "session_start",
@@ -720,6 +722,21 @@ export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
   blockReason?: string;
+  /** If set, skip actual tool execution and return this as the tool result. */
+  result?: unknown;
+};
+
+// tool_result_before_model hook
+export type PluginHookToolResultBeforeModelEvent = {
+  toolName: string;
+  toolCallId?: string;
+  params: Record<string, unknown>;
+  result: unknown;
+};
+
+export type PluginHookToolResultBeforeModelResult = {
+  /** If set, replaces the result the LLM sees. */
+  result?: unknown;
 };
 
 // after_tool_call hook
@@ -941,6 +958,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ) => Promise<void> | void;
+  tool_result_before_model: (
+    event: PluginHookToolResultBeforeModelEvent,
+    ctx: PluginHookToolContext,
+  ) =>
+    | Promise<PluginHookToolResultBeforeModelResult | void>
+    | PluginHookToolResultBeforeModelResult
+    | void;
   tool_result_persist: (
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
