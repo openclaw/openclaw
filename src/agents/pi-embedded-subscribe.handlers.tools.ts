@@ -98,6 +98,7 @@ function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): s
   pushUniqueMediaUrl(urls, seen, record.mediaUrl);
   pushUniqueMediaUrl(urls, seen, record.path);
   pushUniqueMediaUrl(urls, seen, record.filePath);
+  pushUniqueMediaUrl(urls, seen, record.audioPath);
 
   const mediaUrls = record.mediaUrls;
   if (Array.isArray(mediaUrls)) {
