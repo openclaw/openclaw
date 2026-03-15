@@ -483,6 +483,18 @@ export async function setHuggingfaceApiKey(
   });
 }
 
+export function setDeepSeekApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "deepseek:default",
+    credential: buildApiKeyCredential("deepseek", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export function setQianfanApiKey(
   key: SecretInput,
   agentDir?: string,

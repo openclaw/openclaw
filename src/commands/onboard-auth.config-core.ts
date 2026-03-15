@@ -9,6 +9,9 @@ import {
   buildQianfanProvider,
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
+  DEEPSEEK_DEFAULT_MODEL_ID,
+  DEEPSEEK_BASE_URL,
+  buildDeepSeekProvider,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
 import {
@@ -70,6 +73,7 @@ import {
   MISTRAL_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
+  DEEPSEEK_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_ID,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_BASE_URL,
@@ -554,6 +558,42 @@ export function applyAuthProfileConfig(
       ...(order ? { order } : {}),
     },
   };
+}
+
+export function applyDeepSeekProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[DEEPSEEK_DEFAULT_MODEL_REF] = {
+    ...models[DEEPSEEK_DEFAULT_MODEL_REF],
+    alias: models[DEEPSEEK_DEFAULT_MODEL_REF]?.alias ?? "DeepSeek",
+  };
+  const defaultProvider = buildDeepSeekProvider();
+  const existingProvider = cfg.models?.providers?.deepseek as
+    | {
+        baseUrl?: unknown;
+        api?: unknown;
+      }
+    | undefined;
+  const existingBaseUrl =
+    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+  const resolvedBaseUrl = existingBaseUrl || DEEPSEEK_BASE_URL;
+  const resolvedApi =
+    typeof existingProvider?.api === "string"
+      ? (existingProvider.api as ModelApi)
+      : "openai-completions";
+
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "deepseek",
+    api: resolvedApi,
+    baseUrl: resolvedBaseUrl,
+    defaultModels: defaultProvider.models ?? [],
+    defaultModelId: DEEPSEEK_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyDeepSeekConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyDeepSeekProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, DEEPSEEK_DEFAULT_MODEL_REF);
 }
 
 export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig {

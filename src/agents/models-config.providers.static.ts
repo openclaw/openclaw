@@ -127,6 +127,36 @@ const OPENROUTER_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1";
+export const DEEPSEEK_DEFAULT_MODEL_ID = "deepseek-chat";
+
+export function buildDeepSeekProvider(): ProviderConfig {
+  return {
+    baseUrl: DEEPSEEK_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "deepseek-chat",
+        name: "DeepSeek V3",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0.27, output: 1.1, cacheRead: 0.07, cacheWrite: 0.27 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+      },
+      {
+        id: "deepseek-reasoner",
+        name: "DeepSeek R1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0.55, output: 2.19, cacheRead: 0.14, cacheWrite: 0.55 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+      },
+    ],
+  };
+}
+
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;

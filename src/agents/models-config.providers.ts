@@ -34,12 +34,15 @@ import {
   buildOpenAICodexProvider,
   buildOpenrouterProvider,
   buildQianfanProvider,
+  buildDeepSeekProvider,
   buildQwenPortalProvider,
   buildSyntheticProvider,
   buildTogetherProvider,
   buildXiaomiProvider,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
+  DEEPSEEK_BASE_URL,
+  DEEPSEEK_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 export {
@@ -53,6 +56,9 @@ export {
   MODELSTUDIO_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
+  DEEPSEEK_BASE_URL,
+  DEEPSEEK_DEFAULT_MODEL_ID,
+  buildDeepSeekProvider,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 import {
@@ -703,6 +709,7 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     ...(await buildHuggingfaceProvider(discoveryApiKey)),
     apiKey,
   })),
+  withApiKey("deepseek", async ({ apiKey }) => ({ ...buildDeepSeekProvider(), apiKey })),
   withApiKey("qianfan", async ({ apiKey }) => ({ ...buildQianfanProvider(), apiKey })),
   withApiKey("modelstudio", async ({ apiKey }) => ({ ...buildModelStudioProvider(), apiKey })),
   withApiKey("openrouter", async ({ apiKey }) => ({ ...buildOpenrouterProvider(), apiKey })),

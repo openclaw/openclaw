@@ -110,6 +110,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["zai-coding-global", "zai-coding-cn", "zai-global", "zai-cn"],
   },
   {
+    value: "deepseek",
+    label: "DeepSeek",
+    hint: "API key",
+    choices: ["deepseek-api-key"],
+  },
+  {
     value: "qianfan",
     label: "Qianfan",
     hint: "API key",

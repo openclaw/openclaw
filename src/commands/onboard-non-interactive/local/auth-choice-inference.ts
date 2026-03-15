@@ -30,6 +30,7 @@ type AuthChoiceFlagOptions = Pick<
   | "opencodeGoApiKey"
   | "xaiApiKey"
   | "litellmApiKey"
+  | "deepseekApiKey"
   | "qianfanApiKey"
   | "modelstudioApiKeyCn"
   | "modelstudioApiKey"
