@@ -59,6 +59,7 @@ vi.mock("node:net", () => ({
 
 vi.mock("./proxy-env.js", () => ({
   hasEnvHttpProxyConfigured: vi.fn(() => false),
+  resolveAllProxyFallbackOptions: vi.fn(() => undefined),
 }));
 
 import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
