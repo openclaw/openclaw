@@ -37,11 +37,14 @@ const DISK_CACHE_FILENAME = "openrouter-models.json";
 interface OpenRouterApiModel {
   id: string;
   name?: string;
+  modality?: string;
   architecture?: {
     modality?: string;
   };
   supported_parameters?: string[];
   context_length?: number;
+  max_completion_tokens?: number;
+  max_output_tokens?: number;
   top_provider?: {
     max_completion_tokens?: number;
   };
@@ -149,7 +152,8 @@ let fetchInFlight: Promise<void> | undefined;
 
 function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
   const input: Array<"text" | "image"> = ["text"];
-  const inputModalities = model.architecture?.modality?.split("->")[0] ?? "";
+  const modality = model.architecture?.modality ?? model.modality ?? "";
+  const inputModalities = modality.split("->")[0] ?? "";
   if (inputModalities.includes("image")) {
     input.push("image");
   }
@@ -159,7 +163,11 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
     input,
     reasoning: model.supported_parameters?.includes("reasoning") ?? false,
     contextWindow: model.context_length || 128_000,
-    maxTokens: model.top_provider?.max_completion_tokens || 8192,
+    maxTokens:
+      model.top_provider?.max_completion_tokens ??
+      model.max_completion_tokens ??
+      model.max_output_tokens ??
+      8192,
     cost: {
       input: parseFloat(model.pricing?.prompt || "0") * 1_000_000,
       output: parseFloat(model.pricing?.completion || "0") * 1_000_000,
