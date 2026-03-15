@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
+import type { ChatAutoScrollMode } from "./app-scroll.ts";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -27,9 +28,12 @@ function createScrollHost(
     clientHeight,
     style: { overflowY } as unknown as CSSStyleDeclaration,
   };
-  const threadInner = {
+  const threadInner: {
+    lastElementChild: null;
+    querySelectorAll: (selector: string) => HTMLElement[];
+  } = {
     lastElementChild: null,
-    querySelectorAll: vi.fn(() => []),
+    querySelectorAll: vi.fn((): HTMLElement[] => []),
   };
 
   // Make getComputedStyle return the overflowY value
@@ -54,7 +58,7 @@ function createScrollHost(
     chatHasAutoScrolled: false,
     chatLastScrollTop: null as number | null,
     chatAutoScrollBlockId: null as string | null,
-    chatAutoScrollMode: "bottom" as const,
+    chatAutoScrollMode: "bottom" as ChatAutoScrollMode,
     chatSuppressedBlockId: null as string | null,
     chatUserNearBottom: true,
     chatNewMessagesBelow: false,

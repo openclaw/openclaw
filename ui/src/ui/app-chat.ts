@@ -24,10 +24,6 @@ export type ChatHost = {
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
-  chatUserNearBottom: boolean;
-  chatAutoScrollMode: ChatAutoScrollMode;
-  chatSuppressedBlockId: string | null;
-  chatNewMessagesBelow: boolean;
   lastError?: string | null;
   sessionKey: string;
   basePath: string;
@@ -40,6 +36,13 @@ export type ChatHost = {
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void;
+};
+
+type ChatFollowState = {
+  chatUserNearBottom: boolean;
+  chatAutoScrollMode: ChatAutoScrollMode;
+  chatSuppressedBlockId: string | null;
+  chatNewMessagesBelow: boolean;
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
@@ -125,11 +128,12 @@ async function sendChatMessageNow(
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+  const scrollState = host as ChatHost & ChatFollowState;
   // A local send is an explicit intent to watch the latest activity.
-  host.chatUserNearBottom = true;
-  host.chatAutoScrollMode = "bottom";
-  host.chatSuppressedBlockId = null;
-  host.chatNewMessagesBelow = false;
+  scrollState.chatUserNearBottom = true;
+  scrollState.chatAutoScrollMode = "bottom";
+  scrollState.chatSuppressedBlockId = null;
+  scrollState.chatNewMessagesBelow = false;
   const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {
