@@ -26,7 +26,6 @@ type StoredToolInterruptRecord = ToolInterruptBinding & {
   normalizedArgsHash?: string;
   createdAtMs: number;
   expiresAtMs: number;
-  resumeToken?: string;
   resumeTokenHash: string;
   resumedAtMs?: number;
   resumedBy?: string | null;
@@ -91,6 +90,7 @@ export type ToolInterruptEmitResult = {
 
 type PendingInterruptEntry = {
   record: StoredToolInterruptRecord;
+  resumeToken: string | null;
   promise: Promise<ToolInterruptWaitResult>;
   resolve: (result: ToolInterruptWaitResult) => void;
   timer: NodeJS.Timeout;
@@ -198,7 +198,6 @@ function parseStoredRecord(value: unknown): StoredToolInterruptRecord | null {
         : undefined,
     createdAtMs: Math.floor(record.createdAtMs),
     expiresAtMs: Math.floor(record.expiresAtMs),
-    resumeToken: resumeTokenRaw || undefined,
     resumeTokenHash,
     resumedAtMs: resumedAtMs ? Math.floor(resumedAtMs) : undefined,
     resumedBy:
@@ -315,30 +314,41 @@ export class ToolInterruptManager {
     };
   }
 
-  listPending(): ToolInterruptPendingSnapshot[] {
-    const now = this.nowMs();
-    const snapshots: ToolInterruptPendingSnapshot[] = [];
-    for (const record of this.records.values()) {
-      if (record.resumedAtMs || record.expiredAtMs || now >= record.expiresAtMs) {
-        continue;
+  async listPending(): Promise<ToolInterruptPendingSnapshot[]> {
+    return await this.withLock(async () => {
+      const now = this.nowMs();
+      const snapshots: ToolInterruptPendingSnapshot[] = [];
+      let changed = false;
+      for (const record of this.records.values()) {
+        if (record.resumedAtMs || record.expiredAtMs || now >= record.expiresAtMs) {
+          continue;
+        }
+        let entry = this.pending.get(record.approvalRequestId);
+        if (!entry || entry.settled) {
+          entry = this.createPendingEntry(record);
+          this.pending.set(record.approvalRequestId, entry);
+          this.schedulePendingTimer(entry);
+        }
+        const issued = this.ensurePendingResumeTokenLocked(entry);
+        changed ||= issued.changed;
+        snapshots.push({
+          approvalRequestId: record.approvalRequestId,
+          runId: record.runId,
+          sessionKey: record.sessionKey,
+          toolCallId: record.toolCallId,
+          interrupt: { ...record.interrupt },
+          toolName: record.toolName,
+          normalizedArgsHash: record.normalizedArgsHash,
+          createdAtMs: record.createdAtMs,
+          expiresAtMs: record.expiresAtMs,
+          resumeToken: issued.resumeToken,
+        });
       }
-      if (!record.resumeToken) {
-        continue;
+      if (changed) {
+        await this.persistLocked();
       }
-      snapshots.push({
-        approvalRequestId: record.approvalRequestId,
-        runId: record.runId,
-        sessionKey: record.sessionKey,
-        toolCallId: record.toolCallId,
-        interrupt: { ...record.interrupt },
-        toolName: record.toolName,
-        normalizedArgsHash: record.normalizedArgsHash,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-        resumeToken: record.resumeToken,
-      });
-    }
-    return snapshots.toSorted((a, b) => a.createdAtMs - b.createdAtMs);
+      return snapshots.toSorted((a, b) => a.createdAtMs - b.createdAtMs);
+    });
   }
 
   async emit(
@@ -373,8 +383,6 @@ export class ToolInterruptManager {
       /^[a-f0-9]{64}$/.test(params.normalizedArgsHash)
         ? params.normalizedArgsHash
         : undefined;
-    const resumeToken = mintResumeToken();
-    const resumeTokenHash = hashResumeToken(resumeToken);
     let created = false;
     let pending: PendingInterruptEntry | null = null;
     let requested: ToolInterruptRequested | null = null;
@@ -398,8 +406,7 @@ export class ToolInterruptManager {
           normalizedArgsHash,
           createdAtMs: now,
           expiresAtMs: now + timeoutMs,
-          resumeToken,
-          resumeTokenHash,
+          resumeTokenHash: "",
           resumedAtMs: undefined,
           resumedBy: undefined,
           expiredAtMs: undefined,
@@ -410,8 +417,6 @@ export class ToolInterruptManager {
         record.toolName = toolName;
         record.normalizedArgsHash = normalizedArgsHash;
         record.expiresAtMs = now + timeoutMs;
-        record.resumeToken = resumeToken;
-        record.resumeTokenHash = resumeTokenHash;
         record.expiredAtMs = undefined;
       }
 
@@ -424,6 +429,7 @@ export class ToolInterruptManager {
         nextPending = existingPending;
         nextPending.record = record;
       }
+      const issued = this.ensurePendingResumeTokenLocked(nextPending);
       pending = nextPending;
       this.schedulePendingTimer(nextPending);
       this.pruneRecordsLocked(now);
@@ -437,7 +443,7 @@ export class ToolInterruptManager {
         interrupt: { ...record.interrupt },
         createdAtMs: record.createdAtMs,
         expiresAtMs: record.expiresAtMs,
-        resumeToken,
+        resumeToken: issued.resumeToken,
       };
     });
 
@@ -557,7 +563,6 @@ export class ToolInterruptManager {
       }
       if (record.expiredAtMs || now >= record.expiresAtMs) {
         record.expiredAtMs = record.expiredAtMs ?? now;
-        record.resumeToken = undefined;
         this.settlePendingLocked(binding.approvalRequestId, {
           status: "expired",
           approvalRequestId: record.approvalRequestId,
@@ -589,7 +594,6 @@ export class ToolInterruptManager {
         result: params.result,
       };
       record.resumedAtMs = resumedAtMs;
-      record.resumeToken = undefined;
       record.resumedBy = params.resumedBy ?? null;
       record.decisionReason =
         typeof params.decisionReason === "string" || params.decisionReason === null
@@ -625,11 +629,26 @@ export class ToolInterruptManager {
     });
     return {
       record,
+      resumeToken: null,
       promise,
       resolve,
       timer: setTimeout(() => {}, 0),
       settled: null,
     };
+  }
+
+  private ensurePendingResumeTokenLocked(entry: PendingInterruptEntry): {
+    resumeToken: string;
+    changed: boolean;
+  } {
+    if (entry.resumeToken) {
+      return { resumeToken: entry.resumeToken, changed: false };
+    }
+    const resumeToken = mintResumeToken();
+    entry.resumeToken = resumeToken;
+    entry.record.resumeTokenHash = hashResumeToken(resumeToken);
+    this.records.set(entry.record.approvalRequestId, entry.record);
+    return { resumeToken, changed: true };
   }
 
   private schedulePendingTimer(entry: PendingInterruptEntry) {
@@ -675,7 +694,6 @@ export class ToolInterruptManager {
         return;
       }
       record.expiredAtMs = record.expiredAtMs ?? now;
-      record.resumeToken = undefined;
       this.records.set(record.approvalRequestId, record);
       this.settlePendingLocked(approvalRequestId, {
         status: "expired",
@@ -757,7 +775,6 @@ export class ToolInterruptManager {
         normalizedArgsHash: record.normalizedArgsHash,
         createdAtMs: record.createdAtMs,
         expiresAtMs: record.expiresAtMs,
-        resumeToken: record.resumeToken,
         resumeTokenHash: record.resumeTokenHash,
         resumedAtMs: record.resumedAtMs,
         resumedBy: record.resumedBy,
