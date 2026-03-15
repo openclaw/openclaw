@@ -440,15 +440,11 @@ describe("tryDispatchAcpReply", () => {
     setReadyAcpResolution();
     // Configure TTS mode as "final" but TTS synthesis returns no mediaUrl
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
-    // Mock TTS to return no mediaUrl for final-stage synthesis
-    // Note: block delivery path will also call maybeApplyTtsToPayload,
-    // so we use mockResolvedValue to handle both calls
+    // Mock TTS to return no mediaUrl for all calls
     ttsMocks.maybeApplyTtsToPayload.mockResolvedValue(
       {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
     );
 
-    // Simulate a scenario where projector did not deliver blocks
-    // (e.g., deliveryMode="final_only" with no block delivery)
     managerMocks.runTurn.mockImplementation(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
         await onEvent({ type: "text_delta", text: "CODEX_OK", tag: "agent_message_chunk" });
@@ -463,9 +459,13 @@ describe("tryDispatchAcpReply", () => {
       shouldRouteToOriginating: true,
     });
 
-    // Should deliver final text as fallback when TTS produced no media
+    // Should deliver final text as fallback when TTS produced no media.
+    // Note: ACP sends block first (during flush on done), then final fallback.
+    // So routeReply is called twice: 1 for block + 1 for final.
+    expect(result?.counts.block).toBeGreaterThanOrEqual(1);
     expect(result?.counts.final).toBe(1);
-    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    // Verify final delivery contains the expected text
     expect(routeMocks.routeReply).toHaveBeenCalledWith(
       expect.objectContaining({
         payload: expect.objectContaining({
