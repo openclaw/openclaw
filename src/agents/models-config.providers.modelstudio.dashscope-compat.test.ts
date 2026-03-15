@@ -1,6 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { upsertAuthProfile } from "./auth-profiles.js";
@@ -22,6 +23,30 @@ import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js"
  */
 
 const modelStudioApiKeyEnv = ["MODELSTUDIO_API", "KEY"].join("_");
+
+const dashScopeModel = (overrides?: Partial<Model<Api>>): Model<Api> =>
+  ({
+    id: "qwen3.5-plus",
+    name: "qwen3.5-plus",
+    api: "openai-completions",
+    provider: "modelstudio",
+    baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+    ...overrides,
+  }) as Model<Api>;
+
+function supportsDeveloperRole(model: Model<Api>): boolean | undefined {
+  return (model.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole;
+}
+
+function supportsUsageInStreaming(model: Model<Api>): boolean | undefined {
+  return (model.compat as { supportsUsageInStreaming?: boolean } | undefined)
+    ?.supportsUsageInStreaming;
+}
 
 describe("Model Studio DashScope compatibility", () => {
   it("includes modelstudio when auth profile uses env keyRef (no env var set)", async () => {
@@ -61,127 +86,72 @@ describe("Model Studio DashScope compatibility", () => {
   });
 
   it("forces supportsDeveloperRole off for modelstudio DashScope endpoint", () => {
-    const model = {
-      id: "qwen3.5-plus",
-      api: "openai-completions" as const,
-      provider: "modelstudio",
-      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-      name: "qwen3.5-plus",
-    };
-
-    const normalized = normalizeModelCompat(model);
-    const compat = (normalized as { compat?: { supportsDeveloperRole?: boolean } }).compat;
-    expect(compat?.supportsDeveloperRole).toBe(false);
+    const normalized = normalizeModelCompat(dashScopeModel());
+    expect(supportsDeveloperRole(normalized)).toBe(false);
   });
 
   it("forces supportsDeveloperRole off for China DashScope endpoint", () => {
-    const model = {
-      id: "qwen3.5-plus",
-      api: "openai-completions" as const,
-      provider: "modelstudio",
-      baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
-      name: "qwen3.5-plus",
-    };
-
-    const normalized = normalizeModelCompat(model);
-    const compat = (normalized as { compat?: { supportsDeveloperRole?: boolean } }).compat;
-    expect(compat?.supportsDeveloperRole).toBe(false);
+    const normalized = normalizeModelCompat(
+      dashScopeModel({ baseUrl: "https://coding.dashscope.aliyuncs.com/v1" }),
+    );
+    expect(supportsDeveloperRole(normalized)).toBe(false);
   });
 
   it("forces supportsUsageInStreaming off for modelstudio DashScope endpoint by default", () => {
-    const model = {
-      id: "qwen3.5-plus",
-      api: "openai-completions" as const,
-      provider: "modelstudio",
-      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-      name: "qwen3.5-plus",
-    };
-
-    const normalized = normalizeModelCompat(model);
-    const compat = (normalized as { compat?: { supportsUsageInStreaming?: boolean } }).compat;
-    expect(compat?.supportsUsageInStreaming).toBe(false);
+    const normalized = normalizeModelCompat(dashScopeModel());
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
   it("respects explicit supportsUsageInStreaming override on DashScope endpoint", () => {
-    const model = {
-      id: "qwen3.5-plus",
-      api: "openai-completions" as const,
-      provider: "modelstudio",
-      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-      name: "qwen3.5-plus",
-      compat: { supportsUsageInStreaming: true },
+    const model = dashScopeModel();
+    (model as { compat?: Record<string, boolean> }).compat = {
+      supportsUsageInStreaming: true,
     };
-
     const normalized = normalizeModelCompat(model);
-    const compat = (normalized as { compat?: { supportsUsageInStreaming?: boolean } }).compat;
-    expect(compat?.supportsUsageInStreaming).toBe(true);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
   });
 
   it("respects explicit supportsDeveloperRole override on DashScope endpoint", () => {
-    const model = {
-      id: "qwen3.5-plus",
-      api: "openai-completions" as const,
-      provider: "modelstudio",
-      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-      name: "qwen3.5-plus",
-      compat: { supportsDeveloperRole: true },
+    const model = dashScopeModel();
+    (model as { compat?: Record<string, boolean> }).compat = {
+      supportsDeveloperRole: true,
     };
-
     const normalized = normalizeModelCompat(model);
-    const compat = (normalized as { compat?: { supportsDeveloperRole?: boolean } }).compat;
-    expect(compat?.supportsDeveloperRole).toBe(true);
+    expect(supportsDeveloperRole(normalized)).toBe(true);
   });
 
   it("forces compat flags off for user-configured DashScope compatible-mode endpoints", () => {
-    const model = {
-      id: "qwen-turbo",
-      api: "openai-completions" as const,
-      provider: "custom-dashscope",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      name: "qwen-turbo",
-    };
-
-    const normalized = normalizeModelCompat(model);
-    const compat = (
-      normalized as {
-        compat?: { supportsDeveloperRole?: boolean; supportsUsageInStreaming?: boolean };
-      }
-    ).compat;
-    expect(compat?.supportsDeveloperRole).toBe(false);
-    expect(compat?.supportsUsageInStreaming).toBe(false);
+    const normalized = normalizeModelCompat(
+      dashScopeModel({
+        id: "qwen-turbo",
+        name: "qwen-turbo",
+        provider: "custom-dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      }),
+    );
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
   it("forces compat flags off for international DashScope compatible-mode endpoints", () => {
-    const model = {
-      id: "qwen-max",
-      api: "openai-completions" as const,
-      provider: "custom-dashscope-intl",
-      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-      name: "qwen-max",
-    };
-
-    const normalized = normalizeModelCompat(model);
-    const compat = (
-      normalized as {
-        compat?: { supportsDeveloperRole?: boolean; supportsUsageInStreaming?: boolean };
-      }
-    ).compat;
-    expect(compat?.supportsDeveloperRole).toBe(false);
-    expect(compat?.supportsUsageInStreaming).toBe(false);
+    const normalized = normalizeModelCompat(
+      dashScopeModel({
+        id: "qwen-max",
+        name: "qwen-max",
+        provider: "custom-dashscope-intl",
+        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      }),
+    );
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
   it("does not mutate the original model object", () => {
-    const model = {
-      id: "qwen3.5-plus",
-      api: "openai-completions" as const,
-      provider: "modelstudio",
-      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-      name: "qwen3.5-plus",
-    };
-
+    const model = dashScopeModel();
     const normalized = normalizeModelCompat(model);
     expect(normalized).not.toBe(model);
-    expect((model as { compat?: unknown }).compat).toBeUndefined();
+    expect(supportsDeveloperRole(model)).toBeUndefined();
+    expect(supportsUsageInStreaming(model)).toBeUndefined();
   });
 
   it("uses openai-completions API type for all modelstudio catalog models", async () => {
