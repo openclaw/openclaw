@@ -80,6 +80,25 @@ function applyScrollTop(target: HTMLElement, scrollTop: number, smoothEnabled: b
   }
 }
 
+function shouldStickToLatestBlock(
+  host: ScrollHost,
+  latestBlockId: string | null,
+  effectiveForce: boolean,
+) {
+  const canFollow = effectiveForce || host.chatUserNearBottom;
+  const trackingCurrentBlock = Boolean(
+    latestBlockId && host.chatAutoScrollBlockId === latestBlockId,
+  );
+  const suppressedCurrentBlock = Boolean(
+    latestBlockId && host.chatSuppressedBlockId === latestBlockId,
+  );
+  return (
+    effectiveForce ||
+    (trackingCurrentBlock && !suppressedCurrentBlock) ||
+    (!latestBlockId && canFollow)
+  );
+}
+
 export function scheduleChatScroll(host: ScrollHost, force = false, smooth = false) {
   if (host.chatScrollFrame) {
     cancelAnimationFrame(host.chatScrollFrame);
@@ -126,16 +145,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         host.chatAutoScrollBlockId = latestBlockId;
         host.chatAutoScrollMode = latestBlock?.defaultMode ?? "bottom";
       }
-      const trackingCurrentBlock = Boolean(
-        latestBlockId && host.chatAutoScrollBlockId === latestBlockId,
-      );
-      const suppressedCurrentBlock = Boolean(
-        latestBlockId && host.chatSuppressedBlockId === latestBlockId,
-      );
-      const shouldStick =
-        effectiveForce ||
-        (trackingCurrentBlock && !suppressedCurrentBlock) ||
-        (!latestBlockId && canStartFollowing);
+      const shouldStick = shouldStickToLatestBlock(host, latestBlockId, effectiveForce);
 
       if (!shouldStick) {
         // User is scrolled up — flag that new content arrived below.
@@ -176,17 +186,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         }
         const latestBlockRetry = pickLatestChatBlock(host);
         const latestBlockRetryId = latestBlockRetry?.id ?? null;
-        const canStartFollowingRetry = effectiveForce || host.chatUserNearBottom;
-        const trackingCurrentBlockRetry = Boolean(
-          latestBlockRetryId && host.chatAutoScrollBlockId === latestBlockRetryId,
-        );
-        const suppressedCurrentBlockRetry = Boolean(
-          latestBlockRetryId && host.chatSuppressedBlockId === latestBlockRetryId,
-        );
-        const shouldStickRetry =
-          effectiveForce ||
-          (trackingCurrentBlockRetry && !suppressedCurrentBlockRetry) ||
-          (!latestBlockRetryId && canStartFollowingRetry);
+        const shouldStickRetry = shouldStickToLatestBlock(host, latestBlockRetryId, effectiveForce);
         if (!shouldStickRetry) {
           return;
         }
