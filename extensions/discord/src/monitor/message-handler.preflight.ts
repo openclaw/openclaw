@@ -12,6 +12,7 @@ import {
 import {
   buildMentionRegexes,
   matchesMentionWithExplicit,
+  normalizeMentionText,
 } from "../../../../src/auto-reply/reply/mentions.js";
 import { formatAllowlistMatchMeta } from "../../../../src/channels/allowlist-match.js";
 import { resolveControlCommandGate } from "../../../../src/channels/command-gating.js";
@@ -59,6 +60,7 @@ import {
   resolveDiscordMessageText,
 } from "./message-utils.js";
 import { resolveDiscordPreflightAudioMentionContext } from "./preflight-audio.js";
+import { resolveDiscordRouteOwner } from "./route-owner.js";
 import {
   buildDiscordRoutePeer,
   resolveDiscordConversationRoute,
@@ -75,6 +77,44 @@ export type {
 } from "./message-handler.preflight.types.js";
 
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildBotNameMentionRegexes(botUserName?: string): RegExp[] {
+  const name = botUserName?.trim();
+  if (!name) {
+    return [];
+  }
+  const parts = name
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => escapeRegexLiteral(part));
+  if (parts.length === 0) {
+    return [];
+  }
+  try {
+    return [
+      new RegExp(
+        String.raw`(?:^|\s)@?${parts.join(String.raw`\s+`)}(?=$|\s|[!?,.;:，。！？；：、】【（）()<>《》"'“”‘’])`,
+        "i",
+      ),
+    ];
+  } catch {
+    return [];
+  }
+}
+
+function mergeMentionRegexes(primary: RegExp[], fallback: RegExp[]): RegExp[] {
+  if (fallback.length === 0) {
+    return primary;
+  }
+  if (primary.length === 0) {
+    return fallback;
+  }
+  return [...primary, ...fallback];
+}
 
 function isPreflightAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
@@ -289,6 +329,10 @@ export async function preflightDiscordMessage(
   const messageText = resolveDiscordMessageText(message, {
     includeForwarded: true,
   });
+  const botNameMentionRegexes = buildBotNameMentionRegexes(params.botUserName);
+  const explicitlyMentioned = Boolean(
+    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
+  );
 
   // Intercept text-only slash commands (e.g. user typing "/reset" instead of using Discord's slash command picker)
   // These should not be forwarded to the agent; proper slash command interactions are handled elsewhere
@@ -337,17 +381,18 @@ export async function preflightDiscordMessage(
     ? params.data.rawMember.roles.map((roleId: string) => String(roleId))
     : [];
   const freshCfg = loadConfig();
+  const routePeer = buildDiscordRoutePeer({
+    isDirectMessage,
+    isGroupDm,
+    directUserId: author.id,
+    conversationId: messageChannelId,
+  });
   const route = resolveDiscordConversationRoute({
     cfg: freshCfg,
     accountId: params.accountId,
     guildId: params.data.guild_id ?? undefined,
     memberRoleIds,
-    peer: buildDiscordRoutePeer({
-      isDirectMessage,
-      isGroupDm,
-      directUserId: author.id,
-      conversationId: messageChannelId,
-    }),
+    peer: routePeer,
     parentConversationId: earlyThreadParentId,
   });
   let threadBinding: SessionBindingRecord | undefined;
@@ -372,6 +417,52 @@ export async function preflightDiscordMessage(
   const configuredBinding = configuredRoute?.configuredBinding ?? null;
   if (!threadBinding && configuredBinding) {
     threadBinding = configuredBinding.record;
+  }
+  const hasAnyMention = Boolean(
+    !isDirectMessage &&
+    ((message.mentionedUsers?.length ?? 0) > 0 ||
+      (message.mentionedRoles?.length ?? 0) > 0 ||
+      (message.mentionedEveryone && (!author.bot || sender.isPluralKit))),
+  );
+  const ownerBypassMentionRegexes = mergeMentionRegexes(
+    buildMentionRegexes(freshCfg, route.agentId),
+    botNameMentionRegexes,
+  );
+  const bypassOwnerBecauseMentioned =
+    !isDirectMessage &&
+    matchesMentionWithExplicit({
+      text: normalizeMentionText(baseText),
+      mentionRegexes: ownerBypassMentionRegexes,
+      explicit: {
+        hasAnyMention,
+        isExplicitlyMentioned: explicitlyMentioned,
+        canResolveExplicit: Boolean(botId),
+      },
+    });
+  if (!threadBinding && !configuredBinding) {
+    const owner = resolveDiscordRouteOwner({
+      cfg: freshCfg,
+      currentAccountId: params.accountId,
+      currentRoute: route,
+      guildId: params.data.guild_id ?? undefined,
+      memberRoleIds,
+      peer: routePeer,
+      parentPeer: earlyThreadParentId ? { kind: "channel", id: earlyThreadParentId } : undefined,
+    });
+    if (owner && !bypassOwnerBecauseMentioned) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "discord",
+        target: messageChannelId,
+        reason: `owned by account=${owner.accountId} agent=${owner.route.agentId} via ${owner.route.matchedBy}`,
+      });
+      return null;
+    }
+    if (owner && bypassOwnerBecauseMentioned) {
+      logVerbose(
+        `discord: bypass route owner account=${owner.accountId} because current bot ${params.botUserName ?? botId ?? "unknown"} was explicitly mentioned`,
+      );
+    }
   }
   if (
     shouldIgnoreBoundThreadWebhookMessage({
@@ -403,15 +494,9 @@ export async function preflightDiscordMessage(
     logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
     return null;
   }
-  const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
-  const explicitlyMentioned = Boolean(
-    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
-  );
-  const hasAnyMention = Boolean(
-    !isDirectMessage &&
-    ((message.mentionedUsers?.length ?? 0) > 0 ||
-      (message.mentionedRoles?.length ?? 0) > 0 ||
-      (message.mentionedEveryone && (!author.bot || sender.isPluralKit))),
+  const mentionRegexes = mergeMentionRegexes(
+    buildMentionRegexes(params.cfg, effectiveRoute.agentId),
+    botNameMentionRegexes,
   );
   const hasUserOrRoleMention = Boolean(
     !isDirectMessage &&
@@ -785,6 +870,7 @@ export async function preflightDiscordMessage(
     token: params.token,
     runtime: params.runtime,
     botUserId: params.botUserId,
+    botUserName: params.botUserName,
     abortSignal: params.abortSignal,
     guildHistories: params.guildHistories,
     historyLimit: params.historyLimit,
