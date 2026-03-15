@@ -135,13 +135,19 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     ...lineConfigBase,
     isConfigured: (account) =>
       Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
-      tokenSource: account.tokenSource ?? undefined,
-    }),
+    describeAccount: (account, cfg) => {
+      const resolved = getLineRuntime().channel.line.resolveLineAccount({
+        cfg,
+        accountId: account.accountId ?? undefined,
+      });
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: Boolean(resolved.channelAccessToken?.trim() && resolved.channelSecret?.trim()),
+        tokenSource: resolved.tokenSource ?? account.tokenSource ?? undefined,
+      };
+    },
     ...lineConfigAccessors,
   },
   security: {
