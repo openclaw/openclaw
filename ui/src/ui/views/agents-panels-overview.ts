@@ -1,4 +1,6 @@
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
+import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
 import {
   buildModelOptions,
@@ -51,17 +53,20 @@ export function renderAgentOverview(params: {
     ? resolveModelLabel(config.entry?.model)
     : resolveModelLabel(config.defaults?.model);
   const defaultModel = resolveModelLabel(config.defaults?.model);
-  const entryPrimary = resolveModelPrimary(config.entry?.model);
+  const modelPrimary = resolveModelPrimary(config.entry?.model);
   const defaultPrimary =
     resolveModelPrimary(config.defaults?.model) ||
     (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null);
-  const effectivePrimary = entryPrimary ?? defaultPrimary ?? null;
   const modelFallbacks = resolveModelFallbacks(config.entry?.model);
   const fallbackChips = modelFallbacks ?? [];
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
   const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
   const disabled = !configForm || configLoading || configSaving;
+  const optionCurrent = isDefault
+    ? (modelPrimary ?? defaultPrimary ?? undefined)
+    : (modelPrimary ?? undefined);
+  const selectValue = isDefault ? (modelPrimary ?? defaultPrimary ?? "") : (modelPrimary ?? "");
 
   const removeChip = (index: number) => {
     const next = fallbackChips.filter((_, i) => i !== index);
@@ -121,7 +126,20 @@ export function renderAgentOverview(params: {
           <label class="field">
             <span>Primary model${isDefault ? " (default)" : ""}</span>
             <select
-              .value=${isDefault ? (effectivePrimary ?? "") : (entryPrimary ?? "")}
+              .value=${live(selectValue)}
+              ${ref((element) => {
+                if (!(element instanceof HTMLSelectElement)) {
+                  return;
+                }
+                queueMicrotask(() => {
+                  const hasDomMatch = Array.from(element.options).some(
+                    (option) => option.value === selectValue,
+                  );
+                  if (element.value !== selectValue && hasDomMatch) {
+                    element.value = selectValue;
+                  }
+                });
+              })}
               ?disabled=${disabled}
               @change=${(e: Event) =>
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
@@ -135,7 +153,7 @@ export function renderAgentOverview(params: {
                       </option>
                     `
               }
-              ${buildModelOptions(configForm, effectivePrimary ?? undefined)}
+              ${buildModelOptions(configForm, optionCurrent)}
             </select>
           </label>
           <div class="field">
