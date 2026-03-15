@@ -622,11 +622,35 @@ export function resolveAllowedModelRef(params: {
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
   });
-  if (!status.allowed) {
-    return { error: `model not allowed: ${status.key}` };
+  if (status.allowed) {
+    return { ref: resolved.ref, key: status.key };
   }
 
-  return { ref: resolved.ref, key: status.key };
+  // When a bare model ID (no provider prefix) is not found under the default
+  // provider, search the catalog for a matching entry from any provider.
+  // This handles the case where a UI model picker or user sends a bare model
+  // ID that belongs to a different provider than the session's current default.
+  // See https://github.com/openclaw/openclaw/issues/46859
+  if (!trimmed.includes("/")) {
+    for (const entry of params.catalog) {
+      if (entry.id !== trimmed) {
+        continue;
+      }
+      const candidateRef: ModelRef = { provider: entry.provider, model: entry.id };
+      const candidateStatus = getModelRefStatus({
+        cfg: params.cfg,
+        catalog: params.catalog,
+        ref: candidateRef,
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
+      });
+      if (candidateStatus.allowed) {
+        return { ref: candidateRef, key: candidateStatus.key };
+      }
+    }
+  }
+
+  return { error: `model not allowed: ${status.key}` };
 }
 
 export function resolveThinkingDefault(params: {
