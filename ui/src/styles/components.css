@@ -2665,11 +2665,14 @@
 
 .exec-approval-card {
   width: min(540px, 100%);
+  max-height: calc(100vh - 48px);
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 20px;
   animation: scale-in 0.2s var(--ease-out);
+  display: flex;
+  flex-direction: column;
 }
 
 .exec-approval-header {
@@ -2677,6 +2680,16 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  flex-shrink: 0;
+}
+
+.exec-approval-content {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-right: -4px;
+  padding-right: 4px;
 }
 
 .exec-approval-title {
@@ -2741,6 +2754,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 /* ===========================================
