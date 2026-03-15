@@ -9,6 +9,11 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "npmSpec": "@openclaw/acpx",
+      "localPath": "extensions/acpx",
+      "defaultChoice": "local"
+    }
   }
 }
