@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import { stripMarkdown } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import {
+  fetchBlueBubblesServerInfo,
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
@@ -389,7 +390,7 @@ export async function sendMessageBlueBubbles(
   if (!password) {
     throw new Error("BlueBubbles password is required");
   }
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
+  let privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
 
   const target = resolveBlueBubblesSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
@@ -417,6 +418,30 @@ export async function sendMessageBlueBubbles(
   const effectId = resolveEffectId(opts.effectId);
   const wantsReplyThread = Boolean(opts.replyToMessageGuid?.trim());
   const wantsEffect = Boolean(effectId);
+
+  // Lazy-refresh Private API status when it's unknown and we need it for reply/effect.
+  // The cache expires after 10 minutes; without this, replies silently degrade to plain sends.
+  // Only refresh when the resolved credentials match the account config. The cache is keyed
+  // by accountId, so refreshing with ad-hoc or overridden credentials would poison the
+  // account-scoped cache entry for subsequent sends.
+  const accountServerUrl = normalizeSecretInputString(account.config.serverUrl);
+  const credentialsAreAccountBound = accountServerUrl != null && baseUrl === accountServerUrl;
+  if (
+    privateApiStatus === null &&
+    (wantsReplyThread || wantsEffect) &&
+    credentialsAreAccountBound
+  ) {
+    const serverInfo = await fetchBlueBubblesServerInfo({
+      baseUrl,
+      password,
+      accountId: account.accountId,
+      timeoutMs: opts.timeoutMs ?? 5000,
+    });
+    if (serverInfo) {
+      privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
+    }
+  }
+
   const privateApiDecision = resolvePrivateApiDecision({
     privateApiStatus,
     wantsReplyThread,
