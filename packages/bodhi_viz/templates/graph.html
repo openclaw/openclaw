@@ -507,16 +507,36 @@ function openDocPanel(node) {
     [node.domain?.toUpperCase(), node.type, date].filter(Boolean).join(' · ');
 
   document.getElementById('doc-title').textContent = node.label || '';
-  document.getElementById('doc-content').textContent = node.content || '';
+  document.getElementById('doc-content').textContent = 'Loading…';
+  document.getElementById('doc-enriched').style.display = 'none';
 
-  const enriched = node.content_enriched || '';
-  const enrichedEl = document.getElementById('doc-enriched');
-  if (enriched && enriched !== node.content) {
-    enrichedEl.textContent = enriched;
-    enrichedEl.style.display = 'block';
-  } else {
-    enrichedEl.style.display = 'none';
-  }
+  // Fetch full content from authenticated endpoint (not in graph.json)
+  fetch('/api/node/' + encodeURIComponent(node.id))
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (!data) {
+        document.getElementById('doc-content').textContent = node.label || '';
+        return;
+      }
+      document.getElementById('doc-content').textContent = data.content || '';
+      const enriched = data.content_enriched || '';
+      const enrichedEl = document.getElementById('doc-enriched');
+      if (enriched && enriched !== data.content) {
+        enrichedEl.textContent = enriched;
+        enrichedEl.style.display = 'block';
+      }
+      // Append people pills (from full node, not graph.json)
+      const tagsEl = document.getElementById('doc-tags');
+      (data.people || []).forEach(p => {
+        const pill = document.createElement('span');
+        pill.className = 'person-pill';
+        pill.textContent = '@ ' + p;
+        tagsEl.appendChild(pill);
+      });
+    })
+    .catch(() => {
+      document.getElementById('doc-content').textContent = node.label || '';
+    });
 
   // Energy pips
   const energy = node.energy_level || 1;
@@ -529,7 +549,7 @@ function openDocPanel(node) {
     energyEl.appendChild(pip);
   }
 
-  // Tags + people
+  // Tags (available in graph.json, no people — those come from /api/node)
   const tagsEl = document.getElementById('doc-tags');
   tagsEl.innerHTML = '';
   tagsEl.appendChild(energyEl);
@@ -538,12 +558,6 @@ function openDocPanel(node) {
     const pill = document.createElement('span');
     pill.className = 'tag-pill';
     pill.textContent = '#' + t;
-    tagsEl.appendChild(pill);
-  });
-  (node.people || []).forEach(p => {
-    const pill = document.createElement('span');
-    pill.className = 'person-pill';
-    pill.textContent = '@ ' + p;
     tagsEl.appendChild(pill);
   });
 
@@ -740,8 +754,8 @@ document.getElementById('btn-reset').addEventListener('click', () => {
             // Let timeline filter re-apply
             document.getElementById('timeline-slider').dispatchEvent(new Event('input'));
           }
-          document.getElementById('node-count').textContent =
-            graphData.nodes.length + ' nodes';
+          document.getElementById('stats-bar').textContent =
+            `${graphData.nodes.length} nodes · ${graphData.links.length} links`;
         })
         .catch(() => {});
     });

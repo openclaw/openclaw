@@ -64,13 +64,12 @@ def build_graph(nodes: list[dict[str, Any]]) -> dict[str, Any]:
             "created_at": node.get("created_at", ""),
             "type": node.get("type", "Unknown"),
             "tags": node.get("tags", []),
-            "people": node.get("people", []),
             "cluster_id": node.get("cluster_id"),
             "energy_level": energy,
-            "content": content,
-            "content_enriched": node.get("content_enriched", ""),
             "domain": domain,
             "media_type": node.get("media_type", "text"),
+            # NOTE: content and people intentionally excluded — served only via
+            # authenticated /api/node/<id> to prevent bulk content exfiltration
         })
 
     # Links from shared people[]

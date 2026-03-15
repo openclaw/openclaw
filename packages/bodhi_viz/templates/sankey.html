@@ -190,8 +190,24 @@ const TIER_COLORS = {
 
 const tooltip = document.getElementById('tooltip');
 
-function showTooltip(x, y, html) {
-  tooltip.innerHTML = html;
+function showTooltip(x, y, title, sub1, sub2) {
+  // Build DOM nodes — never innerHTML with vault-derived strings (XSS guard)
+  tooltip.innerHTML = '';
+  const strong = document.createElement('strong');
+  strong.textContent = title;
+  tooltip.appendChild(strong);
+  if (sub1) {
+    const d1 = document.createElement('div');
+    d1.className = 'tt-sub';
+    d1.textContent = sub1;
+    tooltip.appendChild(d1);
+  }
+  if (sub2) {
+    const d2 = document.createElement('div');
+    d2.className = 'tt-sub';
+    d2.textContent = sub2;
+    tooltip.appendChild(d2);
+  }
   tooltip.style.opacity = '1';
   tooltip.style.left = (x + 14) + 'px';
   tooltip.style.top = (y - 10) + 'px';
@@ -268,10 +284,13 @@ function drawSankey(data, svgEl) {
     const tgtColor = getNodeColor(link.target) || '#94a3b8';
     const gradId = `grad-${i}`;
 
+    const srcMidY = link.source.y0 + (link.source.y1 - link.source.y0) / 2;
+    const tgtMidY = link.target.y0 + (link.target.y1 - link.target.y0) / 2;
     const grad = defs.append('linearGradient')
       .attr('id', gradId)
       .attr('gradientUnits', 'userSpaceOnUse')
-      .attr('x1', link.source.x1).attr('x2', link.target.x0);
+      .attr('x1', link.source.x1).attr('y1', srcMidY)
+      .attr('x2', link.target.x0).attr('y2', tgtMidY);
 
     grad.append('stop').attr('offset', '0%').attr('stop-color', srcColor).attr('stop-opacity', 0.7);
     grad.append('stop').attr('offset', '100%').attr('stop-color', tgtColor).attr('stop-opacity', 0.5);
@@ -293,8 +312,8 @@ function drawSankey(data, svgEl) {
     .on('mousemove', (evt, d) => {
       d3.select(evt.currentTarget).attr('opacity', 0.85);
       showTooltip(evt.clientX, evt.clientY,
-        `<strong>${d.source.name} → ${d.target.name}</strong>
-         <div class="tt-sub">${d.value} node${d.value !== 1 ? 's' : ''}</div>`
+        `${d.source.name} → ${d.target.name}`,
+        `${d.value} node${d.value !== 1 ? 's' : ''}`
       );
     })
     .on('mouseleave', (evt, d) => {
@@ -325,9 +344,9 @@ function drawSankey(data, svgEl) {
         .reduce((s, l) => s + l.value, 0);
       const count = Math.max(flowIn, flowOut, d.value || 0);
       showTooltip(evt.clientX, evt.clientY,
-        `<strong>${d.name}</strong>
-         <div class="tt-sub">${count} thought${count !== 1 ? 's' : ''}</div>
-         <div class="tt-sub">${d.layer?.toUpperCase() || ''}</div>`
+        d.name,
+        `${count} thought${count !== 1 ? 's' : ''}`,
+        d.layer?.toUpperCase() || ''
       );
     })
     .on('mouseleave', () => hideTooltip());

@@ -231,12 +231,14 @@ class _Handler(BaseHTTPRequestHandler):
         return _verify_token(candidate, self.__class__.token)
 
     def _set_token_cookie(self) -> None:
-        """Set the token as a Secure, HttpOnly, SameSite=Strict cookie."""
+        """Set the token as HttpOnly, SameSite=Strict. Secure flag included
+        so it activates automatically when TLS is enabled."""
         cookie = (
             f"{COOKIE_NAME}={self.__class__.token}; "
             f"Max-Age={COOKIE_MAX_AGE}; "
             "Path=/; "
             "HttpOnly; "
+            "Secure; "
             "SameSite=Strict"
         )
         self.send_header("Set-Cookie", cookie)
@@ -329,7 +331,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", _mime(str(target)))
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self._set_token_cookie()
+        # Cookie already set on the redirect; don't repeat on every asset
         self._send_cors()
         self.end_headers()
         self.wfile.write(body)
@@ -339,10 +341,14 @@ class _Handler(BaseHTTPRequestHandler):
         # Sanitise: node IDs are UUIDs or short alphanumeric strings
         safe = "".join(c for c in node_id if c.isalnum() or c in "-_")
         vault_path = self.__class__.vault_path
-        # Search under nodes/**/*.json
-        nodes_dir = vault_path / "nodes"
+        nodes_dir = (vault_path / "nodes").resolve()  # resolve symlinks at root
         found = None
         for f in nodes_dir.rglob(f"*{safe}*.json"):
+            try:
+                # Guard against symlinks pointing outside nodes_dir
+                f.resolve().relative_to(nodes_dir)
+            except ValueError:
+                continue
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 if data.get("id") == safe:
@@ -397,7 +403,7 @@ class _Handler(BaseHTTPRequestHandler):
                 tick += 1
                 with _vault_mtime_lock:
                     current = _vault_mtime
-                if current > last_sent and last_sent > 0:
+                if current > last_sent and current > 0:
                     self.wfile.write(b"event: refresh\ndata: {}\n\n")
                     self.wfile.flush()
                 last_sent = current
