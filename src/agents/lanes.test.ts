@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_LANE_NESTED, resolveNestedAgentLane } from "./lanes.js";
+import {
+  AGENT_LANE_CRON_NESTED,
+  AGENT_LANE_NESTED,
+  resolveCronEmbeddedAgentLane,
+  resolveNestedAgentLane,
+} from "./lanes.js";
+
+describe("resolveCronEmbeddedAgentLane", () => {
+  it("defaults to the dedicated cron nested lane when no lane is provided", () => {
+    expect(resolveCronEmbeddedAgentLane()).toBe(AGENT_LANE_CRON_NESTED);
+  });
+
+  it("moves cron lane callers onto the dedicated cron nested lane", () => {
+    expect(resolveCronEmbeddedAgentLane("cron")).toBe(AGENT_LANE_CRON_NESTED);
+    expect(resolveCronEmbeddedAgentLane("  cron  ")).toBe(AGENT_LANE_CRON_NESTED);
+  });
+
+  it("preserves non-cron lanes", () => {
+    expect(resolveCronEmbeddedAgentLane("subagent")).toBe("subagent");
+    expect(resolveCronEmbeddedAgentLane(" custom-lane ")).toBe("custom-lane");
+  });
+});
 
 describe("resolveNestedAgentLane", () => {
   it("defaults to the nested lane when no lane is provided", () => {

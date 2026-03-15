@@ -13,7 +13,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { resolveNestedAgentLane } from "../../agents/lanes.js";
+import { resolveCronEmbeddedAgentLane } from "../../agents/lanes.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
@@ -612,7 +612,7 @@ export async function runCronIsolatedAgentTurn(params: {
             config: cfgWithAgentDefaults,
             skillsSnapshot,
             prompt: promptText,
-            lane: resolveNestedAgentLane(params.lane),
+            lane: resolveCronEmbeddedAgentLane(params.lane),
             provider: providerOverride,
             model: modelOverride,
             authProfileId,
