@@ -158,13 +158,19 @@ export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSCli
   }
 
   const agent = getWsProxyAgent();
-  return new Lark.WSClient({
+  // Provide wsConfig at construction time so the SDK never starts with
+  // an uninitialised websocket config (which would crash with
+  // "Cannot read properties of undefined (reading 'PingInterval')").
+  const client = new Lark.WSClient({
     appId,
     appSecret,
     domain: resolveDomain(domain),
     loggerLevel: Lark.LoggerLevel.info,
     ...(agent ? { agent } : {}),
-  });
+    wsConfig: { PingInterval: 30, PingTimeout: 5 },
+  } as ConstructorParameters<typeof Lark.WSClient>[0]);
+
+  return client;
 }
 
 /**

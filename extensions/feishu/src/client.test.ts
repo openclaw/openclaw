@@ -64,8 +64,10 @@ const baseAccount: ResolvedFeishuAccount = {
   config: {} as FeishuConfig,
 };
 
-function firstWsClientOptions(): { agent?: unknown } {
-  const calls = wsClientCtorMock.mock.calls as unknown as Array<[options: { agent?: unknown }]>;
+function firstWsClientOptions(): { agent?: unknown; [key: string]: unknown } {
+  const calls = wsClientCtorMock.mock.calls as unknown as Array<
+    [options: { agent?: unknown; [key: string]: unknown }]
+  >;
   return calls[0]?.[0] ?? {};
 }
 
@@ -320,5 +322,16 @@ describe("createFeishuWSClient proxy handling", () => {
     expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://upper-http:8999");
     const options = firstWsClientOptions();
     expect(options.agent).toEqual({ proxyUrl: "http://upper-http:8999" });
+  });
+});
+
+describe("createFeishuWSClient wsConfig", () => {
+  it("passes wsConfig with PingInterval and PingTimeout to WSClient", () => {
+    createFeishuWSClient(baseAccount);
+    const calls = wsClientCtorMock.mock.calls as unknown as Array<
+      [options: Record<string, unknown>]
+    >;
+    const options = calls[0]?.[0] ?? {};
+    expect(options.wsConfig).toEqual({ PingInterval: 30, PingTimeout: 5 });
   });
 });
