@@ -561,28 +561,57 @@ function buildChatModelOptions(
     options.push({ value: trimmed, label: label ?? trimmed });
   };
 
+  const providerById = new Map<string, string>();
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    if (provider) {
+      providerById.set(entry.id, provider);
+    }
+    const value = provider && !entry.id.includes("/") ? `${provider}/${entry.id}` : entry.id;
+    addOption(value, provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
+  const qualify = (raw: string): string => {
+    const v = raw.trim();
+    if (!v || v.includes("/")) {
+      return v;
+    }
+    const provider = providerById.get(v);
+    return provider ? `${provider}/${v}` : v;
+  };
+
   if (currentOverride) {
-    addOption(currentOverride);
+    addOption(qualify(currentOverride));
   }
   if (defaultModel) {
-    addOption(defaultModel);
+    addOption(qualify(defaultModel));
   }
   return options;
+}
+
+function qualifyModelId(catalog: ModelCatalogEntry[], raw: string): string {
+  const v = raw.trim();
+  if (!v || v.includes("/")) {
+    return v;
+  }
+  for (const entry of catalog) {
+    if (entry.id === v && entry.provider?.trim()) {
+      return `${entry.provider.trim()}/${v}`;
+    }
+  }
+  return v;
 }
 
 function renderChatModelSelect(state: AppViewState) {
   const currentOverride = resolveModelOverrideValue(state);
   const defaultModel = resolveDefaultModelValue(state);
+  const catalog = state.chatModelCatalog ?? [];
   const options = buildChatModelOptions(
-    state.chatModelCatalog ?? [],
+    catalog,
     currentOverride,
     defaultModel,
   );
+  const resolvedOverride = currentOverride ? qualifyModelId(catalog, currentOverride) : "";
   const defaultLabel = defaultModel ? `Default (${defaultModel})` : "Default model";
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
@@ -599,12 +628,12 @@ function renderChatModelSelect(state: AppViewState) {
           await switchChatModel(state, next);
         }}
       >
-        <option value="" ?selected=${currentOverride === ""}>${defaultLabel}</option>
+        <option value="" ?selected=${resolvedOverride === ""}>${defaultLabel}</option>
         ${repeat(
           options,
           (entry) => entry.value,
           (entry) =>
-            html`<option value=${entry.value} ?selected=${entry.value === currentOverride}>
+            html`<option value=${entry.value} ?selected=${entry.value === resolvedOverride}>
               ${entry.label}
             </option>`,
         )}
