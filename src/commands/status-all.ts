@@ -37,6 +37,60 @@ import { buildStatusAllReportLines } from "./status-all/report-lines.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 import { formatUpdateOneLiner } from "./status.update.js";
 
+type StatusAllTailscaleState = {
+  ok: boolean;
+  backendState: string | null;
+  dnsName: string | null;
+  ips: string[];
+  error: string | null;
+};
+
+export async function readStatusAllTailscale(params: {
+  tailscaleMode?: string;
+  exec?: typeof runExec;
+  timeoutMs?: number;
+  readStatusJson?: typeof readTailscaleStatusJson;
+}): Promise<StatusAllTailscaleState> {
+  if ((params.tailscaleMode ?? "off") === "off") {
+    return {
+      ok: true,
+      backendState: null,
+      dnsName: null,
+      ips: [],
+      error: null,
+    };
+  }
+
+  const readStatusJson = params.readStatusJson ?? readTailscaleStatusJson;
+  try {
+    const parsed = await readStatusJson(params.exec ?? runExec, {
+      timeoutMs: params.timeoutMs ?? 1200,
+    });
+    const backendState = typeof parsed.BackendState === "string" ? parsed.BackendState : null;
+    const self =
+      typeof parsed.Self === "object" && parsed.Self !== null
+        ? (parsed.Self as Record<string, unknown>)
+        : null;
+    const dnsNameRaw = self && typeof self.DNSName === "string" ? self.DNSName : null;
+    const dnsName = dnsNameRaw ? dnsNameRaw.replace(/\.$/, "") : null;
+    const ips =
+      self && Array.isArray(self.TailscaleIPs)
+        ? (self.TailscaleIPs as unknown[])
+            .filter((v) => typeof v === "string" && v.trim().length > 0)
+            .map((v) => (v as string).trim())
+        : [];
+    return { ok: true, backendState, dnsName, ips, error: null };
+  } catch (err) {
+    return {
+      ok: false,
+      backendState: null,
+      dnsName: null,
+      ips: [],
+      error: String(err),
+    };
+  }
+}
+
 export async function statusAllCommand(
   runtime: RuntimeEnv,
   opts?: { timeoutMs?: number },
@@ -56,35 +110,11 @@ export async function statusAllCommand(
 
     progress.setLabel("Checking Tailscale…");
     const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-    const tailscale = await (async () => {
-      try {
-        const parsed = await readTailscaleStatusJson(runExec, {
-          timeoutMs: 1200,
-        });
-        const backendState = typeof parsed.BackendState === "string" ? parsed.BackendState : null;
-        const self =
-          typeof parsed.Self === "object" && parsed.Self !== null
-            ? (parsed.Self as Record<string, unknown>)
-            : null;
-        const dnsNameRaw = self && typeof self.DNSName === "string" ? self.DNSName : null;
-        const dnsName = dnsNameRaw ? dnsNameRaw.replace(/\.$/, "") : null;
-        const ips =
-          self && Array.isArray(self.TailscaleIPs)
-            ? (self.TailscaleIPs as unknown[])
-                .filter((v) => typeof v === "string" && v.trim().length > 0)
-                .map((v) => (v as string).trim())
-            : [];
-        return { ok: true as const, backendState, dnsName, ips, error: null };
-      } catch (err) {
-        return {
-          ok: false as const,
-          backendState: null,
-          dnsName: null,
-          ips: [] as string[],
-          error: String(err),
-        };
-      }
-    })();
+    const tailscale = await readStatusAllTailscale({
+      tailscaleMode,
+      exec: runExec,
+      timeoutMs: 1200,
+    });
     const tailscaleHttpsUrl =
       tailscaleMode !== "off" && tailscale.dnsName
         ? `https://${tailscale.dnsName}${normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath)}`
