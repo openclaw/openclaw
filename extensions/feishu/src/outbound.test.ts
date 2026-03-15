@@ -143,9 +143,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       }),
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(result).toEqual(
-      expect.objectContaining({ channel: "feishu", messageId: "card_msg" }),
-    );
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "card_msg" }));
   });
 
   it("forwards replyToId as replyToMessageId on sendText", async () => {
