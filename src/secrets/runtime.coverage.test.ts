@@ -88,6 +88,18 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
       "webhook",
     );
   }
+  if (entry.id === "channels.feishu.tts.elevenlabs.apiKey") {
+    setPathCreateStrict(config, ["channels", "feishu", "enabled"], true);
+  }
+  if (entry.id === "channels.feishu.tts.openai.apiKey") {
+    setPathCreateStrict(config, ["channels", "feishu", "enabled"], true);
+  }
+  if (entry.id === "channels.feishu.accounts.*.tts.elevenlabs.apiKey") {
+    setPathCreateStrict(config, ["channels", "feishu", "accounts", "sample", "enabled"], true);
+  }
+  if (entry.id === "channels.feishu.accounts.*.tts.openai.apiKey") {
+    setPathCreateStrict(config, ["channels", "feishu", "accounts", "sample", "enabled"], true);
+  }
   if (entry.id === "tools.web.search.gemini.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
   }

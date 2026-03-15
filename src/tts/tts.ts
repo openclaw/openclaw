@@ -329,6 +329,55 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
   };
 }
 
+function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
+  if (!override) {
+    return base;
+  }
+  return {
+    ...base,
+    ...override,
+    modelOverrides: {
+      ...base.modelOverrides,
+      ...override.modelOverrides,
+    },
+    ...(base.elevenlabs || override.elevenlabs
+      ? {
+          elevenlabs: {
+            ...base.elevenlabs,
+            ...override.elevenlabs,
+            voiceSettings: {
+              ...base.elevenlabs?.voiceSettings,
+              ...override.elevenlabs?.voiceSettings,
+            },
+          },
+        }
+      : {}),
+    ...(base.openai || override.openai ? { openai: { ...base.openai, ...override.openai } } : {}),
+    ...(base.edge || override.edge ? { edge: { ...base.edge, ...override.edge } } : {}),
+  };
+}
+
+export function resolveTtsConfigForAccount(
+  cfg: OpenClawConfig,
+  channel: string,
+  accountId: string,
+): ResolvedTtsConfig {
+  const base = cfg.messages?.tts ?? {};
+  const channelConfig = cfg.channels?.[channel] as
+    | { accounts?: Record<string, { tts?: TtsConfig }> }
+    | undefined;
+  const accountTts = channelConfig?.accounts?.[accountId]?.tts;
+  const merged = mergeTtsConfig(base, accountTts);
+  const cfgWithMerged = {
+    ...cfg,
+    messages: {
+      ...cfg.messages,
+      tts: merged,
+    },
+  };
+  return resolveTtsConfig(cfgWithMerged);
+}
+
 export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
   if (config.prefsPath?.trim()) {
     return resolveUserPath(config.prefsPath.trim());
@@ -846,11 +895,15 @@ export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
   channel?: string;
+  accountId?: string;
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
 }): Promise<ReplyPayload> {
-  const config = resolveTtsConfig(params.cfg);
+  const config =
+    params.channel && params.accountId
+      ? resolveTtsConfigForAccount(params.cfg, params.channel, params.accountId)
+      : resolveTtsConfig(params.cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
     config,
@@ -946,9 +999,23 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   const ttsStart = Date.now();
+  const mergedTtsConfig =
+    params.channel && params.accountId
+      ? mergeTtsConfig(
+          params.cfg.messages?.tts ?? {},
+          params.cfg.channels?.[params.channel]?.accounts?.[params.accountId]?.tts,
+        )
+      : params.cfg.messages?.tts;
+  const cfgWithAccountTts = {
+    ...params.cfg,
+    messages: {
+      ...params.cfg.messages,
+      tts: mergedTtsConfig,
+    },
+  };
   const result = await textToSpeech({
     text: textForAudio,
-    cfg: params.cfg,
+    cfg: cfgWithAccountTts,
     prefsPath,
     channel: params.channel,
     overrides: directives.overrides,

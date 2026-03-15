@@ -1,3 +1,4 @@
+import { TtsConfigSchema } from "openclaw/plugin-sdk";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { z } from "zod";
 export { z };
@@ -199,6 +200,7 @@ export const FeishuAccountConfigSchema = z
     domain: FeishuDomainSchema.optional(),
     connectionMode: FeishuConnectionModeSchema.optional(),
     webhookPath: z.string().optional(),
+    tts: TtsConfigSchema.optional(),
     ...FeishuSharedConfigShape,
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,

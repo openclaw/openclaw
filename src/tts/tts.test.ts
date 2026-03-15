@@ -745,4 +745,77 @@ describe("tts", () => {
       });
     });
   });
+
+  describe("resolveTtsConfigForAccount", () => {
+    const baseCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: {
+        tts: {
+          provider: "edge",
+          edge: {
+            voice: "zh-CN-XiaoyiNeural",
+            lang: "zh-CN",
+          },
+        },
+      },
+    };
+
+    it("falls back to global config when no account TTS is configured", () => {
+      const config = tts.resolveTtsConfigForAccount(baseCfg, "telegram", "my-bot");
+      expect(config.edge.voice).toBe("zh-CN-XiaoyiNeural");
+      expect(config.edge.lang).toBe("zh-CN");
+    });
+
+    it("uses account TTS override when configured", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        channels: {
+          telegram: {
+            accounts: {
+              "english-bot": {
+                tts: {
+                  provider: "edge",
+                  edge: {
+                    voice: "en-US-JennyNeural",
+                    lang: "en-US",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const config = tts.resolveTtsConfigForAccount(cfg, "telegram", "english-bot");
+      expect(config.edge.voice).toBe("en-US-JennyNeural");
+      expect(config.edge.lang).toBe("en-US");
+    });
+
+    it("merges partial account TTS with global config", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        channels: {
+          telegram: {
+            accounts: {
+              "my-bot": {
+                tts: {
+                  edge: {
+                    voice: "en-US-JennyNeural",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const config = tts.resolveTtsConfigForAccount(cfg, "telegram", "my-bot");
+      expect(config.edge.voice).toBe("en-US-JennyNeural");
+      expect(config.edge.lang).toBe("zh-CN");
+      expect(config.provider).toBe("edge");
+    });
+
+    it("returns global config for non-existent channel/account", () => {
+      const config = tts.resolveTtsConfigForAccount(baseCfg, "nonexistent", "unknown");
+      expect(config.edge.voice).toBe("zh-CN-XiaoyiNeural");
+    });
+  });
 });
