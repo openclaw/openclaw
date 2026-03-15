@@ -19,6 +19,7 @@ async function buildGroupVoiceContext(params: {
   firstName: string;
   fileId: string;
   mediaPath: string;
+  contentType?: string;
   groupDisableAudioPreflight?: boolean;
   topicDisableAudioPreflight?: boolean;
 }) {
@@ -42,7 +43,7 @@ async function buildGroupVoiceContext(params: {
       from: { id: params.fromId, first_name: params.firstName },
       voice: { file_id: params.fileId },
     },
-    allMedia: [{ path: params.mediaPath, contentType: "audio/ogg" }],
+    allMedia: [{ path: params.mediaPath, contentType: params.contentType ?? "audio/ogg" }],
     options: { forceWasMentioned: true },
     cfg: {
       agents: { defaults: { model: DEFAULT_MODEL, workspace: DEFAULT_WORKSPACE } },
@@ -149,5 +150,44 @@ describe("buildTelegramMessageContext audio transcript body", () => {
 
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
     expectAudioPlaceholderRendered(ctx);
+  });
+
+  it("detects audio with parameterized MIME like Telegram Opus voice notes", async () => {
+    transcribeFirstAudioMock.mockResolvedValueOnce("opus voice transcript");
+
+    const ctx = await buildGroupVoiceContext({
+      messageId: 5,
+      chatId: -1001234567894,
+      title: "Test Group 5",
+      date: 1700000400,
+      fromId: 46,
+      firstName: "Eve",
+      fileId: "voice-5",
+      mediaPath: "/tmp/voice5.ogg",
+      contentType: "audio/ogg; codecs=opus",
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expectTranscriptRendered(ctx, "opus voice transcript");
+  });
+
+  it("detects audio with mixed-case MIME like Audio/Ogg", async () => {
+    transcribeFirstAudioMock.mockClear();
+    transcribeFirstAudioMock.mockResolvedValueOnce("mixed case transcript");
+
+    const ctx = await buildGroupVoiceContext({
+      messageId: 6,
+      chatId: -1001234567895,
+      title: "Test Group 6",
+      date: 1700000500,
+      fromId: 47,
+      firstName: "Frank",
+      fileId: "voice-6",
+      mediaPath: "/tmp/voice6.ogg",
+      contentType: "Audio/Ogg; codecs=opus",
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expectTranscriptRendered(ctx, "mixed case transcript");
   });
 });
