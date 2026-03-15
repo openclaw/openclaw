@@ -497,5 +497,11 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
-  return nextConfig;
+  if (authChoice === "skip") {
+    return nextConfig;
+  }
+
+  runtime.error(`Unknown --auth-choice: "${authChoice}". Run "openclaw onboard --help" for valid choices.`);
+  runtime.exit(1);
+  return null;
 }
