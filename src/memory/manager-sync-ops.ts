@@ -416,6 +416,11 @@ export abstract class MemoryManagerSyncOps {
     }
     this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
+      // Cap recursive depth to prevent FD exhaustion in large workspaces (see #41606).
+      // Use a generous limit for memory watchers since watchPaths is already scoped
+      // to specific directories and IGNORED_MEMORY_WATCH_DIR_NAMES filters out
+      // problematic subtrees like .git and node_modules.
+      depth: 10,
       ignored: (watchPath) => shouldIgnoreMemoryWatchPath(String(watchPath)),
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,

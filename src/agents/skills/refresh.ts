@@ -168,6 +168,9 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
 
   const watcher = chokidar.watch(watchTargets, {
     ignoreInitial: true,
+    // Cap depth to <skillsRoot>/<skillName>/SKILL.md nesting; prevents FD
+    // exhaustion when skill directories contain deep node_modules trees (#41606).
+    depth: 2,
     awaitWriteFinish: {
       stabilityThreshold: debounceMs,
       pollInterval: 100,
