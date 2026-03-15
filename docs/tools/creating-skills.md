@@ -53,6 +53,17 @@ Ask your agent to "refresh skills" or restart the gateway. OpenClaw will discove
 - **Safety First**: If your skill uses `bash`, ensure the prompts don't allow arbitrary command injection from untrusted user input.
 - **Test Locally**: Use `openclaw agent --message "use my new skill"` to test.
 
+## Next Steps
+
+The guide above covers the basics. The full [Skills Reference](./skills.md) documents several advanced features you will likely need as your skill matures:
+
+- **Conditional activation** — Use `requires.bins`, `requires.env`, or `requires.config` in your skill's metadata to gate loading so the skill only appears when its dependencies are present. See [Gating](./skills.md#gating-load-time-filters).
+- **Environment & API key injection** — Supply secrets to your skill at runtime via `skills.entries.<name>.env` and `apiKey` in `openclaw.json`, scoped to a single agent run. See [Environment injection](./skills.md#environment-injection-per-agent-run).
+- **Command dispatch** — Set `command-dispatch: tool` and `command-tool` in frontmatter to bypass the model and route a slash command directly to a tool. See [Format](./skills.md#format-agentskills--pi-compatible).
+- **Template variables** — Use `{baseDir}` inside your `SKILL.md` instructions to reference the skill's own directory, keeping paths portable across machines. See [Format](./skills.md#format-agentskills--pi-compatible).
+- **Invocation control** — Set `user-invocable: false` to hide a skill from the slash-command menu, or `disable-model-invocation: true` to prevent the model from using it autonomously. See [Format](./skills.md#format-agentskills--pi-compatible).
+- **Config overrides** — Toggle skills on/off and pass custom per-skill configuration via `skills.entries` in `openclaw.json`. See [Config overrides](./skills.md#config-overrides-openclawopenclaw-json).
+
 ## Shared Skills
 
 You can also browse and contribute skills to [ClawHub](https://clawhub.com).
