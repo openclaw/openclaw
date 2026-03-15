@@ -59,7 +59,10 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
   }
 }
 
-export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+export function createOpenRouterSystemCacheWrapper(
+  baseStreamFn: StreamFn | undefined,
+  cacheRetention?: "none" | "short" | "long",
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (
@@ -68,6 +71,11 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
       !isOpenRouterAnthropicModel(model.provider, model.id)
     ) {
       return underlying(model, context, options);
+    }
+
+    const cacheControl: Record<string, unknown> = { type: "ephemeral" };
+    if (cacheRetention === "long") {
+      cacheControl.ttl = "1h";
     }
 
     const originalOnPayload = options?.onPayload;
@@ -81,13 +89,11 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
               continue;
             }
             if (typeof msg.content === "string") {
-              msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-              ];
+              msg.content = [{ type: "text", text: msg.content, cache_control: cacheControl }];
             } else if (Array.isArray(msg.content) && msg.content.length > 0) {
               const last = msg.content[msg.content.length - 1];
               if (last && typeof last === "object") {
-                (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
+                (last as Record<string, unknown>).cache_control = cacheControl;
               }
             }
           }
