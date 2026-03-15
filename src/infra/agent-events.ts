@@ -19,10 +19,27 @@ export type AgentRunContext = {
   isControlUiVisible?: boolean;
 };
 
-// Keep per-run counters so streams stay strictly monotonic per runId.
-const seqByRun = new Map<string, number>();
-const listeners = new Set<(evt: AgentEventPayload) => void>();
-const runContextById = new Map<string, AgentRunContext>();
+// ─── Global singleton ────────────────────────────────────────────────
+// tsdown inlines this module into multiple chunks, each getting its own
+// module-level state.  Using globalThis ensures every chunk shares the
+// same listeners Set, seqByRun Map and runContextById Map – which is
+// the intended design (global pub/sub bus within a single gateway process).
+const GLOBAL_KEY = Symbol.for("__openclaw_agent_events_v1__");
+
+type AgentEventsGlobal = {
+  seqByRun: Map<string, number>;
+  listeners: Set<(evt: AgentEventPayload) => void>;
+  runContextById: Map<string, AgentRunContext>;
+};
+
+const _global: AgentEventsGlobal = ((globalThis as Record<symbol, unknown>)[GLOBAL_KEY] ??= {
+  seqByRun: new Map<string, number>(),
+  listeners: new Set<(evt: AgentEventPayload) => void>(),
+  runContextById: new Map<string, AgentRunContext>(),
+}) as AgentEventsGlobal;
+
+const { seqByRun, listeners, runContextById } = _global;
+// ─────────────────────────────────────────────────────────────────────
 
 export function registerAgentRunContext(runId: string, context: AgentRunContext) {
   if (!runId) {
@@ -57,6 +74,8 @@ export function clearAgentRunContext(runId: string) {
 
 export function resetAgentRunContextForTest() {
   runContextById.clear();
+  seqByRun.clear();
+  listeners.clear();
 }
 
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
