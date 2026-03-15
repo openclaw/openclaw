@@ -7,6 +7,7 @@ import {
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
+import { retryAsync } from "../../infra/retry.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
@@ -18,6 +19,39 @@ import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
+
+const NON_TRANSIENT_OAUTH_ERRORS = [
+  "invalid_grant",
+  "invalid_client",
+  "invalid_scope",
+  "invalid_request",
+  "unauthorized_client",
+  "access_denied",
+  "unsupported_grant_type",
+  "unsupported_response_type",
+];
+
+function isTransientOAuthError(err: unknown): boolean {
+  const status =
+    typeof (err as Record<string, unknown>)?.status === "number"
+      ? ((err as Record<string, unknown>).status as number)
+      : typeof (err as Record<string, unknown>)?.statusCode === "number"
+        ? ((err as Record<string, unknown>).statusCode as number)
+        : undefined;
+
+  // 4xx errors are non-transient, except 429 (rate limit)
+  if (typeof status === "number" && status >= 400 && status < 500 && status !== 429) {
+    return false;
+  }
+
+  const message = err instanceof Error ? err.message : String(err);
+  const lower = message.toLowerCase();
+  if (NON_TRANSIENT_OAUTH_ERRORS.some((code) => lower.includes(code))) {
+    return false;
+  }
+
+  return true;
+}
 
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
 
@@ -155,14 +189,42 @@ function adoptNewerMainOAuthCredential(params: {
   return null;
 }
 
+// Per-profile in-flight refresh deduplication: when two concurrent requests
+// need to refresh the same profile, the second caller awaits the first
+// refresh instead of issuing a parallel token-exchange that may invalidate
+// the refresh token used by the first request.
+const inflightRefreshes = new Map<
+  string,
+  Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null>
+>();
+
 async function refreshOAuthTokenWithLock(params: {
+  profileId: string;
+  agentDir?: string;
+}): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
+  const dedupeKey = `${params.profileId}\0${resolveAuthStorePath(params.agentDir)}`;
+  const inflight = inflightRefreshes.get(dedupeKey);
+  if (inflight) {
+    return inflight;
+  }
+  const promise = refreshOAuthTokenWithLockInner(params);
+  inflightRefreshes.set(dedupeKey, promise);
+  try {
+    return await promise;
+  } finally {
+    inflightRefreshes.delete(dedupeKey);
+  }
+}
+
+async function refreshOAuthTokenWithLockInner(params: {
   profileId: string;
   agentDir?: string;
 }): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
 
-  return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
+  // Phase 1: Read credentials under lock (short critical section).
+  const refreshInput = await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
     const store = ensureAuthProfileStore(params.agentDir);
     const cred = store.profiles[params.profileId];
     if (!cred || cred.type !== "oauth") {
@@ -171,47 +233,95 @@ async function refreshOAuthTokenWithLock(params: {
 
     if (Date.now() < cred.expires) {
       return {
+        cached: true as const,
         apiKey: buildOAuthApiKey(cred.provider, cred),
         newCredentials: cred,
       };
     }
 
-    const oauthCreds: Record<string, OAuthCredentials> = {
-      [cred.provider]: cred,
-    };
+    return { cached: false as const, cred };
+  });
 
-    const result =
-      String(cred.provider) === "chutes"
+  if (!refreshInput) {
+    return null;
+  }
+  if (refreshInput.cached) {
+    return { apiKey: refreshInput.apiKey, newCredentials: refreshInput.newCredentials };
+  }
+
+  const { cred } = refreshInput;
+  const oauthCreds: Record<string, OAuthCredentials> = {
+    [cred.provider]: cred,
+  };
+
+  // Phase 2: Perform the (possibly retried) token refresh outside the lock so
+  // that backoff sleeps don't extend the critical section past the stale-lock
+  // threshold, avoiding concurrent writers on auth-profiles.json.
+  const result =
+    String(cred.provider) === "chutes"
+      ? await (async () => {
+          const newCredentials = await refreshChutesTokens({
+            credential: cred,
+          });
+          return { apiKey: newCredentials.access, newCredentials };
+        })()
+      : String(cred.provider) === "qwen-portal"
         ? await (async () => {
-            const newCredentials = await refreshChutesTokens({
-              credential: cred,
-            });
+            const newCredentials = await refreshQwenPortalCredentials(cred);
             return { apiKey: newCredentials.access, newCredentials };
           })()
-        : String(cred.provider) === "qwen-portal"
-          ? await (async () => {
-              const newCredentials = await refreshQwenPortalCredentials(cred);
-              return { apiKey: newCredentials.access, newCredentials };
-            })()
-          : await (async () => {
-              const oauthProvider = resolveOAuthProvider(cred.provider);
-              if (!oauthProvider) {
-                return null;
-              }
-              return await getOAuthApiKey(oauthProvider, oauthCreds);
-            })();
-    if (!result) {
-      return null;
+        : await (async () => {
+            const oauthProvider = resolveOAuthProvider(cred.provider);
+            if (!oauthProvider) {
+              return null;
+            }
+            return await retryAsync(() => getOAuthApiKey(oauthProvider, oauthCreds), {
+              attempts: 3,
+              minDelayMs: 1000,
+              shouldRetry: isTransientOAuthError,
+              onRetry: (info) => {
+                log.warn(
+                  `OAuth refresh attempt ${info.attempt}/${info.maxAttempts} failed, retrying in ${info.delayMs}ms`,
+                  {
+                    error: info.err instanceof Error ? info.err.message : String(info.err),
+                  },
+                );
+              },
+            });
+          })();
+
+  if (!result) {
+    return null;
+  }
+
+  // Phase 3: Save refreshed credentials under lock (short critical section).
+  const originalProvider = cred.provider;
+  let persisted = false;
+  await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
+    const store = ensureAuthProfileStore(params.agentDir);
+    const currentCred = store.profiles[params.profileId];
+    // Only apply refreshed credentials if the profile hasn't been modified
+    // during the unlocked network refresh (e.g., concurrent re-auth or removal).
+    if (!currentCred || currentCred.type !== "oauth") {
+      return;
+    }
+    // Verify the credential identity hasn't changed (e.g., provider switch or
+    // concurrent re-auth with a different account).
+    if (currentCred.provider !== originalProvider) {
+      return;
     }
     store.profiles[params.profileId] = {
-      ...cred,
+      ...currentCred,
       ...result.newCredentials,
       type: "oauth",
     };
     saveAuthProfileStore(store, params.agentDir);
-
-    return result;
+    persisted = true;
   });
+
+  // If the profile was removed or changed during the refresh, discard the
+  // result so callers don't use a token that was never persisted.
+  return persisted ? result : null;
 }
 
 async function tryResolveOAuthProfile(
