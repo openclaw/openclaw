@@ -9,11 +9,17 @@ import type { ContextEngine } from "./types.js";
 export type ContextEngineFactory = () => ContextEngine | Promise<ContextEngine>;
 export type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
 
+type RegisterContextEngineForOwnerOptions = {
+  allowSameOwnerRefresh?: boolean;
+};
+
 // ---------------------------------------------------------------------------
 // Registry (module-level singleton)
 // ---------------------------------------------------------------------------
 
 const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistryState");
+const CORE_CONTEXT_ENGINE_OWNER = "core";
+const PUBLIC_CONTEXT_ENGINE_OWNER = "public-sdk";
 
 type ContextEngineRegistryState = {
   engines: Map<
@@ -39,28 +45,56 @@ function getContextEngineRegistryState(): ContextEngineRegistryState {
   return globalState[CONTEXT_ENGINE_REGISTRY_STATE];
 }
 
+function requireContextEngineOwner(owner: string): string {
+  const normalizedOwner = owner.trim();
+  if (!normalizedOwner) {
+    throw new Error(
+      `registerContextEngineForOwner: owner must be a non-empty string, got ${JSON.stringify(owner)}`,
+    );
+  }
+  return normalizedOwner;
+}
+
 /**
- * Register a context engine implementation under the given id.
+ * Register a context engine implementation under an explicit trusted owner.
+ */
+export function registerContextEngineForOwner(
+  id: string,
+  factory: ContextEngineFactory,
+  owner: string,
+  opts?: RegisterContextEngineForOwnerOptions,
+): ContextEngineRegistrationResult {
+  const normalizedOwner = requireContextEngineOwner(owner);
+  const registry = getContextEngineRegistryState().engines;
+  const existing = registry.get(id);
+  if (
+    id === defaultSlotIdForKey("contextEngine") &&
+    normalizedOwner !== CORE_CONTEXT_ENGINE_OWNER
+  ) {
+    return { ok: false, existingOwner: CORE_CONTEXT_ENGINE_OWNER };
+  }
+  if (existing && existing.owner !== normalizedOwner) {
+    return { ok: false, existingOwner: existing.owner };
+  }
+  if (existing && opts?.allowSameOwnerRefresh !== true) {
+    return { ok: false, existingOwner: existing.owner };
+  }
+  registry.set(id, { factory, owner: normalizedOwner });
+  return { ok: true };
+}
+
+/**
+ * Public SDK entry point for third-party registrations.
+ *
+ * This path is intentionally unprivileged: it cannot claim core-owned ids and
+ * it cannot safely refresh an existing registration because the caller's
+ * identity is not authenticated.
  */
 export function registerContextEngine(
   id: string,
   factory: ContextEngineFactory,
-  opts?: { owner?: string },
 ): ContextEngineRegistrationResult {
-  const rawOwner = opts?.owner?.trim();
-  if (opts?.owner !== undefined && !rawOwner) {
-    throw new Error(
-      `registerContextEngine: owner must be a non-empty string, got ${JSON.stringify(opts.owner)}`,
-    );
-  }
-  const owner = rawOwner || "core";
-  const registry = getContextEngineRegistryState().engines;
-  const existing = registry.get(id);
-  if (existing && existing.owner !== owner) {
-    return { ok: false, existingOwner: existing.owner };
-  }
-  registry.set(id, { factory, owner });
-  return { ok: true };
+  return registerContextEngineForOwner(id, factory, PUBLIC_CONTEXT_ENGINE_OWNER);
 }
 
 /**
