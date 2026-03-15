@@ -338,6 +338,12 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
+  /**
+   * Truncate the session JSONL file after compaction to remove entries that
+   * were summarized. Prevents unbounded file growth in long-running sessions.
+   * Default: false (existing behavior preserved).
+   */
+  truncateAfterCompaction?: boolean;
   /** Maximum time in seconds for a single compaction operation (default: 900). */
   timeoutSeconds?: number;
 };
