@@ -413,6 +413,20 @@ export async function openWritableFileWithinRoot(params: {
     if (!isNotFoundPathError(err)) {
       throw err;
     }
+    // File doesn't exist yet (ENOENT). On Windows, O_NOFOLLOW is unavailable,
+    // so open(O_CREAT) would follow directory junctions. Resolve the parent
+    // directory to verify it is inside the workspace root before creating.
+    if (!SUPPORTS_NOFOLLOW) {
+      const parentDir = path.dirname(resolved);
+      const parentReal = await fs.realpath(parentDir);
+      if (!isPathInside(rootWithSep, parentReal) && parentReal !== rootReal) {
+        throw new SafeOpenError(
+          "outside-workspace",
+          "parent directory resolves outside workspace root",
+        );
+      }
+      ioPath = path.join(parentReal, path.basename(resolved));
+    }
   }
 
   const fileMode = params.mode ?? 0o600;
