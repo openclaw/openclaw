@@ -224,18 +224,6 @@ function generatePkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-function resolvePlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
-  if (process.platform === "win32") {
-    return "WINDOWS";
-  }
-  if (process.platform === "darwin") {
-    return "MACOS";
-  }
-  // Google's loadCodeAssist API rejects "LINUX" as an invalid Platform enum value.
-  // Use "PLATFORM_UNSPECIFIED" for Linux and other platforms to match the pi-ai runtime.
-  return "PLATFORM_UNSPECIFIED";
-}
-
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
@@ -466,10 +454,9 @@ async function getUserEmail(accessToken: string): Promise<string | undefined> {
 
 async function discoverProject(accessToken: string): Promise<string> {
   const envProject = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
-  const platform = resolvePlatform();
   const metadata = {
-    ideType: "ANTIGRAVITY",
-    platform,
+    ideType: "IDE_UNSPECIFIED",
+    platform: "PLATFORM_UNSPECIFIED",
     pluginType: "GEMINI",
   };
   const headers = {
