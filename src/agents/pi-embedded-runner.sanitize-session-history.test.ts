@@ -280,6 +280,33 @@ describe("sanitizeSessionHistory", () => {
     expect(result).toEqual(mockMessages);
   });
 
+  it("coerces openai-completions assistant content arrays to a single text block", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "first line" },
+          { type: "text", text: "second line" },
+        ],
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "openai",
+      modelId: "gpt-5.2",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    const assistant = result[0] as { content?: unknown };
+    expect(Array.isArray(assistant.content)).toBe(true);
+    expect(assistant.content).toEqual([{ type: "text", text: "first line\nsecond line" }]);
+  });
+
   it("prepends a bootstrap user turn for strict OpenAI-compatible assistant-first history", async () => {
     setNonGoogleModelApi();
     const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [];

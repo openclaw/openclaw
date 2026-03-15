@@ -8,6 +8,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -137,6 +138,38 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       content: [{ type: "text", text: prefix }, ...user.content],
     } as AgentMessage);
   }
+  return touched ? out : messages;
+}
+
+function coerceOpenAICompletionsAssistantText(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object" || msg.role !== "assistant") {
+      out.push(msg);
+      continue;
+    }
+    const assistant = msg;
+    if (!Array.isArray(assistant.content)) {
+      out.push(msg);
+      continue;
+    }
+    const contentText = extractTextFromChatContent(assistant.content, {
+      joinWith: "\n",
+      normalizeText: (text: string) => text.trim(),
+    });
+    if (contentText === null) {
+      out.push(msg);
+      continue;
+    }
+    touched = true;
+    out.push({
+      ...assistant,
+      content: [{ type: "text", text: contentText }],
+    });
+  }
+
   return touched ? out : messages;
 }
 
@@ -536,9 +569,13 @@ export async function sanitizeSessionHistory(params: {
       provider: params.provider,
       modelId: params.modelId,
     });
+  const coerceOpenAICompletionsText = params.modelApi === "openai-completions";
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const openAICompletionsCoerced = coerceOpenAICompletionsText
+    ? coerceOpenAICompletionsAssistantText(withInterSessionMarkers)
+    : withInterSessionMarkers;
   const sanitizedImages = await sanitizeSessionMessagesImages(
-    withInterSessionMarkers,
+    openAICompletionsCoerced,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,
