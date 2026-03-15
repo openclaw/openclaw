@@ -53,7 +53,7 @@ export type RecoverySummary = {
   deferredBackoff: number;
 };
 
-function resolveQueueDir(stateDir?: string): string {
+export function resolveQueueDir(stateDir?: string): string {
   const base = stateDir ?? resolveStateDir();
   return path.join(base, QUEUE_DIRNAME);
 }
@@ -418,6 +418,108 @@ export async function recoverPendingDeliveries(opts: {
 }
 
 export { MAX_RETRIES };
+
+const NO_LISTENER_ERROR_RE = /No active WhatsApp Web listener/i;
+const RECONNECT_QUEUE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Per-account drain lock to prevent concurrent drains on rapid reconnects
+const drainInProgress = new Map<string, boolean>();
+
+export async function drainReconnectQueue(opts: {
+  accountId: string;
+  cfg: OpenClawConfig;
+  log: RecoveryLogger;
+  stateDir?: string;
+  deliver?: DeliverFn; // injectable for testing
+}): Promise<void> {
+  // Concurrency guard: skip if drain already running for this account
+  if (drainInProgress.get(opts.accountId)) {
+    opts.log.info(
+      `WhatsApp reconnect drain: already in progress for account ${opts.accountId}, skipping`,
+    );
+    return;
+  }
+  drainInProgress.set(opts.accountId, true);
+  try {
+    await _drainReconnectQueueCore(opts);
+  } finally {
+    drainInProgress.delete(opts.accountId);
+  }
+}
+
+async function _drainReconnectQueueCore(opts: {
+  accountId: string;
+  cfg: OpenClawConfig;
+  log: RecoveryLogger;
+  stateDir?: string;
+  deliver?: DeliverFn;
+}): Promise<void> {
+  const pending = await loadPendingDeliveries(opts.stateDir);
+  const now = Date.now();
+
+  const myEntries = pending.filter(
+    (e) =>
+      e.channel === "whatsapp" &&
+      ((e.accountId ?? "").trim() || "default") === opts.accountId &&
+      typeof e.lastError === "string" &&
+      NO_LISTENER_ERROR_RE.test(e.lastError),
+  );
+
+  const eligible = myEntries.filter(
+    (e) => e.retryCount < MAX_RETRIES && now - e.enqueuedAt < RECONNECT_QUEUE_TTL_MS,
+  );
+  const expired = myEntries.filter(
+    (e) => e.retryCount >= MAX_RETRIES || now - e.enqueuedAt >= RECONNECT_QUEUE_TTL_MS,
+  );
+
+  // Move expired entries to failed
+  for (const entry of expired) {
+    await moveToFailed(entry.id, opts.stateDir);
+    opts.log.warn(
+      `WhatsApp reconnect drain: expired entry ${entry.id} (TTL exceeded or max retries)`,
+    );
+  }
+
+  if (eligible.length === 0) {
+    return;
+  }
+
+  opts.log.info(
+    `WhatsApp reconnect drain: ${eligible.length} pending message(s) for account ${opts.accountId}`,
+  );
+
+  // Reset backoff: set retryCount=0 so recoverPendingDeliveries picks them up immediately
+  const queueDir = resolveQueueDir(opts.stateDir);
+  for (const entry of eligible) {
+    const filePath = path.join(queueDir, `${entry.id}.json`);
+    const reset: QueuedDelivery = {
+      ...entry,
+      retryCount: 0,
+      lastAttemptAt: undefined,
+      lastError: undefined,
+    };
+    const tmp = `${filePath}.${process.pid}.tmp`;
+    await fs.promises.writeFile(tmp, JSON.stringify(reset, null, 2), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+    await fs.promises.rename(tmp, filePath);
+  }
+
+  // Deliver using injectable or real deliver function
+  // Dynamic import to avoid circular dependency (deliver.ts imports from delivery-queue.ts).
+  // The INEFFECTIVE_DYNAMIC_IMPORT warning is expected since deliver.ts is statically
+  // imported by other modules; the dynamic import here is purely for cycle avoidance.
+  const deliver = opts.deliver ?? (await import("./deliver.js")).deliverOutboundPayloads;
+
+  await recoverPendingDeliveries({
+    deliver,
+    cfg: opts.cfg,
+    log: opts.log,
+    stateDir: opts.stateDir,
+    maxRecoveryMs: 30_000,
+  });
+}
 
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,
