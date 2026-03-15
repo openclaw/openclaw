@@ -79,6 +79,25 @@ async function emitPngMediaToolResult(
   });
 }
 
+async function emitReadImageToolResultWithoutDetailsPath(ctx: EmbeddedPiSubscribeContext) {
+  await handleToolExecutionStart(ctx, {
+    type: "tool_execution_start",
+    toolName: "read",
+    toolCallId: "tc-1",
+    args: { file_path: "/tmp/from-read.png" },
+  });
+
+  await handleToolExecutionEnd(ctx, {
+    type: "tool_execution_end",
+    toolName: "read",
+    toolCallId: "tc-1",
+    isError: false,
+    result: {
+      content: [{ type: "image", data: "base64", mimeType: "image/png" }],
+    },
+  });
+}
+
 async function emitUntrustedToolMediaResult(
   ctx: EmbeddedPiSubscribeContext,
   mediaPathOrUrl: string,
@@ -126,6 +145,17 @@ describe("handleToolExecutionEnd media emission", () => {
     await emitUntrustedToolMediaResult(ctx, "/tmp/secret.png");
 
     expect(onToolResult).not.toHaveBeenCalled();
+  });
+
+  it("falls back to read start args when image tool result omits details.path", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await emitReadImageToolResultWithoutDetailsPath(ctx);
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/from-read.png"],
+    });
   });
 
   it("emits remote media for untrusted tools", async () => {

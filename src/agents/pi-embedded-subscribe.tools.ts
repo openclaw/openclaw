@@ -193,7 +193,10 @@ export function filterToolResultMediaUrls(
  * returns base64 image data but no file path; those need a different delivery
  * path like saving to a temp file).
  */
-export function extractToolResultMediaPaths(result: unknown): string[] {
+export function extractToolResultMediaPaths(
+  result: unknown,
+  startArgs?: Record<string, unknown>,
+): string[] {
   if (!result || typeof result !== "object") {
     return [];
   }
@@ -234,6 +237,15 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
     const p = typeof details?.path === "string" ? details.path.trim() : "";
     if (p) {
       return [p];
+    }
+    const startPath =
+      typeof startArgs?.path === "string"
+        ? startArgs.path.trim()
+        : typeof startArgs?.file_path === "string"
+          ? startArgs.file_path.trim()
+          : "";
+    if (startPath) {
+      return [startPath];
     }
   }
 
