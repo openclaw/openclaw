@@ -34,11 +34,16 @@ function hasNewerRuntimeState(cache: HealthSummary): boolean {
     if (runtimeRunning && !cachedRunning) {
       return true;
     }
-    const runtimeLastStartAt =
-      typeof runtime.lastStartAt === "number" ? runtime.lastStartAt : null;
-    const cachedLastStartAt =
-      typeof cached.lastStartAt === "number" ? cached.lastStartAt : null;
-    if (runtimeLastStartAt !== cachedLastStartAt) {
+    const runtimeLastStartAt = typeof runtime.lastStartAt === "number" ? runtime.lastStartAt : null;
+    const cachedLastStartAt = typeof cached.lastStartAt === "number" ? cached.lastStartAt : null;
+    // Only compare lastStartAt when the cached summary actually carries it.
+    // Channels like WhatsApp omit lastStartAt, so cached is always null while
+    // runtime always has a number, which would force a rebuild every time.
+    if (
+      runtimeLastStartAt !== null &&
+      cachedLastStartAt !== null &&
+      runtimeLastStartAt !== cachedLastStartAt
+    ) {
       return true;
     }
   }
@@ -105,9 +110,7 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
   broadcastHealthUpdate = fn;
 }
 
-export function setHealthRuntimeSnapshotProvider(
-  fn: (() => ChannelRuntimeSnapshot) | null,
-) {
+export function setHealthRuntimeSnapshotProvider(fn: (() => ChannelRuntimeSnapshot) | null) {
   healthRuntimeSnapshotProvider = fn;
 }
 

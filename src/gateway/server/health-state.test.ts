@@ -113,4 +113,53 @@ describe("refreshGatewayHealthSnapshot", () => {
       }),
     ).toBe(true);
   });
+
+  it("does not perpetually invalidate when cached summary omits lastStartAt", async () => {
+    const mod = await import("./health-state.js");
+    const runtimeSnapshot: ChannelRuntimeSnapshot = {
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          running: true,
+          lastStartAt: 789,
+        },
+      },
+      channelAccounts: {
+        whatsapp: {
+          default: {
+            accountId: "default",
+            running: true,
+            lastStartAt: 789,
+          },
+        },
+      },
+    };
+
+    mod.setHealthRuntimeSnapshotProvider(() => runtimeSnapshot);
+
+    expect(
+      mod.isGatewayHealthCacheStale({
+        ok: true,
+        ts: Date.now(),
+        durationMs: 1,
+        channels: {
+          whatsapp: {
+            accountId: "default",
+            configured: true,
+            running: true,
+          },
+        },
+        channelOrder: ["whatsapp"],
+        channelLabels: { whatsapp: "WhatsApp" },
+        heartbeatSeconds: 0,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: {
+          path: "/tmp/sessions.json",
+          count: 0,
+          recent: [],
+        },
+      }),
+    ).toBe(false);
+  });
 });
