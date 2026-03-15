@@ -40,6 +40,7 @@ export type ResolvedQmdUpdateConfig = {
 
 export type ResolvedQmdLimitsConfig = {
   maxResults: number;
+  minScore: number;
   maxSnippetChars: number;
   maxInjectedChars: number;
   timeoutMs: number;
@@ -83,6 +84,7 @@ const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_EMBED_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
   maxResults: 6,
+  minScore: 0.5,
   maxSnippetChars: 700,
   maxInjectedChars: 4_000,
   timeoutMs: DEFAULT_QMD_TIMEOUT_MS,
@@ -181,6 +183,9 @@ function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig
   const parsed: ResolvedQmdLimitsConfig = { ...DEFAULT_QMD_LIMITS };
   if (raw?.maxResults && raw.maxResults > 0) {
     parsed.maxResults = Math.floor(raw.maxResults);
+  }
+  if (raw?.minScore && raw.minScore >= 0 && raw.minScore < 1) {
+    parsed.minScore = raw.minScore;
   }
   if (raw?.maxSnippetChars && raw.maxSnippetChars > 0) {
     parsed.maxSnippetChars = Math.floor(raw.maxSnippetChars);

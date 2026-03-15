@@ -398,6 +398,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "memory.qmd.update.updateTimeoutMs": "QMD Update Timeout (ms)",
   "memory.qmd.update.embedTimeoutMs": "QMD Embed Timeout (ms)",
   "memory.qmd.limits.maxResults": "QMD Max Results",
+  "memory.qmd.limits.minScore": "QMD Min Score",
   "memory.qmd.limits.maxSnippetChars": "QMD Max Snippet Chars",
   "memory.qmd.limits.maxInjectedChars": "QMD Max Injected Chars",
   "memory.qmd.limits.timeoutMs": "QMD Search Timeout (ms)",

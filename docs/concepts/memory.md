@@ -206,7 +206,7 @@ out to QMD for retrieval. Key points:
 - `update`: controls refresh cadence and maintenance execution:
   (`interval`, `debounceMs`, `onBoot`, `waitForBootSync`, `embedInterval`,
   `commandTimeoutMs`, `updateTimeoutMs`, `embedTimeoutMs`).
-- `limits`: clamp recall payload (`maxResults`, `maxSnippetChars`,
+- `limits`: clamp recall payload (`maxResults`, `minScore`, `maxSnippetChars`,
   `maxInjectedChars`, `timeoutMs`).
 - `scope`: same schema as [`session.sendPolicy`](/gateway/configuration#session).
   Default is DM-only (`deny` all, `allow` direct chats); loosen it to surface QMD
@@ -241,7 +241,7 @@ memory: {
   qmd: {
     includeDefaultMemory: true,
     update: { interval: "5m", debounceMs: 15000 },
-    limits: { maxResults: 6, timeoutMs: 4000 },
+    limits: { maxResults: 6, minScore: 0.5, timeoutMs: 4000 },
     scope: {
       default: "deny",
       rules: [

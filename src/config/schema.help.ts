@@ -914,6 +914,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Sets maximum runtime for each `qmd embed` cycle in milliseconds (default: 120000). Increase for heavier embedding workloads or slower hardware, and lower to fail fast under tight SLAs.",
   "memory.qmd.limits.maxResults":
     "Limits how many QMD hits are returned into the agent loop for each recall request (default: 6). Increase for broader recall context, or lower to keep prompts tighter and faster.",
+  "memory.qmd.limits.minScore":
+    "Sets the minimum score threshold for QMD hits to be considered in recall (default: 0.5). Increase to filter out low-confidence results, or lower to include more results.",
   "memory.qmd.limits.maxSnippetChars":
     "Caps per-result snippet length extracted from QMD hits in characters (default: 700). Lower this when prompts bloat quickly, and raise only if answers consistently miss key details.",
   "memory.qmd.limits.maxInjectedChars":

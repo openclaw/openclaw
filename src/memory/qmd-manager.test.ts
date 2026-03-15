@@ -983,6 +983,7 @@ describe("QmdMemoryManager", () => {
     if (!maxResults) {
       throw new Error("qmd maxResults missing");
     }
+    const minScore = resolved.qmd?.limits.minScore ?? 0;
 
     await expect(
       manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
@@ -996,7 +997,9 @@ describe("QmdMemoryManager", () => {
       "test",
       "--json",
       "-n",
-      String(resolved.qmd?.limits.maxResults),
+      String(maxResults),
+      "--min-score",
+      String(minScore),
       "-c",
       "workspace-main",
     ]);
@@ -1168,6 +1171,7 @@ describe("QmdMemoryManager", () => {
     if (!maxResults) {
       throw new Error("qmd maxResults missing");
     }
+    const minScore = resolved.qmd?.limits.minScore ?? 0;
 
     await expect(
       manager.search("記憶系統升級 QMD", { sessionKey: "agent:main:slack:dm:u123" }),
@@ -1182,6 +1186,8 @@ describe("QmdMemoryManager", () => {
       "--json",
       "-n",
       String(maxResults),
+      "--min-score",
+      String(minScore),
       "-c",
       "workspace-main",
     ]);
@@ -1288,6 +1294,7 @@ describe("QmdMemoryManager", () => {
     if (!maxResults) {
       throw new Error("qmd maxResults missing");
     }
+    const minScore = resolved.qmd?.limits.minScore ?? 0;
 
     await expect(
       manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
@@ -1299,8 +1306,28 @@ describe("QmdMemoryManager", () => {
         (args): args is string[] => Array.isArray(args) && ["search", "query"].includes(args[0]),
       );
     expect(searchAndQueryCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
+      [
+        "search",
+        "test",
+        "--json",
+        "-n",
+        String(maxResults),
+        "--min-score",
+        String(minScore),
+        "-c",
+        "workspace-main",
+      ],
+      [
+        "query",
+        "test",
+        "--json",
+        "-n",
+        String(maxResults),
+        "--min-score",
+        String(minScore),
+        "-c",
+        "workspace-main",
+      ],
     ]);
     await manager.close();
   });
@@ -1457,12 +1484,33 @@ describe("QmdMemoryManager", () => {
     if (!maxResults) {
       throw new Error("qmd maxResults missing");
     }
+    const minScore = resolved.qmd?.limits.minScore ?? 0;
     const searchCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "search");
     expect(searchCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+      [
+        "search",
+        "test",
+        "--json",
+        "-n",
+        String(maxResults),
+        "--min-score",
+        String(minScore),
+        "-c",
+        "workspace-main",
+      ],
+      [
+        "search",
+        "test",
+        "--json",
+        "-n",
+        String(maxResults),
+        "--min-score",
+        String(minScore),
+        "-c",
+        "notes-main",
+      ],
     ]);
     await manager.close();
   });
@@ -1498,6 +1546,7 @@ describe("QmdMemoryManager", () => {
     if (!maxResults) {
       throw new Error("qmd maxResults missing");
     }
+    const minScore = resolved.qmd?.limits.minScore ?? 0;
 
     await expect(
       manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
@@ -1507,8 +1556,28 @@ describe("QmdMemoryManager", () => {
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "query");
     expect(queryCalls).toEqual([
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+      [
+        "query",
+        "test",
+        "--json",
+        "-n",
+        String(maxResults),
+        "--min-score",
+        String(minScore),
+        "-c",
+        "workspace-main",
+      ],
+      [
+        "query",
+        "test",
+        "--json",
+        "-n",
+        String(maxResults),
+        "--min-score",
+        String(minScore),
+        "-c",
+        "notes-main",
+      ],
     ]);
     await manager.close();
   });
@@ -1549,6 +1618,7 @@ describe("QmdMemoryManager", () => {
     if (!maxResults) {
       throw new Error("qmd maxResults missing");
     }
+    const minScore = resolved.qmd?.limits.minScore ?? 0;
 
     await expect(
       manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
@@ -1558,9 +1628,39 @@ describe("QmdMemoryManager", () => {
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "search" || args[0] === "query");
     expect(searchAndQueryCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+      [
+        "search",
+        "test",
+        "--json",
+        "-n",
+        String(maxResults),
+        "--min-score",
+        String(minScore),
+        "-c",
+        "workspace-main",
+      ],
+      [
+        "query",
+        "test",
+        "--json",
+        "-n",
+        String(maxResults),
+        "--min-score",
+        String(minScore),
+        "-c",
+        "workspace-main",
+      ],
+      [
+        "query",
+        "test",
+        "--json",
+        "-n",
+        String(maxResults),
+        "--min-score",
+        String(minScore),
+        "-c",
+        "notes-main",
+      ],
     ]);
     await manager.close();
   });

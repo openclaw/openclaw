@@ -733,10 +733,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       return [];
     }
     await this.waitForPendingUpdateBeforeSearch();
-    const limit = Math.min(
+    const maxResults = Math.min(
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
+    const minScore = Math.max(this.qmd.limits.minScore, opts?.minScore ?? this.qmd.limits.minScore);
     const collectionNames = this.listManagedCollectionNames();
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
@@ -755,12 +756,11 @@ export class QmdMemoryManager implements MemorySearchManager {
               : qmdSearchCommand === "vsearch"
                 ? "vector_search"
                 : "deep_search";
-          const minScore = opts?.minScore ?? 0;
           if (collectionNames.length > 1) {
             return await this.runMcporterAcrossCollections({
               tool,
               query: trimmed,
-              limit,
+              maxResults,
               minScore,
               collectionNames,
             });
@@ -769,7 +769,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             mcporter: this.qmd.mcporter,
             tool,
             query: trimmed,
-            limit,
+            maxResults,
             minScore,
             collection: collectionNames[0],
             timeoutMs: this.qmd.limits.timeoutMs,
@@ -778,12 +778,13 @@ export class QmdMemoryManager implements MemorySearchManager {
         if (collectionNames.length > 1) {
           return await this.runQueryAcrossCollections(
             trimmed,
-            limit,
+            maxResults,
+            minScore,
             collectionNames,
             qmdSearchCommand,
           );
         }
-        const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
+        const args = this.buildSearchArgs(qmdSearchCommand, trimmed, maxResults, minScore);
         args.push(...this.buildCollectionFilterArgs(collectionNames));
         // Always scope to managed collections (default + custom). Even for `search`/`vsearch`,
         // pass collection filters; if a given QMD build rejects these flags, we fall back to `query`.
@@ -803,9 +804,15 @@ export class QmdMemoryManager implements MemorySearchManager {
           );
           try {
             if (collectionNames.length > 1) {
-              return await this.runQueryAcrossCollections(trimmed, limit, collectionNames, "query");
+              return await this.runQueryAcrossCollections(
+                trimmed,
+                maxResults,
+                minScore,
+                collectionNames,
+                "query",
+              );
             }
-            const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
+            const fallbackArgs = this.buildSearchArgs("query", trimmed, maxResults, minScore);
             fallbackArgs.push(...this.buildCollectionFilterArgs(collectionNames));
             const fallback = await this.runQmd(fallbackArgs, {
               timeoutMs: this.qmd.limits.timeoutMs,
@@ -857,7 +864,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         source: doc.source,
       });
     }
-    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(results, limit));
+    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(results, maxResults));
   }
 
   async sync(params?: {
@@ -1265,7 +1272,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     mcporter: ResolvedQmdMcporterConfig;
     tool: "search" | "vector_search" | "deep_search";
     query: string;
-    limit: number;
+    maxResults: number;
     minScore: number;
     collection?: string;
     timeoutMs: number;
@@ -1275,7 +1282,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const selector = `${params.mcporter.serverName}.${params.tool}`;
     const callArgs: Record<string, unknown> = {
       query: params.query,
-      limit: params.limit,
+      limit: params.maxResults,
       minScore: params.minScore,
     };
     if (params.collection) {
@@ -1835,9 +1842,9 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private diversifyResultsBySource(
     results: MemorySearchResult[],
-    limit: number,
+    maxResults: number,
   ): MemorySearchResult[] {
-    const target = Math.max(0, limit);
+    const target = Math.max(0, maxResults);
     if (target <= 0) {
       return [];
     }
@@ -1929,7 +1936,8 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async runQueryAcrossCollections(
     query: string,
-    limit: number,
+    maxResults: number,
+    minScore: number,
     collectionNames: string[],
     command: "query" | "search" | "vsearch",
   ): Promise<QmdQueryResult[]> {
@@ -1938,7 +1946,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     );
     const bestByResultKey = new Map<string, QmdQueryResult>();
     for (const collectionName of collectionNames) {
-      const args = this.buildSearchArgs(command, query, limit);
+      const args = this.buildSearchArgs(command, query, maxResults, minScore);
       args.push("-c", collectionName);
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
       const parsed = parseQmdQueryJson(result.stdout, result.stderr);
@@ -1999,7 +2007,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private async runMcporterAcrossCollections(params: {
     tool: "search" | "vector_search" | "deep_search";
     query: string;
-    limit: number;
+    maxResults: number;
     minScore: number;
     collectionNames: string[];
   }): Promise<QmdQueryResult[]> {
@@ -2009,7 +2017,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         mcporter: this.qmd.mcporter,
         tool: params.tool,
         query: params.query,
-        limit: params.limit,
+        maxResults: params.maxResults,
         minScore: params.minScore,
         collection: collectionName,
         timeoutMs: this.qmd.limits.timeoutMs,
@@ -2058,12 +2066,29 @@ export class QmdMemoryManager implements MemorySearchManager {
   private buildSearchArgs(
     command: "query" | "search" | "vsearch",
     query: string,
-    limit: number,
+    maxResults: number,
+    minScore: number,
   ): string[] {
     const normalizedQuery = command === "search" ? normalizeHanBm25Query(query) : query;
     if (command === "query") {
-      return ["query", normalizedQuery, "--json", "-n", String(limit)];
+      return [
+        "query",
+        normalizedQuery,
+        "--json",
+        "-n",
+        String(maxResults),
+        "--min-score",
+        String(minScore ?? 0),
+      ];
     }
-    return [command, normalizedQuery, "--json", "-n", String(limit)];
+    return [
+      command,
+      normalizedQuery,
+      "--json",
+      "-n",
+      String(maxResults),
+      "--min-score",
+      String(minScore ?? 0),
+    ];
   }
 }
