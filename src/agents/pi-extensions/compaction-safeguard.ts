@@ -536,6 +536,50 @@ function trimToolResultsForSummarization(messages: AgentMessage[]): {
   };
 }
 
+function getToolResultStableId(message: AgentMessage): string | null {
+  if ((message as { role?: unknown }).role !== "toolResult") {
+    return null;
+  }
+  const toolCallId = (message as { toolCallId?: unknown }).toolCallId;
+  if (typeof toolCallId === "string" && toolCallId.length > 0) {
+    return `call:${toolCallId}`;
+  }
+  const toolUseId = (message as { toolUseId?: unknown }).toolUseId;
+  if (typeof toolUseId === "string" && toolUseId.length > 0) {
+    return `use:${toolUseId}`;
+  }
+  return null;
+}
+
+function restoreOriginalToolResultsForKeptMessages(params: {
+  prunedMessages: AgentMessage[];
+  originalMessages: AgentMessage[];
+}): AgentMessage[] {
+  const originalByStableId = new Map<string, AgentMessage[]>();
+  for (const message of params.originalMessages) {
+    const stableId = getToolResultStableId(message);
+    if (!stableId) {
+      continue;
+    }
+    const bucket = originalByStableId.get(stableId) ?? [];
+    bucket.push(message);
+    originalByStableId.set(stableId, bucket);
+  }
+
+  return params.prunedMessages.map((message) => {
+    const stableId = getToolResultStableId(message);
+    if (!stableId) {
+      return message;
+    }
+    const bucket = originalByStableId.get(stableId);
+    if (!bucket || bucket.length === 0) {
+      return message;
+    }
+    const restored = bucket.shift();
+    return restored ?? message;
+  });
+}
+
 function wrapUntrustedInstructionBlock(label: string, text: string): string {
   return wrapUntrustedPromptDataBlock({
     label,
@@ -916,6 +960,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       if (tokensBefore !== undefined) {
         const budgetTrimmedForSummary = trimToolResultsForSummarization(messagesToSummarize);
+        if (
+          budgetTrimmedForSummary.stats.truncatedCount > 0 ||
+          budgetTrimmedForSummary.stats.compactedCount > 0
+        ) {
+          log.warn(
+            `Compaction safeguard: pre-trimmed toolResult payloads for budgeting ` +
+              `(truncated=${budgetTrimmedForSummary.stats.truncatedCount}, compacted=${budgetTrimmedForSummary.stats.compactedCount}, ` +
+              `chars=${budgetTrimmedForSummary.stats.beforeChars}->${budgetTrimmedForSummary.stats.afterChars})`,
+          );
+        }
         const summarizableTokens =
           estimateMessagesTokens(budgetTrimmedForSummary.messages) +
           estimateMessagesTokens(prefixMessagesForSummary);
@@ -924,21 +978,25 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         const maxHistoryTokens = Math.floor(contextWindowTokens * maxHistoryShare * SAFETY_MARGIN);
 
         if (newContentTokens > maxHistoryTokens) {
+          const originalMessagesBeforePrune = messagesToSummarize;
           const pruned = pruneHistoryForContextShare({
-            messages: messagesToSummarize,
+            messages: budgetTrimmedForSummary.messages,
             maxContextTokens: contextWindowTokens,
             maxHistoryShare,
             parts: 2,
           });
           if (pruned.droppedChunks > 0) {
-            const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
+            const historyRatio = (summarizableTokens / contextWindowTokens) * 100;
             log.warn(
-              `Compaction safeguard: new content uses ${newContentRatio.toFixed(
+              `Compaction safeguard: summarizable history uses ${historyRatio.toFixed(
                 1,
               )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
                 `(${pruned.droppedMessages} messages) to fit history budget.`,
             );
-            messagesToSummarize = pruned.messages;
+            messagesToSummarize = restoreOriginalToolResultsForKeptMessages({
+              prunedMessages: pruned.messages,
+              originalMessages: originalMessagesBeforePrune,
+            });
 
             // Summarize dropped messages so context isn't lost
             if (pruned.droppedMessagesList.length > 0) {
@@ -952,8 +1010,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   Math.floor(contextWindowTokens * droppedChunkRatio) -
                     SUMMARIZATION_OVERHEAD_TOKENS,
                 );
+                const droppedTrimmed = trimToolResultsForSummarization(pruned.droppedMessagesList);
+                if (
+                  droppedTrimmed.stats.truncatedCount > 0 ||
+                  droppedTrimmed.stats.compactedCount > 0
+                ) {
+                  log.warn(
+                    `Compaction safeguard: trimmed dropped toolResult payloads before summarize ` +
+                      `(truncated=${droppedTrimmed.stats.truncatedCount}, compacted=${droppedTrimmed.stats.compactedCount}, ` +
+                      `chars=${droppedTrimmed.stats.beforeChars}->${droppedTrimmed.stats.afterChars})`,
+                  );
+                }
                 droppedSummary = await summarizeInStages({
-                  messages: pruned.droppedMessagesList,
+                  messages: droppedTrimmed.messages,
                   model,
                   apiKey,
                   signal,
