@@ -1,6 +1,6 @@
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import type { GatewayAuthResult } from "../../auth.js";
+import type { GatewayAuthResult, ResolvedGatewayAuthMode } from "../../auth.js";
 import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
 import { isLoopbackAddress } from "../../net.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
@@ -66,6 +66,7 @@ export function shouldSkipBackendSelfPairing(params: {
   hasBrowserOriginHeader: boolean;
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
+  authMode?: ResolvedGatewayAuthMode;
 }): boolean {
   const isGatewayBackendClient =
     params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
@@ -75,13 +76,18 @@ export function shouldSkipBackendSelfPairing(params: {
   }
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesDeviceTokenAuth = params.authMethod === "device-token";
+  // When auth.mode is "none" there are no shared secrets to prove, so requiring
+  // proof of shared-secret auth is nonsensical. The three safety constraints
+  // (isGatewayBackendClient + isLocalClient + !hasBrowserOriginHeader) still
+  // prevent external or browser-based clients from bypassing pairing.
+  const authDisabled = params.authMode === "none";
   // `authMethod === "device-token"` only reaches this helper after the caller
   // has already accepted auth (`authOk === true`), so a separate
   // `deviceTokenAuthOk` flag would be redundant here.
   return (
     params.isLocalClient &&
     !params.hasBrowserOriginHeader &&
-    ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth)
+    ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth || authDisabled)
   );
 }
 
