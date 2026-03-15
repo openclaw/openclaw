@@ -613,7 +613,13 @@ function renderChatModelSelect(state: AppViewState) {
           options,
           (entry) => entry.value,
           (entry) =>
-            html`<option value=${entry.value} ?selected=${entry.value === currentOverride}>
+            html`<option
+              value=${entry.value}
+              ?selected=${
+                entry.value === currentOverride ||
+                (currentOverride && entry.value.endsWith(`/${currentOverride}`))
+              }
+            >
               ${entry.label}
             </option>`,
         )}
