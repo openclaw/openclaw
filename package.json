@@ -586,6 +586,8 @@
     "android:test": "cd apps/android && ./gradlew :app:testPlayDebugUnitTest",
     "android:test:integration": "OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 vitest run --config vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
     "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
+    "deploy:stable": "bash scripts/deploy-stable.sh",
+    "deploy:stable:fast": "OPENCLAW_DEPLOY_SKIP_TESTS=1 bash scripts/deploy-stable.sh",
     "deploy:local": "bash scripts/deploy-local.sh",
     "deploy:local:fast": "OPENCLAW_DEPLOY_SKIP_TESTS=1 bash scripts/deploy-local.sh",
     "deploy:replist": "bash scripts/deploy-replist.sh",
