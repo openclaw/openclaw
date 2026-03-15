@@ -44,6 +44,16 @@ describe("cron protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts exec payloads", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        sessionTarget: "isolated",
+        payload: { kind: "exec", command: "echo hi", timeout: 5_000 },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects add params when required scheduling fields are missing", () => {
     const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
     expect(validateCronAddParams(withoutWakeMode)).toBe(false);
