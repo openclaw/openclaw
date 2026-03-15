@@ -6,6 +6,7 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import WebSocket from "ws";
+import { resolveEnvHttpProxyUrl } from "../../../../src/infra/net/proxy-env.js";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
@@ -270,7 +271,7 @@ export function createDiscordGatewayPlugin(params: {
   runtime: RuntimeEnv;
 }): GatewayPlugin {
   const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
-  const proxy = params.discordConfig?.proxy?.trim();
+  const proxy = params.discordConfig?.proxy?.trim() || resolveEnvHttpProxyUrl("https");
   const options = {
     reconnect: { maxAttempts: 50 },
     intents,
@@ -287,7 +288,7 @@ export function createDiscordGatewayPlugin(params: {
 
   try {
     const wsAgent = new HttpsProxyAgent<string>(proxy);
-    const fetchAgent = new ProxyAgent(proxy);
+    const fetchAgent = new ProxyAgent({ uri: proxy, connect: { keepAlive: false } });
 
     params.runtime.log?.("discord: gateway proxy enabled");
 
