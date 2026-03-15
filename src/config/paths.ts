@@ -66,6 +66,28 @@ export function resolveStateDir(
   if (override) {
     return resolveUserPath(override, env, effectiveHomedir);
   }
+
+  // When OPENCLAW_HOME already ends with a state dirname, use it directly
+  // to avoid creating a nested directory like ~/.openclaw/.openclaw.
+  // But if the nested directory already exists (from an earlier version),
+  // fall through to the normal resolution to preserve access to that data.
+  const stateDirnames = [NEW_STATE_DIRNAME, ...LEGACY_STATE_DIRNAMES];
+  const explicitHome = env.OPENCLAW_HOME?.trim();
+  if (explicitHome) {
+    const resolved = effectiveHomedir();
+    const baseName = path.basename(resolved);
+    if (stateDirnames.includes(baseName)) {
+      // Check for any possible nested state directory — including the new
+      // dirname and all legacy names — not just the current baseName.
+      // This handles upgrades (e.g., ~/.clawdbot/.openclaw exists from
+      // migrating legacy → new while OPENCLAW_HOME pointed at legacy).
+      const hasNestedState = stateDirnames.some((name) => fs.existsSync(path.join(resolved, name)));
+      if (!hasNestedState) {
+        return resolved;
+      }
+    }
+  }
+
   const newDir = newStateDir(effectiveHomedir);
   if (env.OPENCLAW_TEST_FAST === "1") {
     return newDir;
