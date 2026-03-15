@@ -1169,6 +1169,12 @@ export function startHeartbeatRunner(opts: {
     const now = startedAt;
     let ran = false;
 
+    // Track whether the wake layer handles rescheduling (requests-in-flight).
+    // When true, we must NOT call scheduleNext() in the finally block because
+    // it would register a 0 ms timer that races with and defeats the wake
+    // layer's 1 s retry cooldown.
+    let skipFinalSchedule = false;
+
     // Wrap the entire run in try/finally so scheduleNext() is ALWAYS called,
     // even if an unexpected rejection or silent error exits the function early.
     // This prevents the heartbeat timer from permanently dying (see #45772).
@@ -1217,8 +1223,8 @@ export function startHeartbeatRunner(opts: {
             deps: { runtime: state.runtime },
           });
         } catch (err) {
-          // If runOnce throws (e.g. during session compaction), we must still
-          // advance the timer and call scheduleNext so heartbeats keep firing.
+          // If runOnce throws (e.g. during session compaction), advance the
+          // agent's schedule so the next interval is computed correctly.
           const errMsg = formatErrorMessage(err);
           log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
           advanceAgentSchedule(agent, now);
@@ -1226,9 +1232,11 @@ export function startHeartbeatRunner(opts: {
         }
         if (res.status === "skipped" && res.reason === "requests-in-flight") {
           // Do not advance the schedule — the main lane is busy and the wake
-          // layer will retry shortly (DEFAULT_RETRY_MS = 1 s).  Calling
-          // scheduleNext() here would register a 0 ms timer that races with
-          // the wake layer's 1 s retry and wins, bypassing the cooldown.
+          // layer will retry shortly (DEFAULT_RETRY_MS = 1 s).  We must also
+          // suppress scheduleNext() in the finally block because it would
+          // register a 0 ms timer that races with the wake layer's retry
+          // cooldown and defeats the backoff.
+          skipFinalSchedule = true;
           return res;
         }
         if (res.status !== "skipped" || res.reason !== "disabled") {
@@ -1244,11 +1252,14 @@ export function startHeartbeatRunner(opts: {
       }
       return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
     } finally {
-      // Always re-arm the timer regardless of how the run exits.
+      // Always re-arm the timer regardless of how the run exits — unless the
+      // wake layer is handling rescheduling (requests-in-flight path).
       // This is the critical fix for #45772: without this, any unhandled
       // rejection or unexpected early exit permanently kills the heartbeat
       // timer because scheduleNext() is never called.
-      scheduleNext();
+      if (!skipFinalSchedule) {
+        scheduleNext();
+      }
     }
   };
 
