@@ -47,7 +47,7 @@ export function createFeishuToolClient(params: {
 }
 
 export function resolveAnyEnabledFeishuToolsConfig(
-  accounts: ResolvedFeishuAccount[],
+  accounts: Array<{ config: { tools?: FeishuToolsConfig } }>,
 ): Required<FeishuToolsConfig> {
   const merged: Required<FeishuToolsConfig> = {
     doc: false,
