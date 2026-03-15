@@ -78,9 +78,23 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+export type CronScriptPayload = {
+  kind: "script";
+  /** Shell command or script body to execute. */
+  script: string;
+  /** Optional wall-clock timeout in seconds. Overrides DEFAULT_JOB_TIMEOUT_MS when set. */
+  timeoutSeconds?: number;
+};
 
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronScriptPayload;
+
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronScriptPayload;
 
 type CronAgentTurnPayloadFields = {
   message: string;
