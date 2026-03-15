@@ -374,7 +374,9 @@ export function buildAgentSystemPrompt(params: {
     .map((cap) => String(cap).trim())
     .filter(Boolean);
   const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
-  const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
+  const inlineButtonsEnabled =
+    runtimeCapabilitiesLower.has("inlinebuttons") ||
+    (runtimeChannel === "slack" && runtimeCapabilitiesLower.has("interactivereplies"));
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
