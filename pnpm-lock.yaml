@@ -16,6 +16,7 @@ overrides:
   qs: 6.14.2
   node-domexception: npm:@nolyfill/domexception@^1.0.28
   '@sinclair/typebox': 0.34.48
+  punycode: npm:punycode.js@^2.3.1
   tar: 7.5.11
   tough-cookie: 4.1.3
   yauzl: 3.2.1
@@ -5850,10 +5851,6 @@ packages:
 
   punycode.js@2.3.1:
     resolution: {integrity: sha512-uxFIHU0YlHYhDQtV4R9J6a52SLx28BCjT+4ieh7IGbgwVJWO+km431c4yRlREUAsAmt/uMjQUyQHNEPf0M39CA==}
-    engines: {node: '>=6'}
-
-  punycode@2.3.1:
-    resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
 
   qified@0.6.0:
@@ -13211,7 +13208,7 @@ snapshots:
 
   psl@1.15.0:
     dependencies:
-      punycode: 2.3.1
+      punycode: punycode.js@2.3.1
 
   pug-attrs@3.0.0:
     dependencies:
@@ -13286,8 +13283,6 @@ snapshots:
       once: 1.4.0
 
   punycode.js@2.3.1: {}
-
-  punycode@2.3.1: {}
 
   qified@0.6.0:
     dependencies:
@@ -13948,7 +13943,7 @@ snapshots:
   tough-cookie@4.1.3:
     dependencies:
       psl: 1.15.0
-      punycode: 2.3.1
+      punycode: punycode.js@2.3.1
       universalify: 0.2.0
       url-parse: 1.5.10
 
@@ -13956,7 +13951,7 @@ snapshots:
 
   tr46@6.0.0:
     dependencies:
-      punycode: 2.3.1
+      punycode: punycode.js@2.3.1
 
   tree-kill@1.2.2: {}
 
