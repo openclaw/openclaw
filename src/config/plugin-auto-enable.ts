@@ -521,7 +521,25 @@ export function applyPluginAutoEnable(params: {
             }
             return (channelConfig as { enabled?: unknown }).enabled === true;
           })()
-        : next.plugins?.entries?.[entry.pluginId]?.enabled === true;
+        : (() => {
+            if (next.plugins?.entries?.[entry.pluginId]?.enabled === true) {
+              return true;
+            }
+            // A globally- or workspace-installed plugin that declares channels in its
+            // manifest will be auto-loaded by the plugin loader whenever one of those
+            // channels is configured — adding it to plugins.entries would create a
+            // "duplicate plugin id" warning at startup.  Bundled plugins (origin
+            // "bundled") are NOT auto-loaded this way and still need plugins.entries
+            // to be explicitly enabled.
+            // See: https://github.com/openclaw/openclaw/issues/37548
+            const pluginRecord = registry.plugins.find((p) => p.id === entry.pluginId);
+            return (
+              pluginRecord != null &&
+              (pluginRecord.origin === "global" || pluginRecord.origin === "workspace") &&
+              pluginRecord.channels.length > 0 &&
+              pluginRecord.channels.some((ch) => isChannelConfigured(next, ch, env))
+            );
+          })();
     if (alreadyEnabled && !allowMissing) {
       continue;
     }

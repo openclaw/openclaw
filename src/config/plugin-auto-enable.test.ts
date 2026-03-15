@@ -379,6 +379,69 @@ describe("applyPluginAutoEnable", () => {
       expect(result.changes).toEqual([]);
     });
 
+    it("does not add plugins.entries for a globally-installed plugin already auto-loaded via its manifest channel (fixes #37548)", () => {
+      // When a globally-installed plugin (e.g. "feishu", origin "global") declares
+      // channels: ["feishu"] in its manifest AND channels.feishu is configured,
+      // the plugin loader auto-discovers and loads it from ~/.openclaw/extensions/.
+      // Doctor must NOT also write plugins.entries.feishu, which would create a
+      // "duplicate plugin id" warning at startup.
+      const globalRegistry: PluginManifestRegistry = {
+        plugins: [
+          {
+            id: "feishu",
+            channels: ["feishu"],
+            providers: [],
+            skills: [],
+            origin: "global" as const,
+            rootDir: "/fake/feishu",
+            source: "/fake/feishu/index.js",
+            manifestPath: "/fake/feishu/openclaw.plugin.json",
+          },
+        ],
+        diagnostics: [],
+      };
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { feishu: { appId: "cli_xxx", appSecret: "xxx" } }, // pragma: allowlist secret
+        },
+        env: {},
+        manifestRegistry: globalRegistry,
+      });
+
+      expect(result.config.plugins?.entries?.feishu).toBeUndefined();
+      expect(result.changes).toEqual([]);
+    });
+
+    it('still adds plugins.entries for a bundled plugin (origin "bundled", not auto-loaded from extensions directory)', () => {
+      // Bundled plugins are part of OpenClaw's own distribution. They are NOT
+      // auto-discovered from ~/.openclaw/extensions/, so they still require an
+      // explicit plugins.entries entry. The fix must NOT skip them.
+      const bundledRegistry: PluginManifestRegistry = {
+        plugins: [
+          {
+            id: "feishu",
+            channels: ["feishu"],
+            providers: [],
+            skills: [],
+            origin: "bundled" as const,
+            rootDir: "/fake/feishu",
+            source: "/fake/feishu/index.js",
+            manifestPath: "/fake/feishu/openclaw.plugin.json",
+          },
+        ],
+        diagnostics: [],
+      };
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { feishu: { appId: "cli_xxx", appSecret: "xxx" } }, // pragma: allowlist secret
+        },
+        env: {},
+        manifestRegistry: bundledRegistry,
+      });
+
+      expect(result.config.plugins?.entries?.feishu?.enabled).toBe(true);
+    });
+
     it("falls back to channel key as plugin id when no installed manifest declares the channel", () => {
       // Without a matching manifest entry, behavior is unchanged (backward compat).
       const result = applyPluginAutoEnable({
