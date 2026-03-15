@@ -199,7 +199,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
 }): Model<Api> | undefined {
   const { provider, modelId, modelRegistry, dashModelId, dotModelId } = params;
   const normalizedProvider = normalizeProviderId(provider);
-  if (normalizedProvider !== "anthropic") {
+  if (normalizedProvider !== "anthropic" && normalizedProvider !== "google-antigravity") {
     return undefined;
   }
 
@@ -275,7 +275,11 @@ function resolveGoogle31ForwardCompatModel(
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  if (normalizedProvider !== "google" && normalizedProvider !== "google-gemini-cli") {
+  if (
+    normalizedProvider !== "google" &&
+    normalizedProvider !== "google-gemini-cli" &&
+    normalizedProvider !== "google-antigravity"
+  ) {
     return undefined;
   }
   const trimmed = modelId.trim();
