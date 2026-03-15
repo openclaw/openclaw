@@ -156,7 +156,7 @@ describe("createAcpxRuntimeService", () => {
 
     expect(runtimeFactory).toHaveBeenCalledWith(
       expect.objectContaining({
-        queueOwnerTtlSeconds: 0.1,
+        queueOwnerTtlSeconds: 30,
       }),
     );
   });
