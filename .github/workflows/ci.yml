@@ -96,28 +96,6 @@ jobs:
           use-sticky-disk: "false"
           lookup-only: "true"
 
-  # Seed the Windows dependency cache before sharded jobs so only the first miss installs.
-  deps-windows:
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true'
-    runs-on: blacksmith-32vcpu-windows-2025
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Seed Windows dependency cache
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-          use-restore-keys: "false"
-          use-actions-cache: "true"
-          prefer-offline: "true"
-          side-effects-cache: "true"
-          lookup-only: "true"
-
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
     needs: [docs-scope, changed-scope, deps-linux]
@@ -420,7 +398,7 @@ jobs:
         run: pre-commit run --all-files pnpm-audit-prod
 
   checks-windows:
-    needs: [docs-scope, changed-scope, deps-windows]
+    needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true'
     runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 45
@@ -495,6 +473,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-workspace-deps-cache: "false"
           # Sticky disk mount currently retries/fails on every shard and adds ~50s
           # before install while still yielding zero pnpm store reuse.
           # Keep exact-key actions/cache restores for the cold-miss path instead.

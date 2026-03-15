@@ -32,6 +32,10 @@ inputs:
     description: Whether pnpm store restore/save should use actions/cache.
     required: false
     default: "true"
+  use-workspace-deps-cache:
+    description: Whether to restore/save workspace node_modules via actions/cache.
+    required: false
+    default: "true"
   install-deps:
     description: Whether to run pnpm install after environment setup.
     required: false
@@ -67,7 +71,7 @@ runs:
         package-manager-cache: false
 
     - name: Restore workspace dependency cache
-      if: inputs.install-deps == 'true' || inputs.lookup-only == 'true'
+      if: (inputs.install-deps == 'true' || inputs.lookup-only == 'true') && inputs.use-workspace-deps-cache == 'true'
       id: workspace-deps-cache
       uses: actions/cache@v5
       with:
