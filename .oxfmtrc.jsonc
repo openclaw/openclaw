@@ -21,6 +21,7 @@
     "src/gateway/server-methods/CLAUDE.md",
     "src/auto-reply/reply/export-html/",
     "Swabble/",
+    "ui-mc/",
     "vendor/",
   ],
 }

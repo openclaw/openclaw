@@ -1,0 +1,234 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --void: 240 60% 2%;
+    --surface-0: 240 33% 5%;
+    --surface-1: 240 33% 8%;
+    --surface-2: 0 0% 100% / 0.04;
+
+    --background: 240 33% 5%;
+    --foreground: 240 5% 96%;
+
+    --card: 240 33% 8%;
+    --card-foreground: 240 5% 96%;
+
+    --popover: 240 33% 8%;
+    --popover-foreground: 240 5% 96%;
+
+    --primary: 193 100% 50%;
+    --primary-foreground: 240 60% 2%;
+
+    --secondary: 240 33% 12%;
+    --secondary-foreground: 240 5% 96%;
+
+    --muted: 240 20% 15%;
+    --muted-foreground: 240 5% 55%;
+
+    --accent: 193 100% 50%;
+    --accent-foreground: 240 60% 2%;
+
+    --accent-red: 345 100% 57%;
+    --accent-gold: 48 100% 52%;
+    --accent-green: 142 69% 50%;
+
+    --destructive: 345 100% 57%;
+    --destructive-foreground: 240 5% 96%;
+
+    --border: 0 0% 100% / 0.08;
+    --border-glow: 0 0% 100% / 0.15;
+    --input: 0 0% 100% / 0.08;
+    --ring: 193 100% 50%;
+
+    --radius: 1rem;
+
+    --text-1: 240 5% 96%;
+    --text-2: 240 5% 55%;
+    --text-3: 240 14% 25%;
+
+    --sidebar-background: 240 33% 5%;
+    --sidebar-foreground: 240 5% 96%;
+    --sidebar-primary: 193 100% 50%;
+    --sidebar-primary-foreground: 240 60% 2%;
+    --sidebar-accent: 240 33% 12%;
+    --sidebar-accent-foreground: 240 5% 96%;
+    --sidebar-border: 0 0% 100% / 0.08;
+    --sidebar-ring: 193 100% 50%;
+  }
+
+  .light {
+    --void: 220 20% 97%;
+    --surface-0: 220 20% 95%;
+    --surface-1: 220 15% 92%;
+    --surface-2: 0 0% 0% / 0.03;
+
+    --background: 220 20% 97%;
+    --foreground: 240 10% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 10%;
+
+    --primary: 193 100% 40%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 15% 90%;
+    --secondary-foreground: 240 10% 10%;
+
+    --muted: 220 15% 92%;
+    --muted-foreground: 240 5% 45%;
+
+    --accent: 193 100% 40%;
+    --accent-foreground: 0 0% 100%;
+
+    --accent-red: 345 85% 50%;
+    --accent-gold: 40 95% 45%;
+    --accent-green: 142 60% 40%;
+
+    --destructive: 345 85% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 0% / 0.1;
+    --border-glow: 0 0% 0% / 0.15;
+    --input: 0 0% 0% / 0.08;
+    --ring: 193 100% 40%;
+
+    --text-1: 240 10% 10%;
+    --text-2: 240 5% 45%;
+    --text-3: 240 5% 75%;
+
+    --sidebar-background: 220 20% 95%;
+    --sidebar-foreground: 240 10% 10%;
+    --sidebar-primary: 193 100% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 15% 90%;
+    --sidebar-accent-foreground: 240 10% 10%;
+    --sidebar-border: 0 0% 0% / 0.08;
+    --sidebar-ring: 193 100% 40%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border transition-colors duration-200;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(40px) saturate(180%) brightness(110%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+      0 20px 60px rgba(0, 0, 0, 0.6),
+      0 0 120px rgba(0, 200, 255, 0.03);
+    border-radius: 16px;
+  }
+
+  .light .glass-panel {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(40px) saturate(150%);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.02) inset,
+      0 10px 40px rgba(0, 0, 0, 0.08),
+      0 0 80px rgba(0, 150, 200, 0.03);
+  }
+
+  .glass-panel-sm {
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    border-radius: 12px;
+  }
+
+  .light .glass-panel-sm {
+    background: rgba(255, 255, 255, 0.6);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+  }
+
+  .glass-pill {
+    background: rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 9999px;
+  }
+
+  .light .glass-pill {
+    background: rgba(0, 0, 0, 0.04);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  .glow-accent {
+    box-shadow: 0 0 20px rgba(0, 200, 255, 0.3), 0 0 60px rgba(0, 200, 255, 0.1);
+  }
+
+  .glow-green {
+    box-shadow: 0 0 12px rgba(48, 209, 88, 0.4);
+  }
+
+  .glow-red {
+    box-shadow: 0 0 12px rgba(255, 45, 85, 0.4);
+  }
+
+  .glow-gold {
+    box-shadow: 0 0 12px rgba(255, 214, 10, 0.4);
+  }
+
+  .text-gradient-accent {
+    background: linear-gradient(135deg, hsl(193 100% 50%), hsl(210 100% 70%));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+  }
+  .light .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.12);
+  }
+}
+
+@layer utilities {
+  @keyframes pulse-glow {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  @keyframes ping-ring {
+    0% { transform: scale(1); opacity: 0.8; }
+    100% { transform: scale(2); opacity: 0; }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+  .animate-pulse-glow {
+    animation: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  .animate-ping-ring {
+    animation: ping-ring 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+}

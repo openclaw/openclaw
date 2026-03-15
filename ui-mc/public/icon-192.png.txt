@@ -1,0 +1,2 @@
+Placeholder for PWA icon (192x192). 
+Replace with actual PNG icon: A dark-themed mission control icon with Mavis branding.

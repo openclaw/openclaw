@@ -1,0 +1,22 @@
+{
+  "name": "Mavis Mission Control",
+  "short_name": "Mavis MC",
+  "description": "OpenClaw Mission Control Dashboard",
+  "start_url": "/?gwHost=127.0.0.1:18789&token=da63e1e0bd3fb9b17ef92a35c848b6155a55b488482506b1",
+  "display": "standalone",
+  "background_color": "#050a1a",
+  "theme_color": "#050a1a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
