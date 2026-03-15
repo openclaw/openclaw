@@ -44,12 +44,13 @@ function createTestPlugin(params?: {
   account?: TestAccount;
   startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
   includeDescribeAccount?: boolean;
+  resolveAccount?: ChannelPlugin<TestAccount>["config"]["resolveAccount"];
 }): ChannelPlugin<TestAccount> {
   const account = params?.account ?? { enabled: true, configured: true };
   const includeDescribeAccount = params?.includeDescribeAccount !== false;
   const config: ChannelPlugin<TestAccount>["config"] = {
     listAccountIds: () => [DEFAULT_ACCOUNT_ID],
-    resolveAccount: () => account,
+    resolveAccount: params?.resolveAccount ?? (() => account),
     isEnabled: (resolved) => resolved.enabled !== false,
   };
   if (includeDescribeAccount) {
@@ -88,13 +89,16 @@ function installTestRegistry(plugin: ChannelPlugin<TestAccount>) {
   setActivePluginRegistry(registry);
 }
 
-function createManager(options?: { channelRuntime?: PluginRuntime["channel"] }) {
+function createManager(options?: {
+  channelRuntime?: PluginRuntime["channel"];
+  loadConfig?: () => Record<string, unknown>;
+}) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
   const runtime = runtimeForLogger(log);
   const channelRuntimeEnvs = { discord: runtime } as Record<ChannelId, RuntimeEnv>;
   return createChannelManager({
-    loadConfig: () => ({}),
+    loadConfig: () => options?.loadConfig?.() ?? {},
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
@@ -179,5 +183,105 @@ describe("server-channels auto restart", () => {
 
     await manager.startChannels();
     expect(startAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses plugin account resolution for health monitor overrides", () => {
+    installTestRegistry(
+      createTestPlugin({
+        resolveAccount: (cfg, accountId) => {
+          const accounts = (
+            cfg as {
+              channels?: {
+                discord?: {
+                  accounts?: Record<
+                    string,
+                    TestAccount & { healthMonitor?: { enabled?: boolean } }
+                  >;
+                };
+              };
+            }
+          ).channels?.discord?.accounts;
+          if (!accounts) {
+            return { enabled: true, configured: true };
+          }
+          const direct = accounts[accountId ?? DEFAULT_ACCOUNT_ID];
+          if (direct) {
+            return direct;
+          }
+          const normalized = (accountId ?? DEFAULT_ACCOUNT_ID).toLowerCase().replaceAll(" ", "-");
+          const matchKey = Object.keys(accounts).find(
+            (key) => key.toLowerCase().replaceAll(" ", "-") === normalized,
+          );
+          return matchKey ? (accounts[matchKey] ?? { enabled: true, configured: true }) : {};
+        },
+      }),
+    );
+
+    const manager = createManager({
+      loadConfig: () => ({
+        channels: {
+          discord: {
+            accounts: {
+              "Router D": {
+                enabled: true,
+                configured: true,
+                healthMonitor: { enabled: false },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    expect(manager.isHealthMonitorEnabled("discord", "router-d")).toBe(false);
+  });
+
+  it("falls back to channel-level health monitor overrides when account resolution omits them", () => {
+    installTestRegistry(
+      createTestPlugin({
+        resolveAccount: () => ({
+          enabled: true,
+          configured: true,
+        }),
+      }),
+    );
+
+    const manager = createManager({
+      loadConfig: () => ({
+        channels: {
+          discord: {
+            healthMonitor: { enabled: false },
+          },
+        },
+      }),
+    });
+
+    expect(manager.isHealthMonitorEnabled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+  });
+
+  it("uses wrapped account config health monitor overrides", () => {
+    installTestRegistry(
+      createTestPlugin({
+        resolveAccount: () => ({
+          enabled: true,
+          configured: true,
+          config: {
+            healthMonitor: { enabled: false },
+          },
+        }),
+      }),
+    );
+
+    const manager = createManager({
+      loadConfig: () => ({
+        channels: {
+          discord: {
+            healthMonitor: { enabled: true },
+          },
+        },
+      }),
+    });
+
+    expect(manager.isHealthMonitorEnabled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
   });
 });

@@ -105,6 +105,7 @@ export type ChannelManager = {
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
+  isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
 };
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
@@ -118,6 +119,48 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const manuallyStopped = new Set<string>();
 
   const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
+
+  const isHealthMonitorEnabled = (channelId: ChannelId, accountId: string): boolean => {
+    const cfg = loadConfig();
+    const plugin = getChannelPlugin(channelId);
+    const resolvedAccount = plugin?.config.resolveAccount(cfg, accountId) as
+      | {
+          healthMonitor?: {
+            enabled?: boolean;
+          };
+          config?: {
+            healthMonitor?: {
+              enabled?: boolean;
+            };
+          };
+        }
+      | undefined;
+    const accountOverride = resolvedAccount?.healthMonitor?.enabled;
+    const wrappedAccountOverride = resolvedAccount?.config?.healthMonitor?.enabled;
+    const channelOverride = (
+      cfg.channels?.[channelId] as
+        | {
+            healthMonitor?: {
+              enabled?: boolean;
+            };
+          }
+        | undefined
+    )?.healthMonitor?.enabled;
+
+    if (typeof accountOverride === "boolean") {
+      return accountOverride;
+    }
+
+    if (typeof wrappedAccountOverride === "boolean") {
+      return wrappedAccountOverride;
+    }
+
+    if (typeof channelOverride === "boolean") {
+      return channelOverride;
+    }
+
+    return true;
+  };
 
   const getStore = (channelId: ChannelId): ChannelRuntimeStore => {
     const existing = channelStores.get(channelId);
@@ -453,5 +496,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStopped_,
     resetRestartAttempts: resetRestartAttempts_,
+    isHealthMonitorEnabled,
   };
 }
