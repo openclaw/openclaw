@@ -2,10 +2,10 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
+import { verifyDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
 import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
-  verifyDeviceSignature,
 } from "../../../infra/device-identity.js";
 import {
   approveDevicePairing,
@@ -32,11 +32,7 @@ import {
   CANVAS_CAPABILITY_TTL_MS,
   mintCanvasCapabilityToken,
 } from "../../canvas-capability.js";
-import {
-  buildDeviceAuthPayload,
-  buildDeviceAuthPayloadV3,
-  normalizeDeviceMetadataForAuth,
-} from "../../device-auth.js";
+import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
@@ -45,7 +41,7 @@ import {
 } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
+import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
 import {
   ConnectErrorDetailCodes,
   resolveDeviceAuthConnectErrorDetailCode,
@@ -62,7 +58,12 @@ import {
   validateRequestFrame,
 } from "../../protocol/index.js";
 import { parseGatewayRole } from "../../role-policy.js";
-import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
+import {
+  MAX_BUFFERED_BYTES,
+  MAX_PAYLOAD_BYTES,
+  MAX_PREAUTH_PAYLOAD_BYTES,
+  TICK_INTERVAL_MS,
+} from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
@@ -77,134 +78,29 @@ import {
 } from "../health-state.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
-import { formatGatewayAuthFailureMessage, type AuthProvidedKind } from "./auth-messages.js";
+import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
 import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
+import {
+  resolveDeviceSignaturePayloadVersion,
+  resolveHandshakeBrowserSecurityContext,
+  resolveUnauthorizedHandshakeContext,
+  shouldAllowSilentLocalPairing,
+  shouldSkipBackendSelfPairing,
+} from "./handshake-auth-helpers.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
-const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
 
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
-
-type HandshakeBrowserSecurityContext = {
-  hasBrowserOriginHeader: boolean;
-  enforceOriginCheckForAnyClient: boolean;
-  rateLimitClientIp: string | undefined;
-  authRateLimiter?: AuthRateLimiter;
-};
-
-function resolveHandshakeBrowserSecurityContext(params: {
-  requestOrigin?: string;
-  hasProxyHeaders: boolean;
-  clientIp: string | undefined;
-  rateLimiter?: AuthRateLimiter;
-  browserRateLimiter?: AuthRateLimiter;
-}): HandshakeBrowserSecurityContext {
-  const hasBrowserOriginHeader = Boolean(
-    params.requestOrigin && params.requestOrigin.trim() !== "",
-  );
-  return {
-    hasBrowserOriginHeader,
-    enforceOriginCheckForAnyClient: hasBrowserOriginHeader,
-    rateLimitClientIp:
-      hasBrowserOriginHeader && isLoopbackAddress(params.clientIp)
-        ? BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP
-        : params.clientIp,
-    authRateLimiter:
-      hasBrowserOriginHeader && params.browserRateLimiter
-        ? params.browserRateLimiter
-        : params.rateLimiter,
-  };
-}
-
-function shouldAllowSilentLocalPairing(params: {
-  isLocalClient: boolean;
-  hasBrowserOriginHeader: boolean;
-  isControlUi: boolean;
-  isWebchat: boolean;
-  reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
-}): boolean {
-  return (
-    params.isLocalClient &&
-    (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
-    (params.reason === "not-paired" || params.reason === "scope-upgrade")
-  );
-}
-
-function shouldSkipBackendSelfPairing(params: {
-  connectParams: ConnectParams;
-  isLocalClient: boolean;
-  hasBrowserOriginHeader: boolean;
-  sharedAuthOk: boolean;
-  authMethod: GatewayAuthResult["method"];
-}): boolean {
-  const isGatewayBackendClient =
-    params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
-    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
-  if (!isGatewayBackendClient) {
-    return false;
-  }
-  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
-  return (
-    params.isLocalClient &&
-    !params.hasBrowserOriginHeader &&
-    params.sharedAuthOk &&
-    usesSharedSecretAuth
-  );
-}
-
-function resolveDeviceSignaturePayloadVersion(params: {
-  device: {
-    id: string;
-    signature: string;
-    publicKey: string;
-  };
-  connectParams: ConnectParams;
-  role: string;
-  scopes: string[];
-  signedAtMs: number;
-  nonce: string;
-}): "v3" | "v2" | null {
-  const payloadV3 = buildDeviceAuthPayloadV3({
-    deviceId: params.device.id,
-    clientId: params.connectParams.client.id,
-    clientMode: params.connectParams.client.mode,
-    role: params.role,
-    scopes: params.scopes,
-    signedAtMs: params.signedAtMs,
-    token: params.connectParams.auth?.token ?? params.connectParams.auth?.deviceToken ?? null,
-    nonce: params.nonce,
-    platform: params.connectParams.client.platform,
-    deviceFamily: params.connectParams.client.deviceFamily,
-  });
-  if (verifyDeviceSignature(params.device.publicKey, payloadV3, params.device.signature)) {
-    return "v3";
-  }
-
-  const payloadV2 = buildDeviceAuthPayload({
-    deviceId: params.device.id,
-    clientId: params.connectParams.client.id,
-    clientMode: params.connectParams.client.mode,
-    role: params.role,
-    scopes: params.scopes,
-    signedAtMs: params.signedAtMs,
-    token: params.connectParams.auth?.token ?? params.connectParams.auth?.deviceToken ?? null,
-    nonce: params.nonce,
-  });
-  if (verifyDeviceSignature(params.device.publicKey, payloadV2, params.device.signature)) {
-    return "v2";
-  }
-  return null;
-}
 
 function resolvePinnedClientMetadata(params: {
   claimedPlatform?: string;
@@ -348,7 +244,6 @@ export function attachGatewayWsMessageHandler(params: {
   const unauthorizedFloodGuard = new UnauthorizedFloodGuard();
   const browserSecurity = resolveHandshakeBrowserSecurityContext({
     requestOrigin,
-    hasProxyHeaders,
     clientIp,
     rateLimiter,
     browserRateLimiter,
@@ -364,6 +259,18 @@ export function attachGatewayWsMessageHandler(params: {
     if (isClosed()) {
       return;
     }
+
+    const preauthPayloadBytes = !getClient() ? getRawDataByteLength(data) : undefined;
+    if (preauthPayloadBytes !== undefined && preauthPayloadBytes > MAX_PREAUTH_PAYLOAD_BYTES) {
+      setHandshakeState("failed");
+      setCloseCause("preauth-payload-too-large", {
+        payloadBytes: preauthPayloadBytes,
+        limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+      });
+      close(1009, "preauth payload too large");
+      return;
+    }
+
     const text = rawDataToString(data);
     try {
       const parsed = JSON.parse(text);
@@ -514,7 +421,12 @@ export function attachGatewayWsMessageHandler(params: {
               host: requestHost ?? "n/a",
               reason: originCheck.reason,
             });
-            sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage);
+            sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
+              details: {
+                code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+                reason: originCheck.reason,
+              },
+            });
             close(1008, truncateCloseReason(errorMessage));
             return;
           }
@@ -549,6 +461,7 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
           sharedAuthOk,
+          bootstrapTokenCandidate,
           deviceTokenCandidate,
           deviceTokenCandidateSource,
         } = await resolveConnectAuthState({
@@ -562,53 +475,21 @@ export function attachGatewayWsMessageHandler(params: {
           clientIp: browserRateLimitClientIp,
         });
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
-          const canRetryWithDeviceToken =
-            failedAuth.reason === "token_mismatch" &&
-            Boolean(device) &&
-            hasSharedAuth &&
-            !connectParams.auth?.deviceToken;
-          const recommendedNextStep = (() => {
-            if (canRetryWithDeviceToken) {
-              return "retry_with_device_token";
-            }
-            switch (failedAuth.reason) {
-              case "token_missing":
-              case "token_missing_config":
-              case "password_missing":
-              case "password_missing_config":
-                return "update_auth_configuration";
-              case "token_mismatch":
-              case "password_mismatch":
-              case "device_token_mismatch":
-                return "update_auth_credentials";
-              case "rate_limited":
-                return "wait_then_retry";
-              default:
-                return "review_auth_configuration";
-            }
-          })();
+          const { authProvided, canRetryWithDeviceToken, recommendedNextStep } =
+            resolveUnauthorizedHandshakeContext({
+              connectAuth: connectParams.auth,
+              failedAuth,
+              hasDeviceIdentity: Boolean(device),
+            });
           markHandshakeFailure("unauthorized", {
             authMode: resolvedAuth.mode,
-            authProvided: connectParams.auth?.password
-              ? "password"
-              : connectParams.auth?.token
-                ? "token"
-                : connectParams.auth?.deviceToken
-                  ? "device-token"
-                  : "none",
+            authProvided,
             authReason: failedAuth.reason,
             allowTailscale: resolvedAuth.allowTailscale,
           });
           logWsControl.warn(
             `unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version} reason=${failedAuth.reason ?? "unknown"}`,
           );
-          const authProvided: AuthProvidedKind = connectParams.auth?.password
-            ? "password"
-            : connectParams.auth?.token
-              ? "token"
-              : connectParams.auth?.deviceToken
-                ? "device-token"
-                : "none";
           const authMessage = formatGatewayAuthFailureMessage({
             authMode: resolvedAuth.mode,
             authProvided,
@@ -626,15 +507,12 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, truncateCloseReason(authMessage));
         };
         const clearUnboundScopes = () => {
-          if (scopes.length > 0 && !controlUiAuthPolicy.allowBypass && !sharedAuthOk) {
+          if (scopes.length > 0) {
             scopes = [];
             connectParams.scopes = scopes;
           }
         };
         const handleMissingDeviceIdentity = (): boolean => {
-          if (!device) {
-            clearUnboundScopes();
-          }
           const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
             isControlUi,
             role,
@@ -653,6 +531,12 @@ export function attachGatewayWsMessageHandler(params: {
             hasSharedAuth,
             isLocalClient,
           });
+          // Shared token/password auth can bypass pairing for trusted operators, but
+          // device-less backend clients must not self-declare scopes. Control UI
+          // keeps its explicitly allowed device-less scopes on the allow path.
+          if (!device && (!isControlUi || decision.kind !== "allow")) {
+            clearUnboundScopes();
+          }
           if (decision.kind === "allow") {
             return true;
           }
@@ -757,15 +641,25 @@ export function attachGatewayWsMessageHandler(params: {
             authMethod,
             sharedAuthOk,
             sharedAuthProvided: hasSharedAuth,
+            bootstrapTokenCandidate,
             deviceTokenCandidate,
             deviceTokenCandidateSource,
           },
           hasDeviceIdentity: Boolean(device),
           deviceId: device?.id,
+          publicKey: device?.publicKey,
           role,
           scopes,
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
+          verifyBootstrapToken: async ({ deviceId, publicKey, token, role, scopes }) =>
+            await verifyDeviceBootstrapToken({
+              deviceId,
+              publicKey,
+              token,
+              role,
+              scopes,
+            }),
           verifyDeviceToken,
         }));
         if (!authOk) {
@@ -787,7 +681,7 @@ export function attachGatewayWsMessageHandler(params: {
             hasBrowserOriginHeader,
             sharedAuthOk,
             authMethod,
-          }) || shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk, trustedProxyAuthOk);
+          }) || shouldSkipControlUiPairing(controlUiAuthPolicy, role, trustedProxyAuthOk);
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
@@ -1091,6 +985,7 @@ export function attachGatewayWsMessageHandler(params: {
           canvasCapability,
           canvasCapabilityExpiresAtMs,
         };
+        setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
         setClient(nextClient);
         setHandshakeState("connected");
         if (role === "node") {
@@ -1239,4 +1134,24 @@ export function attachGatewayWsMessageHandler(params: {
       }
     }
   });
+}
+
+function getRawDataByteLength(data: unknown): number {
+  if (Buffer.isBuffer(data)) {
+    return data.byteLength;
+  }
+  if (Array.isArray(data)) {
+    return data.reduce((total, chunk) => total + chunk.byteLength, 0);
+  }
+  if (data instanceof ArrayBuffer) {
+    return data.byteLength;
+  }
+  return Buffer.byteLength(String(data));
+}
+
+function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
+  const receiver = (socket as { _receiver?: { _maxPayload?: number } })._receiver;
+  if (receiver) {
+    receiver._maxPayload = maxPayload;
+  }
 }
