@@ -347,8 +347,11 @@ function collectGatewayConfigFindings(
   // Determine if the gateway is actually network-exposed by checking the resolved bind host.
   // bind="custom" with customBindHost="127.0.0.1" is still loopback-only.
   const customBindHost = cfg.gateway?.customBindHost?.trim();
+  // bind="tailnet" is either on the Tailnet (WireGuard-encrypted) or falls back to
+  // 127.0.0.1 at runtime, so it doesn't need public-exposure warnings like TLS/password.
   const isEffectivelyLoopback =
     bind === "loopback" ||
+    bind === "tailnet" ||
     (bind === "custom" && !!customBindHost && isLoopbackHost(customBindHost));
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
