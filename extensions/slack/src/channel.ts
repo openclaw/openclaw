@@ -1,12 +1,12 @@
-import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenProviderGroupPolicyWarnings,
   collectOpenGroupPolicyConfiguredRouteWarnings,
   createScopedAccountConfigAccessors,
+  createScopedChannelConfigBase,
   formatAllowFromLowercase,
+  resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/compat";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
   buildComputedAccountStatusSnapshot,

@@ -1,9 +1,9 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  createScopedAccountConfigAccessors,
   collectAllowlistProviderRestrictSendersWarnings,
+  createScopedAccountConfigAccessors,
+  resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/compat";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
   buildBaseAccountStatusSnapshot,
