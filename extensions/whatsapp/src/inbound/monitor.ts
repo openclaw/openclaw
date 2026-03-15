@@ -447,7 +447,10 @@ export async function monitorWebInbox(options: {
       if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast")) continue;
 
       const group = isJidGroup(remoteJid) === true;
-      const reactorJid = userJid ?? key?.participant ?? (group ? undefined : remoteJid);
+      // key.participant is the original message sender (the reacted-to message key's participant),
+      // not the reactor. Only userJid carries the actual reactor identity; for DMs fall back to
+      // remoteJid (the peer) when userJid is absent. Never use key.participant as reactor.
+      const reactorJid = userJid ?? (group ? undefined : remoteJid);
       // In groups, reactor identity is required — skip unattributable reactions.
       if (group && !reactorJid) continue;
       const senderE164 = reactorJid ? await resolveInboundJid(reactorJid) : null;
