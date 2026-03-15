@@ -11,9 +11,11 @@ title: "Retry + Dead-letter Policy"
 Related: [Core retry policy](/concepts/retry)
 
 ## Retry
+
 - Bounded retries only (no infinite loops)
 - Explicit retry count + backoff
 
 ## Dead-letter
+
 - Failed items after max retries move to dead-letter queue
 - Must include failure reason + next operator action

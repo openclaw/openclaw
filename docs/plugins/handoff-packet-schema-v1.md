@@ -9,9 +9,11 @@ title: "Resumable Handoff Packet Schema (v1)"
 # Resumable Handoff Packet (v1)
 
 ## Purpose
+
 Allow model/agent/plugin swap mid-run without continuity loss.
 
 ## Core fields
+
 - `runId`
 - `goalId`
 - `currentStep`
