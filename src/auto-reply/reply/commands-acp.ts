@@ -1,4 +1,5 @@
 import { logVerbose } from "../../globals.js";
+import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import {
   handleAcpDoctorAction,
   handleAcpInstallAction,
@@ -56,6 +57,20 @@ const ACP_ACTION_HANDLERS: Record<Exclude<AcpAction, "help">, AcpActionHandler> 
   sessions: async (params, tokens) => handleAcpSessionsAction(params, tokens),
 };
 
+const ACP_MUTATING_ACTIONS = new Set<AcpAction>([
+  "spawn",
+  "cancel",
+  "steer",
+  "close",
+  "set-mode",
+  "set",
+  "cwd",
+  "permissions",
+  "timeout",
+  "model",
+  "reset-options",
+]);
+
 export const handleAcpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -76,6 +91,17 @@ export const handleAcpCommand: CommandHandler = async (params, allowTextCommands
   const action = resolveAcpAction(tokens);
   if (action === "help") {
     return stopWithText(resolveAcpHelpText());
+  }
+
+  if (ACP_MUTATING_ACTIONS.has(action)) {
+    const scopeBlock = requireGatewayClientScopeForInternalChannel(params, {
+      label: "/acp",
+      allowedScopes: ["operator.admin"],
+      missingText: "This /acp action requires operator.admin on the internal channel.",
+    });
+    if (scopeBlock) {
+      return scopeBlock;
+    }
   }
 
   const handler = ACP_ACTION_HANDLERS[action];
