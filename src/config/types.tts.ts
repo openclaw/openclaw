@@ -87,6 +87,12 @@ export type TtsConfig = {
     /** Playback speed multiplier applied via ffmpeg (0.5-2.0). */
     speed?: number;
   };
+  /** Optional command to forward TTS audio after generation. */
+  forward?: {
+    enabled?: boolean;
+    command?: string;
+    timeoutMs?: number;
+  };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
   /** Hard cap for text sent to TTS (chars). */
