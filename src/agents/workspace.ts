@@ -40,7 +40,19 @@ let gitAvailabilityPromise: Promise<boolean> | null = null;
 const MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES = 2 * 1024 * 1024;
 
 // File content cache keyed by stable file identity to avoid stale reads.
+// Capped to prevent unbounded memory growth in long-running processes.
+const MAX_WORKSPACE_FILE_CACHE_ENTRIES = 128;
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
+
+function evictWorkspaceFileCacheIfNeeded(): void {
+  if (workspaceFileCache.size < MAX_WORKSPACE_FILE_CACHE_ENTRIES) {
+    return;
+  }
+  const oldest = workspaceFileCache.keys().next().value;
+  if (oldest !== undefined) {
+    workspaceFileCache.delete(oldest);
+  }
+}
 
 /**
  * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime identity.
@@ -77,6 +89,7 @@ async function readWorkspaceFileWithGuards(params: {
 
   try {
     const content = syncFs.readFileSync(opened.fd, "utf-8");
+    evictWorkspaceFileCacheIfNeeded();
     workspaceFileCache.set(params.filePath, { content, identity });
     return { ok: true, content };
   } catch (error) {
