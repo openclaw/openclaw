@@ -1,0 +1,9 @@
+{
+  "id": "byteplus",
+  "providers": ["byteplus", "byteplus-plan"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
