@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { printCronList } from "./shared.js";
+import { formatSchedule, printCronList } from "./shared.js";
 
 function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   const logs: string[] = [];
@@ -60,19 +60,15 @@ describe("printCronList", () => {
     expect(logs.some((line) => line.includes("isolated"))).toBe(true);
   });
 
-  it("shows stagger label for cron schedules", () => {
-    const { logs, runtime } = createRuntimeLogCapture();
-    const job = createBaseJob({
-      id: "staggered-job",
-      name: "Staggered",
-      schedule: { kind: "cron", expr: "0 * * * *", staggerMs: 5 * 60_000 },
-      sessionTarget: "main",
-      state: {},
-      payload: { kind: "systemEvent", text: "tick" },
+  it("shows stagger label for cron schedules with timezone", () => {
+    const label = formatSchedule({
+      kind: "cron",
+      expr: "0 * * * *",
+      tz: "UTC",
+      staggerMs: 5 * 60_000,
     });
-
-    printCronList([job], runtime);
-    expect(logs.some((line) => line.includes("(stagger 5m)"))).toBe(true);
+    expect(label).toContain("(stagger 5m)");
+    expect(label).not.toContain("no tz");
   });
 
   it("shows dash for unset agentId instead of default", () => {
@@ -184,21 +180,11 @@ describe("printCronList", () => {
     expect(logs.some((line) => line.includes("(no tz)"))).toBe(false);
   });
 
-  it("shows stagger label without (no tz) for staggered cron schedules", () => {
-    const { logs, runtime } = createRuntimeLogCapture();
-    const job = createBaseJob({
-      id: "stagger-no-tz-job",
-      name: "Stagger No TZ",
-      schedule: { kind: "cron", expr: "0 * * * *" },
-      sessionTarget: "main",
-      state: {},
-      payload: { kind: "systemEvent", text: "tick" },
-    });
-
-    printCronList([job], runtime);
-    // Staggered jobs show stagger label; (no tz) is only for exact schedules
-    expect(logs.some((line) => line.includes("stagger"))).toBe(true);
-    expect(logs.some((line) => line.includes("(no tz)"))).toBe(false);
+  it("shows stagger label with (no tz) for staggered cron schedules without timezone", () => {
+    const label = formatSchedule({ kind: "cron", expr: "0 * * * *" });
+    // Staggered jobs without tz show both stagger label and (no tz) warning
+    expect(label).toContain("stagger");
+    expect(label).toContain("no tz");
   });
 
   it("shows exact label for cron schedules with stagger disabled and timezone set", () => {

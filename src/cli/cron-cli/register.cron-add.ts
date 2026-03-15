@@ -282,11 +282,13 @@ export function registerCronAddCommand(cron: Command) {
               : undefined,
           };
 
+          if (schedule.kind === "cron" && !(typeof opts.tz === "string" && opts.tz.trim())) {
+            defaultRuntime.error(
+              `note: timezone defaulted to ${schedule.tz} (use --tz to override)`,
+            );
+          }
           const res = await callGatewayFromCli("cron.add", opts, params);
           printCronJson(res);
-          if (schedule.kind === "cron" && !(typeof opts.tz === "string" && opts.tz.trim())) {
-            defaultRuntime.log(`note: timezone defaulted to ${schedule.tz} (use --tz to override)`);
-          }
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
           handleCronCliError(err);
