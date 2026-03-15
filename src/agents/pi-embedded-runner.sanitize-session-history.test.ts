@@ -3,7 +3,6 @@ import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
-  expectGoogleModelApiFullSanitizeCall,
   loadSanitizeSessionHistoryWithCleanMocks,
   makeMockSessionManager,
   makeInMemorySessionManager,
