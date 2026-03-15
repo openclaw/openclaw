@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   resolveRunTimeoutDuringCompaction,
+  resolveRunTimeoutWithCompactionGraceMs,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
@@ -60,6 +61,15 @@ describe("compaction-timeout helpers", () => {
         graceAlreadyUsed: false,
       }),
     ).toBe("abort");
+  });
+
+  it("adds one compaction grace window to the run timeout budget", () => {
+    expect(
+      resolveRunTimeoutWithCompactionGraceMs({
+        runTimeoutMs: 600_000,
+        compactionTimeoutMs: 900_000,
+      }),
+    ).toBe(1_500_000);
   });
 
   it("uses pre-compaction snapshot when compaction timeout occurs", () => {
