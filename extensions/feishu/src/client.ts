@@ -48,15 +48,28 @@ function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance 
     return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;
   }
 
+  function normalizeResponse<T>(value: T): T {
+    if (value && typeof value === "object" && "data" in (value as Record<string, unknown>)) {
+      const data = (value as { data?: unknown }).data;
+      if (data !== undefined) {
+        return data as T;
+      }
+    }
+    return value;
+  }
+
   return {
-    request: (opts) => base.request(injectTimeout(opts)),
-    get: (url, opts) => base.get(url, injectTimeout(opts)),
-    post: (url, data, opts) => base.post(url, data, injectTimeout(opts)),
-    put: (url, data, opts) => base.put(url, data, injectTimeout(opts)),
-    patch: (url, data, opts) => base.patch(url, data, injectTimeout(opts)),
-    delete: (url, opts) => base.delete(url, injectTimeout(opts)),
-    head: (url, opts) => base.head(url, injectTimeout(opts)),
-    options: (url, opts) => base.options(url, injectTimeout(opts)),
+    request: async (opts) => normalizeResponse(await base.request(injectTimeout(opts))),
+    get: async (url, opts) => normalizeResponse(await base.get(url, injectTimeout(opts))),
+    post: async (url, data, opts) =>
+      normalizeResponse(await base.post(url, data, injectTimeout(opts))),
+    put: async (url, data, opts) =>
+      normalizeResponse(await base.put(url, data, injectTimeout(opts))),
+    patch: async (url, data, opts) =>
+      normalizeResponse(await base.patch(url, data, injectTimeout(opts))),
+    delete: async (url, opts) => normalizeResponse(await base.delete(url, injectTimeout(opts))),
+    head: async (url, opts) => normalizeResponse(await base.head(url, injectTimeout(opts))),
+    options: async (url, opts) => normalizeResponse(await base.options(url, injectTimeout(opts))),
   };
 }
 

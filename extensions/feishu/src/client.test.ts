@@ -166,6 +166,23 @@ describe("createFeishuClient HTTP timeout", () => {
     );
   });
 
+  it("normalizes axios-style response wrappers to raw payload objects", async () => {
+    mockBaseHttpInstance.post.mockResolvedValueOnce({
+      data: { tenant_access_token: "tenant_token", expire: 7200 },
+    });
+
+    createFeishuClient({ appId: "app_3b", appSecret: "secret_3b", accountId: "timeout-shape" }); // pragma: allowlist secret
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { post: (...args: unknown[]) => Promise<unknown> };
+    };
+    const httpInstance = lastCall.httpInstance;
+    const res = await httpInstance.post("https://example.com/api", { data: 1 });
+
+    expect(res).toEqual({ tenant_access_token: "tenant_token", expire: 7200 });
+  });
+
   it("uses config-configured default timeout when provided", async () => {
     createFeishuClient({
       appId: "app_4",
