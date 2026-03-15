@@ -28,6 +28,7 @@ import {
   handleFirstUpdated,
   handleUpdated,
 } from "./app-lifecycle.ts";
+import { attachMobileViewportFixes } from "./app-mobile-viewport.ts";
 import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
@@ -448,6 +449,7 @@ export class OpenClawApp extends LitElement {
   private popStateHandler = () =>
     onPopStateInternal(this as unknown as Parameters<typeof onPopStateInternal>[0]);
   private topbarObserver: ResizeObserver | null = null;
+  private mobileViewportController: ReturnType<typeof attachMobileViewportFixes> | null = null;
   private globalKeydownHandler = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "k") {
       e.preventDefault();
@@ -479,6 +481,8 @@ export class OpenClawApp extends LitElement {
       }
     };
     document.addEventListener("keydown", this.globalKeydownHandler);
+    this.mobileViewportController = attachMobileViewportFixes(this);
+    this.mobileViewportController.setShellLocked(this.connected);
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
   }
 
@@ -488,12 +492,15 @@ export class OpenClawApp extends LitElement {
 
   disconnectedCallback() {
     document.removeEventListener("keydown", this.globalKeydownHandler);
+    this.mobileViewportController?.cleanup();
+    this.mobileViewportController = null;
     handleDisconnected(this as unknown as Parameters<typeof handleDisconnected>[0]);
     super.disconnectedCallback();
   }
 
   protected updated(changed: Map<PropertyKey, unknown>) {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
+    this.mobileViewportController?.setShellLocked(this.connected);
   }
 
   connect() {
