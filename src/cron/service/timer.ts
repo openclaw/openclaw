@@ -1193,13 +1193,19 @@ export async function executeJobCore(
 
   // Script payloads execute directly — no session or LLM turn needed.
   if (job.payload.kind === "script") {
-    const basePath = path.resolve(path.dirname(state.deps.storePath), "..");
+    // Prefer explicit ocHomeDir; fall back to inferring from storePath for backwards compat,
+    // but that heuristic breaks when cron.store is configured to a non-default path.
+    const basePath = state.deps.ocHomeDir ?? path.resolve(path.dirname(state.deps.storePath), "..");
     const scriptResult = await execCronScript({ payload: job.payload, basePath, abortSignal });
 
-    // Announce stdout to the delivery channel when deliver=true and output exists.
+    // Announce stdout to the delivery channel when delivery is requested and output exists.
+    // Gate on resolveCronDeliveryPlan (which reads job.delivery.mode) rather than
+    // payload.deliver, because normalizeLegacyDeliveryInput strips deliver from the payload
+    // and moves it into job.delivery during cron.add/update normalization.
+    const scriptDeliveryPlan = resolveCronDeliveryPlan(job);
     if (
       scriptResult.status === "ok" &&
-      job.payload.deliver === true &&
+      scriptDeliveryPlan.requested &&
       scriptResult.summary &&
       state.deps.announceScriptOutput
     ) {

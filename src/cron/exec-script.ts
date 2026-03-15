@@ -101,6 +101,8 @@ export async function execCronScript(params: ExecCronScriptParams): Promise<Cron
             // already gone
           }
         }, 5_000);
+        // Allow Node.js to exit if this is the only pending work during gateway shutdown.
+        killTimer.unref();
         // Clear the timer once the process exits; execFile callback will settle.
         child.once("close", () => clearTimeout(killTimer));
       };
