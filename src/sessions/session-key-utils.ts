@@ -158,6 +158,9 @@ export function buildNamedDmSessionKey(params: {
   if (!agentId || !peerId || !name) {
     throw new Error("buildNamedDmSessionKey: agentId, peerId, and name are required");
   }
+  if (peerId.includes(":")) {
+    throw new Error(`buildNamedDmSessionKey: peerId must not contain ":" (got: "${peerId}")`);
+  }
   if (name.includes(":")) {
     throw new Error(`buildNamedDmSessionKey: name must not contain ":" (got: "${name}")`);
   }

@@ -60,6 +60,16 @@ describe("Named DM Session Keys (ETH-608)", () => {
       ).toThrow("agentId, peerId, and name are required");
     });
 
+    it("throws when peerId contains a colon", () => {
+      expect(() =>
+        buildNamedDmSessionKey({
+          agentId: "main",
+          peerId: "123:456",
+          name: "work",
+        }),
+      ).toThrow();
+    });
+
     it("trims whitespace", () => {
       const key = buildNamedDmSessionKey({
         agentId: "  main  ",
