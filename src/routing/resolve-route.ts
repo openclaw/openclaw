@@ -2,6 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig } from "../config/io.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
@@ -24,7 +25,8 @@ export type RoutePeer = {
 };
 
 export type ResolveAgentRouteInput = {
-  cfg: OpenClawConfig;
+  /** @deprecated Omit to use fresh config via `loadConfig()`. Passing a stale config may cause incorrect routing after bindings updates. */
+  cfg?: OpenClawConfig;
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
@@ -612,6 +614,18 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
 }
 
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
+  // Prefer caller-provided config snapshot when present; load from disk only
+  // when the caller omitted cfg (see #18773).
+  let cfg: OpenClawConfig;
+  if (input.cfg && Object.keys(input.cfg).length > 0) {
+    cfg = input.cfg;
+  } else {
+    try {
+      cfg = loadConfig();
+    } catch {
+      cfg = input.cfg ?? ({} as OpenClawConfig);
+    }
+  }
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
   const peer = input.peer
@@ -624,8 +638,8 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const teamId = normalizeId(input.teamId);
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
-  const dmScope = input.cfg.session?.dmScope ?? "main";
-  const identityLinks = input.cfg.session?.identityLinks;
+  const dmScope = cfg.session?.dmScope ?? "main";
+  const identityLinks = cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = input.parentPeer
     ? {
@@ -634,8 +648,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       }
     : null;
 
-  const routeCache =
-    !shouldLogDebug && !identityLinks ? resolveRouteCacheForConfig(input.cfg) : null;
+  const routeCache = !shouldLogDebug && !identityLinks ? resolveRouteCacheForConfig(cfg) : null;
   const routeCacheKey = routeCache
     ? buildResolvedRouteCacheKey({
         channel,
@@ -655,11 +668,11 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
 
-  const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
-  const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(input.cfg, channel, accountId);
+  const bindings = getEvaluatedBindingsForChannelAccount(cfg, channel, accountId);
+  const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(cfg, channel, accountId);
 
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
-    const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
+    const resolvedAgentId = pickFirstExistingAgentId(cfg, agentId);
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
       channel,
@@ -800,5 +813,5 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
 
-  return choose(resolveDefaultAgentId(input.cfg), "default");
+  return choose(resolveDefaultAgentId(cfg), "default");
 }
