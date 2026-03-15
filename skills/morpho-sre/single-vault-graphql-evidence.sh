@@ -48,6 +48,24 @@ require_cmd() {
   fi
 }
 
+require_readable_file() {
+  local label="${1:?label required}"
+  local file_path="${2:?file path required}"
+  [[ -r "$file_path" ]] || {
+    printf '%s not readable: %s\n' "$label" "$file_path" >&2
+    exit 2
+  }
+}
+
+require_evm_address() {
+  local label="${1:?label required}"
+  local address="${2:?address required}"
+  [[ "$address" =~ ^0x[a-fA-F0-9]{40}$ ]] || {
+    printf '%s must be a valid Ethereum address (0x + 40 hex chars)\n' "$label" >&2
+    exit 2
+  }
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --address)
@@ -113,6 +131,10 @@ require_cmd jq
   printf 'address is required\n' >&2
   exit 2
 }
+require_evm_address "address" "$ADDRESS"
+if [[ -n "$CONTROL_ADDRESS" ]]; then
+  require_evm_address "control address" "$CONTROL_ADDRESS"
+fi
 [[ -n "$CHAIN_ID" ]] || {
   printf 'chain id is required\n' >&2
   exit 2
@@ -123,6 +145,7 @@ require_cmd jq
 }
 
 if [[ -n "$QUERY_FILE" ]]; then
+  require_readable_file "query file" "$QUERY_FILE"
   QUERY="$(cat "$QUERY_FILE")"
 fi
 
@@ -132,6 +155,7 @@ fi
 }
 
 if [[ -n "$VARIABLES_FILE" ]]; then
+  require_readable_file "variables file" "$VARIABLES_FILE"
   VARIABLES_JSON="$(cat "$VARIABLES_FILE")"
 fi
 

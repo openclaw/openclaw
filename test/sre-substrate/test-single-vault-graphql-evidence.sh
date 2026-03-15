@@ -91,13 +91,15 @@ esac
 EOF
 chmod +x "${BIN_WITH_CAST}/cast"
 
+ADDRESS='0x1234567890123456789012345678901234567890'
+CONTROL_ADDRESS='0x4567890123456789012345678901234567890123'
 QUERY='query SingleVaultByAddress($address: String!, $chainId: Int!) { vaultV2ByAddress(address: $address, chainId: $chainId) { address apy } }'
-VARIABLES='{"address":"0x123","chainId":8453}'
+VARIABLES="{\"address\":\"${ADDRESS}\",\"chainId\":8453}"
 
 plan_output="$(
   env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
     bash "$SCRIPT_PATH" \
-      --address 0x123 \
+      --address "$ADDRESS" \
       --chain-id 8453 \
       --query "$QUERY" \
       --variables-json "$VARIABLES" \
@@ -105,10 +107,10 @@ plan_output="$(
 )"
 
 printf '%s\n' "$plan_output" | jq -e '
-  .address == "0x123"
+  .address == $address
   and .chain_id == 8453
   and (.probes | index("exact_query_replay")) != null
-' >/dev/null
+' --arg address "$ADDRESS" >/dev/null
 
 success_output="$(
   env PATH="${BIN_WITH_CAST}:/usr/bin:/bin" \
@@ -116,8 +118,8 @@ success_output="$(
     MOCK_CURL_MODE=success \
     MOCK_CAST_MODE=success \
     bash "$SCRIPT_PATH" \
-      --address 0x123 \
-      --control-address 0x456 \
+      --address "$ADDRESS" \
+      --control-address "$CONTROL_ADDRESS" \
       --chain-id 8453 \
       --query "$QUERY" \
       --variables-json "$VARIABLES"
@@ -138,9 +140,9 @@ strict_cast_output="$(
     MOCK_CURL_MODE=success \
     MOCK_CAST_MODE=success \
     MOCK_CAST_REQUIRE_END_OF_OPTIONS=1 \
-    EXPECTED_ADDRESS=0x123 \
+    EXPECTED_ADDRESS="$ADDRESS" \
     bash "$SCRIPT_PATH" \
-      --address 0x123 \
+      --address "$ADDRESS" \
       --chain-id 8453 \
       --query "$QUERY" \
       --variables-json "$VARIABLES"
@@ -158,29 +160,41 @@ env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --chain-id 8453 --qu
 test "$missing_address_status" = "2"
 
 missing_chain_status=0
-env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address 0x123 --query "$QUERY" >/dev/null 2>&1 || missing_chain_status=$?
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --query "$QUERY" >/dev/null 2>&1 || missing_chain_status=$?
 test "$missing_chain_status" = "2"
 
 missing_query_status=0
-env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address 0x123 --chain-id 8453 >/dev/null 2>&1 || missing_query_status=$?
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id 8453 >/dev/null 2>&1 || missing_query_status=$?
 test "$missing_query_status" = "2"
 
+missing_query_file_stderr="${TMP}/missing-query-file.stderr"
+missing_query_file_status=0
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id 8453 --query-file "${TMP}/missing.graphql" > /dev/null 2>"$missing_query_file_stderr" || missing_query_file_status=$?
+test "$missing_query_file_status" = "2"
+grep -F 'query file not readable' "$missing_query_file_stderr" >/dev/null
+
 non_numeric_chain_status=0
-env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address 0x123 --chain-id not-a-number --query "$QUERY" >/dev/null 2>&1 || non_numeric_chain_status=$?
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id not-a-number --query "$QUERY" >/dev/null 2>&1 || non_numeric_chain_status=$?
 test "$non_numeric_chain_status" = "2"
 
 leading_zero_chain_stderr="${TMP}/leading-zero-chain.stderr"
 leading_zero_chain_status=0
-env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address 0x123 --chain-id 007 --query "$QUERY" > /dev/null 2>"$leading_zero_chain_stderr" || leading_zero_chain_status=$?
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address "$ADDRESS" --chain-id 007 --query "$QUERY" > /dev/null 2>"$leading_zero_chain_stderr" || leading_zero_chain_status=$?
 test "$leading_zero_chain_status" = "2"
 grep -F 'without leading zeros' "$leading_zero_chain_stderr" >/dev/null
+
+invalid_address_stderr="${TMP}/invalid-address.stderr"
+invalid_address_status=0
+env PATH="${BIN_NO_CAST}:/usr/bin:/bin" bash "$SCRIPT_PATH" --address 0x123 --chain-id 8453 --query "$QUERY" > /dev/null 2>"$invalid_address_stderr" || invalid_address_status=$?
+test "$invalid_address_status" = "2"
+grep -F 'address must be a valid Ethereum address' "$invalid_address_stderr" >/dev/null
 
 missing_cast_output="$(
   env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
     SINGLE_VAULT_RPC_URL='https://rpc.example' \
     MOCK_CURL_MODE=success \
     bash "$SCRIPT_PATH" \
-      --address 0x123 \
+      --address "$ADDRESS" \
       --chain-id 8453 \
       --query "$QUERY" \
       --variables-json "$VARIABLES"
@@ -195,7 +209,7 @@ missing_control_output="$(
   env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
     MOCK_CURL_MODE=success \
     bash "$SCRIPT_PATH" \
-      --address 0x123 \
+      --address "$ADDRESS" \
       --chain-id 8453 \
       --query "$QUERY" \
       --variables-json "$VARIABLES"
@@ -207,7 +221,7 @@ invalid_json_output="$(
   env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
     MOCK_CURL_MODE=invalid-json \
     bash "$SCRIPT_PATH" \
-      --address 0x123 \
+      --address "$ADDRESS" \
       --chain-id 8453 \
       --query "$QUERY" \
       --variables-json "$VARIABLES"
@@ -224,7 +238,7 @@ request_failed_output="$(
     MOCK_CURL_MODE=fail \
     MOCK_CURL_ERROR='curl: (28) operation timed out after 20001 milliseconds' \
     bash "$SCRIPT_PATH" \
-      --address 0x123 \
+      --address "$ADDRESS" \
       --chain-id 8453 \
       --query "$QUERY" \
       --variables-json "$VARIABLES"
@@ -244,7 +258,7 @@ env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
   MOCK_CURL_MODE=success \
   MOCK_JQ_FAIL_ARGJSON_RESPONSE=1 \
   bash "$SCRIPT_PATH" \
-    --address 0x123 \
+    --address "$ADDRESS" \
     --chain-id 8453 \
     --query "$QUERY" \
     --variables-json "$VARIABLES" >/dev/null 2>"$response_summary_failure_stderr" || response_summary_failure_status=$?
@@ -256,7 +270,7 @@ partial_surface_output="$(
   env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
     MOCK_CURL_MODE=partial-public-surface \
     bash "$SCRIPT_PATH" \
-      --address 0x123 \
+      --address "$ADDRESS" \
       --chain-id 8453 \
       --query "$QUERY" \
       --variables-json "$VARIABLES"
@@ -276,7 +290,7 @@ rpc_failed_output="$(
     MOCK_CAST_MODE=fail \
     MOCK_CAST_ERROR='cast: rpc down' \
     bash "$SCRIPT_PATH" \
-      --address 0x123 \
+      --address "$ADDRESS" \
       --chain-id 8453 \
       --query "$QUERY" \
       --variables-json "$VARIABLES"
