@@ -50,15 +50,14 @@ export async function executeRevenueCommand(
 
   const contact =
     contactLookup ??
-    (deps.logger?.warn(
-      "[debug] createContact payload:",
-      JSON.stringify({
-        name: parsed.contactName,
-        email: parsed.email,
-        phone: parsed.phone,
-        locationId,
-      }),
-    ),
+      (deps.logger?.warn(
+        `[debug] createContact payload: ${JSON.stringify({
+          name: parsed.contactName,
+          email: parsed.email,
+          phone: parsed.phone,
+          locationId,
+        })}`,
+      ),
     await deps.ghl.createContact({
       name: parsed.contactName,
       email: parsed.email,
@@ -69,15 +68,14 @@ export async function executeRevenueCommand(
     let opportunityId: string | undefined;
     let opportunityError: string | undefined;
     try {
-      deps.logger?.warn(
-        "[debug] createOpportunity payload:",
-        JSON.stringify({
-          contactId: contact.id,
-          name: parsed.opportunityName,
-          amount: parsed.price,
-          locationId,
-        }),
-      );
+        deps.logger?.warn(
+          `[debug] createOpportunity payload: ${JSON.stringify({
+            contactId: contact.id,
+            name: parsed.opportunityName,
+            amount: parsed.price,
+            locationId,
+          })}`,
+        );
       const opp = await deps.ghl.createOpportunity({
         contactId: contact.id,
         name: parsed.opportunityName,
