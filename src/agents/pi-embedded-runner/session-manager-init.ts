@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { archiveFileOnDisk } from "../../gateway/session-utils.fs.js";
 
 type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
@@ -12,6 +13,10 @@ type SessionMessageEntry = { type: "message"; message?: { role?: string } };
  *
  * This normalizes the file/session state so the first user prompt is persisted before the first
  * assistant entry, even for pre-created session files.
+ *
+ * CRITICAL: We only reset header-only files (no messages at all). If there's a user message
+ * but no assistant message, that means the gateway restarted mid-turn — we must preserve
+ * the existing messages, not clear them.
  */
 export async function prepareSessionManagerForRun(params: {
   sessionManager: unknown;
@@ -30,9 +35,7 @@ export async function prepareSessionManagerForRun(params: {
   };
 
   const header = sm.fileEntries.find((e): e is SessionHeaderEntry => e.type === "session");
-  const hasAssistant = sm.fileEntries.some(
-    (e) => e.type === "message" && (e as SessionMessageEntry).message?.role === "assistant",
-  );
+  const hasAnyMessage = sm.fileEntries.some((e) => e.type === "message");
 
   if (!params.hadSessionFile && header) {
     header.id = params.sessionId;
@@ -41,8 +44,15 @@ export async function prepareSessionManagerForRun(params: {
     return;
   }
 
-  if (params.hadSessionFile && header && !hasAssistant) {
-    // Reset file so the first assistant flush includes header+user+assistant in order.
+  if (params.hadSessionFile && header && !hasAnyMessage) {
+    // Only reset header-only files (pre-created session files with no messages).
+    // If there's a user message but no assistant, that's a gateway restart mid-turn —
+    // we must preserve the existing messages, not clear them.
+    try {
+      archiveFileOnDisk(params.sessionFile, "reset");
+    } catch {
+      // best-effort backup
+    }
     await fs.writeFile(params.sessionFile, "", "utf-8");
     sm.fileEntries = [header];
     sm.byId?.clear?.();
