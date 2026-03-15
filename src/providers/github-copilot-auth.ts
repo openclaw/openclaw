@@ -1,4 +1,4 @@
-import { intro, note, outro, spinner } from "@clack/prompts";
+import { confirm, intro, isCancel, note, outro, spinner } from "@clack/prompts";
 import { ensureAuthProfileStore, upsertAuthProfile } from "../agents/auth-profiles.js";
 import { updateConfig } from "../commands/models/shared.js";
 import { applyAuthProfileConfig } from "../commands/onboard-auth.js";
@@ -28,6 +28,8 @@ type DeviceTokenResponse =
       error: string;
       error_description?: string;
       error_uri?: string;
+      /** Returned by `slow_down` — the new minimum polling interval in seconds. */
+      interval?: number;
     };
 
 function parseJsonResponse<T>(value: unknown): T {
@@ -67,6 +69,8 @@ async function pollForAccessToken(params: {
   deviceCode: string;
   intervalMs: number;
   expiresAt: number;
+  /** Earliest timestamp (ms) at which the first poll may fire. Defaults to now + intervalMs. */
+  firstPollAfter?: number;
 }): Promise<string> {
   const bodyBase = new URLSearchParams({
     client_id: CLIENT_ID,
@@ -74,7 +78,18 @@ async function pollForAccessToken(params: {
     grant_type: "urn:ietf:params:oauth:grant-type:device_code",
   });
 
+  let intervalMs = params.intervalMs;
+  let nextPollAfter = params.firstPollAfter ?? Date.now() + intervalMs;
+
   while (Date.now() < params.expiresAt) {
+    // Wait only the remaining portion of the interval — respects GitHub's
+    // minimum polling rate whether or not the user pre-confirmed via --wait.
+    const delay = Math.max(0, nextPollAfter - Date.now());
+    if (delay > 0) {
+      await new Promise((r) => setTimeout(r, delay));
+      if (Date.now() >= params.expiresAt) break;
+    }
+
     const res = await fetch(ACCESS_TOKEN_URL, {
       method: "POST",
       headers: {
@@ -95,11 +110,18 @@ async function pollForAccessToken(params: {
 
     const err = "error" in json ? json.error : "unknown";
     if (err === "authorization_pending") {
-      await new Promise((r) => setTimeout(r, params.intervalMs));
+      nextPollAfter = Date.now() + intervalMs;
       continue;
     }
     if (err === "slow_down") {
-      await new Promise((r) => setTimeout(r, params.intervalMs + 2000));
+      // GitHub returns the new required minimum interval in seconds.
+      // Respect it exactly rather than adding an arbitrary fixed offset.
+      if ("interval" in json && typeof json.interval === "number") {
+        intervalMs = json.interval * 1000;
+      } else {
+        intervalMs += 5000;
+      }
+      nextPollAfter = Date.now() + intervalMs;
       continue;
     }
     if (err === "expired_token") {
@@ -115,7 +137,7 @@ async function pollForAccessToken(params: {
 }
 
 export async function githubCopilotLoginCommand(
-  opts: { profileId?: string; yes?: boolean },
+  opts: { profileId?: string; yes?: boolean; wait?: boolean },
   runtime: RuntimeEnv,
 ) {
   if (!process.stdin.isTTY) {
@@ -139,15 +161,30 @@ export async function githubCopilotLoginCommand(
   const spin = spinner();
   spin.start("Requesting device code from GitHub...");
   const device = await requestDeviceCode({ scope: "read:user" });
+  const deviceCodeReceivedAt = Date.now();
   spin.stop("Device code ready");
 
-  note(
-    [`Visit: ${device.verification_uri}`, `Code: ${device.user_code}`].join("\n"),
-    stylePromptTitle("Authorize"),
-  );
+  if (opts.wait) {
+    // In WSL/remote terminals the clack box prevents ctrl+click link detection,
+    // so print plain text and skip the note() box to avoid showing it twice.
+    process.stdout.write(`\n  URL:  ${device.verification_uri}\n  Code: ${device.user_code}\n\n`);
+
+    const ready = await confirm({ message: "Have you authorized the code in your browser?" });
+    if (isCancel(ready) || !ready) {
+      throw new Error("GitHub login cancelled");
+    }
+  } else {
+    note(
+      [`Visit: ${device.verification_uri}`, `Code: ${device.user_code}`].join("\n"),
+      stylePromptTitle("Authorize"),
+    );
+  }
 
   const expiresAt = Date.now() + device.expires_in * 1000;
   const intervalMs = Math.max(1000, device.interval * 1000);
+  // Earliest the first poll may fire: respect GitHub's interval from when the
+  // device code was received, minus time already elapsed (e.g. during --wait prompt).
+  const firstPollAfter = deviceCodeReceivedAt + intervalMs;
 
   const polling = spinner();
   polling.start("Waiting for GitHub authorization...");
@@ -155,6 +192,7 @@ export async function githubCopilotLoginCommand(
     deviceCode: device.device_code,
     intervalMs,
     expiresAt,
+    firstPollAfter,
   });
   polling.stop("GitHub access token acquired");
 
