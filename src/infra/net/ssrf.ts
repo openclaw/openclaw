@@ -40,7 +40,19 @@ export type SsrFPolicy = {
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
   "localhost.localdomain",
+  // Cloud provider IMDS hostnames — defense-in-depth alongside IP range
+  // blocking (link-local 169.254.x.x, carrier-grade NAT 100.64.0.0/10,
+  // uniqueLocal fd00::/8).  The .internal suffix rule also catches some of
+  // these, but explicit entries make the intent clear and survive refactors.
+  //
+  // Coverage model:
+  //   GCP  — metadata.google.internal (hostname, explicit below)
+  //   Azure — metadata.azure.internal (hostname, explicit below)
+  //   AWS  — 169.254.169.254 / fd00:ec2::254 (IP ranges: linkLocal / uniqueLocal)
+  //   Alibaba — 100.100.100.200 (IP range: carrierGradeNat)
+  //   AWS ECS — 169.254.170.2 (IP range: linkLocal)
   "metadata.google.internal",
+  "metadata.azure.internal",
 ]);
 
 function normalizeHostnameSet(values?: string[]): Set<string> {

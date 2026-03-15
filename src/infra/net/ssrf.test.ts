@@ -105,6 +105,7 @@ describe("isBlockedHostnameOrIp", () => {
   it.each([
     "localhost.localdomain",
     "metadata.google.internal",
+    "metadata.azure.internal",
     "api.localhost",
     "svc.local",
     "db.internal",
