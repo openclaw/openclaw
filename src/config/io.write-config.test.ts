@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "./io.js";
+import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("config io write", () => {
@@ -546,6 +547,37 @@ describe("config io write", () => {
       expect(last.watchMode).toBe(true);
       expect(last.watchSession).toBe("watch-session-1");
       expect(last.watchCommand).toBe("gateway --force");
+    });
+  });
+
+  it("refuses to write config containing redaction sentinel (issue #18102)", async () => {
+    await withSuiteHome(async (home) => {
+      const initialConfig = {
+        gateway: { port: 18789 },
+        channels: { telegram: { botToken: "real-bot-token-123" } },
+      };
+      const errorFn = vi.fn();
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig,
+        logger: { warn: vi.fn(), error: errorFn },
+      });
+
+      const poisoned = structuredClone(snapshot.config);
+      (poisoned as Record<string, unknown>).channels = {
+        ...poisoned.channels,
+        telegram: {
+          ...poisoned.channels?.telegram,
+          botToken: REDACTED_SENTINEL,
+        },
+      };
+
+      await expect(io.writeConfigFile(poisoned)).rejects.toThrow(/redaction sentinel/i);
+
+      const ondisk = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+      expect(JSON.stringify(ondisk)).not.toContain(REDACTED_SENTINEL);
+      expect(ondisk).toEqual(initialConfig);
+      expect(errorFn).toHaveBeenCalled();
     });
   });
 });
