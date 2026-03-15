@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildMinimalServicePath,
@@ -9,6 +10,16 @@ import {
   getMinimalServicePathParts,
   getMinimalServicePathPartsFromEnv,
 } from "./service-env.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual: Record<string, unknown> = await importOriginal();
+  const actualDefault = actual.default as Record<string, unknown>;
+  return { ...actual, default: { ...actualDefault, existsSync: vi.fn(() => true) } };
+});
+
+beforeEach(() => {
+  vi.mocked(fs.existsSync).mockReturnValue(true);
+});
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
   it("includes user bin directories when HOME is set on Linux", () => {
@@ -167,6 +178,22 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
     // Windows returns empty array (uses existing PATH)
     expect(result).toEqual([]);
+  });
+
+  it("excludes non-existent user bin directories", () => {
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      const s = String(p);
+      return s.includes(".local/bin") || s.includes(".volta/bin");
+    });
+    const result = getMinimalServicePathParts({
+      platform: "linux",
+      home: "/home/testuser",
+    });
+
+    expect(result).toContain("/home/testuser/.local/bin");
+    expect(result).toContain("/home/testuser/.volta/bin");
+    expect(result).not.toContain("/home/testuser/.npm-global/bin");
+    expect(result).not.toContain("/home/testuser/.nvm/current/bin");
   });
 });
 
