@@ -22,6 +22,8 @@ import type {
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
+  PluginHookBeforeMessageDispatchEvent,
+  PluginHookBeforeMessageDispatchResult,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookGatewayContext,
@@ -69,6 +71,8 @@ export type {
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
+  PluginHookBeforeMessageDispatchEvent,
+  PluginHookBeforeMessageDispatchResult,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
@@ -393,6 +397,33 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookMessageContext,
   ): Promise<void> {
     return runVoidHook("message_received", event, ctx);
+  }
+
+  /**
+   * Run before_message_dispatch hook.
+   * Allows plugins to block inbound messages before agent/LLM processing.
+   *
+   * All registered handlers run sequentially and their results are merged.
+   * If any handler returns `{ block: true }`, the message will not be
+   * dispatched to the agent (blocking is applied at the call site after
+   * all handlers complete). Optionally, a handler can provide a `response`
+   * to send directly to the user.
+   */
+  async function runBeforeMessageDispatch(
+    event: PluginHookBeforeMessageDispatchEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<PluginHookBeforeMessageDispatchResult | undefined> {
+    return runModifyingHook<"before_message_dispatch", PluginHookBeforeMessageDispatchResult>(
+      "before_message_dispatch",
+      event,
+      ctx,
+      (acc, next) => ({
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+        response: next.response ?? acc?.response,
+        context: next.context ? { ...acc?.context, ...next.context } : acc?.context,
+      }),
+    );
   }
 
   /**
@@ -735,6 +766,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeReset,
     // Message hooks
     runMessageReceived,
+    runBeforeMessageDispatch,
     runMessageSending,
     runMessageSent,
     // Tool hooks
