@@ -161,11 +161,6 @@ async function approvePairingWithFallback(
     if (!approved) {
       return null;
     }
-    if (approved.status !== "approved") {
-      throw new Error(`Pairing request denied: missing scope \`${approved.missingScope}\``, {
-        cause: error,
-      });
-    }
     return {
       requestId,
       device: redactLocalPairedDevice(approved.device),
