@@ -1425,6 +1425,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/Tailscale: when `gateway.tailscale.mode` is `serve` or `funnel` and `gateway.bind` is not loopback, the gateway now auto-corrects the bind to 127.0.0.1 for that session and logs a one-time warning instead of crashing. Config file is unchanged. Closes #14542.
 - Slack/Identity: thread agent outbound identity (`chat:write.customize` overrides) through the channel reply delivery path so per-agent username, icon URL, and icon emoji are applied to all Slack replies including media messages. (#27134) Thanks @hou-rong.
 - Slack/Threading: resolve `replyToMode` per incoming message using chat-type-aware account config (`replyToModeByChatType` and legacy `dm.replyToMode`) so DM/channel reply threading honors overrides instead of always using monitor startup defaults. (#24717) Thanks @dbachelder.
 - Slack/Threading: track bot participation in message threads (per account/channel/thread) so follow-up messages in those threads can be handled without requiring repeated @mentions, while preserving mention-gating behavior for unrelated threads. (#29165) Thanks @luijoc.

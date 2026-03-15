@@ -496,6 +496,7 @@ export async function startGatewayServer(
     openResponsesEnabled: opts.openResponsesEnabled,
     auth: opts.auth,
     tailscale: opts.tailscale,
+    log: { warn: (msg) => log.warn(msg) },
   });
   const {
     bindHost,
