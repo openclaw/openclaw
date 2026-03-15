@@ -229,24 +229,30 @@ async function downloadGraphHostedContent(params: {
       // Fetch the actual bytes via the /$value endpoint instead.
       const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(item.id)}/$value`;
       const fetchFn = params.fetchFn ?? fetch;
-      const { response: valResp, release: valRelease } = await fetchWithSsrFGuard({
-        url: valueUrl,
-        fetchImpl: fetchFn,
-        init: { headers: { Authorization: `Bearer ${params.accessToken}` } },
-        policy: params.ssrfPolicy,
-        auditContext: "msteams.graph.hostedcontent.value",
-      });
+      let valRelease: (() => Promise<void>) | undefined;
       try {
+        const { response: valResp, release } = await fetchWithSsrFGuard({
+          url: valueUrl,
+          fetchImpl: fetchFn,
+          init: { headers: { Authorization: `Bearer ${params.accessToken}` } },
+          policy: params.ssrfPolicy,
+          auditContext: "msteams.graph.hostedcontent.value",
+        });
+        valRelease = release;
         if (!valResp.ok) {
           continue;
         }
-        const ct = valResp.headers.get("content-type");
+        const ct = normalizeContentType(valResp.headers.get("content-type"));
         if (ct) itemContentType = ct;
+        const contentLength = Number(valResp.headers.get("content-length") ?? "0");
+        if (contentLength > 0 && contentLength > params.maxBytes) {
+          continue;
+        }
         buffer = Buffer.from(await valResp.arrayBuffer());
       } catch {
         continue;
       } finally {
-        await valRelease();
+        await valRelease?.();
       }
     } else {
       continue;
@@ -288,6 +294,8 @@ export async function downloadMSTeamsGraphMedia(params: {
   fetchFn?: typeof fetch;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
+  /** Tenant ID from the conversation (may differ from the configured bot tenant). */
+  conversationTenantId?: string;
 }): Promise<MSTeamsGraphMediaResult> {
   if (!params.messageUrl || !params.tokenProvider) {
     return { media: [] };
@@ -300,7 +308,29 @@ export async function downloadMSTeamsGraphMedia(params: {
   const messageUrl = params.messageUrl;
   let accessToken: string;
   try {
-    accessToken = await params.tokenProvider.getAccessToken("https://graph.microsoft.com");
+    const provider = params.tokenProvider as unknown as {
+      connectionSettings?: { clientId?: string; clientSecret?: string; tenantId?: string };
+      getAccessToken(authConfig: Record<string, unknown>, scope: string): Promise<string>;
+      getAccessToken(scope: string): Promise<string>;
+    };
+    const conversationTenantId = params.conversationTenantId;
+    if (
+      conversationTenantId &&
+      provider.connectionSettings?.clientId &&
+      provider.connectionSettings?.clientSecret &&
+      conversationTenantId !== provider.connectionSettings.tenantId
+    ) {
+      accessToken = await provider.getAccessToken(
+        {
+          clientId: provider.connectionSettings.clientId,
+          clientSecret: provider.connectionSettings.clientSecret,
+          tenantId: conversationTenantId,
+        },
+        "https://graph.microsoft.com",
+      );
+    } else {
+      accessToken = await params.tokenProvider.getAccessToken("https://graph.microsoft.com");
+    }
   } catch {
     return { media: [], messageUrl, tokenError: true };
   }

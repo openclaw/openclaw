@@ -23,6 +23,7 @@ export async function resolveMSTeamsInboundMedia(params: {
   conversationType: string;
   conversationId: string;
   conversationMessageId?: string;
+  conversationTenantId?: string;
   activity: Pick<MSTeamsTurnContext["activity"], "id" | "replyToId" | "channelData">;
   log: MSTeamsLogger;
   /** When true, embeds original filename in stored path for later extraction. */
@@ -52,11 +53,11 @@ export async function resolveMSTeamsInboundMedia(params: {
   });
 
   if (mediaList.length === 0) {
-    const onlyHtmlAttachments =
+    const hasHtmlAttachment =
       attachments.length > 0 &&
       attachments.some((att) => String(att.contentType ?? "").startsWith("text/html"));
 
-    if (onlyHtmlAttachments) {
+    if (hasHtmlAttachment) {
       const messageUrls = buildMSTeamsGraphMessageUrls({
         conversationType,
         conversationId,
@@ -89,6 +90,7 @@ export async function resolveMSTeamsInboundMedia(params: {
             allowHosts,
             authAllowHosts: params.authAllowHosts,
             preserveFilenames,
+            conversationTenantId: params.conversationTenantId,
           });
           attempts.push({
             url: messageUrl,
