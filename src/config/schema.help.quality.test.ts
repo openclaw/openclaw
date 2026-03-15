@@ -587,15 +587,53 @@ describe("config help copy quality", () => {
   }
 
   it("keeps root section labels and help complete", () => {
+    const missingLabels: string[] = [];
+    const missingHelp: string[] = [];
     for (const key of ROOT_SECTIONS) {
-      expect(FIELD_LABELS[key], `missing root label for ${key}`).toBeDefined();
-      expect(FIELD_HELP[key], `missing root help for ${key}`).toBeDefined();
+      if (FIELD_LABELS[key] === undefined) {
+        missingLabels.push(key);
+      }
+      if (FIELD_HELP[key] === undefined) {
+        missingHelp.push(key);
+      }
+    }
+    if (missingLabels.length > 0 || missingHelp.length > 0) {
+      const parts: string[] = [];
+      if (missingLabels.length > 0) {
+        const stubs = missingLabels
+          .map((k) => `  "${k}": "${k.charAt(0).toUpperCase()}${k.slice(1)}",`)
+          .join("\n");
+        parts.push(`Missing root labels (add to schema.labels.ts):\n${stubs}`);
+      }
+      if (missingHelp.length > 0) {
+        parts.push(`Missing root help keys: ${missingHelp.join(", ")}`);
+      }
+      expect.fail(parts.join("\n\n"));
     }
   });
 
   it("keeps labels in parity for all help keys", () => {
+    const missing: string[] = [];
     for (const key of Object.keys(FIELD_HELP)) {
-      expect(FIELD_LABELS[key], `missing label for help key ${key}`).toBeDefined();
+      if (FIELD_LABELS[key] === undefined) {
+        missing.push(key);
+      }
+    }
+    if (missing.length > 0) {
+      const stubs = missing
+        .map((key) => {
+          const label = key
+            .split(".")
+            .pop()!
+            .replace(/([a-z])([A-Z])/g, "$1 $2")
+            .replace(/^./, (c) => c.toUpperCase());
+          return `  "${key}": "${label}",`;
+        })
+        .join("\n");
+      expect.fail(
+        `${missing.length} help key(s) missing from FIELD_LABELS.\n` +
+          `Add the following to src/config/schema.labels.ts:\n\n${stubs}\n`,
+      );
     }
   });
 
