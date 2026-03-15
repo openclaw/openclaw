@@ -42,6 +42,7 @@ export async function monitorWebInbox(options: {
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
+  const APPEND_HISTORY_GRACE_MS = 30_000;
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -419,7 +420,7 @@ export async function monitorWebInbox(options: {
         // Groups can legitimately arrive as append, but skip older history sync payloads.
         if (
           typeof inbound.messageTimestampMs === "number" &&
-          inbound.messageTimestampMs < connectedAtMs - 30_000
+          inbound.messageTimestampMs < connectedAtMs - APPEND_HISTORY_GRACE_MS
         ) {
           continue;
         }
