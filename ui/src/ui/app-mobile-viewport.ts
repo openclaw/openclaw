@@ -49,17 +49,15 @@ export function attachMobileViewportFixes(
     body.toggleAttribute("data-ios-mobile", active);
     host.toggleAttribute("data-ios-mobile", active);
   };
-  setIosMobile(true);
 
   const viewport = window.visualViewport;
   if (!viewport) {
     return {
-      cleanup: () => {
-        setIosMobile(false);
-      },
+      cleanup: () => {},
       setShellLocked: () => {},
     };
   }
+  setIosMobile(true);
 
   let restoreTimer: number | null = null;
   let focusTimer: number | null = null;
