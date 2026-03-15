@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ResolvedQmdConfig } from "./backend-config.js";
+import type { ResolvedCortexConfig, ResolvedQmdConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import type {
   MemoryEmbeddingProbeResult,
@@ -10,6 +10,7 @@ import type {
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
+const CORTEX_MANAGER_CACHE = new Map<string, MemorySearchManager>();
 let managerRuntimePromise: Promise<typeof import("./manager-runtime.js")> | null = null;
 
 function loadManagerRuntime() {
@@ -28,6 +29,55 @@ export async function getMemorySearchManager(params: {
   purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
+
+  // Handle cortex backend
+  if (resolved.backend === "cortex" && resolved.cortex) {
+    const statusOnly = params.purpose === "status";
+    let cacheKey: string | undefined;
+    if (!statusOnly) {
+      cacheKey = buildCortexCacheKey(params.agentId, resolved.cortex);
+      const cached = CORTEX_MANAGER_CACHE.get(cacheKey);
+      if (cached) {
+        return { manager: cached };
+      }
+    }
+    try {
+      const { CortexMemoryManager } = await import("./cortex-manager.js");
+      const primary = await CortexMemoryManager.create({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        resolved,
+      });
+      if (primary) {
+        if (statusOnly) {
+          return { manager: primary };
+        }
+        const wrapper = new FallbackMemoryManager(
+          {
+            primary,
+            fallbackFactory: async () => {
+              const { MemoryIndexManager } = await loadManagerRuntime();
+              return await MemoryIndexManager.get(params);
+            },
+          },
+          () => {
+            if (cacheKey) {
+              CORTEX_MANAGER_CACHE.delete(cacheKey);
+            }
+          },
+        );
+        if (cacheKey) {
+          CORTEX_MANAGER_CACHE.set(cacheKey, wrapper);
+        }
+        return { manager: wrapper };
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`cortex memory unavailable; falling back to builtin: ${message}`);
+    }
+  }
+
+  // Handle qmd backend
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
     let cacheKey: string | undefined;
@@ -75,6 +125,7 @@ export async function getMemorySearchManager(params: {
     }
   }
 
+  // Fallback to builtin backend
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
@@ -125,9 +176,10 @@ class FallbackMemoryManager implements MemorySearchManager {
       } catch (err) {
         this.primaryFailed = true;
         this.lastError = err instanceof Error ? err.message : String(err);
-        log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
+        const backendName = this.deps.primary.status().backend;
+        log.warn(`${backendName} memory failed; switching to builtin index: ${this.lastError}`);
         await this.deps.primary.close?.().catch(() => {});
-        // Evict the failed wrapper so the next request can retry QMD with a fresh manager.
+        // Evict the failed wrapper so the next request can retry with a fresh manager.
         this.evictCacheEntry();
       }
     }
@@ -154,7 +206,8 @@ class FallbackMemoryManager implements MemorySearchManager {
       return this.deps.primary.status();
     }
     const fallbackStatus = this.fallback?.status();
-    const fallbackInfo = { from: "qmd", reason: this.lastError ?? "unknown" };
+    const backendName = this.deps.primary.status().backend;
+    const fallbackInfo = { from: backendName, reason: this.lastError ?? "unknown" };
     if (fallbackStatus) {
       const custom = fallbackStatus.custom ?? {};
       return {
@@ -249,5 +302,10 @@ class FallbackMemoryManager implements MemorySearchManager {
 function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {
   // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
   // Fast stringify avoids deep key-sorting overhead on this hot path.
-  return `${agentId}:${JSON.stringify(config)}`;
+  return `${agentId}:qmd:${JSON.stringify(config)}`;
+}
+
+function buildCortexCacheKey(agentId: string, config: ResolvedCortexConfig): string {
+  // ResolvedCortexConfig is assembled in a stable field order.
+  return `${agentId}:cortex:${JSON.stringify(config)}`;
 }

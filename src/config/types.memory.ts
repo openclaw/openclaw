@@ -1,6 +1,6 @@
 import type { SessionSendPolicyConfig } from "./types.base.js";
 
-export type MemoryBackend = "builtin" | "qmd";
+export type MemoryBackend = "builtin" | "qmd" | "cortex";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
@@ -8,7 +8,84 @@ export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  cortex?: MemoryCortexConfig;
 };
+
+/**
+ * Cortex Memory backend configuration.
+ *
+ * Cortex Memory is a high-performance, persistent, and intelligent long-term memory system
+ * that gives AI agents the ability to remember, learn, and personalize interactions across sessions.
+ *
+ * Features:
+ * - Three-tier memory hierarchy (L0 Abstract → L1 Overview → L2 Detail)
+ * - Virtual filesystem with cortex:// URI scheme
+ * - Vector-based semantic search via Qdrant
+ * - Multi-tenancy support with isolated memory spaces
+ *
+ * @see https://github.com/sopaco/cortex-mem
+ */
+export type MemoryCortexConfig = {
+  /**
+   * URL of the Cortex Memory service (cortex-mem-service).
+   * Default: "http://localhost:8085"
+   */
+  serviceUrl?: string;
+
+  /**
+   * Tenant identifier for memory isolation.
+   * Each tenant has completely isolated memory spaces.
+   * Default: "default"
+   */
+  tenant?: string;
+
+  /**
+   * API key for authenticating with the Cortex Memory service.
+   * Optional - set if the service requires authentication.
+   */
+  apiKey?: string;
+
+  /**
+   * Request timeout in milliseconds for Cortex Memory API calls.
+   * Default: 30000 (30 seconds)
+   */
+  timeoutMs?: number;
+
+  /**
+   * Maximum number of search results to return.
+   * Default: 10
+   */
+  maxResults?: number;
+
+  /**
+   * Minimum relevance score threshold for search results (0.0-1.0).
+   * Default: 0.4
+   */
+  minScore?: number;
+
+  /**
+   * Search scope: "session", "user", or "agent".
+   * - session: Search within conversation sessions
+   * - user: Search user preferences and entities
+   * - agent: Search agent cases and skills
+   * Default: "session"
+   */
+  scope?: MemoryCortexSearchScope;
+
+  /**
+   * Whether to automatically create sessions when adding messages.
+   * Default: true
+   */
+  autoCreateSession?: boolean;
+
+  /**
+   * Whether to automatically extract memories when sessions are closed.
+   * Default: true
+   */
+  autoExtract?: boolean;
+};
+
+export type MemoryCortexSearchScope = "session" | "user" | "agent";
 
 export type MemoryQmdConfig = {
   command?: string;
