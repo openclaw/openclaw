@@ -59,6 +59,7 @@ const TELEGRAM_SUPPORTED_REACTION_EMOJIS = new Set<string>([
   "😇",
   "😨",
   "🤝",
+  "✅",
   "✍",
   "🤗",
   "🫡",
@@ -114,6 +115,10 @@ function normalizeEmoji(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+export function normalizeTelegramReactionEmoji(emoji: string): string {
+  return emoji.normalize("NFC").replace(/\uFE0F/g, "");
+}
+
 function toUniqueNonEmpty(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
@@ -155,7 +160,7 @@ export function buildTelegramStatusReactionVariants(
 }
 
 export function isTelegramSupportedReactionEmoji(emoji: string): boolean {
-  return TELEGRAM_SUPPORTED_REACTION_EMOJIS.has(emoji);
+  return TELEGRAM_SUPPORTED_REACTION_EMOJIS.has(normalizeTelegramReactionEmoji(emoji));
 }
 
 export function extractTelegramAllowedEmojiReactions(

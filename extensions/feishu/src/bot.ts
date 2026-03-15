@@ -1523,7 +1523,11 @@ export async function handleFeishuMessage(params: {
             : threadMessages) ?? [];
 
         const threadStarterBody = rootMsg?.content ?? relevantMessages[0]?.content;
-        const includeStarterInHistory = Boolean(rootMsg?.content || ctx.rootId);
+        // Only include the starter in history if it actually came from rootMsg (not fallback).
+        // When rootMsg fetch fails and we fall back to relevantMessages[0], includeStarterInHistory
+        // must be false so historyMessages starts from slice(1) — otherwise the first message
+        // appears in both threadStarterBody and threadHistoryBody.
+        const includeStarterInHistory = Boolean(rootMsg?.content);
         const historyMessages = includeStarterInHistory
           ? relevantMessages
           : relevantMessages.slice(1);

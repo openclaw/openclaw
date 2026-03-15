@@ -34,6 +34,10 @@ import {
 } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
+import {
+  isTelegramSupportedReactionEmoji,
+  normalizeTelegramReactionEmoji,
+} from "./status-reaction-variants.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import {
   normalizeTelegramChatId,
@@ -1010,12 +1014,21 @@ export async function reactMessageTelegram(
   });
   const remove = opts.remove === true;
   const trimmedEmoji = emoji.trim();
-  // Build the reaction array. We cast emoji to the grammY union type since
-  // Telegram validates emoji server-side; invalid emojis fail gracefully.
+  const normalizedEmoji = normalizeTelegramReactionEmoji(trimmedEmoji);
+  // Pre-validate emoji against the known Telegram-supported set to avoid
+  // REACTION_INVALID errors from the API.
+  if (!remove && trimmedEmoji && !isTelegramSupportedReactionEmoji(normalizedEmoji)) {
+    return {
+      ok: false as const,
+      warning: `Reaction unavailable: ${trimmedEmoji} (not in Telegram supported emoji set)`,
+    };
+  }
+  // Build the reaction array using the normalized emoji (variation selectors
+  // stripped) so Telegram receives the canonical form it expects.
   const reactions: ReactionType[] =
     remove || !trimmedEmoji
       ? []
-      : [{ type: "emoji", emoji: trimmedEmoji as ReactionTypeEmoji["emoji"] }];
+      : [{ type: "emoji", emoji: normalizedEmoji as ReactionTypeEmoji["emoji"] }];
   if (typeof api.setMessageReaction !== "function") {
     throw new Error("Telegram reactions are unavailable in this bot API.");
   }

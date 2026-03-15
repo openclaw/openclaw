@@ -232,6 +232,12 @@ export function setActiveEmbeddedRun(
   sessionKey?: string,
 ) {
   const wasActive = ACTIVE_EMBEDDED_RUNS.has(sessionId);
+  if (wasActive) {
+    // Clear stale snapshot from the previous run so /btw context doesn't
+    // pick up messages/inFlightPrompt from a prior task during the window
+    // before updateActiveEmbeddedRunSnapshot is called for the new run.
+    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
+  }
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
   logSessionStateChange({
     sessionId,

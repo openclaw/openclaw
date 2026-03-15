@@ -1526,6 +1526,14 @@ describe("reactMessageTelegram", () => {
       remove: true,
       expected: [],
     },
+    {
+      testName: "normalizes variation selectors before sending reactions",
+      target: "123",
+      messageId: 456,
+      emoji: "❤️",
+      remove: false,
+      expected: [{ type: "emoji", emoji: "❤" }],
+    },
   ] as const)("$testName", async (testCase) => {
     const setMessageReaction = vi.fn().mockResolvedValue(undefined);
     const api = { setMessageReaction } as unknown as {

@@ -48,6 +48,11 @@ export function normalizeFeishuTarget(raw: string): string | null {
   if (lowered.startsWith("open_id:")) {
     return withoutProvider.slice("open_id:".length).trim() || null;
   }
+  if (lowered.startsWith("p2p:")) {
+    // p2p:<open_id> is a Feishu P2P (direct message) synthetic chat_id;
+    // strip the prefix to expose the raw open_id for sending.
+    return withoutProvider.slice("p2p:".length).trim() || null;
+  }
 
   return withoutProvider;
 }
@@ -74,6 +79,10 @@ export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_
     return "chat_id";
   }
   if (lowered.startsWith("open_id:")) {
+    return "open_id";
+  }
+  if (lowered.startsWith("p2p:")) {
+    // p2p:<open_id> is a direct-message synthetic chat_id; the inner ID is an open_id.
     return "open_id";
   }
   if (lowered.startsWith("user:") || lowered.startsWith("dm:")) {

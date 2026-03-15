@@ -154,8 +154,34 @@ export const registerTelegramHandlers = ({
       ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
       : MEDIA_GROUP_TIMEOUT_MS;
 
+  const DEFAULT_DOCUMENT_BATCH_WINDOW_MS = 1500;
+  const documentBatchWindowMs =
+    typeof opts.testTimings?.documentBatchFlushMs === "number" &&
+    Number.isFinite(opts.testTimings.documentBatchFlushMs)
+      ? Math.max(10, Math.floor(opts.testTimings.documentBatchFlushMs))
+      : typeof telegramCfg.documentBatchWindowMs === "number" &&
+          Number.isFinite(telegramCfg.documentBatchWindowMs)
+        ? Math.max(0, Math.floor(telegramCfg.documentBatchWindowMs))
+        : DEFAULT_DOCUMENT_BATCH_WINDOW_MS;
+
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
+
+  type DocumentBatchEntry = {
+    key: string;
+    messages: Array<{ msg: Message; ctx: TelegramContext }>;
+    timer: ReturnType<typeof setTimeout> | null;
+    sendOversizeWarning: boolean;
+    oversizeLogMessage: string;
+  };
+  const documentBatchBuffer = new Map<string, DocumentBatchEntry>();
+  let documentBatchProcessing: Promise<void> = Promise.resolve();
+  // Use the transport as-is for batched media downloads so DNS pinning
+  // (resolvePinnedHostnameWithPolicy / TELEGRAM_MEDIA_SSRF_POLICY) is preserved
+  // on the same wrapped Telegram fetch path as non-batch/media-group processing.
+  // Overriding sourceFetch with fetch would make fetch === sourceFetch true,
+  // causing downloadAndSaveTelegramFile to set pinDns: false and bypass DNS pinning.
+  const telegramMediaResolveTransport = telegramTransport ?? undefined;
 
   type TextFragmentEntry = {
     key: string;
@@ -198,15 +224,20 @@ export const registerTelegramHandlers = ({
     text: string;
     date?: number;
     from?: Message["from"];
-  }): Message => ({
-    ...params.base,
-    ...(params.from ? { from: params.from } : {}),
-    text: params.text,
-    caption: undefined,
-    caption_entities: undefined,
-    entities: undefined,
-    ...(params.date != null ? { date: params.date } : {}),
-  });
+    entities?: Message["entities"];
+  }): Message => {
+    const preservedEntities =
+      params.entities ?? params.base.entities ?? params.base.caption_entities;
+    return {
+      ...params.base,
+      ...(params.from ? { from: params.from } : {}),
+      text: params.text,
+      caption: undefined,
+      caption_entities: undefined,
+      entities: preservedEntities,
+      ...(params.date != null ? { date: params.date } : {}),
+    };
+  };
   const buildSyntheticContext = (
     ctx: Pick<TelegramContext, "me"> & { getFile?: unknown },
     message: Message,
@@ -372,14 +403,36 @@ export const registerTelegramHandlers = ({
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
-      const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
-      const primaryEntry = captionMsg ?? entry.messages[0];
+      const textMessages: { msg: Message }[] = [];
+      const textParts: string[] = [];
+      for (const m of entry.messages) {
+        const t = m.msg.caption || m.msg.text || "";
+        if (t) {
+          textParts.push(t);
+          textMessages.push(m);
+        }
+      }
+      const separator = "\n\n";
+      const allText = textParts.join(separator);
+      const combinedEntities = collectBatchEntities(textMessages, separator);
+
+      const firstEntry = entry.messages[0];
+      const syntheticMsg = buildSyntheticTextMessage({
+        base: firstEntry.msg,
+        text: allText,
+        date: entry.messages.at(-1)?.msg.date ?? firstEntry.msg.date,
+        entities: combinedEntities,
+      });
+      const primaryEntry = {
+        ctx: buildSyntheticContext(firstEntry.ctx, syntheticMsg),
+        msg: syntheticMsg,
+      };
 
       const allMedia: TelegramMediaRef[] = [];
       for (const { ctx } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport);
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramMediaResolveTransport);
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;
@@ -396,6 +449,12 @@ export const registerTelegramHandlers = ({
             stickerMetadata: media.stickerMetadata,
           });
         }
+      }
+
+      // Skip agent turn when every media item failed to resolve
+      if (allMedia.length === 0) {
+        runtime.log?.(warn("media group: all files failed to resolve, skipping agent turn"));
+        return;
       }
 
       const storeAllowFrom = await loadStoreAllowFrom();
@@ -457,6 +516,128 @@ export const registerTelegramHandlers = ({
     entry.timer = setTimeout(async () => {
       await runTextFragmentFlush(entry);
     }, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS);
+  };
+
+  // Collect caption/text entities from batched messages, offset-adjusting for joined text.
+  const collectBatchEntities = (
+    messages: { msg: Message }[],
+    separator: string,
+  ): Message["entities"] => {
+    const entities: NonNullable<Message["entities"]> = [];
+    let offset = 0;
+    for (const { msg } of messages) {
+      const text = msg.caption || msg.text || "";
+      const msgEntities = msg.caption_entities ?? msg.entities;
+      if (msgEntities) {
+        for (const ent of msgEntities) {
+          entities.push({ ...ent, offset: ent.offset + offset });
+        }
+      }
+      if (text) {
+        offset += text.length + separator.length;
+      }
+    }
+    return entities.length > 0 ? entities : undefined;
+  };
+
+  // Flush buffered document messages as a single processMessage call.
+  // Documents sent in quick succession lack media_group_id, so we batch them manually.
+  const processDocumentBatch = async (entry: DocumentBatchEntry) => {
+    try {
+      entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
+
+      // Build combined text, tracking which messages contribute to calculate entity offsets.
+      const textParts: string[] = [];
+      const textMessages: { msg: Message }[] = [];
+      for (const m of entry.messages) {
+        const t = m.msg.caption || m.msg.text || "";
+        if (t) {
+          textParts.push(t);
+          textMessages.push(m);
+        }
+      }
+      const separator = "\n\n";
+      const allText = textParts.join(separator);
+      const combinedEntities = collectBatchEntities(textMessages, separator);
+
+      const firstEntry = entry.messages[0];
+      const syntheticMsg = buildSyntheticTextMessage({
+        base: firstEntry.msg,
+        text: allText,
+        date: entry.messages.at(-1)?.msg.date ?? firstEntry.msg.date,
+        entities: combinedEntities,
+      });
+      const primaryEntry = {
+        ctx: buildSyntheticContext(firstEntry.ctx, syntheticMsg),
+        msg: syntheticMsg,
+      };
+      const chatId = primaryEntry.msg.chat.id;
+
+      const allMedia: TelegramMediaRef[] = [];
+      for (const { ctx, msg } of entry.messages) {
+        let media;
+        try {
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramMediaResolveTransport);
+        } catch (mediaErr) {
+          // Send the same oversize warning the non-batched path sends
+          if (isMediaSizeLimitError(mediaErr)) {
+            if (entry.sendOversizeWarning) {
+              const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                runtime,
+                fn: () =>
+                  bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
+                    reply_to_message_id: msg.message_id,
+                  }),
+              }).catch(() => {});
+            }
+            logger.warn({ chatId, error: String(mediaErr) }, entry.oversizeLogMessage);
+            continue;
+          }
+          if (!isRecoverableMediaGroupError(mediaErr)) {
+            throw mediaErr;
+          }
+          runtime.log?.(
+            warn(`document batch: skipping file that failed to fetch: ${String(mediaErr)}`),
+          );
+          continue;
+        }
+        if (media) {
+          allMedia.push({
+            path: media.path,
+            contentType: media.contentType,
+            stickerMetadata: media.stickerMetadata,
+          });
+        }
+      }
+
+      if (allMedia.length === 0) {
+        logger.warn({ chatId }, "document batch: all files failed to resolve, skipping agent turn");
+        return;
+      }
+
+      const storeAllowFrom = await loadStoreAllowFrom();
+      const replyMedia = await resolveReplyMediaForMessage(primaryEntry.ctx, primaryEntry.msg);
+      await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom, undefined, replyMedia);
+    } catch (err) {
+      runtime.error?.(danger(`document batch handler failed: ${String(err)}`));
+    }
+  };
+
+  const scheduleDocumentBatchFlush = (entry: DocumentBatchEntry) => {
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+    entry.timer = setTimeout(async () => {
+      documentBatchBuffer.delete(entry.key);
+      documentBatchProcessing = documentBatchProcessing
+        .then(async () => {
+          await processDocumentBatch(entry);
+        })
+        .catch(() => undefined);
+      await documentBatchProcessing;
+    }, documentBatchWindowMs);
   };
 
   const loadStoreAllowFrom = async () =>
@@ -882,6 +1063,7 @@ export const registerTelegramHandlers = ({
     storeAllowFrom: string[];
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
+    skipDocumentBatch?: boolean;
   }) => {
     const {
       ctx,
@@ -892,6 +1074,7 @@ export const registerTelegramHandlers = ({
       storeAllowFrom,
       sendOversizeWarning,
       oversizeLogMessage,
+      skipDocumentBatch,
     } = params;
 
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
@@ -988,6 +1171,37 @@ export const registerTelegramHandlers = ({
           }, mediaGroupTimeoutMs),
         };
         mediaGroupBuffer.set(mediaGroupId, entry);
+      }
+      return;
+    }
+
+    // Document batch handling – documents sent in quick succession lack media_group_id,
+    // so we buffer them per-chat+sender and flush as a single processMessage call.
+    const docSenderId = msg.from?.id != null ? String(msg.from.id) : null;
+    if (
+      !mediaGroupId &&
+      msg.document &&
+      documentBatchWindowMs > 0 &&
+      docSenderId &&
+      !msg.sender_chat &&
+      !skipDocumentBatch
+    ) {
+      const replyTarget = msg.reply_to_message?.message_id ?? "none";
+      const docBatchKey = `doc:${chatId}:${docSenderId}:${resolvedThreadId ?? "f"}:${dmThreadId ?? "d"}:${replyTarget}`;
+      const existing = documentBatchBuffer.get(docBatchKey);
+      if (existing) {
+        existing.messages.push({ msg, ctx });
+        scheduleDocumentBatchFlush(existing);
+      } else {
+        const entry: DocumentBatchEntry = {
+          key: docBatchKey,
+          messages: [{ msg, ctx }],
+          timer: null,
+          sendOversizeWarning,
+          oversizeLogMessage,
+        };
+        documentBatchBuffer.set(docBatchKey, entry);
+        scheduleDocumentBatchFlush(entry);
       }
       return;
     }
@@ -1517,6 +1731,9 @@ export const registerTelegramHandlers = ({
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
     errorMessage: string;
+    /** When true, skip document batching (e.g. channel_post traffic where all
+     *  posts share a synthetic sender identity derived from the channel ID). */
+    skipDocumentBatch?: boolean;
   };
 
   const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
@@ -1596,6 +1813,7 @@ export const registerTelegramHandlers = ({
         storeAllowFrom,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,
+        skipDocumentBatch: event.skipDocumentBatch,
       });
     } catch (err) {
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
@@ -1663,17 +1881,13 @@ export const registerTelegramHandlers = ({
       chatId,
       isGroup: true,
       isForum: false,
-      senderId:
-        post.sender_chat?.id != null
-          ? String(post.sender_chat.id)
-          : post.from?.id != null
-            ? String(post.from.id)
-            : "",
-      senderUsername: post.sender_chat?.username ?? post.from?.username ?? "",
+      senderId: String(syntheticMsg.from?.id ?? ""),
+      senderUsername: syntheticMsg.from?.username ?? "",
       requireConfiguredGroup: true,
       sendOversizeWarning: false,
       oversizeLogMessage: "channel post media exceeds size limit",
       errorMessage: "channel_post handler failed",
+      skipDocumentBatch: true,
     });
   });
 };

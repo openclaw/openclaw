@@ -40,6 +40,7 @@ type FetchMediaOptions = {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   fallbackDispatcherPolicy?: PinnedDispatcherPolicy;
   shouldRetryFetchError?: (error: unknown) => boolean;
+  pinDns?: boolean;
 };
 
 function stripQuotes(value: string): string {
@@ -104,6 +105,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     dispatcherPolicy,
     fallbackDispatcherPolicy,
     shouldRetryFetchError,
+    pinDns,
   } = options;
   const sourceUrl = redactMediaUrl(url);
 
@@ -120,6 +122,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
         policy: ssrfPolicy,
         lookupFn,
         dispatcherPolicy: policy,
+        pinDns,
       }),
     );
   try {

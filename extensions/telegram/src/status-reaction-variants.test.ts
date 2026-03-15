@@ -4,6 +4,7 @@ import {
   buildTelegramStatusReactionVariants,
   extractTelegramAllowedEmojiReactions,
   isTelegramSupportedReactionEmoji,
+  normalizeTelegramReactionEmoji,
   resolveTelegramAllowedEmojiReactions,
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
@@ -53,6 +54,11 @@ describe("isTelegramSupportedReactionEmoji", () => {
   it("accepts Telegram-supported reaction emojis", () => {
     expect(isTelegramSupportedReactionEmoji("👀")).toBe(true);
     expect(isTelegramSupportedReactionEmoji("👨‍💻")).toBe(true);
+  });
+
+  it("normalizes variation-selector forms before checking support", () => {
+    expect(normalizeTelegramReactionEmoji("❤️")).toBe("❤");
+    expect(isTelegramSupportedReactionEmoji("❤️")).toBe(true);
   });
 
   it("rejects unsupported emojis", () => {

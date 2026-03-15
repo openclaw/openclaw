@@ -292,3 +292,33 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
   });
 });
+
+describe("trusted_env_proxy + policy enforcement", () => {
+  it("enforces allowlist policy even when trusted proxy mode is active", async () => {
+    // cdn.example.com is NOT in the allowlist — policy should reject the request.
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://cdn.example.com/file.zip",
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+        policy: { hostnameAllowlist: ["other.example.com"] },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("allows fetch when trusted proxy mode is active and allowlist matches", async () => {
+    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+    type LookupFn = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
+    const lookupFn = vi.fn(async () => [{ address: "1.2.3.4", family: 4 }]) as unknown as LookupFn;
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://cdn.example.com/file.zip",
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      policy: { hostnameAllowlist: ["cdn.example.com"] },
+      lookupFn,
+      fetchImpl,
+    });
+    await result.release();
+
+    expect(result.response.status).toBe(200);
+  });
+});

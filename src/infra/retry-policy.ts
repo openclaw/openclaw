@@ -13,10 +13,10 @@ export const DISCORD_RETRY_DEFAULTS = {
 };
 
 export const TELEGRAM_RETRY_DEFAULTS = {
-  attempts: 3,
-  minDelayMs: 400,
-  maxDelayMs: 30_000,
-  jitter: 0.1,
+  attempts: 4,
+  minDelayMs: 500,
+  maxDelayMs: 60_000,
+  jitter: 0.15,
 };
 
 const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
@@ -36,26 +36,51 @@ function resolveTelegramShouldRetry(params: {
     params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
 }
 
-function getTelegramRetryAfterMs(err: unknown): number | undefined {
+function extractRetryAfterCandidate(err: unknown): unknown {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  const candidate =
-    "parameters" in err && err.parameters && typeof err.parameters === "object"
-      ? (err.parameters as { retry_after?: unknown }).retry_after
-      : "response" in err &&
-          err.response &&
-          typeof err.response === "object" &&
-          "parameters" in err.response
-        ? (
-            err.response as {
-              parameters?: { retry_after?: unknown };
-            }
-          ).parameters?.retry_after
-        : "error" in err && err.error && typeof err.error === "object" && "parameters" in err.error
-          ? (err.error as { parameters?: { retry_after?: unknown } }).parameters?.retry_after
-          : undefined;
-  return typeof candidate === "number" && Number.isFinite(candidate) ? candidate * 1000 : undefined;
+  // Direct parameters (grammY HttpError shape)
+  if ("parameters" in err && err.parameters && typeof err.parameters === "object") {
+    return (err.parameters as { retry_after?: unknown }).retry_after;
+  }
+  // Nested response.parameters
+  if (
+    "response" in err &&
+    err.response &&
+    typeof err.response === "object" &&
+    "parameters" in err.response
+  ) {
+    return (err.response as { parameters?: { retry_after?: unknown } }).parameters?.retry_after;
+  }
+  // Nested error.parameters (wrapped HttpError)
+  if ("error" in err && err.error && typeof err.error === "object" && "parameters" in err.error) {
+    return (err.error as { parameters?: { retry_after?: unknown } }).parameters?.retry_after;
+  }
+  // Cause chain traversal for deeply wrapped errors
+  if ("cause" in err && err.cause && typeof err.cause === "object") {
+    return extractRetryAfterCandidate(err.cause);
+  }
+  return undefined;
+}
+
+function getTelegramRetryAfterMs(err: unknown): number | undefined {
+  const candidate = extractRetryAfterCandidate(err);
+  if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+    const delayMs = candidate * 1000;
+    log.warn(`telegram 429 rate limit: retry_after=${candidate}s (${delayMs}ms)`);
+    return delayMs;
+  }
+  // Fallback: detect 429 from message and use default backoff
+  const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  if (/429|too many requests/i.test(msg) && candidate === undefined) {
+    const defaultBackoffMs = 5_000;
+    log.warn(
+      `telegram 429 rate limit detected (no retry_after header), using ${defaultBackoffMs}ms default backoff`,
+    );
+    return defaultBackoffMs;
+  }
+  return undefined;
 }
 
 export function createDiscordRetryRunner(params: {
