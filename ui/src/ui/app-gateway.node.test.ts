@@ -141,6 +141,7 @@ function createHost() {
     execApprovalQueue: [],
     execApprovalError: null,
     updateAvailable: null,
+    updateRunning: false,
   } as unknown as Parameters<typeof connectGateway>[0];
 }
 
@@ -239,6 +240,61 @@ describe("connectGateway", () => {
     secondClient.emitClose({ code: 1005 });
     expect(host.lastError).toBe("disconnected (1005): no reason");
     expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("reloads the page after service-restart close while update is running", () => {
+    vi.useFakeTimers();
+    const reload = vi.fn();
+    const originalLocation = globalThis.location;
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: { reload },
+    });
+
+    const host = createHost();
+    host.updateRunning = true;
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({ code: 1012, reason: "service restart" });
+    vi.advanceTimersByTime(1500);
+
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+    vi.useRealTimers();
+  });
+
+  it("does not reload the page for service-restart close when update is idle", () => {
+    vi.useFakeTimers();
+    const reload = vi.fn();
+    const originalLocation = globalThis.location;
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: { reload },
+    });
+
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({ code: 1012, reason: "service restart" });
+    vi.advanceTimersByTime(1500);
+
+    expect(reload).not.toHaveBeenCalled();
+
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+    vi.useRealTimers();
   });
 
   it("maps generic fetch-failed auth errors to actionable token mismatch message", () => {

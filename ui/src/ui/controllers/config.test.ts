@@ -371,4 +371,83 @@ describe("runUpdate", () => {
       sessionKey: "agent:main:whatsapp:dm:+15555550123",
     });
   });
+
+  it("reloads the page after a successful update request", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn().mockResolvedValue({ ok: true, result: { status: "ok" } });
+    const reload = vi.fn();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    const originalLocation = globalThis.location;
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: { reload },
+    });
+
+    await runUpdate(state);
+    vi.advanceTimersByTime(2500);
+
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+    vi.useRealTimers();
+  });
+
+  it("does not reload the page when update.run reports failure", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      result: { status: "error", reason: "build-failed" },
+    });
+    const reload = vi.fn();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    const originalLocation = globalThis.location;
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: { reload },
+    });
+
+    await runUpdate(state);
+    vi.advanceTimersByTime(2500);
+
+    expect(reload).not.toHaveBeenCalled();
+    expect(state.lastError).toBe("Update error: build-failed");
+
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+    vi.useRealTimers();
+  });
+
+  it("does not reload the page when update is skipped", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn().mockResolvedValue({ ok: true, result: { status: "skipped" } });
+    const reload = vi.fn();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    const originalLocation = globalThis.location;
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: { reload },
+    });
+
+    await runUpdate(state);
+    vi.advanceTimersByTime(2500);
+
+    expect(reload).not.toHaveBeenCalled();
+
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+    vi.useRealTimers();
+  });
 });

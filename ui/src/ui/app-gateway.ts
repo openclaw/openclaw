@@ -28,6 +28,7 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadHealthState } from "./controllers/health.ts";
 import { loadNodes } from "./controllers/nodes.ts";
+import { scheduleLocationReload } from "./controllers/reload.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import {
   resolveGatewayErrorDetailCode,
@@ -82,6 +83,7 @@ type GatewayHost = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+  updateRunning?: boolean;
 };
 
 type SessionDefaultsSnapshot = {
@@ -246,6 +248,10 @@ export function connectGateway(host: GatewayHost) {
       } else {
         host.lastError = shutdownHost.pendingShutdownMessage ?? null;
         host.lastErrorCode = null;
+        if (host.updateRunning) {
+          host.updateRunning = false;
+          scheduleLocationReload({ delayMs: 1500 });
+        }
       }
     },
     onEvent: (evt) => {
