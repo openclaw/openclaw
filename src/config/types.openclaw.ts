@@ -24,7 +24,7 @@ import type {
 import type { ModelsConfig } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
-import type { SecretsConfig } from "./types.secrets.js";
+import type { SecretProviderConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
@@ -120,6 +120,61 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  security?: SecurityConfig;
+};
+
+export type SecretTier = "open" | "controlled" | "restricted";
+
+export type SecretRegistryEntry = {
+  name: string;
+  tier: SecretTier;
+  description?: string;
+  ttl?: number;
+  type?: string; // e.g., "api_key", "github_pat", "ssh_key"
+  hint?: string; // Human-readable description for agent
+  capabilities?: string[]; // What this secret can do (OAuth scopes, etc.)
+};
+
+export type SecretsConfig = {
+  // Secret management properties (registry-based)
+  /** Secret definitions with tier-based access control. */
+  registry?: SecretRegistryEntry[];
+  /** Directory for grant files. Defaults to {dataDir}/grants/. */
+  grantsDir?: string;
+  /** Keychain service name. Defaults to "openclaw-secrets". */
+  keychainService?: string;
+  /** Vault backend type. Defaults to "keychain". */
+  backend?: "keychain" | "1password" | "bitwarden" | "vault";
+
+  // Secret resolution properties (provider-based)
+  providers?: Record<string, SecretProviderConfig>;
+  defaults?: {
+    env?: string;
+    file?: string;
+    exec?: string;
+  };
+  resolution?: {
+    maxProviderConcurrency?: number;
+    maxRefsPerProvider?: number;
+    maxBatchBytes?: number;
+  };
+};
+
+export type SecurityCredentialMode = "legacy" | "yolo" | "balanced" | "strict";
+
+export type SecurityConfig = {
+  credentials?: {
+    /** Security mode for credential access. Default: "legacy". */
+    mode?: SecurityCredentialMode;
+    broker?: {
+      /** Enable credential broker for tool execution interception. */
+      enabled?: boolean;
+      /** Tools to intercept for credential injection. */
+      interceptTools?: string[];
+      /** Per-tool credential allowlists. Keys are tool names, values are allowed secret names. */
+      toolAllowedSecrets?: Record<string, string[]>;
+    };
+  };
 };
 
 export type ConfigValidationIssue = {

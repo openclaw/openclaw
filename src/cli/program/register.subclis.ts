@@ -272,15 +272,6 @@ const entries: SubCliEntry[] = [
     },
   },
   {
-    name: "secrets",
-    description: "Secrets runtime reload controls",
-    hasSubcommands: true,
-    register: async (program) => {
-      const mod = await import("../secrets-cli.js");
-      mod.registerSecretsCli(program);
-    },
-  },
-  {
     name: "skills",
     description: "List and inspect available skills",
     hasSubcommands: true,
@@ -305,6 +296,24 @@ const entries: SubCliEntry[] = [
     register: async (program) => {
       const mod = await import("../completion-cli.js");
       mod.registerCompletionCli(program);
+    },
+  },
+  {
+    name: "secrets",
+    description: "Manage secrets with OS keychain backing and TOTP approval",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../secrets-cli.js");
+      mod.registerSecretsCli(program);
+    },
+  },
+  {
+    name: "elevate",
+    description: "TOTP-gated elevated access for privileged operations",
+    hasSubcommands: false,
+    register: async (program) => {
+      const mod = await import("../elevate-cli.js");
+      mod.registerElevateCli(program);
     },
   },
 ];

@@ -209,16 +209,4 @@ export type SecretProviderConfig =
   | FileSecretProviderConfig
   | ExecSecretProviderConfig;
 
-export type SecretsConfig = {
-  providers?: Record<string, SecretProviderConfig>;
-  defaults?: {
-    env?: string;
-    file?: string;
-    exec?: string;
-  };
-  resolution?: {
-    maxProviderConcurrency?: number;
-    maxRefsPerProvider?: number;
-    maxBatchBytes?: number;
-  };
-};
+// SecretsConfig moved to types.openclaw.ts and merged with registry-based config

@@ -147,6 +147,7 @@ export const SecretProviderSchema = z.discriminatedUnion("source", [
 
 export const SecretsConfigSchema = z
   .object({
+    // Provider-based secret resolution (existing)
     providers: z
       .object({
         // Keep this as a record so users can define multiple providers per source.
@@ -174,6 +175,24 @@ export const SecretsConfigSchema = z
       })
       .strict()
       .optional(),
+    // Registry-based secret management (new)
+    registry: z
+      .array(
+        z.object({
+          name: z.string(),
+          tier: z.enum(["open", "controlled", "restricted"]),
+          description: z.string().optional(),
+          ttl: z.number().optional(),
+          type: z.string().optional(),
+          hint: z.string().optional(),
+          capabilities: z.array(z.string()).optional(),
+        }),
+      )
+      .optional(),
+    grantsDir: z.string().optional(),
+    keychainService: z.string().optional(),
+    backend: z.enum(["keychain", "1password", "bitwarden", "vault"]).optional().default("keychain"),
+    auditLog: z.string().optional(),
   })
   .strict()
   .optional();

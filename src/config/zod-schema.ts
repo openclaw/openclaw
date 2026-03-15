@@ -852,6 +852,26 @@ export const OpenClawSchema = z
       })
       .optional(),
     memory: MemorySchema,
+    security: z
+      .object({
+        credentials: z
+          .object({
+            mode: z.enum(["legacy", "yolo", "balanced", "strict"]).optional().default("legacy"),
+            totpRequired: z.boolean().optional(),
+            broker: z
+              .object({
+                enabled: z.boolean().optional(),
+                interceptTools: z.array(z.string()).optional(),
+                toolAllowedSecrets: z.record(z.string(), z.array(z.string())).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
