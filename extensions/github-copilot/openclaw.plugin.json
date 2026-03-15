@@ -1,0 +1,9 @@
+{
+  "id": "github-copilot",
+  "providers": ["github-copilot"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
