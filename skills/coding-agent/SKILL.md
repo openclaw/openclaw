@@ -1,6 +1,6 @@
 ---
 name: coding-agent
-description: 'Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi/OpenCode: pty:true required.'
+description: 'Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Default to using a coding agent for all coding work unless the user explicitly says not to, including small fixes, shell scripts, dotfiles, config edits, repo cleanup, feature work, refactors, and PR review/work (spawn in temp dir when appropriate). NOT for: reading code only (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi/OpenCode: pty:true required.'
 metadata:
   {
     "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "opencode", "pi"] } },
@@ -9,7 +9,7 @@ metadata:
 
 # Coding Agent (bash-first)
 
-Use **bash** (with optional background mode) for all coding agent work. Simple and effective.
+Use **bash** (with optional background mode) for all coding agent work. By default, if the task involves making code-adjacent changes at all, use a coding agent unless the user explicitly tells you not to.
 
 ## ⚠️ PTY Mode: Codex/Pi/OpenCode yes, Claude Code no
 
@@ -161,6 +161,12 @@ process action:list
 # Post results to GitHub
 gh pr comment <PR#> --body "<review content>"
 ```
+
+### Addressing PR Review Comments
+
+When asked to address PR comments, first inspect the PR reviews/comments to see what each reviewer wants.
+If a comment is asking a question, reply to answer it.
+If a comment is an instruction, implement the requested change, then reply and resolve the conversation when appropriate.
 
 ---
 
