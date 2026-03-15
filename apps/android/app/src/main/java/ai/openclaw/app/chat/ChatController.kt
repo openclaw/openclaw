@@ -1,6 +1,11 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.android.gateway.ChatSessionEntry
+import ai.openclaw.android.gateway.asArrayOrNull
+import ai.openclaw.android.gateway.asLongOrNull
+import ai.openclaw.android.gateway.asObjectOrNull
+import ai.openclaw.android.gateway.asStringOrNull
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -286,7 +291,7 @@ class ChatController(
           if (limit != null && limit > 0) put("limit", JsonPrimitive(limit))
         }
       val res = session.request("sessions.list", params.toString())
-      _sessions.value = parseSessions(res)
+      _sessions.value = ChatSessionEntry.parseList(res)
     } catch (_: Throwable) {
       // best-effort
     }
@@ -488,19 +493,6 @@ class ChatController(
     }
   }
 
-  private fun parseSessions(jsonString: String): List<ChatSessionEntry> {
-    val root = json.parseToJsonElement(jsonString).asObjectOrNull() ?: return emptyList()
-    val sessions = root["sessions"].asArrayOrNull() ?: return emptyList()
-    return sessions.mapNotNull { item ->
-      val obj = item.asObjectOrNull() ?: return@mapNotNull null
-      val key = obj["key"].asStringOrNull()?.trim().orEmpty()
-      if (key.isEmpty()) return@mapNotNull null
-      val updatedAt = obj["updatedAt"].asLongOrNull()
-      val displayName = obj["displayName"].asStringOrNull()?.trim()
-      ChatSessionEntry(key = key, updatedAtMs = updatedAt, displayName = displayName)
-    }
-  }
-
   private fun parseRunId(resJson: String): String? {
     return try {
       json.parseToJsonElement(resJson).asObjectOrNull()?.get("runId").asStringOrNull()
@@ -518,20 +510,3 @@ class ChatController(
     }
   }
 }
-
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
-
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
-
-private fun JsonElement?.asStringOrNull(): String? =
-  when (this) {
-    is JsonNull -> null
-    is JsonPrimitive -> content
-    else -> null
-  }
-
-private fun JsonElement?.asLongOrNull(): Long? =
-  when (this) {
-    is JsonPrimitive -> content.toLongOrNull()
-    else -> null
-  }

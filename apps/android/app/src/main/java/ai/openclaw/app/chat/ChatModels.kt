@@ -23,12 +23,6 @@ data class ChatPendingToolCall(
   val isError: Boolean? = null,
 )
 
-data class ChatSessionEntry(
-  val key: String,
-  val updatedAtMs: Long?,
-  val displayName: String? = null,
-)
-
 data class ChatHistory(
   val sessionKey: String,
   val sessionId: String?,

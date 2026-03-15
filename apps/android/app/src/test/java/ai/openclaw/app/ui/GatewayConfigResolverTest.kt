@@ -116,6 +116,26 @@ class GatewayConfigResolverTest {
     assertNull(resolved?.password?.takeIf { it.isNotEmpty() })
   }
 
+  @Test
+  fun composeGatewayManualUrlBracketsIpv6Hosts() {
+    assertEquals(
+      "https://[fd7a:115c:a1e0::1234]:18789",
+      composeGatewayManualUrl(
+        hostInput = "fd7a:115c:a1e0::1234",
+        portInput = "18789",
+        tls = true,
+      ),
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointKeepsIpv6DisplayUrlBracketed() {
+    val parsed = parseGatewayEndpoint("wss://[fd7a:115c:a1e0::1234]:18789")
+
+    assertEquals("fd7a:115c:a1e0::1234", parsed?.host)
+    assertEquals("https://[fd7a:115c:a1e0::1234]:18789", parsed?.displayUrl)
+  }
+
   private fun encodeSetupCode(payloadJson: String): String {
     return Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
   }

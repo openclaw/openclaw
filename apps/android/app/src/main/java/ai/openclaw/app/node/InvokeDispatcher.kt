@@ -1,18 +1,19 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
-import ai.openclaw.app.protocol.OpenClawCalendarCommand
-import ai.openclaw.app.protocol.OpenClawCanvasA2UICommand
-import ai.openclaw.app.protocol.OpenClawCanvasCommand
-import ai.openclaw.app.protocol.OpenClawCameraCommand
-import ai.openclaw.app.protocol.OpenClawCallLogCommand
-import ai.openclaw.app.protocol.OpenClawContactsCommand
-import ai.openclaw.app.protocol.OpenClawDeviceCommand
-import ai.openclaw.app.protocol.OpenClawLocationCommand
-import ai.openclaw.app.protocol.OpenClawMotionCommand
-import ai.openclaw.app.protocol.OpenClawNotificationsCommand
-import ai.openclaw.app.protocol.OpenClawSmsCommand
-import ai.openclaw.app.protocol.OpenClawSystemCommand
+import ai.openclaw.android.gateway.OpenClawCalendarCommand
+import ai.openclaw.android.gateway.OpenClawCallLogCommand
+import ai.openclaw.android.gateway.OpenClawCanvasA2UICommand
+import ai.openclaw.android.gateway.OpenClawCanvasCommand
+import ai.openclaw.android.gateway.OpenClawCameraCommand
+import ai.openclaw.android.gateway.OpenClawContactsCommand
+import ai.openclaw.android.gateway.OpenClawDeviceCommand
+import ai.openclaw.android.gateway.OpenClawLocationCommand
+import ai.openclaw.android.gateway.OpenClawMotionCommand
+import ai.openclaw.android.gateway.OpenClawNotificationsCommand
+import ai.openclaw.android.gateway.OpenClawPhotosCommand
+import ai.openclaw.android.gateway.OpenClawSmsCommand
+import ai.openclaw.android.gateway.OpenClawSystemCommand
 
 class InvokeDispatcher(
   private val canvas: CanvasController,
@@ -144,7 +145,7 @@ class InvokeDispatcher(
       OpenClawSystemCommand.Notify.rawValue -> systemHandler.handleSystemNotify(paramsJson)
 
       // Photos command
-      ai.openclaw.app.protocol.OpenClawPhotosCommand.Latest.rawValue -> photosHandler.handlePhotosLatest(
+      OpenClawPhotosCommand.Latest.rawValue -> photosHandler.handlePhotosLatest(
         paramsJson,
       )
 
