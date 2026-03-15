@@ -168,3 +168,19 @@ export function isAuthErrorMessage(raw: string): boolean {
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
 }
+
+/**
+ * Detects JSON parse errors caused by Azure Foundry Anthropic SSE stream
+ * concatenation — two SSE events merged without the required `\n\n` delimiter.
+ * The `@anthropic-ai/sdk` LineDecoder cannot split them, so `JSON.parse()`
+ * fails on the malformed concatenated payload.  These are transient transport
+ * errors and should be retried rather than surfaced to users.
+ */
+const SSE_JSON_PARSE_RE =
+  /(?:in json at position|after json at position|unexpected (?:token|non-whitespace).+?json)\b/i;
+export function isSseJsonParseError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return SSE_JSON_PARSE_RE.test(raw);
+}
