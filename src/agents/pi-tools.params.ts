@@ -146,7 +146,7 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
     }
     const idx = required.indexOf(original);
     if (idx !== -1) {
-      required.splice(idx, 1);
+      required.splice(idx, 1, alias);
       changed = true;
     }
   }
