@@ -113,7 +113,7 @@ async function waitForPortFree(port: number, timeoutMs = 5_000): Promise<boolean
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const usage = await inspectPortUsage(port).catch(() => null);
-    if (usage?.status === "free") {
+    if (usage?.status === "free" || usage?.status === "unknown") {
       return true;
     }
     await sleep(250);
