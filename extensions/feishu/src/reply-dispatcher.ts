@@ -185,6 +185,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
+  let streamingStarted = false;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const formatReasoningPrefix = (thinking: string): string => {
@@ -243,9 +244,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const startStreaming = () => {
-    if (!streamingEnabled || streamingStartPromise || streaming) {
+    if (!streamingEnabled || streamingStartPromise || streaming || streamingStarted) {
       return;
     }
+    streamingStarted = true;
     streamingStartPromise = (async () => {
       const creds =
         account.appId && account.appSecret
@@ -291,6 +293,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     streaming = null;
     streamingStartPromise = null;
+    streamingStarted = false;
     streamText = "";
     lastPartial = "";
     reasoningText = "";
