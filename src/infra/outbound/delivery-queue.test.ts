@@ -181,6 +181,12 @@ describe("delivery-queue", () => {
       "Forbidden: bot was kicked from the group chat",
       "chat_id is empty",
       "Outbound not configured for channel: msteams",
+      "message is too long",
+      "character limit exceeded",
+      "Request failed with status code: 400",
+      "status 403 Forbidden",
+      "HTTP 400 Bad Request",
+      "msteams send failed (HTTP 422): Unprocessable Entity",
     ])("returns true for permanent error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(true);
     });
@@ -191,6 +197,10 @@ describe("delivery-queue", () => {
       "socket hang up",
       "rate limited",
       "500 Internal Server Error",
+      "status 429 Too Many Requests",
+      "HTTP 429",
+      "msteams send failed (HTTP 408): Request Timeout",
+      "status code: 408",
     ])("returns false for transient error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(false);
     });
