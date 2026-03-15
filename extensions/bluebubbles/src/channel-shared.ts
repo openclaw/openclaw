@@ -63,6 +63,7 @@ export function describeBlueBubblesAccount(account: ResolvedBlueBubblesAccount) 
     configured: account.configured,
     extra: {
       baseUrl: account.baseUrl,
+      mode: "webhook",
     },
   });
 }

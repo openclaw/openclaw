@@ -43,6 +43,7 @@ export const lineChannelPluginCommon = {
       enabled: account.enabled,
       configured: hasLineCredentials(account),
       tokenSource: account.tokenSource ?? undefined,
+      mode: "webhook",
     }),
   },
 } satisfies Pick<
