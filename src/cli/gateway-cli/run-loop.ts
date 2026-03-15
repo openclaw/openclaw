@@ -3,6 +3,8 @@ import {
   getActiveEmbeddedRunCount,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
+import { flushAllInboundDebouncers } from "../../auto-reply/inbound-debounce.js";
+import { waitForFollowupQueueDrain } from "../../auto-reply/reply/queue/drain-all.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
@@ -96,6 +98,8 @@ export async function runGatewayLoop(params: {
   };
 
   const DRAIN_TIMEOUT_MS = 90_000;
+  const FOLLOWUP_DRAIN_TIMEOUT_MS = 5_000;
+  const INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS = 10_000;
   const SHUTDOWN_TIMEOUT_MS = 5_000;
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
@@ -107,24 +111,68 @@ export async function runGatewayLoop(params: {
     const isRestart = action === "restart";
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
-    // Allow extra time for draining active turns on restart.
-    const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
-    const forceExitTimer = setTimeout(() => {
-      gatewayLog.error("shutdown timed out; exiting without full cleanup");
-      // Exit non-zero on restart timeout so launchd/systemd treats it as a
-      // failure and triggers a clean process restart instead of assuming the
-      // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
-      exitProcess(isRestart ? 1 : 0);
-    }, forceExitMs);
+    const baseForceExitDeadlineMs =
+      Date.now() + SHUTDOWN_TIMEOUT_MS + (isRestart ? DRAIN_TIMEOUT_MS : 0);
+    let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
+    const armForceExitTimer = (deadlineMs: number) => {
+      if (forceExitTimer) {
+        clearTimeout(forceExitTimer);
+      }
+      forceExitTimer = setTimeout(
+        () => {
+          gatewayLog.error("shutdown timed out; exiting without full cleanup");
+          // Exit non-zero on restart timeout so launchd/systemd treats it as a
+          // failure and triggers a clean process restart instead of assuming the
+          // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
+          exitProcess(isRestart ? 1 : 0);
+        },
+        Math.max(0, deadlineMs - Date.now()),
+      );
+      forceExitTimer.unref?.();
+    };
+    armForceExitTimer(baseForceExitDeadlineMs);
 
     void (async () => {
       try {
         // On restart, wait for in-flight agent turns to finish before
         // tearing down the server so buffered messages are delivered.
         if (isRestart) {
-          // Reject new enqueues immediately during the drain window so
-          // sessions get an explicit restart error instead of silent task loss.
+          // Reject new command-queue work before any awaited restart drain
+          // step so late arrivals fail explicitly instead of being stranded
+          // behind a one-shot debounce flush. This does not block followup
+          // queue enqueues, so flushed inbound work can still drain normally.
           markGatewayDraining();
+
+          // Flush inbound debounce buffers first. This pushes any messages
+          // waiting in per-channel debounce timers (e.g. the 2500ms collect
+          // window) into the followup queues immediately, preventing silent
+          // message loss when the server reinitializes.
+          const flushedBuffers = await flushAllInboundDebouncers({
+            timeoutMs: INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS,
+          });
+          // Start the restart watchdog budget after the pre-shutdown debounce
+          // flush so slow flush handlers do not steal time from active drain.
+          armForceExitTimer(
+            Date.now() +
+              SHUTDOWN_TIMEOUT_MS +
+              DRAIN_TIMEOUT_MS +
+              (flushedBuffers > 0 ? FOLLOWUP_DRAIN_TIMEOUT_MS : 0),
+          );
+          if (flushedBuffers > 0) {
+            gatewayLog.info(
+              `flushed ${flushedBuffers} pending inbound debounce buffer(s) before restart`,
+            );
+            // Give the followup queue drain loops a short window to process
+            // the newly flushed items before the server is torn down.
+            const followupResult = await waitForFollowupQueueDrain(FOLLOWUP_DRAIN_TIMEOUT_MS);
+            if (followupResult.drained) {
+              gatewayLog.info("followup queues drained after debounce flush");
+            } else {
+              gatewayLog.warn(
+                `followup queue drain timeout; ${followupResult.remaining} item(s) still pending`,
+              );
+            }
+          }
           const activeTasks = getActiveTaskCount();
           const activeRuns = getActiveEmbeddedRunCount();
 
@@ -164,7 +212,9 @@ export async function runGatewayLoop(params: {
       } catch (err) {
         gatewayLog.error(`shutdown error: ${String(err)}`);
       } finally {
-        clearTimeout(forceExitTimer);
+        if (forceExitTimer) {
+          clearTimeout(forceExitTimer);
+        }
         server = null;
         if (isRestart) {
           await handleRestartAfterServerClose();

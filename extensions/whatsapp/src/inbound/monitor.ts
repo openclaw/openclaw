@@ -456,6 +456,7 @@ export async function monitorWebInbox(options: {
   return {
     close: async () => {
       try {
+        debouncer.unregister();
         const ev = sock.ev as unknown as {
           off?: (event: string, listener: (...args: unknown[]) => void) => void;
           removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;

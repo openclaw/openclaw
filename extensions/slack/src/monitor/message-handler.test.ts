@@ -12,6 +12,8 @@ vi.mock("../../../../src/auto-reply/inbound-debounce.js", () => ({
   createInboundDebouncer: () => ({
     enqueue: (entry: unknown) => enqueueMock(entry),
     flushKey: (key: string) => flushKeyMock(key),
+    flushAll: async () => 0,
+    unregister: () => {},
   }),
 }));
 

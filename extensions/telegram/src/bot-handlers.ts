@@ -39,11 +39,11 @@ import { applyModelOverrideToSessionEntry } from "../../../src/sessions/model-ov
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
-  normalizeDmAllowFromWithStore,
   type NormalizedAllowFrom,
+  normalizeDmAllowFromWithStore,
 } from "./bot-access.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
-import { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
   MEDIA_GROUP_TIMEOUT_MS,
   type MediaGroupEntry,
@@ -51,9 +51,9 @@ import {
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
 import {
-  getTelegramTextParts,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
+  getTelegramTextParts,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
@@ -76,9 +76,9 @@ import {
   buildProviderKeyboard,
   calculateTotalPages,
   getModelsPageSize,
+  type ProviderInfo,
   parseModelCallbackData,
   resolveModelSelection,
-  type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
@@ -137,7 +137,7 @@ export const registerTelegramHandlers = ({
   shouldSkipUpdate,
   processMessage,
   logger,
-}: RegisterTelegramHandlerParams) => {
+}: RegisterTelegramHandlerParams): { unregisterDebouncer: () => void } => {
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
@@ -159,7 +159,11 @@ export const registerTelegramHandlers = ({
 
   type TextFragmentEntry = {
     key: string;
-    messages: Array<{ msg: Message; ctx: TelegramContext; receivedAtMs: number }>;
+    messages: Array<{
+      msg: Message;
+      ctx: TelegramContext;
+      receivedAtMs: number;
+    }>;
     timer: ReturnType<typeof setTimeout>;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
@@ -328,10 +332,15 @@ export const registerTelegramHandlers = ({
     const baseSessionKey = route.sessionKey;
     const threadKeys =
       dmThreadId != null
-        ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
+        ? resolveThreadSessionKeys({
+            baseSessionKey,
+            threadId: `${params.chatId}:${dmThreadId}`,
+          })
         : null;
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+    const storePath = resolveStorePath(cfg.session?.store, {
+      agentId: route.agentId,
+    });
     const store = loadSessionStore(storePath);
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const storedOverride = resolveStoredModelOverride({
@@ -614,7 +623,9 @@ export const registerTelegramHandlers = ({
   type TelegramGroupAllowContext = Awaited<ReturnType<typeof resolveTelegramGroupAllowFromContext>>;
   type TelegramEventAuthorizationMode = "reaction" | "callback-scope" | "callback-allowlist";
   type TelegramEventAuthorizationResult = { allowed: true } | { allowed: false; reason: string };
-  type TelegramEventAuthorizationContext = TelegramGroupAllowContext & { dmPolicy: DmPolicy };
+  type TelegramEventAuthorizationContext = TelegramGroupAllowContext & {
+    dmPolicy: DmPolicy;
+  };
 
   const TELEGRAM_EVENT_AUTH_RULES: Record<
     TelegramEventAuthorizationMode,
@@ -848,7 +859,11 @@ export const registerTelegramHandlers = ({
         ? resolveTelegramForumThreadId({ isForum, messageThreadId: undefined })
         : undefined;
       const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
-      const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+      const parentPeer = buildTelegramParentPeer({
+        isGroup,
+        resolvedThreadId,
+        chatId,
+      });
       // Fresh config for bindings lookup; other routing inputs are payload-derived.
       const route = resolveAgentRoute({
         cfg: loadConfig(),
@@ -1676,4 +1691,6 @@ export const registerTelegramHandlers = ({
       errorMessage: "channel_post handler failed",
     });
   });
+
+  return { unregisterDebouncer: inboundDebouncer.unregister };
 };

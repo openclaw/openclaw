@@ -13,7 +13,9 @@ type BlueBubblesDebounceEntry = {
 
 export type BlueBubblesDebouncer = {
   enqueue: (item: BlueBubblesDebounceEntry) => Promise<void>;
-  flushKey: (key: string) => Promise<void>;
+  flushKey: (key: string) => Promise<boolean>;
+  flushAll: () => Promise<number>;
+  unregister: () => void;
 };
 
 export type BlueBubblesDebounceRegistry = {
@@ -199,6 +201,7 @@ export function createBlueBubblesDebounceRegistry(params: {
       return debouncer;
     },
     removeDebouncer: (target) => {
+      targetDebouncers.get(target)?.unregister();
       targetDebouncers.delete(target);
     },
   };

@@ -134,8 +134,8 @@ async function handleFileConsentInvoke(
 export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   handler: T,
   deps: MSTeamsMessageHandlerDeps,
-): T {
-  const handleTeamsMessage = createMSTeamsMessageHandler(deps);
+): { handler: T; unregisterDebouncer: () => void } {
+  const { handleTeamsMessage, unregisterDebouncer } = createMSTeamsMessageHandler(deps);
 
   // Wrap the original run method to intercept invokes
   const originalRun = handler.run;
@@ -145,7 +145,10 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       // Handle file consent invokes before passing to normal flow
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "fileConsent/invoke") {
         // Send invoke response IMMEDIATELY to prevent Teams timeout
-        await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
+        await ctx.sendActivity({
+          type: "invokeResponse",
+          value: { status: 200 },
+        });
 
         try {
           await withRevokedProxyFallback({
@@ -158,7 +161,9 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
             },
           });
         } catch (err) {
-          deps.log.debug?.("file consent handler error", { error: String(err) });
+          deps.log.debug?.("file consent handler error", {
+            error: String(err),
+          });
         }
         return;
       }
@@ -186,5 +191,5 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     await next();
   });
 
-  return handler;
+  return { handler, unregisterDebouncer };
 }

@@ -209,6 +209,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
               await params.onFlush([item]);
             },
             flushKey: vi.fn(),
+            flushAll: vi.fn(async () => 0),
+            unregister: vi.fn(),
           }),
         ) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"],
         resolveInboundDebounceMs: vi.fn(
