@@ -333,6 +333,38 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
+  it("degrades safely when daemon probe auth SecretRef is unresolved", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "lan",
+        tls: { enabled: true },
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_DAEMON_GATEWAY_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: undefined,
+        password: undefined,
+      }),
+    );
+    expect(status.rpc?.authWarning).toBeUndefined();
+  });
+
   it("keeps remote probe auth strict when remote token is missing", async () => {
     daemonLoadedConfig = {
       gateway: {
