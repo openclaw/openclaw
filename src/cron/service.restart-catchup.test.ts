@@ -155,6 +155,53 @@ describe("CronService restart catch-up", () => {
       },
     );
   });
+  it("does not re-run an already-executed stale due slot on restart", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "restart-already-executed-due-slot",
+        name: "already executed stale due slot",
+        enabled: true,
+        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+        updatedAtMs: Date.parse("2025-12-13T16:30:00.000Z"),
+        schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "should not duplicate" },
+        state: {
+          // This can happen if startup catch-up (or a manual repair) already
+          // executed the 16:00 slot, but the persisted nextRunAtMs still points
+          // at that stale expired slot.
+          nextRunAtMs: Date.parse("2025-12-13T16:00:00.000Z"),
+          lastRunAtMs: Date.parse("2025-12-13T16:30:00.000Z"),
+          lastStatus: "ok",
+        },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+    });
+
+    await cron.start();
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const updated = jobs.find((job) => job.id === "restart-already-executed-due-slot");
+    expect((updated?.state.nextRunAtMs ?? 0) > Date.parse("2025-12-13T17:00:00.000Z")).toBe(true);
+    expect(updated?.state.lastRunAtMs).toBe(Date.parse("2025-12-13T16:30:00.000Z"));
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("replays the most recent missed cron slot after restart when nextRunAtMs already advanced", async () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(
