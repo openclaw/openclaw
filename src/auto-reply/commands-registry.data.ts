@@ -145,6 +145,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "btw",
+      nativeName: "btw",
+      description: "Ask an ephemeral follow-up about the active session.",
+      textAlias: "/btw",
+      category: "status",
+      args: [
+        {
+          name: "question",
+          description: "Inline follow-up question",
+          type: "string",
+          required: true,
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "skill",
       nativeName: "skill",
       description: "Run a skill by name.",

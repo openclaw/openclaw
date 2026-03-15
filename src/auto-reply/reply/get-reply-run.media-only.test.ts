@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runPreparedReply } from "./get-reply-run.js";
 
@@ -79,6 +82,7 @@ vi.mock("./typing-mode.js", () => ({
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
 
+import { resolveSessionFilePath } from "../../config/sessions.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { routeReply } from "./route-reply.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
@@ -395,5 +399,64 @@ describe("runPreparedReply media-only handling", () => {
     expect(call).toBeTruthy();
     // Queue body (used by steer mode) must keep the full original text.
     expect(call?.followupRun.prompt).toContain("low steer this conversation");
+  });
+
+  it("forces /btw side turns to run as a single no-tools reply", async () => {
+    await runPreparedReply(
+      baseParams({
+        blockStreamingEnabled: true,
+        ephemeralSideTurn: { kind: "btw" },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    expect(call?.followupRun.run.disableTools).toBe(true);
+    expect(call?.resolvedQueue.mode).toBe("interrupt");
+    expect(call?.shouldSteer).toBe(false);
+    expect(call?.shouldFollowup).toBe(false);
+    expect(call?.blockStreamingEnabled).toBe(false);
+    expect(call?.queueKey).toBe(call?.followupRun.run.sessionId);
+    expect(call?.queueKey).not.toBe("session-key");
+  });
+
+  it("copies parent transcript into a temporary /btw session without mutating the parent", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-btw-test-"));
+    const sourceSessionFile = path.join(tempRoot, "parent.jsonl");
+    const sourceTranscript = [
+      JSON.stringify({ type: "header", sessionId: "parent-session" }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "parent question" }] },
+      }),
+      "",
+    ].join("\n");
+    await fs.writeFile(sourceSessionFile, sourceTranscript, "utf-8");
+
+    let copiedTranscript = "";
+    vi.mocked(runReplyAgent).mockImplementationOnce(async (call) => {
+      copiedTranscript = await fs.readFile(call.followupRun.run.sessionFile, "utf-8");
+      return { text: "ok" };
+    });
+    vi.mocked(resolveSessionFilePath).mockReturnValueOnce(sourceSessionFile);
+
+    try {
+      await runPreparedReply(
+        baseParams({
+          ephemeralSideTurn: { kind: "btw" },
+          sessionEntry: {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            sessionFile: sourceSessionFile,
+          },
+          storePath: path.join(tempRoot, "sessions.json"),
+        }),
+      );
+
+      expect(copiedTranscript).toBe(sourceTranscript);
+      await expect(fs.readFile(sourceSessionFile, "utf-8")).resolves.toBe(sourceTranscript);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });

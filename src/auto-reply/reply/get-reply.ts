@@ -14,6 +14,7 @@ import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
+import { shouldHandleTextCommands } from "../commands-registry.js";
 import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -52,6 +53,18 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   }
   const agentSet = new Set(agent);
   return channel.filter((name) => agentSet.has(name));
+}
+
+function parseBtwInlineQuestion(text: string | undefined): string | null {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const match = trimmed.match(/^\/btw(?:\s+([\s\S]+))?$/i);
+  if (!match) {
+    return null;
+  }
+  return match[1]?.trim() ?? "";
 }
 
 export async function getReplyFromConfig(
@@ -124,6 +137,36 @@ export async function getReplyFromConfig(
   opts?.onTypingController?.(typing);
 
   const finalized = finalizeInboundContext(ctx);
+  const commandAuthorized = finalized.CommandAuthorized;
+  const commandAuth = resolveCommandAuthorization({
+    ctx: finalized,
+    cfg,
+    commandAuthorized,
+  });
+  const btwQuestion = parseBtwInlineQuestion(
+    finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? finalized.Body,
+  );
+  const allowBtwSideTurn =
+    typeof btwQuestion === "string" &&
+    shouldHandleTextCommands({
+      cfg,
+      surface: finalized.Surface,
+      commandSource: finalized.CommandSource,
+    });
+  const useBtwSideTurn = allowBtwSideTurn && typeof btwQuestion === "string";
+  if (useBtwSideTurn && !commandAuth.isAuthorizedSender) {
+    return undefined;
+  }
+  if (useBtwSideTurn && btwQuestion.length === 0) {
+    return { text: "⚙️ Usage: /btw <question>" };
+  }
+  if (useBtwSideTurn) {
+    finalized.Body = btwQuestion;
+    finalized.BodyForAgent = btwQuestion;
+    finalized.RawBody = btwQuestion;
+    finalized.CommandBody = btwQuestion;
+    finalized.BodyForCommands = btwQuestion;
+  }
 
   if (!isFastTestEnv) {
     await applyMediaUnderstanding({
@@ -143,16 +186,11 @@ export async function getReplyFromConfig(
     isFastTestEnv,
   });
 
-  const commandAuthorized = finalized.CommandAuthorized;
-  resolveCommandAuthorization({
-    ctx: finalized,
-    cfg,
-    commandAuthorized,
-  });
   const sessionState = await initSessionState({
     ctx: finalized,
     cfg,
     commandAuthorized,
+    readOnly: useBtwSideTurn,
   });
   let {
     sessionCtx,
@@ -172,6 +210,11 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  if (useBtwSideTurn && (isNewSession || !sessionEntry?.sessionFile?.trim())) {
+    typing.cleanup();
+    return { text: "❌ No active session found for /btw." };
+  }
 
   await applyResetModelOverride({
     cfg,
@@ -402,5 +445,6 @@ export async function getReplyFromConfig(
     storePath,
     workspaceDir,
     abortedLastRun,
+    ...(useBtwSideTurn ? { ephemeralSideTurn: { kind: "btw" as const } } : {}),
   });
 }

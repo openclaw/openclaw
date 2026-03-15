@@ -36,6 +36,7 @@ describe("commands registry", () => {
 
   it("exposes native specs", () => {
     const specs = listNativeCommandSpecs();
+    expect(specs.find((spec) => spec.name === "btw")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "help")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "stop")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "skill")).toBeTruthy();
@@ -207,6 +208,20 @@ describe("commands registry", () => {
     });
     const modeArg = fast?.args?.find((arg) => arg.name === "mode");
     expect(modeArg?.choices).toEqual(["status", "on", "off"]);
+  });
+
+  it("registers /btw as an inline-question command", () => {
+    const command = findCommandByNativeName("btw");
+    expect(command).toMatchObject({
+      key: "btw",
+      nativeName: "btw",
+      textAliases: ["/btw"],
+    });
+    expect(command?.args?.[0]).toMatchObject({
+      name: "question",
+      required: true,
+      captureRemaining: true,
+    });
   });
 
   it("detects known text commands", () => {

@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
@@ -53,6 +56,30 @@ import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+type EphemeralSideTurn = { kind: "btw" };
+
+async function createEphemeralSideTurnSession(params: {
+  agentId: string;
+  sessionEntry?: SessionEntry;
+  storePath?: string;
+}) {
+  const sessionId = crypto.randomUUID();
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-btw-"));
+  const sessionFile = path.join(tempDir, `${sessionId}.jsonl`);
+  const sourceSessionFile = params.sessionEntry
+    ? resolveSessionFilePath(
+        params.sessionEntry.sessionId ?? sessionId,
+        params.sessionEntry,
+        resolveSessionFilePathOptions({ agentId: params.agentId, storePath: params.storePath }),
+      )
+    : undefined;
+  if (sourceSessionFile) {
+    await fs.copyFile(sourceSessionFile, sessionFile);
+  } else {
+    await fs.writeFile(sessionFile, "", "utf-8");
+  }
+  return { sessionId, sessionFile, tempDir };
+}
 
 function buildResetSessionNoticeText(params: {
   provider: string;
@@ -177,6 +204,7 @@ type RunPreparedReplyParams = {
   storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
+  ephemeralSideTurn?: EphemeralSideTurn;
 };
 
 export async function runPreparedReply(
@@ -219,6 +247,7 @@ export async function runPreparedReply(
     storePath,
     workspaceDir,
     sessionStore,
+    ephemeralSideTurn,
   } = params;
   let {
     sessionEntry,
@@ -230,6 +259,9 @@ export async function runPreparedReply(
     abortedLastRun,
   } = params;
   let currentSystemSent = systemSent;
+  const persistedSessionStore = ephemeralSideTurn ? undefined : sessionStore;
+  const persistedStorePath = ephemeralSideTurn ? undefined : storePath;
+  const abortedLastRunForRun = ephemeralSideTurn ? false : abortedLastRun;
 
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
   const isGroupChat = sessionCtx.ChatType === "group";
@@ -324,11 +356,11 @@ export async function runPreparedReply(
     : "[User sent media without caption]";
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
-    abortedLastRun,
+    abortedLastRun: abortedLastRunForRun,
     sessionEntry,
-    sessionStore,
+    sessionStore: persistedSessionStore,
     sessionKey,
-    storePath,
+    storePath: persistedStorePath,
     abortKey: command.abortKey,
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
@@ -367,9 +399,9 @@ export async function runPreparedReply(
       : undefined;
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
-    sessionStore,
+    sessionStore: persistedSessionStore,
     sessionKey,
-    storePath,
+    storePath: persistedStorePath,
     sessionId,
     isFirstTurnInSession,
     workspaceDir,
@@ -399,12 +431,18 @@ export async function runPreparedReply(
       };
     }
     resolvedThinkLevel = "high";
-    if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
+    if (
+      !ephemeralSideTurn &&
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      sessionEntry.thinkingLevel === "xhigh"
+    ) {
       sessionEntry.thinkingLevel = "high";
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
-      if (storePath) {
-        await updateSessionStore(storePath, (store) => {
+      if (persistedStorePath) {
+        await updateSessionStore(persistedStorePath, (store) => {
           store[sessionKey] = sessionEntry;
         });
       }
@@ -424,40 +462,53 @@ export async function runPreparedReply(
       defaultModel,
     });
   }
-  const sessionIdFinal = sessionId ?? crypto.randomUUID();
-  const sessionFile = resolveSessionFilePath(
-    sessionIdFinal,
-    sessionEntry,
-    resolveSessionFilePathOptions({ agentId, storePath }),
-  );
+  const sideTurnSession = ephemeralSideTurn
+    ? await createEphemeralSideTurnSession({
+        agentId,
+        sessionEntry,
+        storePath,
+      })
+    : null;
+  const sessionIdFinal = sideTurnSession?.sessionId ?? sessionId ?? crypto.randomUUID();
+  const sessionFile =
+    sideTurnSession?.sessionFile ??
+    resolveSessionFilePath(
+      sessionIdFinal,
+      sessionEntry,
+      resolveSessionFilePathOptions({ agentId, storePath }),
+    );
   // Use bodyWithEvents (events prepended, but no session hints / untrusted context) so
   // deferred turns receive system events while keeping the same scope as effectiveBaseBody did.
   const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
     : queueBodyBase;
-  const resolvedQueue = resolveQueueSettings({
+  const inheritedQueue = resolveQueueSettings({
     cfg,
     channel: sessionCtx.Provider,
     sessionEntry,
     inlineMode: perMessageQueueMode,
     inlineOptions: perMessageQueueOptions,
   });
-  const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
+  const resolvedQueue = ephemeralSideTurn ? { mode: "interrupt" as const } : inheritedQueue;
+  const queueKey = ephemeralSideTurn ? sessionIdFinal : (sessionKey ?? sessionIdFinal);
+  const sessionLaneKey = resolveEmbeddedSessionLane(queueKey);
   const laneSize = getQueueSize(sessionLaneKey);
   if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
     const cleared = clearCommandLane(sessionLaneKey);
     const aborted = abortEmbeddedPiRun(sessionIdFinal);
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
-  const queueKey = sessionKey ?? sessionIdFinal;
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
-  const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
+  const shouldSteer =
+    !ephemeralSideTurn &&
+    (resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog");
   const shouldFollowup =
-    resolvedQueue.mode === "followup" ||
-    resolvedQueue.mode === "collect" ||
-    resolvedQueue.mode === "steer-backlog";
+    !ephemeralSideTurn &&
+    (resolvedQueue.mode === "followup" ||
+      resolvedQueue.mode === "collect" ||
+      resolvedQueue.mode === "steer-backlog");
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg,
     provider,
@@ -519,6 +570,7 @@ export async function runPreparedReply(
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
+      ...(ephemeralSideTurn ? { disableTools: true } : {}),
       execOverrides,
       bashElevated: {
         enabled: elevatedEnabled,
@@ -534,30 +586,36 @@ export async function runPreparedReply(
     },
   };
 
-  return runReplyAgent({
-    commandBody: prefixedCommandBody,
-    followupRun,
-    queueKey,
-    resolvedQueue,
-    shouldSteer,
-    shouldFollowup,
-    isActive,
-    isStreaming,
-    opts,
-    typing,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    defaultModel,
-    agentCfgContextTokens: agentCfg?.contextTokens,
-    resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-    isNewSession,
-    blockStreamingEnabled,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
-    sessionCtx,
-    shouldInjectGroupIntro,
-    typingMode,
-  });
+  try {
+    return await runReplyAgent({
+      commandBody: prefixedCommandBody,
+      followupRun,
+      queueKey,
+      resolvedQueue,
+      shouldSteer,
+      shouldFollowup,
+      isActive,
+      isStreaming,
+      opts,
+      typing,
+      sessionEntry,
+      sessionStore: persistedSessionStore,
+      sessionKey,
+      storePath: persistedStorePath,
+      defaultModel,
+      agentCfgContextTokens: agentCfg?.contextTokens,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      isNewSession,
+      blockStreamingEnabled: ephemeralSideTurn ? false : blockStreamingEnabled,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
+      sessionCtx,
+      shouldInjectGroupIntro,
+      typingMode,
+    });
+  } finally {
+    if (sideTurnSession) {
+      await fs.rm(sideTurnSession.tempDir, { recursive: true, force: true });
+    }
+  }
 }

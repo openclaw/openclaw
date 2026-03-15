@@ -170,8 +170,10 @@ export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
+  readOnly?: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
+  const readOnly = params.readOnly === true;
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const targetSessionKey =
@@ -496,18 +498,24 @@ export async function initSessionState(params: {
   const fallbackSessionFile = !sessionEntry.sessionFile
     ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, ctx.MessageThreadId)
     : undefined;
-  const resolvedSessionFile = await resolveAndPersistSessionFile({
-    sessionId: sessionEntry.sessionId,
-    sessionKey,
-    sessionStore,
-    storePath,
-    sessionEntry,
-    agentId,
-    sessionsDir: path.dirname(storePath),
-    fallbackSessionFile,
-    activeSessionKey: sessionKey,
-  });
-  sessionEntry = resolvedSessionFile.sessionEntry;
+  if (readOnly) {
+    if (!sessionEntry.sessionFile && fallbackSessionFile) {
+      sessionEntry.sessionFile = fallbackSessionFile;
+    }
+  } else {
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionStore,
+      storePath,
+      sessionEntry,
+      agentId,
+      sessionsDir: path.dirname(storePath),
+      fallbackSessionFile,
+      activeSessionKey: sessionKey,
+    });
+    sessionEntry = resolvedSessionFile.sessionEntry;
+  }
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
@@ -519,38 +527,40 @@ export async function initSessionState(params: {
     sessionEntry.outputTokens = undefined;
     sessionEntry.contextTokens = undefined;
   }
-  // Preserve per-session overrides while resetting compaction state on /new.
-  sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
-  await updateSessionStore(
-    storePath,
-    (store) => {
-      // Preserve per-session overrides while resetting compaction state on /new.
-      store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
-      if (retiredLegacyMainDelivery) {
-        store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
-      }
-    },
-    {
-      activeSessionKey: sessionKey,
-      onWarn: (warning) =>
-        deliverSessionMaintenanceWarning({
-          cfg,
-          sessionKey,
-          entry: sessionEntry,
-          warning,
-        }),
-    },
-  );
-
-  // Archive old transcript so it doesn't accumulate on disk (#14869).
-  if (previousSessionEntry?.sessionId) {
-    archiveSessionTranscripts({
-      sessionId: previousSessionEntry.sessionId,
+  if (!readOnly) {
+    // Preserve per-session overrides while resetting compaction state on /new.
+    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+    await updateSessionStore(
       storePath,
-      sessionFile: previousSessionEntry.sessionFile,
-      agentId,
-      reason: "reset",
-    });
+      (store) => {
+        // Preserve per-session overrides while resetting compaction state on /new.
+        store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+        if (retiredLegacyMainDelivery) {
+          store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
+        }
+      },
+      {
+        activeSessionKey: sessionKey,
+        onWarn: (warning) =>
+          deliverSessionMaintenanceWarning({
+            cfg,
+            sessionKey,
+            entry: sessionEntry,
+            warning,
+          }),
+      },
+    );
+
+    // Archive old transcript so it doesn't accumulate on disk (#14869).
+    if (previousSessionEntry?.sessionId) {
+      archiveSessionTranscripts({
+        sessionId: previousSessionEntry.sessionId,
+        storePath,
+        sessionFile: previousSessionEntry.sessionFile,
+        agentId,
+        reason: "reset",
+      });
+    }
   }
 
   const sessionCtx: TemplateContext = {
@@ -571,7 +581,7 @@ export async function initSessionState(params: {
   };
 
   // Run session plugin hooks (fire-and-forget)
-  const hookRunner = getGlobalHookRunner();
+  const hookRunner = readOnly ? null : getGlobalHookRunner();
   if (hookRunner && isNewSession) {
     const effectiveSessionId = sessionId ?? "";
 
