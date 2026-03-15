@@ -23,16 +23,6 @@ const state: RegistryState = (() => {
 })();
 
 export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {
-  const prev = state.registry;
-  // Merge dynamically registered plugin HTTP routes (e.g. BlueBubbles webhook)
-  // so they survive registry replacements from late loadOpenClawPlugins() calls.
-  if (prev && prev !== registry && prev.httpRoutes?.length) {
-    const newPaths = new Set((registry.httpRoutes ?? []).map((r) => `${r.path}::${r.match}`));
-    const missing = prev.httpRoutes.filter((r) => !newPaths.has(`${r.path}::${r.match}`));
-    if (missing.length > 0) {
-      registry.httpRoutes = [...missing, ...(registry.httpRoutes ?? [])];
-    }
-  }
   state.registry = registry;
   state.key = cacheKey ?? null;
   state.version += 1;

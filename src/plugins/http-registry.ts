@@ -83,10 +83,21 @@ export function registerPluginHttpRoute(params: {
   };
   routes.push(entry);
 
+  // Bridge routes via process so they remain visible across jiti VM contexts
+  // where globalThis (and therefore the plugin registry singleton) may differ.
+  const shared = ((
+    process as NodeJS.Process & { __openclawPluginHttpRoutes?: PluginHttpRouteRegistration[] }
+  ).__openclawPluginHttpRoutes ??= []);
+  shared.push(entry);
+
   return () => {
     const index = routes.indexOf(entry);
     if (index >= 0) {
       routes.splice(index, 1);
+    }
+    const sharedIndex = shared.indexOf(entry);
+    if (sharedIndex >= 0) {
+      shared.splice(sharedIndex, 1);
     }
   };
 }

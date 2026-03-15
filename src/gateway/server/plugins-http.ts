@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { PluginRegistry } from "../../plugins/registry.js";
+import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
@@ -65,7 +65,14 @@ export function createGatewayPluginRequestHandler(params: {
 }): PluginHttpRequestHandler {
   const { registry, log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
-    const routes = registry.httpRoutes ?? [];
+    // Fall back to process-level route bridge when the registry's httpRoutes
+    // are empty. Plugin channels running in jiti VM contexts register routes
+    // on a different globalThis, so the registry captured at construction time
+    // may never see them. The process object is shared across all VM contexts.
+    const sharedRoutes = (
+      process as NodeJS.Process & { __openclawPluginHttpRoutes?: PluginHttpRouteRegistration[] }
+    ).__openclawPluginHttpRoutes;
+    const routes = (registry.httpRoutes?.length ? registry.httpRoutes : sharedRoutes) ?? [];
     if (routes.length === 0) {
       return false;
     }
@@ -76,7 +83,11 @@ export function createGatewayPluginRequestHandler(params: {
         const url = new URL(req.url ?? "/", "http://localhost");
         return resolvePluginRoutePathContext(url.pathname);
       })();
-    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+    // Use a registry view that includes the resolved routes so cross-context
+    // plugin routes are visible to the matcher.
+    const effectiveRegistry =
+      routes === registry.httpRoutes ? registry : { ...registry, httpRoutes: routes };
+    const matchedRoutes = findMatchingPluginHttpRoutes(effectiveRegistry, pathContext);
     if (matchedRoutes.length === 0) {
       return false;
     }
