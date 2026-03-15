@@ -322,9 +322,19 @@ Watches company Slack channel, responds helpfully, and forwards notifications to
 
 <CardGroup cols={2}>
 
+<Card title="Clawtotalk Voice Assistant" href="https://clawtotalk.com/">
+  **@clawtotalk** • `voice` `tts` `assistant`
+
+Full-featured voice assistant interface for OpenClaw. Includes ElevenLabs TTS integration, streaming responses, and a clean web UI for voice conversations with your agent.
+
+  <div style={{textAlign: 'center', marginTop: '12px'}}>
+    <img src="/assets/showcase/clawtotalk-icon.png" alt="Clawtotalk icon" style={{width: '64px', height: '64px', borderRadius: '12px'}} />
+  </div>
+</Card>
+
 <Card title="Clawdia Phone Bridge" icon="phone" href="https://github.com/alejandroOPI/clawdia-bridge">
   **@alejandroOPI** • `voice` `vapi` `bridge`
-  
+
   Vapi voice assistant ↔ OpenClaw HTTP bridge. Near real-time phone calls with your agent.
 </Card>
 
