@@ -16,7 +16,12 @@ import {
   renderAgentCron,
 } from "./agents-panels-status-files.ts";
 import { renderAgentTools, renderAgentSkills } from "./agents-panels-tools-skills.ts";
-import { agentBadgeText, buildAgentContext, normalizeAgentLabel } from "./agents-utils.ts";
+import {
+  agentBadgeText,
+  buildAgentContext,
+  normalizeAgentLabel,
+  resolveAgentEmoji,
+} from "./agents-utils.ts";
 
 export type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
 
@@ -149,13 +154,19 @@ export function renderAgents(props: AgentsProps) {
                     ? html`
                         <option value="">No agents</option>
                       `
-                    : agents.map(
-                        (agent) => html`
+                    : agents.map((agent) => {
+                        const emoji = resolveAgentEmoji(
+                          agent,
+                          props.agentIdentityById[agent.id] ?? null,
+                        );
+                        const label = normalizeAgentLabel(agent);
+                        const badge = agentBadgeText(agent.id, defaultId);
+                        return html`
                         <option value=${agent.id} ?selected=${agent.id === selectedId}>
-                          ${normalizeAgentLabel(agent)}${agentBadgeText(agent.id, defaultId) ? ` (${agentBadgeText(agent.id, defaultId)})` : ""}
+                          ${emoji ? `${emoji} ` : ""}${label}${badge ? ` (${badge})` : ""}
                         </option>
-                      `,
-                      )
+                      `;
+                      })
                 }
               </select>
             </div>
