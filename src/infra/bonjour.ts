@@ -53,16 +53,14 @@ function safeServiceName(name: string) {
   }
   
   // Truncate safely: walk backwards from byte 63 to find a valid UTF-8 boundary.
-  // This avoids U+FFFD heuristics which can misfire on strings that already contain
-  // the replacement character, and guarantees the result re-encodes to ≤ MAX_LABEL_BYTES.
+  // UTF-8 continuation bytes are 10xxxxxx (0x80–0xBF). We walk back until we land on
+  // the leading byte of the split character. slice(0, sliceEnd) is exclusive, so the
+  // leading byte is not included — the previous character is preserved intact.
+  // (Do NOT decrement a second time after the loop: that would discard the character
+  //  immediately before the split, causing a spurious extra character to be dropped.)
   const decoder = new TextDecoder("utf-8", { fatal: false });
   let sliceEnd = MAX_LABEL_BYTES;
-  // Skip back over UTF-8 continuation bytes (10xxxxxx = 0x80–0xBF)
   while (sliceEnd > 0 && (encoded[sliceEnd] & 0xc0) === 0x80) {
-    sliceEnd--;
-  }
-  // If we stopped on a leading byte of a multi-byte sequence, drop it too
-  if (sliceEnd > 0 && (encoded[sliceEnd] & 0x80) !== 0) {
     sliceEnd--;
   }
   const truncated = decoder.decode(encoded.slice(0, sliceEnd));
