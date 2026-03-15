@@ -241,10 +241,19 @@ async function fetchWithTimeout(
   init: RequestInit,
   timeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
 ): Promise<Response> {
+  const hasProxy = !!(
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.ALL_PROXY ||
+    process.env.all_proxy
+  );
   const { response, release } = await fetchWithSsrFGuard({
     url,
     init,
     timeoutMs,
+    pinDns: !hasProxy,
   });
   try {
     const body = await response.arrayBuffer();
