@@ -114,7 +114,7 @@ function buildSelectBlock(raw: string, index: number): SlackBlock | null {
     elements: [
       {
         type: "static_select",
-        action_id: SLACK_REPLY_SELECT_ACTION_ID,
+        action_id: `${SLACK_REPLY_SELECT_ACTION_ID}:${index}`,
         placeholder: {
           type: "plain_text",
           text: truncateSlackText(placeholder, SLACK_PLAIN_TEXT_MAX),
