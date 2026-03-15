@@ -2115,10 +2115,13 @@ describe("loadOpenClawPlugins", () => {
     expect(resolved).toMatch(/plugin-sdk[/\\]keyed-async-queue\.(ts|js)$/);
   });
 
-  it("loads bundled plugins importing openclaw/plugin-sdk/keyed-async-queue", async () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
+  it("loads bundled plugins importing openclaw/plugin-sdk/keyed-async-queue", () => {
+    // Write the plugin into a dedicated bundled dir so discovery finds it via
+    // OPENCLAW_BUNDLED_PLUGINS_DIR — the actual code path that triggered #30458.
+    const bundledDir = makeTempDir();
+    writePlugin({
       id: "keyed-async-queue-consumer",
+      dir: bundledDir,
       filename: "keyed-async-queue-consumer.cjs",
       body: `const { KeyedAsyncQueue } = require("openclaw/plugin-sdk/keyed-async-queue");
 if (typeof KeyedAsyncQueue !== "function") {
@@ -2133,15 +2136,16 @@ module.exports = {
     const loaderModuleUrl = pathToFileURL(
       path.join(process.cwd(), "src", "plugins", "loader.ts"),
     ).href;
+    // Use a subprocess to avoid Vitest module-cache interference with jiti aliases.
     const script = `
       import { loadOpenClawPlugins } from ${JSON.stringify(loaderModuleUrl)};
       const registry = loadOpenClawPlugins({
         cache: false,
-        workspaceDir: ${JSON.stringify(plugin.dir)},
+        workspaceDir: ${JSON.stringify(bundledDir)},
         config: {
           plugins: {
-            load: { paths: [${JSON.stringify(plugin.file)}] },
             allow: ["keyed-async-queue-consumer"],
+            entries: { "keyed-async-queue-consumer": { enabled: true } },
           },
         },
       });
@@ -2157,7 +2161,9 @@ module.exports = {
       env: {
         ...process.env,
         OPENCLAW_HOME: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        // Point subprocess at the real bundled dir so the bundled-plugin discovery
+        // path is exercised, not the plugins.load.paths shortcut.
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
       },
       encoding: "utf-8",
       stdio: "pipe",
