@@ -231,7 +231,7 @@ Multi-account options:
 - `channels.zalo.accounts.<id>.enabled`: enable/disable account.
 - `channels.zalo.accounts.<id>.dmPolicy`: per-account DM policy.
 - `channels.zalo.accounts.<id>.allowFrom`: per-account allowlist.
-- `channels.zalo.accounts.<id>.groupPolicy`: per-account group policy.
+- `channels.zalo.accounts.<id>.groupPolicy`: per-account group policy. Present in config, but not usable for the current Marketplace-bot flow when the bot cannot be added to groups.
 - `channels.zalo.accounts.<id>.groupAllowFrom`: per-account group sender allowlist.
 - `channels.zalo.accounts.<id>.webhookUrl`: per-account webhook URL.
 - `channels.zalo.accounts.<id>.webhookSecret`: per-account webhook secret.
