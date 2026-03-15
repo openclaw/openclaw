@@ -63,6 +63,17 @@ export function renderAgentOverview(params: {
   const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
   const disabled = !configForm || configLoading || configSaving;
 
+  // Normalize provider-qualified model values for dropdown matching.
+  // Option values in buildModelOptions are unprefixed model IDs.
+  const normalizeDropdownValue = (v: string | null): string => {
+    if (!v) return "";
+    const slash = v.indexOf("/");
+    return slash > 0 ? v.slice(slash + 1).trim() : v.trim();
+  };
+  const currentDropdownValue = isDefault
+    ? normalizeDropdownValue(effectivePrimary)
+    : normalizeDropdownValue(entryPrimary);
+
   const removeChip = (index: number) => {
     const next = fallbackChips.filter((_, i) => i !== index);
     onModelFallbacksChange(agent.id, next);
@@ -121,7 +132,7 @@ export function renderAgentOverview(params: {
           <label class="field">
             <span>Primary model${isDefault ? " (default)" : ""}</span>
             <select
-              .value=${isDefault ? (effectivePrimary ?? "") : (entryPrimary ?? "")}
+              .value=${currentDropdownValue}
               ?disabled=${disabled}
               @change=${(e: Event) =>
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
@@ -131,7 +142,7 @@ export function renderAgentOverview(params: {
                   ? nothing
                   : html`
                       <option value="">
-                        ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
+                        ${defaultPrimary ? `Inherit default (${normalizeDropdownValue(defaultPrimary)})` : "Inherit default"}
                       </option>
                     `
               }

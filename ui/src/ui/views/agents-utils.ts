@@ -554,19 +554,36 @@ function resolveConfiguredModels(
     return [];
   }
   const options: ConfiguredModelOption[] = [];
+  const seen = new Set<string>();
   for (const [modelId, modelRaw] of Object.entries(models)) {
     const trimmed = modelId.trim();
     if (!trimmed) {
       continue;
     }
+    // Normalize to unprefixed model ID for the option value.
+    // This matches the chat model dropdown behavior and prevents
+    // incorrect provider prefixes in config from propagating.
+    const slash = trimmed.indexOf("/");
+    const provider = slash > 0 ? trimmed.slice(0, slash).trim() : "";
+    const modelOnly = slash > 0 ? trimmed.slice(slash + 1).trim() : trimmed;
+    if (!modelOnly) {
+      continue;
+    }
+    // Deduplicate: if multiple providers have the same model ID, keep the first.
+    const valueKey = modelOnly.toLowerCase();
+    if (seen.has(valueKey)) {
+      continue;
+    }
+    seen.add(valueKey);
     const alias =
       modelRaw && typeof modelRaw === "object" && "alias" in modelRaw
         ? typeof (modelRaw as { alias?: unknown }).alias === "string"
           ? (modelRaw as { alias?: string }).alias?.trim()
           : undefined
         : undefined;
-    const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
-    options.push({ value: trimmed, label });
+    const displayLabel = alias ? `${alias}` : modelOnly;
+    const providerLabel = provider ? `${displayLabel} · ${provider}` : displayLabel;
+    options.push({ value: modelOnly, label: providerLabel });
   }
   return options;
 }
@@ -576,9 +593,17 @@ export function buildModelOptions(
   current?: string | null,
 ) {
   const options = resolveConfiguredModels(configForm);
-  const hasCurrent = current ? options.some((option) => option.value === current) : false;
-  if (current && !hasCurrent) {
-    options.unshift({ value: current, label: `Current (${current})` });
+  // Normalize current value to handle provider-qualified strings from existing config.
+  const currentNormalized = current
+    ? current.includes("/")
+      ? current.slice(current.indexOf("/") + 1).trim()
+      : current.trim()
+    : null;
+  const hasCurrent = currentNormalized
+    ? options.some((option) => option.value === currentNormalized)
+    : false;
+  if (currentNormalized && !hasCurrent) {
+    options.unshift({ value: currentNormalized, label: `Current (${currentNormalized})` });
   }
   if (options.length === 0) {
     return html`
