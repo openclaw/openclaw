@@ -35,6 +35,8 @@ const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
 const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
+const EMBEDDING_SCOPE_RETRY_MAX_ATTEMPTS = 12;
+const EMBEDDING_SCOPE_RETRY_DELAY_MS = 250;
 const BATCH_FAILURE_LIMIT = 2;
 const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
@@ -545,11 +547,19 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
+        const scopeMismatch = this.isTransientScopeMismatchError(message);
+        const maxAttempts = scopeMismatch
+          ? EMBEDDING_SCOPE_RETRY_MAX_ATTEMPTS
+          : EMBEDDING_RETRY_MAX_ATTEMPTS;
+        if (!this.isRetryableEmbeddingError(message) || attempt >= maxAttempts) {
           throw err;
         }
-        await this.waitForEmbeddingRetry(delayMs, "retrying");
-        delayMs *= 2;
+        const retryDelayMs = scopeMismatch ? EMBEDDING_SCOPE_RETRY_DELAY_MS : delayMs;
+        const retryAction = scopeMismatch ? "retrying auth check" : "retrying";
+        await this.waitForEmbeddingRetry(retryDelayMs, retryAction, message);
+        if (!scopeMismatch) {
+          delayMs *= 2;
+        }
         attempt += 1;
       }
     }
@@ -579,29 +589,56 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
+        const scopeMismatch = this.isTransientScopeMismatchError(message);
+        const maxAttempts = scopeMismatch
+          ? EMBEDDING_SCOPE_RETRY_MAX_ATTEMPTS
+          : EMBEDDING_RETRY_MAX_ATTEMPTS;
+        if (!this.isRetryableEmbeddingError(message) || attempt >= maxAttempts) {
           throw err;
         }
-        await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
-        delayMs *= 2;
+        const retryDelayMs = scopeMismatch ? EMBEDDING_SCOPE_RETRY_DELAY_MS : delayMs;
+        const retryAction = scopeMismatch
+          ? "retrying structured auth check"
+          : "retrying structured batch";
+        await this.waitForEmbeddingRetry(retryDelayMs, retryAction, message);
+        if (!scopeMismatch) {
+          delayMs *= 2;
+        }
         attempt += 1;
       }
     }
   }
 
-  private async waitForEmbeddingRetry(delayMs: number, action: string): Promise<void> {
+  private summarizeEmbeddingErrorForLog(message: string): string {
+    const normalized = message.replace(/\s+/g, " ").trim();
+    if (normalized.length <= 220) {
+      return normalized;
+    }
+    return `${normalized.slice(0, 217)}...`;
+  }
+
+  private async waitForEmbeddingRetry(
+    delayMs: number,
+    action: string,
+    message: string,
+  ): Promise<void> {
     const waitMs = Math.min(
       EMBEDDING_RETRY_MAX_DELAY_MS,
       Math.round(delayMs * (1 + Math.random() * 0.2)),
     );
-    log.warn(`memory embeddings rate limited; ${action} in ${waitMs}ms`);
+    const reason = this.summarizeEmbeddingErrorForLog(message);
+    log.warn(`memory embeddings transient error; ${action} in ${waitMs}ms: ${reason}`);
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
 
   private isRetryableEmbeddingError(message: string): boolean {
-    return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i.test(
+    return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day|missing scopes:\s*model\.request)/i.test(
       message,
     );
+  }
+
+  private isTransientScopeMismatchError(message: string): boolean {
+    return /missing scopes:\s*model\.request/i.test(message);
   }
 
   private resolveEmbeddingTimeout(kind: "query" | "batch"): number {
@@ -616,13 +653,35 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!this.provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
-    const timeoutMs = this.resolveEmbeddingTimeout("query");
-    log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
-    return await this.withTimeout(
-      this.provider.embedQuery(text),
-      timeoutMs,
-      `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
-    );
+    let attempt = 0;
+    let delayMs = EMBEDDING_RETRY_BASE_DELAY_MS;
+    while (true) {
+      try {
+        const timeoutMs = this.resolveEmbeddingTimeout("query");
+        log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
+        return await this.withTimeout(
+          this.provider.embedQuery(text),
+          timeoutMs,
+          `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const scopeMismatch = this.isTransientScopeMismatchError(message);
+        const maxAttempts = scopeMismatch
+          ? EMBEDDING_SCOPE_RETRY_MAX_ATTEMPTS
+          : EMBEDDING_RETRY_MAX_ATTEMPTS;
+        if (!this.isRetryableEmbeddingError(message) || attempt >= maxAttempts) {
+          throw err;
+        }
+        const retryDelayMs = scopeMismatch ? EMBEDDING_SCOPE_RETRY_DELAY_MS : delayMs;
+        const retryAction = scopeMismatch ? "retrying query auth check" : "retrying query";
+        await this.waitForEmbeddingRetry(retryDelayMs, retryAction, message);
+        if (!scopeMismatch) {
+          delayMs *= 2;
+        }
+        attempt += 1;
+      }
+    }
   }
 
   protected async withTimeout<T>(

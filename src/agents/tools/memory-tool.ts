@@ -2,6 +2,10 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
+import {
+  resolveEmbeddingAuthDiagnostics,
+  type EmbeddingAuthDiagnostics,
+} from "../../memory/embedding-auth-diagnostics.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import type { MemorySearchResult } from "../../memory/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -126,7 +130,13 @@ export function createMemorySearchTool(options: {
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          return jsonResult(buildMemorySearchUnavailableResult(message));
+          let embeddingAuth: EmbeddingAuthDiagnostics | undefined;
+          try {
+            embeddingAuth = resolveEmbeddingAuthDiagnostics(memory.manager.status());
+          } catch {
+            embeddingAuth = undefined;
+          }
+          return jsonResult(buildMemorySearchUnavailableResult(message, embeddingAuth));
         }
       },
   });
@@ -221,7 +231,10 @@ function clampResultsByInjectedChars(
   return clamped;
 }
 
-function buildMemorySearchUnavailableResult(error: string | undefined) {
+function buildMemorySearchUnavailableResult(
+  error: string | undefined,
+  embeddingAuth?: EmbeddingAuthDiagnostics,
+) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const isQuotaError = /insufficient_quota|quota|429/.test(reason.toLowerCase());
   const warning = isQuotaError
@@ -235,6 +248,7 @@ function buildMemorySearchUnavailableResult(error: string | undefined) {
     disabled: true,
     unavailable: true,
     error: reason,
+    ...(embeddingAuth ? { embeddingAuth } : {}),
     warning,
     action,
   };

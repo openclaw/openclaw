@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
@@ -287,6 +288,45 @@ describe("embedding provider remote overrides", () => {
     expect(headers.Authorization).toBe("Bearer mistral-key");
     const payload = JSON.parse((init?.body as string | undefined) ?? "{}") as { model?: string };
     expect(payload.model).toBe("mistral-embed");
+  });
+
+  it("derives auth diagnostics from effective Authorization override headers", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
+    mockResolvedProviderKey("provider-key");
+
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            headers: {
+              Authorization: "Bearer provider-header-key",
+            },
+          },
+        },
+      },
+    };
+
+    const result = await createEmbeddingProvider({
+      config: cfg as never,
+      provider: "openai",
+      remote: {
+        headers: {
+          Authorization: "Bearer remote-header-key",
+        },
+      },
+      model: "text-embedding-3-small",
+      fallback: "openai",
+    });
+
+    const provider = requireProvider(result);
+    await provider.embedQuery("hello");
+
+    expect(result.openAi?.authSource).toBe("agents.*.memorySearch.remote.headers.Authorization");
+    expect(result.openAi?.authFingerprint).toBe(
+      crypto.createHash("sha256").update("Bearer remote-header-key").digest("hex").slice(0, 12),
+    );
   });
 });
 

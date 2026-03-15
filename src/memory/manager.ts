@@ -132,6 +132,33 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonlyRecoveryFailures = 0;
   private readonlyRecoveryLastError?: string;
 
+  private resolveEmbeddingAuthDetails():
+    | { provider: string; source?: string; fingerprint?: string }
+    | undefined {
+    if (this.openAi) {
+      return {
+        provider: "openai",
+        source: this.openAi.authSource,
+        fingerprint: this.openAi.authFingerprint,
+      };
+    }
+    if (this.voyage) {
+      return {
+        provider: "voyage",
+        source: this.voyage.authSource,
+        fingerprint: this.voyage.authFingerprint,
+      };
+    }
+    if (this.mistral) {
+      return {
+        provider: "mistral",
+        source: this.mistral.authSource,
+        fingerprint: this.mistral.authFingerprint,
+      };
+    }
+    return undefined;
+  }
+
   static async get(params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -710,6 +737,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const providerInfo = this.provider
       ? { provider: this.provider.id, model: this.provider.model }
       : { provider: "none", model: undefined };
+    const embeddingAuth = this.resolveEmbeddingAuthDetails();
 
     return {
       backend: "builtin",
@@ -765,6 +793,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       custom: {
         searchMode,
         providerUnavailableReason: this.providerUnavailableReason,
+        embeddingAuth,
         readonlyRecovery: {
           attempts: this.readonlyRecoveryAttempts,
           successes: this.readonlyRecoverySuccesses,
