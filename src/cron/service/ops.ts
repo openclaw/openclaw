@@ -12,7 +12,7 @@ import {
   recomputeNextRuns,
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
-import { locked } from "./locked.js";
+import { clearStoreLock, locked } from "./locked.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
@@ -132,6 +132,9 @@ export async function start(state: CronServiceState) {
 
 export function stop(state: CronServiceState) {
   stopTimer(state);
+  // Clear the store lock to prevent stale promises from blocking
+  // subsequent operations if a new cron service is created for the same store.
+  clearStoreLock(state.deps.storePath);
 }
 
 export async function status(state: CronServiceState) {
