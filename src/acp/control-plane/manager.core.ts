@@ -76,6 +76,17 @@ const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
 const ACP_TURN_TIMEOUT_REASON = "turn-timeout";
 
+const ACPX_EXIT_ERROR_RE = /\bacpx exited with code\s+\d+\b/i;
+
+function resolveTurnFailureFallbackCode(error: unknown): AcpRuntimeError["code"] {
+  if (error instanceof Error && !(error instanceof AcpRuntimeError)) {
+    if (ACPX_EXIT_ERROR_RE.test(error.message)) {
+      return "ACP_BACKEND_UNAVAILABLE";
+    }
+  }
+  return "ACP_TURN_FAILED";
+}
+
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
   private readonly actorTailBySession = this.actorQueue.getTailMapForTesting();
@@ -609,6 +620,7 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
+<<<<<<< HEAD
     await this.withSessionActor(
       sessionKey,
       async () => {
@@ -616,6 +628,121 @@ export class AcpSessionManager {
         const actorKey = normalizeActorKey(sessionKey);
         for (let attempt = 0; attempt < 2; attempt += 1) {
           const resolution = this.resolveSession({
+=======
+    await this.withSessionActor(sessionKey, async () => {
+      const resolution = this.resolveSession({
+        cfg: input.cfg,
+        sessionKey,
+      });
+      const resolvedMeta = requireReadySessionMeta(resolution);
+
+      const {
+        runtime,
+        handle: ensuredHandle,
+        meta: ensuredMeta,
+      } = await this.ensureRuntimeHandle({
+        cfg: input.cfg,
+        sessionKey,
+        meta: resolvedMeta,
+      });
+      let handle = ensuredHandle;
+      const meta = ensuredMeta;
+      await this.applyRuntimeControls({
+        sessionKey,
+        runtime,
+        handle,
+        meta,
+      });
+      const turnStartedAt = Date.now();
+      const actorKey = normalizeActorKey(sessionKey);
+
+      await this.setSessionState({
+        cfg: input.cfg,
+        sessionKey,
+        state: "running",
+        clearLastError: true,
+      });
+
+      const internalAbortController = new AbortController();
+      const onCallerAbort = () => {
+        internalAbortController.abort();
+      };
+      if (input.signal?.aborted) {
+        internalAbortController.abort();
+      } else if (input.signal) {
+        input.signal.addEventListener("abort", onCallerAbort, { once: true });
+      }
+
+      const activeTurn: ActiveTurnState = {
+        runtime,
+        handle,
+        abortController: internalAbortController,
+      };
+      this.activeTurnBySession.set(actorKey, activeTurn);
+
+      let streamError: AcpRuntimeError | null = null;
+      try {
+        const combinedSignal =
+          input.signal && typeof AbortSignal.any === "function"
+            ? AbortSignal.any([input.signal, internalAbortController.signal])
+            : internalAbortController.signal;
+        for await (const event of runtime.runTurn({
+          handle,
+          text: input.text,
+          attachments: input.attachments,
+          mode: input.mode,
+          requestId: input.requestId,
+          signal: combinedSignal,
+        })) {
+          if (event.type === "error") {
+            streamError = new AcpRuntimeError(
+              normalizeAcpErrorCode(event.code),
+              event.message?.trim() || "ACP turn failed before completion.",
+            );
+          }
+          if (input.onEvent) {
+            await input.onEvent(event);
+          }
+        }
+        if (streamError) {
+          throw streamError;
+        }
+        this.recordTurnCompletion({
+          startedAt: turnStartedAt,
+        });
+        await this.setSessionState({
+          cfg: input.cfg,
+          sessionKey,
+          state: "idle",
+          clearLastError: true,
+        });
+      } catch (error) {
+        const acpError = toAcpRuntimeError({
+          error,
+          fallbackCode: resolveTurnFailureFallbackCode(error),
+          fallbackMessage: "ACP turn failed before completion.",
+        });
+        this.recordTurnCompletion({
+          startedAt: turnStartedAt,
+          errorCode: acpError.code,
+        });
+        await this.setSessionState({
+          cfg: input.cfg,
+          sessionKey,
+          state: "error",
+          lastError: acpError.message,
+        });
+        throw acpError;
+      } finally {
+        if (input.signal) {
+          input.signal.removeEventListener("abort", onCallerAbort);
+        }
+        if (this.activeTurnBySession.get(actorKey) === activeTurn) {
+          this.activeTurnBySession.delete(actorKey);
+        }
+        if (meta.mode !== "oneshot") {
+          ({ handle } = await this.reconcileRuntimeSessionIdentifiers({
+>>>>>>> c50968f53c (ACP: classify silent acpx exits as backend unavailable)
             cfg: input.cfg,
             sessionKey,
           });

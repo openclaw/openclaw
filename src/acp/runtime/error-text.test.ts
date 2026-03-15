@@ -16,4 +16,13 @@ describe("formatAcpRuntimeErrorText", () => {
     expect(text).toContain("ACP error (ACP_TURN_FAILED): turn failed");
     expect(text).toContain("next:");
   });
+
+  it("routes backend-unavailable failures to ACP doctor guidance", () => {
+    const text = formatAcpRuntimeErrorText(
+      new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "acpx exited with code 1"),
+    );
+    expect(text).toContain("ACP error (ACP_BACKEND_UNAVAILABLE): acpx exited with code 1");
+    expect(text).toContain("/acp doctor");
+    expect(text).not.toContain("/acp cancel");
+  });
 });
