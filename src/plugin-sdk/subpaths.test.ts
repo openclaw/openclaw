@@ -1,3 +1,4 @@
+import * as extensionApi from "openclaw/extension-api";
 import * as compatSdk from "openclaw/plugin-sdk/compat";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
@@ -84,8 +85,11 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports WhatsApp helpers", () => {
-    expect(typeof whatsappSdk.resolveWhatsAppAccount).toBe("function");
-    expect(typeof whatsappSdk.whatsappOnboardingAdapter).toBe("object");
+    // WhatsApp-specific functions (resolveWhatsAppAccount, whatsappOnboardingAdapter) moved to extensions/whatsapp/src/
+    expect(typeof whatsappSdk.WhatsAppConfigSchema).toBe("object");
+    expect(typeof whatsappSdk.resolveWhatsAppOutboundTarget).toBe("function");
+    expect(typeof whatsappSdk.resolveWhatsAppMentionStripRegexes).toBe("function");
+    expect("resolveWhatsAppMentionStripPatterns" in whatsappSdk).toBe(false);
   });
 
   it("exports LINE helpers", () => {
@@ -98,11 +102,39 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof msteamsSdk.loadOutboundMediaFromUrl).toBe("function");
   });
 
+  it("exports acpx helpers", async () => {
+    const acpxSdk = await import("openclaw/plugin-sdk/acpx");
+    expect(typeof acpxSdk.listKnownProviderAuthEnvVarNames).toBe("function");
+    expect(typeof acpxSdk.omitEnvKeysCaseInsensitive).toBe("function");
+  });
+
   it("resolves bundled extension subpaths", async () => {
     for (const { id, load } of bundledExtensionSubpathLoaders) {
       const mod = await load();
       expect(typeof mod).toBe("object");
       expect(mod, `subpath ${id} should resolve`).toBeTruthy();
     }
+  });
+
+  it("keeps the newly added bundled plugin-sdk contracts available", async () => {
+    const bluebubbles = await import("openclaw/plugin-sdk/bluebubbles");
+    expect(typeof bluebubbles.parseFiniteNumber).toBe("function");
+
+    const mattermost = await import("openclaw/plugin-sdk/mattermost");
+    expect(typeof mattermost.parseStrictPositiveInteger).toBe("function");
+
+    const nextcloudTalk = await import("openclaw/plugin-sdk/nextcloud-talk");
+    expect(typeof nextcloudTalk.waitForAbortSignal).toBe("function");
+
+    const twitch = await import("openclaw/plugin-sdk/twitch");
+    expect(typeof twitch.DEFAULT_ACCOUNT_ID).toBe("string");
+    expect(typeof twitch.normalizeAccountId).toBe("function");
+
+    const zalo = await import("openclaw/plugin-sdk/zalo");
+    expect(typeof zalo.resolveClientIp).toBe("function");
+  });
+
+  it("exports the extension api bridge", () => {
+    expect(typeof extensionApi.runEmbeddedPiAgent).toBe("function");
   });
 });

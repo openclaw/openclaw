@@ -63,6 +63,13 @@ export type TalkProviderConfig = {
   [key: string]: unknown;
 };
 
+export type ResolvedTalkConfig = {
+  /** Active Talk TTS provider resolved from the current config payload. */
+  provider: string;
+  /** Provider config for the active Talk provider. */
+  config: TalkProviderConfig;
+};
+
 export type TalkConfig = {
   /** Active Talk TTS provider (for example "elevenlabs"). */
   provider?: string;
@@ -70,6 +77,8 @@ export type TalkConfig = {
   providers?: Record<string, TalkProviderConfig>;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
+  /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
+  silenceTimeoutMs?: number;
 
   /**
    * Legacy ElevenLabs compatibility fields.
@@ -80,6 +89,11 @@ export type TalkConfig = {
   modelId?: string;
   outputFormat?: string;
   apiKey?: SecretInput;
+};
+
+export type TalkConfigResponse = TalkConfig & {
+  /** Canonical active Talk payload for clients. */
+  resolved?: ResolvedTalkConfig;
 };
 
 export type GatewayControlUiConfig = {
@@ -172,6 +186,8 @@ export type GatewayTailscaleConfig = {
 };
 
 export type GatewayRemoteConfig = {
+  /** Whether remote gateway surfaces are enabled. Default: true when absent. */
+  enabled?: boolean;
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
   /** Transport for macOS remote connections (ssh tunnel or direct WS). */
@@ -331,6 +347,21 @@ export type GatewayHttpConfig = {
   securityHeaders?: GatewayHttpSecurityHeadersConfig;
 };
 
+export type GatewayPushApnsRelayConfig = {
+  /** Base HTTPS URL for the external iOS APNs relay service. */
+  baseUrl?: string;
+  /** Timeout in milliseconds for relay send requests (default: 10000). */
+  timeoutMs?: number;
+};
+
+export type GatewayPushApnsConfig = {
+  relay?: GatewayPushApnsRelayConfig;
+};
+
+export type GatewayPushConfig = {
+  apns?: GatewayPushApnsConfig;
+};
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -379,6 +410,7 @@ export type GatewayConfig = {
   reload?: GatewayReloadConfig;
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
+  push?: GatewayPushConfig;
   nodes?: GatewayNodesConfig;
   /**
    * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection
@@ -399,4 +431,16 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Stale event threshold in minutes for the channel health monitor.
+   * A connected channel that receives no events for this duration is treated
+   * as a stale socket and restarted. Default: 30.
+   */
+  channelStaleEventThresholdMinutes?: number;
+  /**
+   * Maximum number of health-monitor-initiated channel restarts per hour.
+   * Once this limit is reached, the monitor skips further restarts until
+   * the rolling window expires. Default: 10.
+   */
+  channelMaxRestartsPerHour?: number;
 };

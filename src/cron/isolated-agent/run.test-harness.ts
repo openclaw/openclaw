@@ -43,31 +43,54 @@ export const logWarnMock = createMock();
 export const countActiveDescendantRunsMock = createMock();
 export const listDescendantRunsForRequesterMock = createMock();
 export const pickLastNonEmptyTextFromPayloadsMock = createMock();
+export const resolveCronDeliveryPlanMock = createMock();
+export const resolveDeliveryTargetMock = createMock();
 
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentConfig: resolveAgentConfigMock,
-  resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
-  resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
-  resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/workspace"),
-  resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
-  resolveAgentSkillsFilter: resolveAgentSkillsFilterMock,
-}));
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/agent-scope.js")>();
+  return {
+    ...actual,
+    resolveAgentConfig: resolveAgentConfigMock,
+    resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
+    resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
+    resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/workspace"),
+    resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
+    resolveAgentSkillsFilter: resolveAgentSkillsFilterMock,
+  };
+});
 
-vi.mock("../../agents/skills.js", () => ({
-  buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
-}));
+vi.mock("../../agents/skills.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/skills.js")>();
+  return {
+    ...actual,
+    buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
+  };
+});
 
-vi.mock("../../agents/skills/refresh.js", () => ({
-  getSkillsSnapshotVersion: vi.fn().mockReturnValue(42),
-}));
+vi.mock("../../agents/skills/refresh.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/skills/refresh.js")>();
+  return {
+    ...actual,
+    getSkillsSnapshotVersion: vi.fn().mockReturnValue(42),
+  };
+});
 
-vi.mock("../../agents/workspace.js", () => ({
-  ensureAgentWorkspace: vi.fn().mockResolvedValue({ dir: "/tmp/workspace" }),
-}));
+vi.mock("../../agents/workspace.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/workspace.js")>();
+  return {
+    ...actual,
+    DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
+    ensureAgentWorkspace: vi.fn().mockResolvedValue({ dir: "/tmp/workspace" }),
+  };
+});
 
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn().mockResolvedValue({ models: [] }),
-}));
+vi.mock("../../agents/model-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/model-catalog.js")>();
+  return {
+    ...actual,
+    loadModelCatalog: vi.fn().mockResolvedValue({ models: [] }),
+  };
+});
 
 vi.mock("../../agents/model-selection.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/model-selection.js")>();
@@ -82,67 +105,119 @@ vi.mock("../../agents/model-selection.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../agents/model-fallback.js", () => ({
-  runWithModelFallback: runWithModelFallbackMock,
-}));
+vi.mock("../../agents/model-fallback.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/model-fallback.js")>();
+  return {
+    ...actual,
+    runWithModelFallback: runWithModelFallbackMock,
+  };
+});
 
-vi.mock("../../agents/pi-embedded.js", () => ({
-  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
-}));
+vi.mock("../../agents/pi-embedded.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/pi-embedded.js")>();
+  return {
+    ...actual,
+    runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+  };
+});
 
-vi.mock("../../agents/context.js", () => ({
-  lookupContextTokens: vi.fn().mockReturnValue(128000),
-}));
+vi.mock("../../agents/context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/context.js")>();
+  return {
+    ...actual,
+    lookupContextTokens: vi.fn().mockReturnValue(128000),
+  };
+});
 
-vi.mock("../../agents/date-time.js", () => ({
-  formatUserTime: vi.fn().mockReturnValue("2026-02-10 12:00"),
-  resolveUserTimeFormat: vi.fn().mockReturnValue("24h"),
-  resolveUserTimezone: vi.fn().mockReturnValue("UTC"),
-}));
+vi.mock("../../agents/date-time.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/date-time.js")>();
+  return {
+    ...actual,
+    formatUserTime: vi.fn().mockReturnValue("2026-02-10 12:00"),
+    resolveUserTimeFormat: vi.fn().mockReturnValue("24h"),
+    resolveUserTimezone: vi.fn().mockReturnValue("UTC"),
+  };
+});
 
-vi.mock("../../agents/timeout.js", () => ({
-  resolveAgentTimeoutMs: vi.fn().mockReturnValue(60_000),
-}));
+vi.mock("../../agents/timeout.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/timeout.js")>();
+  return {
+    ...actual,
+    resolveAgentTimeoutMs: vi.fn().mockReturnValue(60_000),
+  };
+});
 
-vi.mock("../../agents/usage.js", () => ({
-  deriveSessionTotalTokens: vi.fn().mockReturnValue(30),
-  hasNonzeroUsage: vi.fn().mockReturnValue(false),
-}));
+vi.mock("../../agents/usage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/usage.js")>();
+  return {
+    ...actual,
+    deriveSessionTotalTokens: vi.fn().mockReturnValue(30),
+    hasNonzeroUsage: vi.fn().mockReturnValue(false),
+  };
+});
 
-vi.mock("../../agents/subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: vi.fn().mockResolvedValue(true),
-}));
+vi.mock("../../agents/subagent-announce.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/subagent-announce.js")>();
+  return {
+    ...actual,
+    runSubagentAnnounceFlow: vi.fn().mockResolvedValue(true),
+  };
+});
 
-vi.mock("../../agents/subagent-registry.js", () => ({
-  countActiveDescendantRuns: countActiveDescendantRunsMock,
-  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
-}));
+vi.mock("../../agents/subagent-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/subagent-registry.js")>();
+  return {
+    ...actual,
+    countActiveDescendantRuns: countActiveDescendantRunsMock,
+    listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
+  };
+});
 
-vi.mock("../../agents/cli-runner.js", () => ({
-  runCliAgent: runCliAgentMock,
-}));
+vi.mock("../../agents/cli-runner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/cli-runner.js")>();
+  return {
+    ...actual,
+    runCliAgent: runCliAgentMock,
+  };
+});
 
-vi.mock("../../agents/cli-session.js", () => ({
-  getCliSessionId: getCliSessionIdMock,
-  setCliSessionId: vi.fn(),
-}));
+vi.mock("../../agents/cli-session.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/cli-session.js")>();
+  return {
+    ...actual,
+    getCliSessionId: getCliSessionIdMock,
+    setCliSessionId: vi.fn(),
+  };
+});
 
-vi.mock("../../auto-reply/thinking.js", () => ({
-  normalizeThinkLevel: vi.fn().mockReturnValue(undefined),
-  normalizeVerboseLevel: vi.fn().mockReturnValue("off"),
-  supportsXHighThinking: vi.fn().mockReturnValue(false),
-}));
+vi.mock("../../auto-reply/thinking.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../auto-reply/thinking.js")>();
+  return {
+    ...actual,
+    normalizeThinkLevel: vi.fn().mockReturnValue(undefined),
+    normalizeVerboseLevel: vi.fn().mockReturnValue("off"),
+    supportsXHighThinking: vi.fn().mockReturnValue(false),
+  };
+});
 
-vi.mock("../../cli/outbound-send-deps.js", () => ({
-  createOutboundSendDeps: vi.fn().mockReturnValue({}),
-}));
+vi.mock("../../cli/outbound-send-deps.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../cli/outbound-send-deps.js")>();
+  return {
+    ...actual,
+    createOutboundSendDeps: vi.fn().mockReturnValue({}),
+  };
+});
 
-vi.mock("../../config/sessions.js", () => ({
-  resolveAgentMainSessionKey: vi.fn().mockReturnValue("main:default"),
-  resolveSessionTranscriptPath: vi.fn().mockReturnValue("/tmp/transcript.jsonl"),
-  setSessionRuntimeModel: vi.fn(),
-  updateSessionStore: updateSessionStoreMock,
-}));
+vi.mock("../../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveAgentMainSessionKey: vi.fn().mockReturnValue("main:default"),
+    resolveSessionTranscriptPath: vi.fn().mockReturnValue("/tmp/transcript.jsonl"),
+    setSessionRuntimeModel: vi.fn(),
+    updateSessionStore: updateSessionStoreMock,
+  };
+});
 
 vi.mock("../../routing/session-key.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../routing/session-key.js")>();
@@ -153,40 +228,55 @@ vi.mock("../../routing/session-key.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../infra/agent-events.js", () => ({
-  registerAgentRunContext: vi.fn(),
-}));
+vi.mock("../../infra/agent-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/agent-events.js")>();
+  return {
+    ...actual,
+    registerAgentRunContext: vi.fn(),
+  };
+});
 
-vi.mock("../../infra/outbound/deliver.js", () => ({
-  deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/outbound/deliver.js")>();
+  return {
+    ...actual,
+    deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
-vi.mock("../../infra/skills-remote.js", () => ({
-  getRemoteSkillEligibility: vi.fn().mockReturnValue({}),
-}));
+vi.mock("../../infra/skills-remote.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/skills-remote.js")>();
+  return {
+    ...actual,
+    getRemoteSkillEligibility: vi.fn().mockReturnValue({}),
+  };
+});
 
-vi.mock("../../logger.js", () => ({
-  logWarn: (...args: unknown[]) => logWarnMock(...args),
-}));
+vi.mock("../../logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logger.js")>();
+  return {
+    ...actual,
+    logWarn: (...args: unknown[]) => logWarnMock(...args),
+  };
+});
 
-vi.mock("../../security/external-content.js", () => ({
-  buildSafeExternalPrompt: vi.fn().mockReturnValue("safe prompt"),
-  detectSuspiciousPatterns: vi.fn().mockReturnValue([]),
-  getHookType: vi.fn().mockReturnValue("unknown"),
-  isExternalHookSession: vi.fn().mockReturnValue(false),
-}));
+vi.mock("../../security/external-content.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../security/external-content.js")>();
+  return {
+    ...actual,
+    buildSafeExternalPrompt: vi.fn().mockReturnValue("safe prompt"),
+    detectSuspiciousPatterns: vi.fn().mockReturnValue([]),
+    getHookType: vi.fn().mockReturnValue("unknown"),
+    isExternalHookSession: vi.fn().mockReturnValue(false),
+  };
+});
 
 vi.mock("../delivery.js", () => ({
-  resolveCronDeliveryPlan: vi.fn().mockReturnValue({ requested: false }),
+  resolveCronDeliveryPlan: resolveCronDeliveryPlanMock,
 }));
 
 vi.mock("./delivery-target.js", () => ({
-  resolveDeliveryTarget: vi.fn().mockResolvedValue({
-    channel: "discord",
-    to: undefined,
-    accountId: undefined,
-    error: undefined,
-  }),
+  resolveDeliveryTarget: resolveDeliveryTargetMock,
 }));
 
 vi.mock("./helpers.js", () => ({
@@ -202,11 +292,15 @@ vi.mock("./session.js", () => ({
   resolveCronSession: resolveCronSessionMock,
 }));
 
-vi.mock("../../agents/defaults.js", () => ({
-  DEFAULT_CONTEXT_TOKENS: 128000,
-  DEFAULT_MODEL: "gpt-4",
-  DEFAULT_PROVIDER: "openai",
-}));
+vi.mock("../../agents/defaults.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/defaults.js")>();
+  return {
+    ...actual,
+    DEFAULT_CONTEXT_TOKENS: 128000,
+    DEFAULT_MODEL: "gpt-4",
+    DEFAULT_PROVIDER: "openai",
+  };
+});
 
 export function makeCronSessionEntry(overrides?: Record<string, unknown>): CronSessionEntry {
   return {
@@ -245,6 +339,13 @@ function makeDefaultEmbeddedResult() {
     payloads: [{ text: "test output" }],
     meta: { agentMeta: { usage: { input: 10, output: 20 } } },
   };
+}
+
+export function mockRunCronFallbackPassthrough(): void {
+  runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+    const result = await run(provider, model);
+    return { result, provider, model, attempts: [] };
+  });
 }
 
 export function resetRunCronIsolatedAgentTurnHarness(): void {
@@ -286,6 +387,15 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   listDescendantRunsForRequesterMock.mockReturnValue([]);
   pickLastNonEmptyTextFromPayloadsMock.mockReset();
   pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
+  resolveCronDeliveryPlanMock.mockReset();
+  resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
+  resolveDeliveryTargetMock.mockReset();
+  resolveDeliveryTargetMock.mockResolvedValue({
+    channel: "discord",
+    to: undefined,
+    accountId: undefined,
+    error: undefined,
+  });
 
   logWarnMock.mockReset();
 }

@@ -285,7 +285,7 @@ export function validateConfigObject(
   };
 }
 
-export function validateConfigObjectWithPlugins(raw: unknown):
+type ValidateConfigWithPluginsResult =
   | {
       ok: true;
       config: OpenClawConfig;
@@ -295,38 +295,26 @@ export function validateConfigObjectWithPlugins(raw: unknown):
       ok: false;
       issues: ConfigValidationIssue[];
       warnings: ConfigValidationIssue[];
-    } {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true });
+    };
+
+export function validateConfigObjectWithPlugins(
+  raw: unknown,
+  params?: { env?: NodeJS.ProcessEnv },
+): ValidateConfigWithPluginsResult {
+  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true, env: params?.env });
 }
 
-export function validateConfigObjectRawWithPlugins(raw: unknown):
-  | {
-      ok: true;
-      config: OpenClawConfig;
-      warnings: ConfigValidationIssue[];
-    }
-  | {
-      ok: false;
-      issues: ConfigValidationIssue[];
-      warnings: ConfigValidationIssue[];
-    } {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false });
+export function validateConfigObjectRawWithPlugins(
+  raw: unknown,
+  params?: { env?: NodeJS.ProcessEnv },
+): ValidateConfigWithPluginsResult {
+  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false, env: params?.env });
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean },
-):
-  | {
-      ok: true;
-      config: OpenClawConfig;
-      warnings: ConfigValidationIssue[];
-    }
-  | {
-      ok: false;
-      issues: ConfigValidationIssue[];
-      warnings: ConfigValidationIssue[];
-    } {
+  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv },
+): ValidateConfigWithPluginsResult {
   const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
@@ -363,6 +351,7 @@ function validateConfigObjectWithPluginsBase(
     const registry = loadPluginManifestRegistry({
       config,
       workspaceDir: workspaceDir ?? undefined,
+      env: opts.env,
     });
 
     for (const diag of registry.diagnostics) {
@@ -539,8 +528,17 @@ function validateConfigObjectWithPluginsBase(
     }
   }
 
+  // The default memory slot is inferred; only a user-configured slot should block startup.
+  const pluginSlots = pluginsConfig?.slots;
+  const hasExplicitMemorySlot =
+    pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, "memory");
   const memorySlot = normalizedPlugins.slots.memory;
-  if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
+  if (
+    hasExplicitMemorySlot &&
+    typeof memorySlot === "string" &&
+    memorySlot.trim() &&
+    !knownIds.has(memorySlot)
+  ) {
     pushMissingPluginIssue("plugins.slots.memory", memorySlot);
   }
 
@@ -598,6 +596,9 @@ function validateConfigObjectWithPluginsBase(
             });
           }
         }
+      } else if (record.format === "bundle") {
+        // Compatible bundles currently expose no native OpenClaw config schema.
+        // Treat them as schema-less capability packs rather than failing validation.
       } else {
         issues.push({
           path: `plugins.entries.${pluginId}`,

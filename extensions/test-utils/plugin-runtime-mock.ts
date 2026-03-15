@@ -123,6 +123,17 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         })) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
       },
       routing: {
+        buildAgentSessionKey: vi.fn(
+          ({
+            agentId,
+            channel,
+            peer,
+          }: {
+            agentId: string;
+            channel: string;
+            peer?: { kind?: string; id?: string };
+          }) => `agent:${agentId}:${channel}:${peer?.kind ?? "direct"}:${peer?.id ?? "peer"}`,
+        ) as unknown as PluginRuntime["channel"]["routing"]["buildAgentSessionKey"],
         resolveAgentRoute: vi.fn(() => ({
           agentId: "main",
           accountId: "default",
@@ -241,6 +252,11 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
+    },
+    modelAuth: {
+      getApiKeyForModel: vi.fn() as unknown as PluginRuntime["modelAuth"]["getApiKeyForModel"],
+      resolveApiKeyForProvider:
+        vi.fn() as unknown as PluginRuntime["modelAuth"]["resolveApiKeyForProvider"],
     },
     subagent: {
       run: vi.fn(),

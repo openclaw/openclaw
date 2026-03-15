@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai/dist/types.js";
+import type { Model } from "@mariozechner/pi-ai";
 import { expect } from "vitest";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 

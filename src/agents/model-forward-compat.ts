@@ -11,11 +11,6 @@ const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 
-const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
-const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
-const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
-const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
-
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
@@ -109,60 +104,6 @@ function cloneFirstTemplateModel(params: {
   return undefined;
 }
 
-const CODEX_GPT54_ELIGIBLE_PROVIDERS = new Set(["openai-codex"]);
-const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
-
-function resolveOpenAICodexForwardCompatModel(
-  provider: string,
-  modelId: string,
-  modelRegistry: ModelRegistry,
-): Model<Api> | undefined {
-  const normalizedProvider = normalizeProviderId(provider);
-  const trimmedModelId = modelId.trim();
-  const lower = trimmedModelId.toLowerCase();
-
-  let templateIds: readonly string[];
-  let eligibleProviders: Set<string>;
-  if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
-    templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
-    eligibleProviders = CODEX_GPT54_ELIGIBLE_PROVIDERS;
-  } else if (lower === OPENAI_CODEX_GPT_53_MODEL_ID) {
-    templateIds = OPENAI_CODEX_TEMPLATE_MODEL_IDS;
-    eligibleProviders = CODEX_GPT53_ELIGIBLE_PROVIDERS;
-  } else {
-    return undefined;
-  }
-
-  if (!eligibleProviders.has(normalizedProvider)) {
-    return undefined;
-  }
-
-  for (const templateId of templateIds) {
-    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-    } as Model<Api>);
-  }
-
-  return normalizeModelCompat({
-    id: trimmedModelId,
-    name: trimmedModelId,
-    api: "openai-codex-responses",
-    provider: normalizedProvider,
-    baseUrl: "https://chatgpt.com/backend-api",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
-  } as Model<Api>);
-}
-
 function resolveAnthropic46ForwardCompatModel(params: {
   provider: string;
   modelId: string;
@@ -241,15 +182,17 @@ function resolveAnthropicSonnet46ForwardCompatModel(
   });
 }
 
-// gemini-3.1-pro-preview / gemini-3.1-flash-preview are not present in pi-ai's built-in
-// google-gemini-cli catalog yet. Clone the nearest gemini-3 template so users don't get
-// "Unknown model" errors when Google Gemini CLI gains new minor-version models.
-function resolveGoogleGeminiCli31ForwardCompatModel(
+// gemini-3.1-pro-preview / gemini-3.1-flash-preview are not present in some pi-ai
+// Google catalogs yet. Clone the nearest gemini-3 template so users don't get
+// "Unknown model" errors when Google ships new minor-version models before pi-ai
+// updates its built-in registry.
+function resolveGoogle31ForwardCompatModel(
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
-  if (normalizeProviderId(provider) !== "google-gemini-cli") {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "google" && normalizedProvider !== "google-gemini-cli") {
     return undefined;
   }
   const trimmed = modelId.trim();
@@ -265,7 +208,7 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   }
 
   return cloneFirstTemplateModel({
-    normalizedProvider: "google-gemini-cli",
+    normalizedProvider,
     trimmedModelId: trimmed,
     templateIds: [...templateIds],
     modelRegistry,
@@ -322,10 +265,9 @@ export function resolveForwardCompatModel(
 ): Model<Api> | undefined {
   return (
     resolveOpenAIGpt54ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveOpenAICodexForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveGoogle31ForwardCompatModel(provider, modelId, modelRegistry)
   );
 }

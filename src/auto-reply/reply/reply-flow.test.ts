@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -8,9 +9,14 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  resetRecentQueuedMessageIdDedupe,
+  scheduleFollowupDrain,
+} from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
+import { parseSlackDirectives, hasSlackDirectives } from "./slack-directives.js";
 
 describe("normalizeInboundTextNewlines", () => {
   it("normalizes real newlines and preserves literal backslash-n sequences", () => {
@@ -191,6 +197,8 @@ describe("inbound context contract (providers + extensions)", () => {
 
 const getLineData = (result: ReturnType<typeof parseLineDirectives>) =>
   (result.channelData?.line as Record<string, unknown> | undefined) ?? {};
+const getSlackData = (result: ReturnType<typeof parseSlackDirectives>) =>
+  (result.channelData?.slack as Record<string, unknown> | undefined) ?? {};
 
 describe("hasLineDirectives", () => {
   it("matches expected detection across directive patterns", () => {
@@ -210,6 +218,24 @@ describe("hasLineDirectives", () => {
 
     for (const testCase of cases) {
       expect(hasLineDirectives(testCase.text)).toBe(testCase.expected);
+    }
+  });
+});
+
+describe("hasSlackDirectives", () => {
+  it("matches expected detection across Slack directive patterns", () => {
+    const cases: Array<{ text: string; expected: boolean }> = [
+      { text: "Pick one [[slack_buttons: Approve:approve, Reject:reject]]", expected: true },
+      {
+        text: "[[slack_select: Choose a project | Alpha:alpha, Beta:beta]]",
+        expected: true,
+      },
+      { text: "Just regular text", expected: false },
+      { text: "[[buttons: Menu | Choose | A:a]]", expected: false },
+    ];
+
+    for (const testCase of cases) {
+      expect(hasSlackDirectives(testCase.text)).toBe(testCase.expected);
     }
   });
 });
@@ -574,6 +600,279 @@ describe("parseLineDirectives", () => {
   });
 });
 
+describe("parseSlackDirectives", () => {
+  it("builds section and button blocks from slack_buttons directives", () => {
+    const result = parseSlackDirectives({
+      text: "Choose an action [[slack_buttons: Approve:approve, Reject:reject]]",
+    });
+
+    expect(result.text).toBe("Choose an action");
+    expect(getSlackData(result).blocks).toEqual([
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "Choose an action",
+        },
+      },
+      {
+        type: "actions",
+        block_id: "openclaw_reply_buttons_1",
+        elements: [
+          {
+            type: "button",
+            action_id: "openclaw:reply_button",
+            text: {
+              type: "plain_text",
+              text: "Approve",
+              emoji: true,
+            },
+            value: "reply_1_approve",
+          },
+          {
+            type: "button",
+            action_id: "openclaw:reply_button",
+            text: {
+              type: "plain_text",
+              text: "Reject",
+              emoji: true,
+            },
+            value: "reply_2_reject",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("builds static select blocks from slack_select directives", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_select: Choose a project | Alpha:alpha, Beta:beta]]",
+    });
+
+    expect(result.text).toBeUndefined();
+    expect(getSlackData(result).blocks).toEqual([
+      {
+        type: "actions",
+        block_id: "openclaw_reply_select_1",
+        elements: [
+          {
+            type: "static_select",
+            action_id: "openclaw:reply_select",
+            placeholder: {
+              type: "plain_text",
+              text: "Choose a project",
+              emoji: true,
+            },
+            options: [
+              {
+                text: {
+                  type: "plain_text",
+                  text: "Alpha",
+                  emoji: true,
+                },
+                value: "reply_1_alpha",
+              },
+              {
+                text: {
+                  type: "plain_text",
+                  text: "Beta",
+                  emoji: true,
+                },
+                value: "reply_2_beta",
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("appends Slack interactive blocks to existing slack blocks", () => {
+    const result = parseSlackDirectives({
+      text: "Act now [[slack_buttons: Retry:retry]]",
+      channelData: {
+        slack: {
+          blocks: [{ type: "divider" }],
+        },
+      },
+    });
+
+    expect(result.text).toBe("Act now");
+    expect(getSlackData(result).blocks).toEqual([
+      { type: "divider" },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "Act now",
+        },
+      },
+      {
+        type: "actions",
+        block_id: "openclaw_reply_buttons_1",
+        elements: [
+          {
+            type: "button",
+            action_id: "openclaw:reply_button",
+            text: {
+              type: "plain_text",
+              text: "Retry",
+              emoji: true,
+            },
+            value: "reply_1_retry",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("preserves authored order for mixed Slack directives", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_select: Pick one | Alpha:alpha]] then [[slack_buttons: Retry:retry]]",
+    });
+
+    expect(getSlackData(result).blocks).toEqual([
+      {
+        type: "actions",
+        block_id: "openclaw_reply_select_1",
+        elements: [
+          {
+            type: "static_select",
+            action_id: "openclaw:reply_select",
+            placeholder: {
+              type: "plain_text",
+              text: "Pick one",
+              emoji: true,
+            },
+            options: [
+              {
+                text: {
+                  type: "plain_text",
+                  text: "Alpha",
+                  emoji: true,
+                },
+                value: "reply_1_alpha",
+              },
+            ],
+          },
+        ],
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "then",
+        },
+      },
+      {
+        type: "actions",
+        block_id: "openclaw_reply_buttons_1",
+        elements: [
+          {
+            type: "button",
+            action_id: "openclaw:reply_button",
+            text: {
+              type: "plain_text",
+              text: "Retry",
+              emoji: true,
+            },
+            value: "reply_1_retry",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("truncates Slack interactive reply strings to safe Block Kit limits", () => {
+    const long = "x".repeat(120);
+    const result = parseSlackDirectives({
+      text: `${"y".repeat(3100)} [[slack_select: ${long} | ${long}:${long}]] [[slack_buttons: ${long}:${long}]]`,
+    });
+
+    const blocks = getSlackData(result).blocks as Array<Record<string, unknown>>;
+    expect(blocks).toHaveLength(3);
+    expect(((blocks[0]?.text as { text?: string })?.text ?? "").length).toBeLessThanOrEqual(3000);
+    expect(
+      (
+        (
+          (blocks[1]?.elements as Array<Record<string, unknown>>)?.[0]?.placeholder as {
+            text?: string;
+          }
+        )?.text ?? ""
+      ).length,
+    ).toBeLessThanOrEqual(75);
+    expect(
+      (
+        (
+          (
+            (blocks[1]?.elements as Array<Record<string, unknown>>)?.[0]?.options as Array<
+              Record<string, unknown>
+            >
+          )?.[0]?.text as { text?: string }
+        )?.text ?? ""
+      ).length,
+    ).toBeLessThanOrEqual(75);
+    expect(
+      (
+        ((
+          (blocks[1]?.elements as Array<Record<string, unknown>>)?.[0]?.options as Array<
+            Record<string, unknown>
+          >
+        )?.[0]?.value as string | undefined) ?? ""
+      ).length,
+    ).toBeLessThanOrEqual(75);
+    expect(
+      (
+        (
+          (blocks[2]?.elements as Array<Record<string, unknown>>)?.[0]?.text as {
+            text?: string;
+          }
+        )?.text ?? ""
+      ).length,
+    ).toBeLessThanOrEqual(75);
+    expect(
+      (
+        ((blocks[2]?.elements as Array<Record<string, unknown>>)?.[0]?.value as
+          | string
+          | undefined) ?? ""
+      ).length,
+    ).toBeLessThanOrEqual(75);
+  });
+
+  it("falls back to the original payload when generated blocks would exceed Slack limits", () => {
+    const result = parseSlackDirectives({
+      text: "Choose [[slack_buttons: Retry:retry]]",
+      channelData: {
+        slack: {
+          blocks: Array.from({ length: 49 }, () => ({ type: "divider" })),
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      text: "Choose [[slack_buttons: Retry:retry]]",
+      channelData: {
+        slack: {
+          blocks: Array.from({ length: 49 }, () => ({ type: "divider" })),
+        },
+      },
+    });
+  });
+
+  it("ignores malformed existing Slack blocks during directive compilation", () => {
+    expect(() =>
+      parseSlackDirectives({
+        text: "Choose [[slack_buttons: Retry:retry]]",
+        channelData: {
+          slack: {
+            blocks: "{not json}",
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+});
+
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -627,6 +926,10 @@ function createRun(params: {
 }
 
 describe("followup queue deduplication", () => {
+  beforeEach(() => {
+    resetRecentQueuedMessageIdDedupe();
+  });
+
   it("deduplicates messages with same Discord message_id", async () => {
     const key = `test-dedup-message-id-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -688,6 +991,161 @@ describe("followup queue deduplication", () => {
     await done.promise;
     // Should collect both unique messages
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+  });
+
+  it("deduplicates same message_id after queue drain restarts", async () => {
+    const key = `test-dedup-after-drain-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "same-id",
+        originatingChannel: "signal",
+        originatingTo: "+10000000000",
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    const redelivery = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first-redelivery",
+        messageId: "same-id",
+        originatingChannel: "signal",
+        originatingTo: "+10000000000",
+      }),
+      settings,
+    );
+
+    expect(redelivery).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("deduplicates same message_id across distinct enqueue module instances", async () => {
+    const enqueueA = await importFreshModule<typeof import("./queue/enqueue.js")>(
+      import.meta.url,
+      "./queue/enqueue.js?scope=dedupe-a",
+    );
+    const enqueueB = await importFreshModule<typeof import("./queue/enqueue.js")>(
+      import.meta.url,
+      "./queue/enqueue.js?scope=dedupe-b",
+    );
+    const { clearSessionQueues } = await import("./queue.js");
+    const key = `test-dedup-cross-module-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueA.resetRecentQueuedMessageIdDedupe();
+    enqueueB.resetRecentQueuedMessageIdDedupe();
+
+    try {
+      expect(
+        enqueueA.enqueueFollowupRun(
+          key,
+          createRun({
+            prompt: "first",
+            messageId: "same-id",
+            originatingChannel: "signal",
+            originatingTo: "+10000000000",
+          }),
+          settings,
+        ),
+      ).toBe(true);
+
+      scheduleFollowupDrain(key, runFollowup);
+      await done.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(
+        enqueueB.enqueueFollowupRun(
+          key,
+          createRun({
+            prompt: "first-redelivery",
+            messageId: "same-id",
+            originatingChannel: "signal",
+            originatingTo: "+10000000000",
+          }),
+          settings,
+        ),
+      ).toBe(false);
+      expect(calls).toHaveLength(1);
+    } finally {
+      clearSessionQueues([key]);
+      enqueueA.resetRecentQueuedMessageIdDedupe();
+      enqueueB.resetRecentQueuedMessageIdDedupe();
+    }
+  });
+
+  it("does not collide recent message-id keys when routing contains delimiters", async () => {
+    const key = `test-dedup-key-collision-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "same-id",
+        originatingChannel: "signal|group",
+        originatingTo: "peer",
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    // Different routing dimensions can produce identical pipe-joined strings.
+    // This must not be deduplicated as a replay of the first run.
+    const second = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second",
+        messageId: "same-id",
+        originatingChannel: "signal",
+        originatingTo: "group|peer",
+      }),
+      settings,
+    );
+    expect(second).toBe(true);
   });
 
   it("deduplicates exact prompt when routing matches and no message id", async () => {
@@ -1166,6 +1624,55 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls[1]?.prompt).toBe("after-idle");
   });
 
+  it("restarts an idle drain across distinct enqueue and drain module instances", async () => {
+    const drainA = await importFreshModule<typeof import("./queue/drain.js")>(
+      import.meta.url,
+      "./queue/drain.js?scope=restart-a",
+    );
+    const enqueueB = await importFreshModule<typeof import("./queue/enqueue.js")>(
+      import.meta.url,
+      "./queue/enqueue.js?scope=restart-b",
+    );
+    const { clearSessionQueues } = await import("./queue.js");
+    const key = `test-idle-window-cross-module-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const firstProcessed = createDeferred<void>();
+
+    enqueueB.resetRecentQueuedMessageIdDedupe();
+
+    try {
+      const runFollowup = async (run: FollowupRun) => {
+        calls.push(run);
+        if (calls.length === 1) {
+          firstProcessed.resolve();
+        }
+      };
+
+      enqueueB.enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+      drainA.scheduleFollowupDrain(key, runFollowup);
+      await firstProcessed.promise;
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      enqueueB.enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+
+      await vi.waitFor(
+        () => {
+          expect(calls).toHaveLength(2);
+        },
+        { timeout: 1_000 },
+      );
+
+      expect(calls[0]?.prompt).toBe("before-idle");
+      expect(calls[1]?.prompt).toBe("after-idle");
+    } finally {
+      clearSessionQueues([key]);
+      drainA.clearFollowupDrainCallback(key);
+      enqueueB.resetRecentQueuedMessageIdDedupe();
+    }
+  });
+
   it("does not double-drain when a message arrives while drain is still running", async () => {
     const key = `test-no-double-drain-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -1270,6 +1777,43 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver.mock.calls[0][0].text).toBe("PFX hello");
     expect(onHeartbeatStrip).toHaveBeenCalledTimes(2);
+  });
+
+  it("compiles Slack directives in dispatcher flows when enabled", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      enableSlackInteractiveReplies: true,
+    });
+
+    expect(
+      dispatcher.sendFinalReply({
+        text: "Choose [[slack_buttons: Retry:retry]]",
+      }),
+    ).toBe(true);
+    await dispatcher.waitForIdle();
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]).toMatchObject({
+      text: "Choose",
+      channelData: {
+        slack: {
+          blocks: [
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: "Choose",
+              },
+            },
+            {
+              type: "actions",
+              block_id: "openclaw_reply_buttons_1",
+            },
+          ],
+        },
+      },
+    });
   });
 
   it("avoids double-prefixing and keeps media when heartbeat is the only text", async () => {

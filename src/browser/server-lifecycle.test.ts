@@ -5,9 +5,18 @@ const { resolveProfileMock, ensureChromeExtensionRelayServerMock } = vi.hoisted(
   ensureChromeExtensionRelayServerMock: vi.fn(),
 }));
 
+const { stopOpenClawChromeMock, stopChromeExtensionRelayServerMock } = vi.hoisted(() => ({
+  stopOpenClawChromeMock: vi.fn(async () => {}),
+  stopChromeExtensionRelayServerMock: vi.fn(async () => true),
+}));
+
 const { createBrowserRouteContextMock, listKnownProfileNamesMock } = vi.hoisted(() => ({
   createBrowserRouteContextMock: vi.fn(),
   listKnownProfileNamesMock: vi.fn(),
+}));
+
+vi.mock("./chrome.js", () => ({
+  stopOpenClawChrome: stopOpenClawChromeMock,
 }));
 
 vi.mock("./config.js", () => ({
@@ -16,6 +25,7 @@ vi.mock("./config.js", () => ({
 
 vi.mock("./extension-relay.js", () => ({
   ensureChromeExtensionRelayServer: ensureChromeExtensionRelayServerMock,
+  stopChromeExtensionRelayServer: stopChromeExtensionRelayServerMock,
 }));
 
 vi.mock("./server-context.js", () => ({
@@ -33,7 +43,7 @@ describe("ensureExtensionRelayForProfiles", () => {
 
   it("starts relay only for extension profiles", async () => {
     resolveProfileMock.mockImplementation((_resolved: unknown, name: string) => {
-      if (name === "chrome") {
+      if (name === "chrome-relay") {
         return { driver: "extension", cdpUrl: "http://127.0.0.1:18888" };
       }
       return { driver: "openclaw", cdpUrl: "http://127.0.0.1:18889" };
@@ -43,7 +53,7 @@ describe("ensureExtensionRelayForProfiles", () => {
     await ensureExtensionRelayForProfiles({
       resolved: {
         profiles: {
-          chrome: {},
+          "chrome-relay": {},
           openclaw: {},
         },
       } as never,
@@ -62,12 +72,12 @@ describe("ensureExtensionRelayForProfiles", () => {
     const onWarn = vi.fn();
 
     await ensureExtensionRelayForProfiles({
-      resolved: { profiles: { chrome: {} } } as never,
+      resolved: { profiles: { "chrome-relay": {} } } as never,
       onWarn,
     });
 
     expect(onWarn).toHaveBeenCalledWith(
-      'Chrome extension relay init failed for profile "chrome": Error: boom',
+      'Chrome extension relay init failed for profile "chrome-relay": Error: boom',
     );
   });
 });
@@ -76,13 +86,15 @@ describe("stopKnownBrowserProfiles", () => {
   beforeEach(() => {
     createBrowserRouteContextMock.mockClear();
     listKnownProfileNamesMock.mockClear();
+    stopOpenClawChromeMock.mockClear();
+    stopChromeExtensionRelayServerMock.mockClear();
   });
 
   it("stops all known profiles and ignores per-profile failures", async () => {
-    listKnownProfileNamesMock.mockReturnValue(["openclaw", "chrome"]);
+    listKnownProfileNamesMock.mockReturnValue(["openclaw", "chrome-relay"]);
     const stopMap: Record<string, ReturnType<typeof vi.fn>> = {
       openclaw: vi.fn(async () => {}),
-      chrome: vi.fn(async () => {
+      "chrome-relay": vi.fn(async () => {
         throw new Error("profile stop failed");
       }),
     };
@@ -100,8 +112,55 @@ describe("stopKnownBrowserProfiles", () => {
     });
 
     expect(stopMap.openclaw).toHaveBeenCalledTimes(1);
-    expect(stopMap.chrome).toHaveBeenCalledTimes(1);
+    expect(stopMap["chrome-relay"]).toHaveBeenCalledTimes(1);
     expect(onWarn).not.toHaveBeenCalled();
+  });
+
+  it("stops tracked runtime browsers even when the profile no longer resolves", async () => {
+    listKnownProfileNamesMock.mockReturnValue(["deleted-local", "deleted-extension"]);
+    createBrowserRouteContextMock.mockReturnValue({
+      forProfile: vi.fn(() => {
+        throw new Error("profile not found");
+      }),
+    });
+    const localRuntime = {
+      profile: {
+        name: "deleted-local",
+        driver: "openclaw",
+      },
+      running: {
+        pid: 42,
+        cdpPort: 18888,
+      },
+    };
+    const launchedBrowser = localRuntime.running;
+    const extensionRuntime = {
+      profile: {
+        name: "deleted-extension",
+        driver: "extension",
+        cdpUrl: "http://127.0.0.1:19999",
+      },
+      running: null,
+    };
+    const profiles = new Map<string, unknown>([
+      ["deleted-local", localRuntime],
+      ["deleted-extension", extensionRuntime],
+    ]);
+    const state = {
+      resolved: { profiles: {} },
+      profiles,
+    };
+
+    await stopKnownBrowserProfiles({
+      getState: () => state as never,
+      onWarn: vi.fn(),
+    });
+
+    expect(stopOpenClawChromeMock).toHaveBeenCalledWith(launchedBrowser);
+    expect(localRuntime.running).toBeNull();
+    expect(stopChromeExtensionRelayServerMock).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:19999",
+    });
   });
 
   it("warns when profile enumeration fails", async () => {

@@ -3,6 +3,7 @@ summary: "OpenClaw plugins/extensions: discovery, config, and safety"
 read_when:
   - Adding or modifying plugins/extensions
   - Documenting plugin install or load rules
+  - Working with Codex/Claude-compatible plugin bundles
 title: "Plugins"
 ---
 
@@ -10,8 +11,13 @@ title: "Plugins"
 
 ## Quick start (new to plugins?)
 
-A plugin is just a **small code module** that extends OpenClaw with extra
-features (commands, tools, and Gateway RPC).
+A plugin is either:
+
+- a native **OpenClaw plugin** (`openclaw.plugin.json` + runtime module), or
+- a compatible **bundle** (`.codex-plugin/plugin.json` or `.claude-plugin/plugin.json`)
+
+Both show up under `openclaw plugins`, but only native OpenClaw plugins execute
+runtime code in-process.
 
 Most of the time, you’ll use plugins when you want a feature that’s not built
 into core OpenClaw yet (or you want to keep optional features out of your main
@@ -42,6 +48,110 @@ prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
 
 See [Voice Call](/plugins/voice-call) for a concrete example plugin.
 Looking for third-party listings? See [Community plugins](/plugins/community).
+Need the bundle compatibility details? See [Plugin bundles](/plugins/bundles).
+
+For compatible bundles, install from a local directory or archive:
+
+```bash
+openclaw plugins install ./my-bundle
+openclaw plugins install ./my-bundle.tgz
+```
+
+## Architecture
+
+OpenClaw's plugin system has four layers:
+
+1. **Manifest + discovery**
+   OpenClaw finds candidate plugins from configured paths, workspace roots,
+   global extension roots, and bundled extensions. Discovery reads native
+   `openclaw.plugin.json` manifests plus supported bundle manifests first.
+2. **Enablement + validation**
+   Core decides whether a discovered plugin is enabled, disabled, blocked, or
+   selected for an exclusive slot such as memory.
+3. **Runtime loading**
+   Native OpenClaw plugins are loaded in-process via jiti and register
+   capabilities into a central registry. Compatible bundles are normalized into
+   registry records without importing runtime code.
+4. **Surface consumption**
+   The rest of OpenClaw reads the registry to expose tools, channels, provider
+   setup, hooks, HTTP routes, CLI commands, and services.
+
+The important design boundary:
+
+- discovery + config validation should work from **manifest/schema metadata**
+  without executing plugin code
+- native runtime behavior comes from the plugin module's `register(api)` path
+
+That split lets OpenClaw validate config, explain missing/disabled plugins, and
+build UI/schema hints before the full runtime is active.
+
+## Compatible bundles
+
+OpenClaw also recognizes two compatible external bundle layouts:
+
+- Codex-style bundles: `.codex-plugin/plugin.json`
+- Claude-style bundles: `.claude-plugin/plugin.json` or the default Claude
+  component layout without a manifest
+- Cursor-style bundles: `.cursor-plugin/plugin.json`
+
+They are shown in the plugin list as `format=bundle`, with a subtype of
+`codex` or `claude` in verbose/info output.
+
+See [Plugin bundles](/plugins/bundles) for the exact detection rules, mapping
+behavior, and current support matrix.
+
+Today, OpenClaw treats these as **capability packs**, not native runtime
+plugins:
+
+- supported now: bundled `skills`
+- supported now: Claude `commands/` markdown roots, mapped into the normal
+  OpenClaw skill loader
+- supported now: Claude bundle `settings.json` defaults for embedded Pi agent
+  settings (with shell override keys sanitized)
+- supported now: Cursor `.cursor/commands/*.md` roots, mapped into the normal
+  OpenClaw skill loader
+- supported now: Codex bundle hook directories that use the OpenClaw hook-pack
+  layout (`HOOK.md` + `handler.ts`/`handler.js`)
+- detected but not wired yet: other declared bundle capabilities such as
+  agents, Claude hook automation, Cursor rules/hooks/MCP metadata, MCP/app/LSP
+  metadata, output styles
+
+That means bundle install/discovery/list/info/enablement all work, and bundle
+skills, Claude command-skills, Claude bundle settings defaults, and compatible
+Codex hook directories load when the bundle is enabled, but bundle runtime code
+is not executed in-process.
+
+Bundle hook support is limited to the normal OpenClaw hook directory format
+(`HOOK.md` plus `handler.ts`/`handler.js` under the declared hook roots).
+Vendor-specific shell/JSON hook runtimes, including Claude `hooks.json`, are
+only detected today and are not executed directly.
+
+## Execution model
+
+Native OpenClaw plugins run **in-process** with the Gateway. They are not
+sandboxed. A loaded native plugin has the same process-level trust boundary as
+core code.
+
+Implications:
+
+- a native plugin can register tools, network handlers, hooks, and services
+- a native plugin bug can crash or destabilize the gateway
+- a malicious native plugin is equivalent to arbitrary code execution inside
+  the OpenClaw process
+
+Compatible bundles are safer by default because OpenClaw currently treats them
+as metadata/content packs. In current releases, that mostly means bundled
+skills.
+
+Use allowlists and explicit install/load paths for non-bundled plugins. Treat
+workspace plugins as development-time code, not production defaults.
+
+Important trust note:
+
+- `plugins.allow` trusts **plugin ids**, not source provenance.
+- A workspace plugin with the same id as a bundled plugin intentionally shadows
+  the bundled copy when that workspace plugin is enabled/allowlisted.
+- This is normal and useful for local development, patch testing, and hotfixes.
 
 ## Available plugins (official)
 
@@ -54,16 +164,36 @@ Looking for third-party listings? See [Community plugins](/plugins/community).
 - [Nostr](/channels/nostr) — `@openclaw/nostr`
 - [Zalo](/channels/zalo) — `@openclaw/zalo`
 - [Microsoft Teams](/channels/msteams) — `@openclaw/msteams`
+- BytePlus provider catalog — bundled as `byteplus` (enabled by default)
+- Cloudflare AI Gateway provider catalog — bundled as `cloudflare-ai-gateway` (enabled by default)
 - Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)
 - Gemini CLI OAuth (provider auth) — bundled as `google-gemini-cli-auth` (disabled by default)
-- Qwen OAuth (provider auth) — bundled as `qwen-portal-auth` (disabled by default)
+- GitHub Copilot provider runtime — bundled as `github-copilot` (enabled by default)
+- Hugging Face provider catalog — bundled as `huggingface` (enabled by default)
+- Kilo Gateway provider runtime — bundled as `kilocode` (enabled by default)
+- Kimi Coding provider catalog — bundled as `kimi-coding` (enabled by default)
+- MiniMax provider catalog — bundled as `minimax` (enabled by default)
+- MiniMax OAuth (provider auth + catalog) — bundled as `minimax-portal-auth` (enabled by default)
+- Model Studio provider catalog — bundled as `modelstudio` (enabled by default)
+- Moonshot provider runtime — bundled as `moonshot` (enabled by default)
+- NVIDIA provider catalog — bundled as `nvidia` (enabled by default)
+- OpenAI Codex provider runtime — bundled as `openai-codex` (enabled by default)
+- OpenRouter provider runtime — bundled as `openrouter` (enabled by default)
+- Qianfan provider catalog — bundled as `qianfan` (enabled by default)
+- Qwen OAuth (provider auth + catalog) — bundled as `qwen-portal-auth` (enabled by default)
+- Synthetic provider catalog — bundled as `synthetic` (enabled by default)
+- Together provider catalog — bundled as `together` (enabled by default)
+- Venice provider catalog — bundled as `venice` (enabled by default)
+- Vercel AI Gateway provider catalog — bundled as `vercel-ai-gateway` (enabled by default)
+- Volcengine provider catalog — bundled as `volcengine` (enabled by default)
+- Xiaomi provider catalog — bundled as `xiaomi` (enabled by default)
 - Copilot Proxy (provider auth) — local VS Code Copilot Proxy bridge; distinct from built-in `github-copilot` device login (bundled, disabled by default)
 
-OpenClaw plugins are **TypeScript modules** loaded at runtime via jiti. **Config
-validation does not execute plugin code**; it uses the plugin manifest and JSON
-Schema instead. See [Plugin manifest](/plugins/manifest).
+Native OpenClaw plugins are **TypeScript modules** loaded at runtime via jiti.
+**Config validation does not execute plugin code**; it uses the plugin manifest
+and JSON Schema instead. See [Plugin manifest](/plugins/manifest).
 
-Plugins can register:
+Native OpenClaw plugins can register:
 
 - Gateway RPC methods
 - Gateway HTTP routes
@@ -71,12 +201,197 @@ Plugins can register:
 - CLI commands
 - Background services
 - Context engines
+- Provider auth flows and model catalogs
+- Provider runtime hooks for dynamic model ids, transport normalization, capability metadata, stream wrapping, cache TTL policy, and runtime auth exchange
 - Optional config validation
 - **Skills** (by listing `skills` directories in the plugin manifest)
 - **Auto-reply commands** (execute without invoking the AI agent)
 
-Plugins run **in‑process** with the Gateway, so treat them as trusted code.
+Native OpenClaw plugins run **in‑process** with the Gateway, so treat them as trusted code.
 Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
+
+## Provider runtime hooks
+
+Provider plugins now have two layers:
+
+- config-time hooks: `catalog` / legacy `discovery`
+- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `isCacheTtlEligible`, `prepareRuntimeAuth`
+
+OpenClaw still owns the generic agent loop, failover, transcript handling, and
+tool policy. These hooks are the seam for provider-specific behavior without
+needing a whole custom inference transport.
+
+### Hook order
+
+For model/provider plugins, OpenClaw uses hooks in this rough order:
+
+1. `catalog`
+   Publish provider config into `models.providers` during `models.json`
+   generation.
+2. built-in/discovered model lookup
+   OpenClaw tries the normal registry/catalog path first.
+3. `resolveDynamicModel`
+   Sync fallback for provider-owned model ids that are not in the local
+   registry yet.
+4. `prepareDynamicModel`
+   Async warm-up only on async model resolution paths, then
+   `resolveDynamicModel` runs again.
+5. `normalizeResolvedModel`
+   Final rewrite before the embedded runner uses the resolved model.
+6. `capabilities`
+   Provider-owned transcript/tooling metadata used by shared core logic.
+7. `prepareExtraParams`
+   Provider-owned request-param normalization before generic stream option wrappers.
+8. `wrapStreamFn`
+   Provider-owned stream wrapper after generic wrappers are applied.
+9. `isCacheTtlEligible`
+   Provider-owned prompt-cache policy for proxy/backhaul providers.
+10. `prepareRuntimeAuth`
+    Exchanges a configured credential into the actual runtime token/key just
+    before inference.
+
+### Which hook to use
+
+- `catalog`: publish provider config and model catalogs into `models.providers`
+- `resolveDynamicModel`: handle pass-through or forward-compat model ids that are not in the local registry yet
+- `prepareDynamicModel`: async warm-up before retrying dynamic resolution (for example refresh provider metadata cache)
+- `normalizeResolvedModel`: rewrite a resolved model's transport/base URL/compat before inference
+- `capabilities`: publish provider-family and transcript/tooling quirks without hardcoding provider ids in core
+- `prepareExtraParams`: set provider defaults or normalize provider-specific per-model params before generic stream wrapping
+- `wrapStreamFn`: add provider-specific headers/payload/model compat patches while still using the normal `pi-ai` execution path
+- `isCacheTtlEligible`: decide whether provider/model pairs should use cache TTL metadata
+- `prepareRuntimeAuth`: exchange a configured credential into the actual short-lived runtime token/key used for requests
+
+Rule of thumb:
+
+- provider owns a catalog or base URL defaults: use `catalog`
+- provider accepts arbitrary upstream model ids: use `resolveDynamicModel`
+- provider needs network metadata before resolving unknown ids: add `prepareDynamicModel`
+- provider needs transport rewrites but still uses a core transport: use `normalizeResolvedModel`
+- provider needs transcript/provider-family quirks: use `capabilities`
+- provider needs default request params or per-provider param cleanup: use `prepareExtraParams`
+- provider needs request headers/body/model compat wrappers without a custom transport: use `wrapStreamFn`
+- provider needs proxy-specific cache TTL gating: use `isCacheTtlEligible`
+- provider needs a token exchange or short-lived request credential: use `prepareRuntimeAuth`
+
+If the provider needs a fully custom wire protocol or custom request executor,
+that is a different class of extension. These hooks are for provider behavior
+that still runs on OpenClaw's normal inference loop.
+
+### Example
+
+```ts
+api.registerProvider({
+  id: "example-proxy",
+  label: "Example Proxy",
+  auth: [],
+  catalog: {
+    order: "simple",
+    run: async (ctx) => {
+      const apiKey = ctx.resolveProviderApiKey("example-proxy").apiKey;
+      if (!apiKey) {
+        return null;
+      }
+      return {
+        provider: {
+          baseUrl: "https://proxy.example.com/v1",
+          apiKey,
+          api: "openai-completions",
+          models: [{ id: "auto", name: "Auto" }],
+        },
+      };
+    },
+  },
+  resolveDynamicModel: (ctx) => ({
+    id: ctx.modelId,
+    name: ctx.modelId,
+    provider: "example-proxy",
+    api: "openai-completions",
+    baseUrl: "https://proxy.example.com/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+  }),
+  prepareRuntimeAuth: async (ctx) => {
+    const exchanged = await exchangeToken(ctx.apiKey);
+    return {
+      apiKey: exchanged.token,
+      baseUrl: exchanged.baseUrl,
+      expiresAt: exchanged.expiresAt,
+    };
+  },
+});
+```
+
+### Built-in examples
+
+- OpenRouter uses `catalog` plus `resolveDynamicModel` and
+  `prepareDynamicModel` because the provider is pass-through and may expose new
+  model ids before OpenClaw's static catalog updates.
+- GitHub Copilot uses `catalog`, `resolveDynamicModel`, and
+  `capabilities` plus `prepareRuntimeAuth` because it needs model fallback
+  behavior, Claude transcript quirks, and a GitHub token -> Copilot token exchange.
+- OpenAI Codex uses `catalog`, `resolveDynamicModel`, and
+  `normalizeResolvedModel` plus `prepareExtraParams` because it still runs on
+  core OpenAI transports but owns its transport/base URL normalization and
+  default transport choice.
+- OpenRouter uses `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible`
+  to keep provider-specific request headers, routing metadata, reasoning
+  patches, and prompt-cache policy out of core.
+- Moonshot uses `catalog` plus `wrapStreamFn` because it still uses the shared
+  OpenAI transport but needs provider-owned thinking payload normalization.
+- Kilocode uses `catalog`, `capabilities`, `wrapStreamFn`, and
+  `isCacheTtlEligible` because it needs provider-owned request headers,
+  reasoning payload normalization, Gemini transcript hints, and Anthropic
+  cache-TTL gating.
+- Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
+  `huggingface`, `kimi-coding`, `minimax`, `minimax-portal`, `modelstudio`,
+  `nvidia`, `qianfan`, `qwen-portal`, `synthetic`, `together`, `venice`,
+  `vercel-ai-gateway`, `volcengine`, and `xiaomi` use `catalog` only.
+
+## Load pipeline
+
+At startup, OpenClaw does roughly this:
+
+1. discover candidate plugin roots
+2. read native or compatible bundle manifests and package metadata
+3. reject unsafe candidates
+4. normalize plugin config (`plugins.enabled`, `allow`, `deny`, `entries`,
+   `slots`, `load.paths`)
+5. decide enablement for each candidate
+6. load enabled native modules via jiti
+7. call native `register(api)` hooks and collect registrations into the plugin registry
+8. expose the registry to commands/runtime surfaces
+
+The safety gates happen **before** runtime execution. Candidates are blocked
+when the entry escapes the plugin root, the path is world-writable, or path
+ownership looks suspicious for non-bundled plugins.
+
+### Manifest-first behavior
+
+The manifest is the control-plane source of truth. OpenClaw uses it to:
+
+- identify the plugin
+- discover declared channels/skills/config schema or bundle capabilities
+- validate `plugins.entries.<id>.config`
+- augment Control UI labels/placeholders
+- show install/catalog metadata
+
+For native plugins, the runtime module is the data-plane part. It registers
+actual behavior such as hooks, tools, commands, or provider flows.
+
+### What the loader caches
+
+OpenClaw keeps short in-process caches for:
+
+- discovery results
+- manifest registry data
+- loaded plugin registries
+
+These caches reduce bursty startup and repeated command overhead. They are safe
+to think of as short-lived performance caches, not persistence.
 
 ## Runtime helpers
 
@@ -141,6 +456,7 @@ Notes:
 - `api.registerHttpHandler(...)` is obsolete. Use `api.registerHttpRoute(...)`.
 - Plugin routes must declare `auth` explicitly.
 - Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
+- Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
 
 ## Plugin SDK import paths
 
@@ -175,6 +491,36 @@ authoring plugins:
   `openclaw/plugin-sdk/thread-ownership`, `openclaw/plugin-sdk/tlon`,
   `openclaw/plugin-sdk/twitch`, `openclaw/plugin-sdk/voice-call`,
   `openclaw/plugin-sdk/zalo`, and `openclaw/plugin-sdk/zalouser`.
+
+## Provider catalogs
+
+Provider plugins can define model catalogs for inference with
+`registerProvider({ catalog: { run(...) { ... } } })`.
+
+`catalog.run(...)` returns the same shape OpenClaw writes into
+`models.providers`:
+
+- `{ provider }` for one provider entry
+- `{ providers }` for multiple provider entries
+
+Use `catalog` when the plugin owns provider-specific model ids, base URL
+defaults, or auth-gated model metadata.
+
+`catalog.order` controls when a plugin's catalog merges relative to OpenClaw's
+built-in implicit providers:
+
+- `simple`: plain API-key or env-driven providers
+- `profile`: providers that appear when auth profiles exist
+- `paired`: providers that synthesize multiple related provider entries
+- `late`: last pass, after other implicit providers
+
+Later providers win on key collision, so plugins can intentionally override a
+built-in provider entry with the same provider id.
+
+Compatibility:
+
+- `discovery` still works as a legacy alias
+- if both `catalog` and `discovery` are registered, OpenClaw uses `catalog`
 
 Compatibility note:
 
@@ -242,21 +588,51 @@ OpenClaw scans, in order:
 - `~/.openclaw/extensions/*.ts`
 - `~/.openclaw/extensions/*/index.ts`
 
-4. Bundled extensions (shipped with OpenClaw, mostly disabled by default)
+4. Bundled extensions (shipped with OpenClaw; mixed default-on/default-off)
 
 - `<openclaw>/extensions/*`
 
-Most bundled plugins must be enabled explicitly via
-`plugins.entries.<id>.enabled` or `openclaw plugins enable <id>`.
+Many bundled provider plugins are enabled by default so model catalogs/runtime
+hooks stay available without extra setup. Others still require explicit
+enablement via `plugins.entries.<id>.enabled` or
+`openclaw plugins enable <id>`.
 
-Default-on bundled plugin exceptions:
+Default-on bundled plugin examples:
 
+- `byteplus`
+- `cloudflare-ai-gateway`
 - `device-pair`
+- `github-copilot`
+- `huggingface`
+- `kilocode`
+- `kimi-coding`
+- `minimax`
+- `minimax-portal-auth`
+- `modelstudio`
+- `moonshot`
+- `nvidia`
+- `ollama`
+- `openai-codex`
+- `openrouter`
 - `phone-control`
+- `qianfan`
+- `qwen-portal-auth`
+- `sglang`
+- `synthetic`
 - `talk-voice`
+- `together`
+- `venice`
+- `vercel-ai-gateway`
+- `vllm`
+- `volcengine`
+- `xiaomi`
 - active memory slot plugin (default slot: `memory-core`)
 
 Installed plugins are enabled by default, but can be disabled the same way.
+
+Workspace plugins are **disabled by default** unless you explicitly enable them
+or allowlist them. This is intentional: a checked-out repo should not silently
+become production gateway code.
 
 Hardening notes:
 
@@ -267,12 +643,46 @@ Hardening notes:
   - path ownership is suspicious for non-bundled plugins (POSIX owner is neither current uid nor root).
 - Loaded non-bundled plugins without install/load-path provenance emit a warning so you can pin trust (`plugins.allow`) or install tracking (`plugins.installs`).
 
-Each plugin must include a `openclaw.plugin.json` file in its root. If a path
-points at a file, the plugin root is the file's directory and must contain the
-manifest.
+Each native OpenClaw plugin must include a `openclaw.plugin.json` file in its
+root. If a path points at a file, the plugin root is the file's directory and
+must contain the manifest.
+
+Compatible bundles may instead provide one of:
+
+- `.codex-plugin/plugin.json`
+- `.claude-plugin/plugin.json`
+
+Bundle directories are discovered from the same roots as native plugins.
 
 If multiple plugins resolve to the same id, the first match in the order above
 wins and lower-precedence copies are ignored.
+
+That means:
+
+- workspace plugins intentionally shadow bundled plugins with the same id
+- `plugins.allow: ["foo"]` authorizes the active `foo` plugin by id, even when
+  the active copy comes from the workspace instead of the bundled extension root
+- if you need stricter provenance control, use explicit install/load paths and
+  inspect the resolved plugin source before enabling it
+
+### Enablement rules
+
+Enablement is resolved after discovery:
+
+- `plugins.enabled: false` disables all plugins
+- `plugins.deny` always wins
+- `plugins.entries.<id>.enabled: false` disables that plugin
+- workspace-origin plugins are disabled by default
+- allowlists restrict the active set when `plugins.allow` is non-empty
+- allowlists are **id-based**, not source-based
+- bundled plugins are disabled by default unless:
+  - the bundled id is in the built-in default-on set, or
+  - you explicitly enable it, or
+  - channel config implicitly enables the bundled channel plugin
+- exclusive slots can force-enable the selected plugin for that slot
+
+In current core, bundled default-on ids include the local/provider helpers
+above plus the active memory slot plugin.
 
 ### Package packs
 
@@ -353,6 +763,34 @@ Default plugin ids:
 If a plugin exports `id`, OpenClaw uses it but warns when it doesn’t match the
 configured id.
 
+## Registry model
+
+Loaded plugins do not directly mutate random core globals. They register into a
+central plugin registry.
+
+The registry tracks:
+
+- plugin records (identity, source, origin, status, diagnostics)
+- tools
+- legacy hooks and typed hooks
+- channels
+- providers
+- gateway RPC handlers
+- HTTP routes
+- CLI registrars
+- background services
+- plugin-owned commands
+
+Core features then read from that registry instead of talking to plugin modules
+directly. This keeps loading one-way:
+
+- plugin module -> registry registration
+- core runtime -> registry consumption
+
+That separation matters for maintainability. It means most core surfaces only
+need one integration point: "read the registry", not "special-case every plugin
+module".
+
 ## Config
 
 ```json5
@@ -385,9 +823,21 @@ Validation rules (strict):
 - Unknown plugin ids in `entries`, `allow`, `deny`, or `slots` are **errors**.
 - Unknown `channels.<id>` keys are **errors** unless a plugin manifest declares
   the channel id.
-- Plugin config is validated using the JSON Schema embedded in
+- Native plugin config is validated using the JSON Schema embedded in
   `openclaw.plugin.json` (`configSchema`).
+- Compatible bundles currently do not expose native OpenClaw config schemas.
 - If a plugin is disabled, its config is preserved and a **warning** is emitted.
+
+### Disabled vs missing vs invalid
+
+These states are intentionally different:
+
+- **disabled**: plugin exists, but enablement rules turned it off
+- **missing**: config references a plugin id that discovery did not find
+- **invalid**: plugin exists, but its config does not match the declared schema
+
+OpenClaw preserves config for disabled plugins so toggling them back on is not
+destructive.
 
 ## Plugin slots (exclusive categories)
 
@@ -475,6 +925,10 @@ openclaw plugins disable <id>
 openclaw plugins doctor
 ```
 
+`openclaw plugins list` shows the top-level format as `openclaw` or `bundle`.
+Verbose list/info output also shows bundle subtype (`codex` or `claude`) plus
+detected bundle capabilities.
+
 `plugins update` only works for npm installs tracked under `plugins.installs`.
 If stored integrity metadata changes between updates, OpenClaw warns and asks for confirmation (use global `--yes` to bypass prompts).
 
@@ -486,6 +940,19 @@ Plugins export either:
 
 - A function: `(api) => { ... }`
 - An object: `{ id, name, configSchema, register(api) { ... } }`
+
+`register(api)` is where plugins attach behavior. Common registrations include:
+
+- `registerTool`
+- `registerHook`
+- `on(...)` for typed lifecycle hooks
+- `registerChannel`
+- `registerProvider`
+- `registerHttpRoute`
+- `registerCommand`
+- `registerCli`
+- `registerContextEngine`
+- `registerService`
 
 Context engine plugins can also register a runtime-owned context manager:
 
@@ -602,13 +1069,188 @@ Migration guidance:
 
 ## Provider plugins (model auth)
 
-Plugins can register **model provider auth** flows so users can run OAuth or
-API-key setup inside OpenClaw (no external scripts needed).
+Plugins can register **model providers** so users can run OAuth or API-key
+setup inside OpenClaw, surface provider setup in onboarding/model-pickers, and
+contribute implicit provider discovery.
+
+Provider plugins are the modular extension seam for model-provider setup. They
+are not just "OAuth helpers" anymore.
+
+### Provider plugin lifecycle
+
+A provider plugin can participate in five distinct phases:
+
+1. **Auth**
+   `auth[].run(ctx)` performs OAuth, API-key capture, device code, or custom
+   setup and returns auth profiles plus optional config patches.
+2. **Non-interactive setup**
+   `auth[].runNonInteractive(ctx)` handles `openclaw onboard --non-interactive`
+   without prompts. Use this when the provider needs custom headless setup
+   beyond the built-in simple API-key paths.
+3. **Wizard integration**
+   `wizard.onboarding` adds an entry to `openclaw onboard`.
+   `wizard.modelPicker` adds a setup entry to the model picker.
+4. **Implicit discovery**
+   `discovery.run(ctx)` can contribute provider config automatically during
+   model resolution/listing.
+5. **Post-selection follow-up**
+   `onModelSelected(ctx)` runs after a model is chosen. Use this for provider-
+   specific work such as downloading a local model.
+
+This is the recommended split because these phases have different lifecycle
+requirements:
+
+- auth is interactive and writes credentials/config
+- non-interactive setup is flag/env-driven and must not prompt
+- wizard metadata is static and UI-facing
+- discovery should be safe, quick, and failure-tolerant
+- post-select hooks are side effects tied to the chosen model
+
+### Provider auth contract
+
+`auth[].run(ctx)` returns:
+
+- `profiles`: auth profiles to write
+- `configPatch`: optional `openclaw.json` changes
+- `defaultModel`: optional `provider/model` ref
+- `notes`: optional user-facing notes
+
+Core then:
+
+1. writes the returned auth profiles
+2. applies auth-profile config wiring
+3. merges the config patch
+4. optionally applies the default model
+5. runs the provider's `onModelSelected` hook when appropriate
+
+That means a provider plugin owns the provider-specific setup logic, while core
+owns the generic persistence and config-merge path.
+
+### Provider non-interactive contract
+
+`auth[].runNonInteractive(ctx)` is optional. Implement it when the provider
+needs headless setup that cannot be expressed through the built-in generic
+API-key flows.
+
+The non-interactive context includes:
+
+- the current and base config
+- parsed onboarding CLI options
+- runtime logging/error helpers
+- agent/workspace dirs
+- `resolveApiKey(...)` to read provider keys from flags, env, or existing auth
+  profiles while honoring `--secret-input-mode`
+- `toApiKeyCredential(...)` to convert a resolved key into an auth-profile
+  credential with the right plaintext vs secret-ref storage
+
+Use this surface for providers such as:
+
+- self-hosted OpenAI-compatible runtimes that need `--custom-base-url` +
+  `--custom-model-id`
+- provider-specific non-interactive verification or config synthesis
+
+Do not prompt from `runNonInteractive`. Reject missing inputs with actionable
+errors instead.
+
+### Provider wizard metadata
+
+`wizard.onboarding` controls how the provider appears in grouped onboarding:
+
+- `choiceId`: auth-choice value
+- `choiceLabel`: option label
+- `choiceHint`: short hint
+- `groupId`: group bucket id
+- `groupLabel`: group label
+- `groupHint`: group hint
+- `methodId`: auth method to run
+
+`wizard.modelPicker` controls how a provider appears as a "set this up now"
+entry in model selection:
+
+- `label`
+- `hint`
+- `methodId`
+
+When a provider has multiple auth methods, the wizard can either point at one
+explicit method or let OpenClaw synthesize per-method choices.
+
+OpenClaw validates provider wizard metadata when the plugin registers:
+
+- duplicate or blank auth-method ids are rejected
+- wizard metadata is ignored when the provider has no auth methods
+- invalid `methodId` bindings are downgraded to warnings and fall back to the
+  provider's remaining auth methods
+
+### Provider discovery contract
+
+`discovery.run(ctx)` returns one of:
+
+- `{ provider }`
+- `{ providers }`
+- `null`
+
+Use `{ provider }` for the common case where the plugin owns one provider id.
+Use `{ providers }` when a plugin discovers multiple provider entries.
+
+The discovery context includes:
+
+- the current config
+- agent/workspace dirs
+- process env
+- a helper to resolve the provider API key and a discovery-safe API key value
+
+Discovery should be:
+
+- fast
+- best-effort
+- safe to skip on failure
+- careful about side effects
+
+It should not depend on prompts or long-running setup.
+
+### Discovery ordering
+
+Provider discovery runs in ordered phases:
+
+- `simple`
+- `profile`
+- `paired`
+- `late`
+
+Use:
+
+- `simple` for cheap environment-only discovery
+- `profile` when discovery depends on auth profiles
+- `paired` for providers that need to coordinate with another discovery step
+- `late` for expensive or local-network probing
+
+Most self-hosted providers should use `late`.
+
+### Good provider-plugin boundaries
+
+Good fit for provider plugins:
+
+- local/self-hosted providers with custom setup flows
+- provider-specific OAuth/device-code login
+- implicit discovery of local model servers
+- post-selection side effects such as model pulls
+
+Less compelling fit:
+
+- trivial API-key-only providers that differ only by env var, base URL, and one
+  default model
+
+Those can still become plugins, but the main modularity payoff comes from
+extracting behavior-rich providers first.
 
 Register a provider via `api.registerProvider(...)`. Each provider exposes one
-or more auth methods (OAuth, API key, device code, etc.). These methods power:
+or more auth methods (OAuth, API key, device code, etc.). Those methods can
+power:
 
 - `openclaw models auth login --provider <id> [--method <id>]`
+- `openclaw onboard`
+- model-picker “custom provider” setup entries
+- implicit provider discovery during model resolution/listing
 
 Example:
 
@@ -641,6 +1283,31 @@ api.registerProvider({
       },
     },
   ],
+  wizard: {
+    onboarding: {
+      choiceId: "acme",
+      choiceLabel: "AcmeAI",
+      groupId: "acme",
+      groupLabel: "AcmeAI",
+      methodId: "oauth",
+    },
+    modelPicker: {
+      label: "AcmeAI (custom)",
+      hint: "Connect a self-hosted AcmeAI endpoint",
+      methodId: "oauth",
+    },
+  },
+  discovery: {
+    order: "late",
+    run: async () => ({
+      provider: {
+        baseUrl: "https://acme.example/v1",
+        api: "openai-completions",
+        apiKey: "${ACME_API_KEY}",
+        models: [],
+      },
+    }),
+  },
 });
 ```
 
@@ -648,8 +1315,19 @@ Notes:
 
 - `run` receives a `ProviderAuthContext` with `prompter`, `runtime`,
   `openUrl`, and `oauth.createVpsAwareHandlers` helpers.
+- `runNonInteractive` receives a `ProviderAuthMethodNonInteractiveContext`
+  with `opts`, `resolveApiKey`, and `toApiKeyCredential` helpers for
+  headless onboarding.
 - Return `configPatch` when you need to add default models or provider config.
 - Return `defaultModel` so `--set-default` can update agent defaults.
+- `wizard.onboarding` adds a provider choice to `openclaw onboard`.
+- `wizard.modelPicker` adds a “setup this provider” entry to the model picker.
+- `discovery.run` returns either `{ provider }` for the plugin’s own provider id
+  or `{ providers }` for multi-provider discovery.
+- `discovery.order` controls when the provider runs relative to built-in
+  discovery phases: `simple`, `profile`, `paired`, or `late`.
+- `onModelSelected` is the post-selection hook for provider-specific follow-up
+  work such as pulling a local model.
 
 ### Register a messaging channel
 
@@ -862,6 +1540,7 @@ Command handler context:
 Command options:
 
 - `name`: Command name (without the leading `/`)
+- `nativeNames`: Optional native-command aliases for slash/menu surfaces. Use `default` for all native providers, or provider-specific keys like `discord`
 - `description`: Help text shown in command lists
 - `acceptsArgs`: Whether the command accepts arguments (default: false). If false and arguments are provided, the command won't match and the message falls through to other handlers
 - `requireAuth`: Whether to require authorized sender (default: true)
@@ -950,6 +1629,8 @@ Plugins run in-process with the Gateway. Treat them as trusted code:
 
 - Only install plugins you trust.
 - Prefer `plugins.allow` allowlists.
+- Remember that `plugins.allow` is id-based, so an enabled workspace plugin can
+  intentionally shadow a bundled plugin with the same id.
 - Restart the Gateway after changes.
 
 ## Testing plugins

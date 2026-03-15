@@ -1,30 +1,11 @@
-export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export type { ResolvedIMessageAccount } from "../imessage/accounts.js";
-export type { PluginRuntime } from "../plugins/runtime/types.js";
-export type { OpenClawPluginApi } from "../plugins/types.js";
-
-export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-
-export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
-
-export {
-  applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../channels/plugins/setup-helpers.js";
-export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-export {
-  deleteAccountFromConfigSection,
-  setAccountEnabledInConfigSection,
-} from "../channels/plugins/config-helpers.js";
-export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
-export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
-
-export { getChatChannelMeta } from "../channels/registry.js";
+export type { ResolvedIMessageAccount } from "../../extensions/imessage/src/accounts.js";
+export type { IMessageAccountConfig } from "../config/types.js";
+export * from "./channel-plugin-common.js";
 export {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
-} from "../imessage/accounts.js";
+} from "../../extensions/imessage/src/accounts.js";
 export {
   formatTrimmedAllowFromEntries,
   resolveIMessageConfigAllowFrom,
@@ -43,7 +24,8 @@ export {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
 } from "../channels/plugins/group-mentions.js";
-export { imessageOnboardingAdapter } from "../channels/plugins/onboarding/imessage.js";
+export { imessageOnboardingAdapter } from "../../extensions/imessage/src/onboarding.js";
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export { collectStatusIssuesFromLastError } from "./status-helpers.js";

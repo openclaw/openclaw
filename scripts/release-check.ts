@@ -4,10 +4,18 @@ import { execSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  collectBundledExtensionManifestErrors,
+  normalizeBundledExtensionMetadata,
+  type BundledExtension,
+  type ExtensionPackageJson as PackageJson,
+} from "./lib/bundled-extension-manifest.ts";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
+export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
+
 type PackFile = { path: string };
-type PackResult = { files?: PackFile[] };
+type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
 
 const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
@@ -104,14 +112,13 @@ const requiredPathGroups = [
   "dist/build-info.json",
 ];
 const forbiddenPrefixes = ["dist/OpenClaw.app/"];
+// 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
+// startup/doctor OOM reports. Keep enough headroom for the current pack while
+// failing fast if duplicate/shim content sneaks back into the release artifact.
+const npmPackUnpackedSizeBudgetBytes = 160 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
-
-type PackageJson = {
-  name?: string;
-  version?: string;
-};
 
 function normalizePluginSyncVersion(version: string): string {
   const normalized = version.trim().replace(/^v/, "");
@@ -122,6 +129,90 @@ function normalizePluginSyncVersion(version: string): string {
   return normalized.replace(/[-+].*$/, "");
 }
 
+export function collectBundledExtensionRootDependencyGapErrors(params: {
+  rootPackage: PackageJson;
+  extensions: BundledExtension[];
+}): string[] {
+  const rootDeps = {
+    ...params.rootPackage.dependencies,
+    ...params.rootPackage.optionalDependencies,
+  };
+  const errors: string[] = [];
+
+  for (const extension of normalizeBundledExtensionMetadata(params.extensions)) {
+    if (!extension.npmSpec) {
+      continue;
+    }
+
+    const missing = Object.keys(extension.packageJson.dependencies ?? {})
+      .filter((dep) => dep !== "openclaw" && !rootDeps[dep])
+      .toSorted();
+    const allowlisted = extension.rootDependencyMirrorAllowlist.toSorted();
+    if (missing.join("\n") !== allowlisted.join("\n")) {
+      const unexpected = missing.filter((dep) => !allowlisted.includes(dep));
+      const resolved = allowlisted.filter((dep) => !missing.includes(dep));
+      const parts = [
+        `bundled extension '${extension.id}' root dependency mirror drift`,
+        `missing in root package: ${missing.length > 0 ? missing.join(", ") : "(none)"}`,
+      ];
+      if (unexpected.length > 0) {
+        parts.push(`new gaps: ${unexpected.join(", ")}`);
+      }
+      if (resolved.length > 0) {
+        parts.push(`remove stale allowlist entries: ${resolved.join(", ")}`);
+      }
+      errors.push(parts.join(" | "));
+    }
+  }
+
+  return errors;
+}
+
+function collectBundledExtensions(): BundledExtension[] {
+  const extensionsDir = resolve("extensions");
+  const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
+    entry.isDirectory(),
+  );
+
+  return entries.flatMap((entry) => {
+    const packagePath = join(extensionsDir, entry.name, "package.json");
+    try {
+      return [
+        {
+          id: entry.name,
+          packageJson: JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson,
+        },
+      ];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function checkBundledExtensionRootDependencyMirrors() {
+  const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as PackageJson;
+  const extensions = collectBundledExtensions();
+  const manifestErrors = collectBundledExtensionManifestErrors(extensions);
+  if (manifestErrors.length > 0) {
+    console.error("release-check: bundled extension manifest validation failed:");
+    for (const error of manifestErrors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+  const errors = collectBundledExtensionRootDependencyGapErrors({
+    rootPackage,
+    extensions,
+  });
+  if (errors.length > 0) {
+    console.error("release-check: bundled extension root dependency mirror validation failed:");
+    for (const error of errors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+}
+
 function runPackDry(): PackResult[] {
   const raw = execSync("npm pack --dry-run --json --ignore-scripts", {
     encoding: "utf8",
@@ -129,6 +220,60 @@ function runPackDry(): PackResult[] {
     maxBuffer: 1024 * 1024 * 100,
   });
   return JSON.parse(raw) as PackResult[];
+}
+
+export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
+  return [...paths]
+    .filter(
+      (path) =>
+        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
+        /(^|\/)node_modules\//.test(path),
+    )
+    .toSorted();
+}
+
+function formatMiB(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function resolvePackResultLabel(entry: PackResult, index: number): string {
+  return entry.filename?.trim() || `pack result #${index + 1}`;
+}
+
+function formatPackUnpackedSizeBudgetError(params: {
+  label: string;
+  unpackedSize: number;
+}): string {
+  return [
+    `${params.label} unpackedSize ${params.unpackedSize} bytes (${formatMiB(params.unpackedSize)}) exceeds budget ${npmPackUnpackedSizeBudgetBytes} bytes (${formatMiB(npmPackUnpackedSizeBudgetBytes)}).`,
+    "Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
+  ].join(" ");
+}
+
+export function collectPackUnpackedSizeErrors(results: Iterable<PackResult>): string[] {
+  const entries = Array.from(results);
+  const errors: string[] = [];
+  let checkedCount = 0;
+
+  for (const [index, entry] of entries.entries()) {
+    if (typeof entry.unpackedSize !== "number" || !Number.isFinite(entry.unpackedSize)) {
+      continue;
+    }
+    checkedCount += 1;
+    if (entry.unpackedSize <= npmPackUnpackedSizeBudgetBytes) {
+      continue;
+    }
+    const label = resolvePackResultLabel(entry, index);
+    errors.push(formatPackUnpackedSizeBudgetError({ label, unpackedSize: entry.unpackedSize }));
+  }
+
+  if (entries.length > 0 && checkedCount === 0) {
+    errors.push(
+      "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
+    );
+  }
+
+  return errors;
 }
 
 function checkPluginVersions() {
@@ -321,6 +466,7 @@ function main() {
   checkPluginVersions();
   checkAppcastSparkleVersions();
   checkPluginSdkExports();
+  checkBundledExtensionRootDependencyMirrors();
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);
@@ -334,11 +480,10 @@ function main() {
       return paths.has(group) ? [] : [group];
     })
     .toSorted();
-  const forbidden = [...paths].filter((path) =>
-    forbiddenPrefixes.some((prefix) => path.startsWith(prefix)),
-  );
+  const forbidden = collectForbiddenPackPaths(paths);
+  const sizeErrors = collectPackUnpackedSizeErrors(results);
 
-  if (missing.length > 0 || forbidden.length > 0) {
+  if (missing.length > 0 || forbidden.length > 0 || sizeErrors.length > 0) {
     if (missing.length > 0) {
       console.error("release-check: missing files in npm pack:");
       for (const path of missing) {
@@ -349,6 +494,12 @@ function main() {
       console.error("release-check: forbidden files in npm pack:");
       for (const path of forbidden) {
         console.error(`  - ${path}`);
+      }
+    }
+    if (sizeErrors.length > 0) {
+      console.error("release-check: npm pack unpacked size budget exceeded:");
+      for (const error of sizeErrors) {
+        console.error(`  - ${error}`);
       }
     }
     process.exit(1);

@@ -5,8 +5,41 @@
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 - GitHub comment footgun: never use `gh issue/pr comment -b "..."` when body contains backticks or shell chars. Always use single-quoted heredoc (`-F - <<'EOF'`) so no command substitution/escaping corruption.
 - GitHub linking footgun: don’t wrap issue/PR refs like `#24643` in backticks when you want auto-linking. Use plain `#24643` (optionally add full URL).
+- PR landing comments: always make commit SHAs clickable with full commit links (both landed SHA + source SHA when present).
+- PR review conversations: if a bot leaves review conversations on your PR, address them and resolve those conversations yourself once fixed. Leave a conversation unresolved only when reviewer or maintainer judgment is still needed; do not leave bot-conversation cleanup to maintainers.
 - GitHub searching footgun: don't limit yourself to the first 500 issues or PRs when wanting to search all. Unless you're supposed to look at the most recent, keep going until you've reached the last page in the search
 - Security advisory analysis: before triage/severity decisions, read `SECURITY.md` to align with OpenClaw's trust model and design boundaries.
+- Do not edit files covered by security-focused `CODEOWNERS` rules unless a listed owner explicitly asked for the change or is already reviewing it with you. Treat those paths as restricted surfaces, not drive-by cleanup.
+
+## Auto-close labels (issues and PRs)
+
+- If an issue/PR matches one of the reasons below, apply the label and let `.github/workflows/auto-response.yml` handle comment/close/lock.
+- Do not manually close + manually comment for these reasons.
+- Why: keeps wording consistent, preserves automation behavior (`state_reason`, locking), and keeps triage/reporting searchable by label.
+- `r:*` labels can be used on both issues and PRs.
+
+- `r: skill`: close with guidance to publish skills on Clawhub.
+- `r: support`: close with redirect to Discord support + stuck FAQ.
+- `r: no-ci-pr`: close test-fix-only PRs for failing `main` CI and post the standard explanation.
+- `r: too-many-prs`: close when author exceeds active PR limit.
+- `r: testflight`: close requests asking for TestFlight access/builds. OpenClaw does not provide TestFlight distribution yet, so use the standard response (“Not available, build from source.”) instead of ad-hoc replies.
+- `r: third-party-extension`: close with guidance to ship as third-party plugin.
+- `r: moltbook`: close + lock as off-topic (not affiliated).
+- `r: spam`: close + lock as spam (`lock_reason: spam`).
+- `invalid`: close invalid items (issues are closed as `not_planned`; PRs are closed).
+- `dirty`: close PRs with too many unrelated/unexpected changes (PR-only label).
+
+## PR truthfulness and bug-fix validation
+
+- Never merge a bug-fix PR based only on issue text, PR text, or AI rationale.
+- Before `/landpr`, run `/reviewpr` and require explicit evidence for bug-fix claims.
+- Minimum merge gate for bug-fix PRs:
+  1. symptom evidence (repro/log/failing test),
+  2. verified root cause in code with file/line,
+  3. fix touches the implicated code path,
+  4. regression test (fail before/pass after) when feasible; if not feasible, include manual verification proof and why no test was added.
+- If claim is unsubstantiated or likely hallucinated/BS: do not merge. Request evidence/changes, or close with `invalid` when appropriate.
+- If linked issue appears wrong/outdated, correct triage first; do not merge speculative fixes.
 
 ## Project Structure & Module Organization
 
@@ -27,6 +60,7 @@
 - Docs are hosted on Mintlify (docs.openclaw.ai).
 - Internal doc links in `docs/**/*.md`: root-relative, no `.md`/`.mdx` (example: `[Config](/configuration)`).
 - When working with documentation, read the mintlify skill.
+- For docs, UI copy, and picker lists, order services/providers alphabetically unless the section is explicitly describing runtime behavior (for example auto-detection or execution order).
 - Section cross-references: use anchors on root-relative paths (example: `[Hooks](/configuration#hooks)`).
 - Doc headings and anchors: avoid em dashes and apostrophes in headings because they break Mintlify anchor links.
 - When Peter asks for links, reply with full `https://docs.openclaw.ai/...` URLs (not root-relative).
@@ -38,6 +72,8 @@
 
 - `docs/zh-CN/**` is generated; do not edit unless the user explicitly asks.
 - Pipeline: update English docs → adjust glossary (`docs/.i18n/glossary.zh-CN.json`) → run `scripts/docs-i18n` → apply targeted fixes only if instructed.
+- Before rerunning `scripts/docs-i18n`, add glossary entries for any new technical terms, page titles, or short nav labels that must stay in English or use a fixed translation (for example `Doctor` or `Polls`).
+- `pnpm docs:check-i18n-glossary` enforces glossary coverage for changed English doc titles and short internal doc labels before translation reruns.
 - Translation memory: `docs/.i18n/zh-CN.tm.jsonl` (generated).
 - See `docs/.i18n/README.md`.
 - The pipeline can be slow/inefficient; if it’s dragging, ping @jospalmbier on Discord instead of hacking around it.
@@ -63,7 +99,7 @@
 - Prefer Bun for TypeScript execution (scripts, dev, tests): `bun <file.ts>` / `bunx <tool>`.
 - Run CLI in dev: `pnpm openclaw ...` (bun) or `pnpm dev`.
 - Node remains supported for running built output (`dist/*`) and production installs.
-- Mac packaging (dev): `scripts/package-mac-app.sh` defaults to current arch. Release checklist: `docs/platforms/mac/release.md`.
+- Mac packaging (dev): `scripts/package-mac-app.sh` defaults to current arch.
 - Type-check/build: `pnpm build`
 - TypeScript checks: `pnpm tsgo`
 - Lint/format: `pnpm check`
@@ -85,6 +121,7 @@
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
 - Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, paths, and config keys.
+- Written English: use American spelling and grammar in code, comments, docs, and UI strings (e.g. "color" not "colour", "behavior" not "behaviour", "analyze" not "analyse").
 
 ## Release Channels (Naming)
 
@@ -98,12 +135,14 @@
 - Framework: Vitest with V8 coverage thresholds (70% lines/branches/functions/statements).
 - Naming: match source names with `*.test.ts`; e2e in `*.e2e.test.ts`.
 - Run `pnpm test` (or `pnpm test:coverage`) before pushing when you touch logic.
+- For targeted/local debugging, keep using the wrapper: `pnpm test -- <path-or-filter> [vitest args...]` (for example `pnpm test -- src/commands/onboard-search.test.ts -t "shows registered plugin providers"`); do not default to raw `pnpm vitest run ...` because it bypasses wrapper config/profile/pool routing.
 - Do not set test workers above 16; tried already.
 - If local Vitest runs cause memory pressure (common on non-Mac-Studio hosts), use `OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test` for land/gate runs.
 - Live tests (real keys): `CLAWDBOT_LIVE_TEST=1 pnpm test:live` (OpenClaw-only) or `LIVE=1 pnpm test:live` (includes provider live tests). Docker: `pnpm test:docker:live-models`, `pnpm test:docker:live-gateway`. Onboarding Docker E2E: `pnpm test:docker:onboard`.
 - Full kit + what’s covered: `docs/testing.md`.
 - Changelog: user-facing changes only; no internal/meta notes (version alignment, appcast reminders, release process).
 - Changelog placement: in the active version block, append new entries to the end of the target section (`### Changes` or `### Fixes`); do not insert new entries at the top of a section.
+- Changelog attribution: use at most one contributor mention per line; prefer `Thanks @author` and do not also add `by @author` on the same entry.
 - Pure test additions/fixes generally do **not** need a changelog entry unless they alter user-facing behavior or the user asks for one.
 - Mobile: before using a simulator, check for connected real devices (iOS + Android) and prefer them when available.
 
@@ -111,6 +150,7 @@
 
 **Full maintainer PR workflow (optional):** If you want the repo's end-to-end maintainer workflow (triage order, quality bar, rebase rules, commit/changelog conventions, co-contributor policy, and the `review-pr` > `prepare-pr` > `merge-pr` pipeline), see `.agents/skills/PR_WORKFLOW.md`. Maintainers may use other workflows; when a maintainer specifies a workflow, follow that. If no workflow is specified, default to PR_WORKFLOW.
 
+- `/landpr` lives in the global Codex prompts (`~/.codex/prompts/landpr.md`); when landing or merging any PR, always follow that `/landpr` process.
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
@@ -141,7 +181,7 @@
 - Pi sessions live under `~/.openclaw/sessions/` by default; the base directory is not configurable.
 - Environment variables: see `~/.profile`.
 - Never commit or publish real phone numbers, videos, or live configuration values. Use obviously fake placeholders in docs, tests, and examples.
-- Release flow: always read `docs/reference/RELEASING.md` and `docs/platforms/mac/release.md` before any release work; do not ask routine questions once those docs answer them.
+- Release flow: use the private [maintainer release docs](https://github.com/openclaw/maintainers/blob/main/release/README.md) for the actual runbook; use `docs/reference/RELEASING.md` for the public release policy.
 
 ## GHSA (Repo Advisory) Patch/Publish
 
@@ -165,6 +205,44 @@
 ## Agent-Specific Notes
 
 - Vocabulary: "makeup" = "mac app".
+- Parallels macOS retests: use the snapshot most closely named like `macOS 26.3.1 fresh` when the user asks for a clean/fresh macOS rerun; avoid older Tahoe snapshots unless explicitly requested.
+- Parallels beta smoke: use `--target-package-spec openclaw@<beta-version>` for the beta artifact, and pin the stable side with both `--install-version <stable-version>` and `--latest-version <stable-version>` for upgrade runs. npm dist-tags can move mid-run.
+- Parallels beta smoke, Windows nuance: old stable `2026.3.12` still prints the Unicode Windows onboarding banner, so mojibake during the stable precheck log is expected there. Judge the beta package by the post-upgrade lane.
+- Parallels macOS smoke playbook:
+  - `prlctl exec` is fine for deterministic repo commands, but it can misrepresent interactive shell behavior (`PATH`, `HOME`, `curl | bash`, shebang resolution). For installer parity or shell-sensitive repros, prefer the guest Terminal or `prlctl enter`.
+  - Fresh Tahoe snapshot current reality: `brew` exists, `node` may not be on `PATH` in noninteractive guest exec. Use absolute `/opt/homebrew/bin/node` for repo/CLI runs when needed.
+  - Preferred automation entrypoint: `pnpm test:parallels:macos`. It restores the snapshot most closely matching `macOS 26.3.1 fresh`, serves the current `main` tarball from the host, then runs fresh-install and latest-release-to-main smoke lanes.
+  - Gateway verification in smoke runs should use `openclaw gateway status --deep --require-rpc`, not plain `--deep`, so probe failures go non-zero.
+  - Latest-release pre-upgrade diagnostics still need compatibility fallback: stable `2026.3.12` does not know `--require-rpc`, so precheck status dumps should fall back to plain `gateway status --deep` until the guest is upgraded.
+  - Harness output: pass `--json` for machine-readable summary; per-phase logs land under `/tmp/openclaw-parallels-smoke.*`.
+  - All-OS parallel runs should share the host `dist` build via `/tmp/openclaw-parallels-build.lock` instead of rebuilding three times.
+  - Current expected outcome on latest stable pre-upgrade: `precheck=latest-ref-fail` is normal on `2026.3.12`; treat it as a baseline signal, not a regression, unless the post-upgrade `main` lane also fails.
+  - Fresh host-served tgz install: restore fresh snapshot, install tgz as guest root with `HOME=/var/root`, then run onboarding as the desktop user via `prlctl exec --current-user`.
+  - For `openclaw onboard --non-interactive --secret-input-mode ref --install-daemon`, expect env-backed auth-profile refs (for example `OPENAI_API_KEY`) to be copied into the service env at install time; this path was fixed and should stay green.
+  - Don’t run local + gateway agent turns in parallel on the same fresh workspace/session; they can collide on the session lock. Run sequentially.
+  - Root-installed tarball smoke on Tahoe can still log plugin blocks for world-writable `extensions/*` under `/opt/homebrew/lib/node_modules/openclaw`; treat that as separate from onboarding/gateway health unless the task is plugin loading.
+- Parallels Windows smoke playbook:
+  - Preferred automation entrypoint: `pnpm test:parallels:windows`. It restores the snapshot most closely matching `pre-openclaw-native-e2e-2026-03-12`, serves the current `main` tarball from the host, then runs fresh-install and latest-release-to-main smoke lanes.
+  - Gateway verification in smoke runs should use `openclaw gateway status --deep --require-rpc`, not plain `--deep`, so probe failures go non-zero.
+  - Latest-release pre-upgrade diagnostics still need compatibility fallback: stable `2026.3.12` does not know `--require-rpc`, so precheck status dumps should fall back to plain `gateway status --deep` until the guest is upgraded.
+  - Always use `prlctl exec --current-user` for Windows guest runs; plain `prlctl exec` lands in `NT AUTHORITY\SYSTEM` and does not match the real desktop-user install path.
+  - Prefer explicit `npm.cmd` / `openclaw.cmd`. Bare `npm` / `openclaw` in PowerShell can hit the `.ps1` shim and fail under restrictive execution policy.
+  - Use PowerShell only as the transport (`powershell.exe -NoProfile -ExecutionPolicy Bypass`) and call the `.cmd` shims explicitly from inside it.
+  - Harness output: pass `--json` for machine-readable summary; per-phase logs land under `/tmp/openclaw-parallels-windows.*`.
+  - Current expected outcome on latest stable pre-upgrade: `precheck=latest-ref-fail` is normal on `2026.3.12`; treat it as a baseline signal, not a regression, unless the post-upgrade `main` lane also fails.
+  - Keep Windows onboarding/status text ASCII-clean in logs. Fancy punctuation in banners shows up as mojibake through the current guest PowerShell capture path.
+- Parallels Linux smoke playbook:
+  - Preferred automation entrypoint: `pnpm test:parallels:linux`. It restores the snapshot most closely matching `fresh` on `Ubuntu 24.04.3 ARM64`, serves the current `main` tarball from the host, then runs fresh-install and latest-release-to-main smoke lanes.
+  - Use plain `prlctl exec` on this snapshot. `--current-user` is not the right transport there.
+  - Fresh snapshot reality: `curl` is missing and `apt-get update` can fail on clock skew. Bootstrap with `apt-get -o Acquire::Check-Date=false update` and install `curl ca-certificates` before testing installer paths.
+  - Fresh `main` tgz smoke on Linux still needs the latest-release installer first, because this snapshot has no Node/npm before bootstrap. The harness does stable bootstrap first, then overlays current `main`.
+  - This snapshot does not have a usable `systemd --user` session. Treat managed daemon install as unsupported here; use `--skip-health`, then verify with direct `openclaw gateway run --bind loopback --port 18789 --force`.
+  - Env-backed auth refs are still fine, but any direct shell launch (`openclaw gateway run`, `openclaw agent --local`, Linux `gateway status --deep` against that direct run) must inherit the referenced env vars in the same shell.
+  - `prlctl exec` reaps detached Linux child processes on this snapshot, so a background `openclaw gateway run` launched from automation is not a trustworthy smoke path. The harness verifies installer + `agent --local`; do direct gateway checks only from an interactive guest shell when needed.
+  - When you do run Linux gateway checks manually from an interactive guest shell, use `openclaw gateway status --deep --require-rpc` so an RPC miss is a hard failure.
+  - Prefer direct argv guest commands for fetch/install steps (`curl`, `npm install -g`, `openclaw ...`) over nested `bash -lc` quoting; Linux guest quoting through Parallels was the flaky part.
+  - Harness output: pass `--json` for machine-readable summary; per-phase logs land under `/tmp/openclaw-parallels-linux.*`.
+  - Current expected outcome on Linux smoke: fresh + upgrade should pass installer and `agent --local`; gateway remains `skipped-no-detached-linux-gateway` on this snapshot and should not be treated as a regression by itself.
 - Never edit `node_modules` (global/Homebrew/npm/git installs too). Updates overwrite. Skill notes go in `tools.md` or `AGENTS.md`.
 - When adding a new `AGENTS.md` anywhere in the repo, also add a `CLAUDE.md` symlink pointing to it (example: `ln -s AGENTS.md CLAUDE.md`).
 - Signal: "update fly" => `fly ssh console -a flawd-bot -C "bash -lc 'cd /data/clawd/openclaw && git pull --rebase origin main'"` then `fly machines restart e825232f34d058 -a flawd-bot`.
@@ -180,14 +258,13 @@
 - If shared guardrails are available locally, review them; otherwise follow this repo's guidance.
 - SwiftUI state management (iOS/macOS): prefer the `Observation` framework (`@Observable`, `@Bindable`) over `ObservableObject`/`@StateObject`; don’t introduce new `ObservableObject` unless required for compatibility, and migrate existing usages when touching related code.
 - Connection providers: when adding a new connection, update every UI surface and docs (macOS app, web UI, mobile if applicable, onboarding/overview docs) and add matching status + configuration forms so provider lists and settings stay in sync.
-- Version locations: `package.json` (CLI), `apps/android/app/build.gradle.kts` (versionName/versionCode), `apps/ios/Sources/Info.plist` + `apps/ios/Tests/Info.plist` (CFBundleShortVersionString/CFBundleVersion), `apps/macos/Sources/OpenClaw/Resources/Info.plist` (CFBundleShortVersionString/CFBundleVersion), `docs/install/updating.md` (pinned npm version), `docs/platforms/mac/release.md` (APP_VERSION/APP_BUILD examples), Peekaboo Xcode projects/Info.plists (MARKETING_VERSION/CURRENT_PROJECT_VERSION).
+- Version locations: `package.json` (CLI), `apps/android/app/build.gradle.kts` (versionName/versionCode), `apps/ios/Sources/Info.plist` + `apps/ios/Tests/Info.plist` (CFBundleShortVersionString/CFBundleVersion), `apps/macos/Sources/OpenClaw/Resources/Info.plist` (CFBundleShortVersionString/CFBundleVersion), `docs/install/updating.md` (pinned npm version), and Peekaboo Xcode projects/Info.plists (MARKETING_VERSION/CURRENT_PROJECT_VERSION).
 - "Bump version everywhere" means all version locations above **except** `appcast.xml` (only touch appcast when cutting a new macOS Sparkle release).
 - **Restart apps:** “restart iOS/Android apps” means rebuild (recompile/install) and relaunch, not just kill/launch.
 - **Device checks:** before testing, verify connected real devices (iOS/Android) before reaching for simulators/emulators.
 - iOS Team ID lookup: `security find-identity -p codesigning -v` → use Apple Development (…) TEAMID. Fallback: `defaults read com.apple.dt.Xcode IDEProvisioningTeamIdentifiers`.
 - A2UI bundle hash: `src/canvas-host/a2ui/.bundle.hash` is auto-generated; ignore unexpected changes, and only regenerate via `pnpm canvas:a2ui:bundle` (or `scripts/bundle-a2ui.sh`) when needed. Commit the hash as a separate commit.
-- Release signing/notary keys are managed outside the repo; follow internal release docs.
-- Notary auth env vars (`APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_API_KEY_P8`) are expected in your environment (per internal release docs).
+- Release signing/notary credentials are managed outside the repo; maintainers keep that setup in the private [maintainer release docs](https://github.com/openclaw/maintainers/tree/main/release).
 - **Multi-agent safety:** do **not** create/apply/drop `git stash` entries unless explicitly requested (this includes `git pull --rebase --autostash`). Assume other agents may be working; keep unrelated WIP untouched and avoid cross-cutting state changes.
 - **Multi-agent safety:** when the user says "push", you may `git pull --rebase` to integrate latest changes (never discard other agents' work). When the user says "commit", scope to your changes only. When the user says "commit all", commit everything in grouped chunks.
 - **Multi-agent safety:** do **not** create/remove/modify `git worktree` checkouts (or edit `.worktrees/*`) unless explicitly requested.
@@ -214,34 +291,12 @@
 - Release guardrails: do not change version numbers without operator’s explicit consent; always ask permission before running any npm publish/release step.
 - Beta release guardrail: when using a beta Git tag (for example `vYYYY.M.D-beta.N`), publish npm with a matching beta version suffix (for example `YYYY.M.D-beta.N`) rather than a plain version on `--tag beta`; otherwise the plain version name gets consumed/blocked.
 
-## NPM + 1Password (publish/verify)
+## Release Auth
 
-- Use the 1password skill; all `op` commands must run inside a fresh tmux session.
-- Sign in: `eval "$(op signin --account my.1password.com)"` (app unlocked + integration on).
-- OTP: `op read 'op://Private/Npmjs/one-time password?attribute=otp'`.
-- Publish: `npm publish --access public --otp="<otp>"` (run from the package dir).
-- Verify without local npmrc side effects: `npm view <pkg> version --userconfig "$(mktemp)"`.
-- Kill the tmux session after publish.
-
-## Plugin Release Fast Path (no core `openclaw` publish)
-
-- Release only already-on-npm plugins. Source list is in `docs/reference/RELEASING.md` under "Current npm plugin list".
-- Run all CLI `op` calls and `npm publish` inside tmux to avoid hangs/interruption:
-  - `tmux new -d -s release-plugins-$(date +%Y%m%d-%H%M%S)`
-  - `eval "$(op signin --account my.1password.com)"`
-- 1Password helpers:
-  - password used by `npm login`:
-    `op item get Npmjs --format=json | jq -r '.fields[] | select(.id=="password").value'`
-  - OTP:
-    `op read 'op://Private/Npmjs/one-time password?attribute=otp'`
-- Fast publish loop (local helper script in `/tmp` is fine; keep repo clean):
-  - compare local plugin `version` to `npm view <name> version`
-  - only run `npm publish --access public --otp="<otp>"` when versions differ
-  - skip if package is missing on npm or version already matches.
-- Keep `openclaw` untouched: never run publish from repo root unless explicitly requested.
-- Post-check for each release:
-  - per-plugin: `npm view @openclaw/<name> version --userconfig "$(mktemp)"` should be `2026.2.17`
-  - core guard: `npm view openclaw version --userconfig "$(mktemp)"` should stay at previous version unless explicitly requested.
+- Core `openclaw` publish uses GitHub trusted publishing; do not use `NPM_TOKEN` or the plugin OTP flow for core releases.
+- Separate `@openclaw/*` plugin publishes use a different maintainer-only auth flow.
+- Plugin scope: only publish already-on-npm `@openclaw/*` plugins. Bundled disk-tree-only plugins stay out.
+- Maintainers: private 1Password item names, tmux rules, plugin publish helpers, and local mac signing/notary setup live in the private [maintainer release docs](https://github.com/openclaw/maintainers/blob/main/release/README.md).
 
 ## Changelog Release Notes
 

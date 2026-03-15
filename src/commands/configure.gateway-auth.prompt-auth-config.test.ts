@@ -23,7 +23,7 @@ vi.mock("./auth-choice-prompt.js", () => ({
 
 vi.mock("./auth-choice.js", () => ({
   applyAuthChoice: mocks.applyAuthChoice,
-  resolvePreferredProviderForAuthChoice: vi.fn(() => undefined),
+  resolvePreferredProviderForAuthChoice: vi.fn(async () => undefined),
 }));
 
 vi.mock("./model-picker.js", async (importActual) => {
@@ -56,8 +56,8 @@ function createKilocodeProvider() {
     baseUrl: "https://api.kilo.ai/api/gateway/",
     api: "openai-completions",
     models: [
-      { id: "anthropic/claude-opus-4.6", name: "Claude Opus 4.6" },
-      { id: "minimax/minimax-m2.5:free", name: "MiniMax M2.5 (Free)" },
+      { id: "kilo/auto", name: "Kilo Auto" },
+      { id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" },
     ],
   };
 }
@@ -67,7 +67,7 @@ function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
     config: {
       agents: {
         defaults: {
-          model: { primary: "kilocode/anthropic/claude-opus-4.6" },
+          model: { primary: "kilocode/kilo/auto" },
         },
       },
       models: {
@@ -92,7 +92,7 @@ async function runPromptAuthConfigWithAllowlist(includeMinimaxProvider = false) 
   mocks.promptAuthChoiceGrouped.mockResolvedValue("kilocode-api-key");
   mocks.applyAuthChoice.mockResolvedValue(createApplyAuthChoiceConfig(includeMinimaxProvider));
   mocks.promptModelAllowlist.mockResolvedValue({
-    models: ["kilocode/anthropic/claude-opus-4.6"],
+    models: ["kilocode/kilo/auto"],
   });
 
   return promptAuthConfig({}, makeRuntime(), noopPrompter);
@@ -102,19 +102,17 @@ describe("promptAuthConfig", () => {
   it("keeps Kilo provider models while applying allowlist defaults", async () => {
     const result = await runPromptAuthConfigWithAllowlist();
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "anthropic/claude-opus-4.6",
-      "minimax/minimax-m2.5:free",
+      "kilo/auto",
+      "anthropic/claude-sonnet-4",
     ]);
-    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual([
-      "kilocode/anthropic/claude-opus-4.6",
-    ]);
+    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual(["kilocode/kilo/auto"]);
   });
 
   it("does not mutate provider model catalogs when allowlist is set", async () => {
     const result = await runPromptAuthConfigWithAllowlist(true);
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "anthropic/claude-opus-4.6",
-      "minimax/minimax-m2.5:free",
+      "kilo/auto",
+      "anthropic/claude-sonnet-4",
     ]);
     expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual([
       "MiniMax-M2.5",
