@@ -124,6 +124,22 @@
     "target": "网络模型"
   },
   {
+    "source": "Doctor",
+    "target": "Doctor"
+  },
+  {
+    "source": "Polls",
+    "target": "投票"
+  },
+  {
+    "source": "Release Policy",
+    "target": "发布策略"
+  },
+  {
+    "source": "Release policy",
+    "target": "发布策略"
+  },
+  {
     "source": "for full details",
     "target": "了解详情"
   },
