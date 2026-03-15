@@ -314,6 +314,16 @@ clawdock-devices() {
   printf "%s\n" "$output" | _clawdock_filter_warnings
   if [ $exit_status -ne 0 ]; then
     echo ""
+    # Token mismatch is the common Docker onboarding failure, so show the one-step fix first.
+    if [[ "${output,,}" == *"token mismatch"* ]]; then
+      echo -e "${_CLR_CYAN}💡 If you see token mismatch errors above:${_CLR_RESET}"
+      echo -e "   1. Run: $(_cmd clawdock-fix-token)"
+      echo -e "   2. Retry: $(_cmd clawdock-devices)"
+      echo "   3. If it still fails, check the configured token inside container:"
+      echo -e "      $(_cmd clawdock-shell)"
+      echo -e "      $(_cmd 'openclaw config get gateway.remote.token')"
+      return 1
+    fi
     echo -e "${_CLR_CYAN}💡 If you see token errors above:${_CLR_RESET}"
     echo -e "   1. Verify token is set: $(_cmd clawdock-token)"
     echo "   2. Try manual config inside container:"
