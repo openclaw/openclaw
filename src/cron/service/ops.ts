@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import { updateSessionStore } from "../../config/sessions/store.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { resolveCronRunLogPath } from "../run-log.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
@@ -330,14 +333,80 @@ export async function remove(state: CronServiceState, id: string) {
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
+    // Capture the job's agentId before filtering so cleanup targets the
+    // correct per-agent session store.
+    const removedJob = state.store.jobs.find((j) => j.id === id);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
     await persist(state);
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed" });
+      // Clean up session records and run log for the deleted job (#46369).
+      // Run outside the critical path — failures are logged but do not
+      // block the removal response.
+      cleanupRemovedJobArtifacts(state, id, removedJob?.agentId).catch((err) => {
+        state.deps.log.warn({ err: String(err) }, "cron: cleanup after remove failed");
+      });
     }
     return { ok: true, removed } as const;
+  });
+}
+
+/**
+ * Remove session store entries and the run-log file for a deleted cron job.
+ * Called after the job is already removed from jobs.json.
+ * Each step is independent — a failure in one does not prevent the other.
+ */
+async function cleanupRemovedJobArtifacts(
+  state: CronServiceState,
+  jobId: string,
+  agentId?: string,
+): Promise<void> {
+  const results = await Promise.allSettled([
+    cleanupSessionEntries(state, jobId, agentId),
+    cleanupRunLog(state, jobId),
+  ]);
+  const errors = results.filter((r) => r.status === "rejected");
+  if (errors.length > 0) {
+    throw new Error(errors.map((r) => r.reason).join("; "));
+  }
+}
+
+async function cleanupSessionEntries(
+  state: CronServiceState,
+  jobId: string,
+  agentId?: string,
+): Promise<void> {
+  // Prefer resolveSessionStorePath with the job's agentId so multi-agent
+  // deployments clean the correct per-agent sessions.json.
+  const sessionStorePath =
+    state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
+  if (!sessionStorePath) {
+    return;
+  }
+  // Match both the canonical key (cron:{jobId}) and run-specific keys
+  // (cron:{jobId}:run:{runId}).
+  const canonicalSuffix = `cron:${jobId}`;
+  const runPrefix = `cron:${jobId}:`;
+  await updateSessionStore(sessionStorePath, (store) => {
+    for (const key of Object.keys(store)) {
+      if (key.endsWith(canonicalSuffix) || key.includes(runPrefix)) {
+        delete store[key];
+      }
+    }
+  });
+}
+
+async function cleanupRunLog(state: CronServiceState, jobId: string): Promise<void> {
+  const logPath = resolveCronRunLogPath({
+    storePath: state.deps.storePath,
+    jobId,
+  });
+  await fs.unlink(logPath).catch((err: unknown) => {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
   });
 }
 
