@@ -47,6 +47,13 @@ export type CronListPageResult = {
   hasMore: boolean;
   nextOffset: number | null;
 };
+
+// Manual `cron.run` requests already reserve the job under the cron service lock
+// before dispatching the actual execution. Queue them on a dedicated outer lane
+// so isolated cron runs can still use the global `cron` lane internally without
+// recursively enqueuing onto the same lane and deadlocking.
+export const MANUAL_CRON_RUN_LANE = `${CommandLane.Cron}:manual`;
+
 function mergeManualRunSnapshotAfterReload(params: {
   state: CronServiceState;
   jobId: string;
@@ -556,7 +563,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
 
   const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
   void enqueueCommandInLane(
-    CommandLane.Cron,
+    MANUAL_CRON_RUN_LANE,
     async () => {
       const result = await run(state, id, mode);
       if (result.ok && "ran" in result && !result.ran) {
