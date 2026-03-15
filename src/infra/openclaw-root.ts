@@ -26,7 +26,7 @@ function readPackageNameSync(dir: string): string | null {
   }
 }
 
-async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
+export async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
   for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = await readPackageName(current);
     if (name && CORE_PACKAGE_NAMES.has(name)) {
