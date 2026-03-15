@@ -204,9 +204,11 @@ export async function updateNpmInstalledPlugins(params: {
   pluginIds?: string[];
   skipIds?: Set<string>;
   dryRun?: boolean;
+  env?: NodeJS.ProcessEnv;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
+  const env = params.env ?? process.env;
   const installs = params.config.plugins?.installs ?? {};
   const targets = params.pluginIds?.length ? params.pluginIds : Object.keys(installs);
   const outcomes: PluginUpdateOutcome[] = [];
@@ -253,7 +255,7 @@ export async function updateNpmInstalledPlugins(params: {
 
     let installPath: string;
     try {
-      installPath = record.installPath ?? resolvePluginInstallDir(pluginId);
+      installPath = resolveUserPath(record.installPath ?? resolvePluginInstallDir(pluginId), env);
     } catch (err) {
       outcomes.push({
         pluginId,

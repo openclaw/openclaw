@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const installPluginFromNpmSpecMock = vi.fn();
@@ -155,6 +158,60 @@ describe("updateNpmInstalledPlugins", () => {
         message: "Failed to check bad: unsupported npm spec: github:evil/evil",
       },
     ]);
+  });
+
+  it("normalizes tilde install paths before reading the installed version", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-home-"));
+    const installDir = path.join(homeDir, "plugins", "demo");
+    await fs.mkdir(installDir, { recursive: true });
+    await fs.writeFile(
+      path.join(installDir, "package.json"),
+      JSON.stringify({ version: "1.2.3" }),
+      "utf-8",
+    );
+
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: installDir,
+      version: "1.2.3",
+      extensions: ["index.js"],
+    });
+
+    try {
+      const { updateNpmInstalledPlugins } = await import("./update.js");
+      const result = await updateNpmInstalledPlugins({
+        config: {
+          plugins: {
+            installs: {
+              demo: {
+                source: "npm",
+                spec: "demo@1.2.3",
+                installPath: "~/plugins/demo",
+              },
+            },
+          },
+        },
+        pluginIds: ["demo"],
+        dryRun: true,
+        env: {
+          ...process.env,
+          HOME: homeDir,
+        },
+      });
+
+      expect(result.outcomes).toEqual([
+        {
+          pluginId: "demo",
+          status: "unchanged",
+          currentVersion: "1.2.3",
+          nextVersion: "1.2.3",
+          message: "demo is up to date (1.2.3).",
+        },
+      ]);
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
   });
 });
 
