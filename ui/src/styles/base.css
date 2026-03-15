@@ -465,20 +465,8 @@ select {
   box-shadow: var(--focus-ring);
 }
 
-/* Screen reader only utility */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-/* Skip link - visible on focus */
+/* Screen reader only utility / skip link base */
+.sr-only,
 .skip-link {
   position: absolute;
   width: 1px;

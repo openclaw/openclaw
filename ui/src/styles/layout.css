@@ -160,6 +160,14 @@
   color: var(--muted);
 }
 
+.dashboard-header__breadcrumb-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
 .topnav-shell .dashboard-header__breadcrumb-current {
   color: var(--text-strong);
   font-weight: 650;
