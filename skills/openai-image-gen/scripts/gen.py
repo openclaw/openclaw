@@ -58,9 +58,7 @@ def pick_prompts(count: int) -> list[str]:
     ]
     prompts: list[str] = []
     for _ in range(count):
-        prompts.append(
-            f"{random.choice(styles)} of {random.choice(subjects)}, {random.choice(lighting)}"
-        )
+        prompts.append(f"{random.choice(styles)} of {random.choice(subjects)}, {random.choice(lighting)}")
     return prompts
 
 
@@ -100,9 +98,7 @@ def normalize_optional_flag(
         value = aliases.get(value, value)
 
     if value not in allowed:
-        raise ValueError(
-            f"Invalid --{flag_name} '{raw_value}'. Allowed values: {allowed_text}."
-        )
+        raise ValueError(f"Invalid --{flag_name} '{raw_value}'. Allowed values: {allowed_text}.")
     return value
 
 
@@ -115,10 +111,7 @@ def normalize_background(model: str, background: str) -> str:
         supported=lambda candidate: candidate.startswith("gpt-image"),
         allowed={"transparent", "opaque", "auto"},
         allowed_text="transparent, opaque, auto",
-        unsupported_message=(
-            "Warning: --background is only supported for gpt-image models; "
-            "ignoring for '{model}'."
-        ),
+        unsupported_message=("Warning: --background is only supported for gpt-image models; ignoring for '{model}'."),
     )
 
 
@@ -131,9 +124,7 @@ def normalize_style(model: str, style: str) -> str:
         supported=lambda candidate: candidate == "dall-e-3",
         allowed={"vivid", "natural"},
         allowed_text="vivid, natural",
-        unsupported_message=(
-            "Warning: --style is only supported for dall-e-3; ignoring for '{model}'."
-        ),
+        unsupported_message=("Warning: --style is only supported for dall-e-3; ignoring for '{model}'."),
     )
 
 
@@ -147,8 +138,7 @@ def normalize_output_format(model: str, output_format: str) -> str:
         allowed={"png", "jpeg", "webp"},
         allowed_text="png, jpeg, webp",
         unsupported_message=(
-            "Warning: --output-format is only supported for gpt-image models; "
-            "ignoring for '{model}'."
+            "Warning: --output-format is only supported for gpt-image models; ignoring for '{model}'."
         ),
         aliases={"jpg": "jpeg"},
     )
@@ -245,9 +235,15 @@ def main() -> int:
     ap.add_argument("--prompt", help="Single prompt. If omitted, random prompts are generated.")
     ap.add_argument("--count", type=int, default=8, help="How many images to generate.")
     ap.add_argument("--model", default="gpt-image-1", help="Image model id.")
-    ap.add_argument("--size", default="", help="Image size (e.g. 1024x1024, 1536x1024). Defaults based on model if not specified.")
-    ap.add_argument("--quality", default="", help="Image quality (e.g. high, standard). Defaults based on model if not specified.")
-    ap.add_argument("--background", default="", help="Background transparency (GPT models only): transparent, opaque, or auto.")
+    ap.add_argument(
+        "--size", default="", help="Image size (e.g. 1024x1024, 1536x1024). Defaults based on model if not specified."
+    )
+    ap.add_argument(
+        "--quality", default="", help="Image quality (e.g. high, standard). Defaults based on model if not specified."
+    )
+    ap.add_argument(
+        "--background", default="", help="Background transparency (GPT models only): transparent, opaque, or auto."
+    )
     ap.add_argument("--output-format", default="", help="Output format (GPT models only): png, jpeg, or webp.")
     ap.add_argument("--style", default="", help="Image style (dall-e-3 only): vivid or natural.")
     ap.add_argument("--out-dir", default="", help="Output directory (default: ./tmp/openai-image-gen-<ts>).")
@@ -265,7 +261,10 @@ def main() -> int:
 
     count = args.count
     if args.model == "dall-e-3" and count > 1:
-        print(f"Warning: dall-e-3 only supports generating 1 image at a time. Reducing count from {count} to 1.", file=sys.stderr)
+        print(
+            f"Warning: dall-e-3 only supports generating 1 image at a time. Reducing count from {count} to 1.",
+            file=sys.stderr,
+        )
         count = 1
 
     out_dir = Path(args.out_dir).expanduser() if args.out_dir else default_out_dir()
