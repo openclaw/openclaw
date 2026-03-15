@@ -64,6 +64,16 @@ export async function runCheckConfig(): Promise<{
     return { results, hasFailures: true };
   }
 
+  // Surface snapshot-level warnings (e.g., unresolved ${ENV_VAR} substitutions)
+  for (const warning of snapshot.warnings) {
+    results.push({
+      category: "schema",
+      label: warning.path || "config",
+      status: "warn",
+      message: warning.message,
+    });
+  }
+
   // Schema passed — also run plugin-aware validation
   const pluginValidation = validateConfigObjectWithPlugins(snapshot.config);
   if (!pluginValidation.ok) {
