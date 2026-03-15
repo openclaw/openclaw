@@ -218,12 +218,21 @@ export function createSessionsSendTool(opts?: {
       
       // Handle async parameter as sugar for timeoutSeconds=0
       const asyncParam = typeof params.async === "boolean" ? params.async : false;
-      const timeoutSeconds =
-        asyncParam
-          ? 0
-          : typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
-            ? Math.max(0, Math.floor(params.timeoutSeconds))
-            : 30;
+      const rawTimeoutSeconds =
+        typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
+          ? Math.max(0, Math.floor(params.timeoutSeconds))
+          : undefined;
+      
+      // Reject contradictory usage: async=true with a non-zero explicit timeout
+      if (asyncParam && rawTimeoutSeconds !== undefined && rawTimeoutSeconds !== 0) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: "Cannot use async=true with a non-zero timeoutSeconds. Use one or the other.",
+        });
+      }
+      
+      const timeoutSeconds = asyncParam ? 0 : (rawTimeoutSeconds ?? 30);
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
