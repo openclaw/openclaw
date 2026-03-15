@@ -592,7 +592,10 @@ function renderChatModelSelect(state: AppViewState) {
     currentOverride,
     defaultModel,
   );
-  const defaultLabel = defaultModel ? `Default (${defaultModel})` : "Default model";
+  const defaultDisplay = defaultModel.includes("/")
+    ? `${defaultModel.slice(defaultModel.indexOf("/") + 1)} · ${defaultModel.slice(0, defaultModel.indexOf("/"))}`
+    : defaultModel;
+  const defaultLabel = defaultModel ? `Default (${defaultDisplay})` : "Default model";
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
   const disabled =
