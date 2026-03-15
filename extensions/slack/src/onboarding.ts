@@ -1,22 +1,12 @@
-import { inspectSlackAccount } from "../../../../extensions/slack/src/account-inspect.js";
+import type {
+  ChannelOnboardingAdapter,
+  ChannelOnboardingDmPolicy,
+} from "../../../src/channels/plugins/onboarding-types.js";
+import { configureChannelAccessWithAllowlist } from "../../../src/channels/plugins/onboarding/channel-access-configure.js";
 import {
-  listSlackAccountIds,
-  resolveDefaultSlackAccountId,
-  resolveSlackAccount,
-} from "../../../../extensions/slack/src/accounts.js";
-import { resolveSlackChannelAllowlist } from "../../../../extensions/slack/src/resolve-channels.js";
-import { resolveSlackUserAllowlist } from "../../../../extensions/slack/src/resolve-users.js";
-import type { OpenClawConfig } from "../../../config/config.js";
-import { hasConfiguredSecretInput } from "../../../config/types.secrets.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
-import { formatDocsLink } from "../../../terminal/links.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
-import { configureChannelAccessWithAllowlist } from "./channel-access-configure.js";
-import {
-  parseMentionOrPrefixedId,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
+  parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   promptLegacyChannelAllowFrom,
   resolveAccountIdForConfigure,
@@ -25,7 +15,20 @@ import {
   setAccountGroupPolicyForChannel,
   setLegacyChannelDmPolicyWithAllowFrom,
   setOnboardingChannelEnabled,
-} from "./helpers.js";
+} from "../../../src/channels/plugins/onboarding/helpers.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import { formatDocsLink } from "../../../src/terminal/links.js";
+import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+import { inspectSlackAccount } from "./account-inspect.js";
+import {
+  listSlackAccountIds,
+  resolveDefaultSlackAccountId,
+  resolveSlackAccount,
+} from "./accounts.js";
+import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
+import { resolveSlackUserAllowlist } from "./resolve-users.js";
 
 const channel = "slack" as const;
 

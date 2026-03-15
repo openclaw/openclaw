@@ -1,4 +1,5 @@
 export type { OpenClawConfig } from "../config/config.js";
+export type { SlackAccountConfig } from "../config/types.slack.js";
 export type { InspectedSlackAccount } from "../../extensions/slack/src/account-inspect.js";
 export type { ResolvedSlackAccount } from "../../extensions/slack/src/accounts.js";
 export * from "./channel-plugin-common.js";
@@ -38,7 +39,7 @@ export {
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
 } from "../channels/plugins/group-mentions.js";
-export { slackOnboardingAdapter } from "../channels/plugins/onboarding/slack.js";
+export { slackOnboardingAdapter } from "../../extensions/slack/src/onboarding.js";
 export { SlackConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { handleSlackMessageAction } from "./slack-message-actions.js";
