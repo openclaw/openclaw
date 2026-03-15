@@ -78,4 +78,49 @@ describe("noteStartupOptimizationHints", () => {
 
     expect(noteFn).not.toHaveBeenCalled();
   });
+
+  it("warns on darwin (macOS) with ARM64 architecture", () => {
+    const noteFn = vi.fn();
+
+    noteStartupOptimizationHints(
+      {
+        NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache",
+      },
+      { platform: "darwin", arch: "arm64", totalMemBytes: 4 * 1024 ** 3, noteFn },
+    );
+
+    expect(noteFn).toHaveBeenCalledTimes(1);
+    const [message, title] = noteFn.mock.calls[0] ?? [];
+    expect(title).toBe("Startup optimization");
+    expect(message).toContain("NODE_COMPILE_CACHE points to /tmp");
+    expect(message).toContain("OPENCLAW_NO_RESPAWN is not set to 1");
+  });
+
+  it("warns on darwin (macOS) with low memory", () => {
+    const noteFn = vi.fn();
+
+    noteStartupOptimizationHints(
+      {
+        NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache",
+      },
+      { platform: "darwin", arch: "x64", totalMemBytes: 4 * 1024 ** 3, noteFn },
+    );
+
+    expect(noteFn).toHaveBeenCalledTimes(1);
+    const [message] = noteFn.mock.calls[0] ?? [];
+    expect(message).toContain("NODE_COMPILE_CACHE points to /tmp");
+  });
+
+  it("skips startup optimization note on darwin with high memory and non-ARM arch", () => {
+    const noteFn = vi.fn();
+
+    noteStartupOptimizationHints(
+      {
+        NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache",
+      },
+      { platform: "darwin", arch: "x64", totalMemBytes: 32 * 1024 ** 3, noteFn },
+    );
+
+    expect(noteFn).not.toHaveBeenCalled();
+  });
 });

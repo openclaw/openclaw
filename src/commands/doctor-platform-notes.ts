@@ -172,9 +172,9 @@ export function noteStartupOptimizationHints(
   const arch = deps?.arch ?? os.arch();
   const totalMemBytes = deps?.totalMemBytes ?? os.totalmem();
   const isArmHost = arch === "arm" || arch === "arm64";
-  const isLowMemoryLinux =
-    platform === "linux" && totalMemBytes > 0 && totalMemBytes <= 8 * 1024 ** 3;
-  const isStartupTuneTarget = platform === "linux" && (isArmHost || isLowMemoryLinux);
+  const isLowMemory =
+    totalMemBytes > 0 && totalMemBytes <= 8 * 1024 ** 3;
+  const isStartupTuneTarget = (platform === "linux" || platform === "darwin") && (isArmHost || isLowMemory);
   if (!isStartupTuneTarget) {
     return;
   }
