@@ -518,35 +518,75 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
     return text.length;
   }
 
-  let lastNewlineBreak = -1;
-  let lastWhitespaceBreak = -1;
+  let lastOutsideParenNewlineBreak = -1;
+  let lastOutsideParenWhitespaceBreak = -1;
+  let lastOutsideParenWhitespaceRunStart = -1;
+  let lastAnyNewlineBreak = -1;
+  let lastAnyWhitespaceBreak = -1;
+  let lastAnyWhitespaceRunStart = -1;
   let parenDepth = 0;
+  let sawNonWhitespace = false;
 
   for (let index = start; index < maxEnd; index += 1) {
     const char = text[index];
     if (char === "(") {
+      sawNonWhitespace = true;
       parenDepth += 1;
       continue;
     }
     if (char === ")" && parenDepth > 0) {
+      sawNonWhitespace = true;
       parenDepth -= 1;
       continue;
     }
-    if (parenDepth !== 0) {
+    if (!/\s/.test(char)) {
+      sawNonWhitespace = true;
+      continue;
+    }
+    if (!sawNonWhitespace) {
       continue;
     }
     if (char === "\n") {
-      lastNewlineBreak = index + 1;
-    } else if (/\s/.test(char)) {
-      lastWhitespaceBreak = index + 1;
+      lastAnyNewlineBreak = index + 1;
+      if (parenDepth === 0) {
+        lastOutsideParenNewlineBreak = index + 1;
+      }
+      continue;
+    }
+    const whitespaceRunStart =
+      index === start || !/\s/.test(text[index - 1] ?? "") ? index : lastAnyWhitespaceRunStart;
+    lastAnyWhitespaceBreak = index + 1;
+    lastAnyWhitespaceRunStart = whitespaceRunStart;
+    if (parenDepth === 0) {
+      lastOutsideParenWhitespaceBreak = index + 1;
+      lastOutsideParenWhitespaceRunStart = whitespaceRunStart;
     }
   }
 
-  if (lastNewlineBreak > start) {
-    return lastNewlineBreak;
+  const resolveWhitespaceBreak = (breakIndex: number, runStart: number): number => {
+    if (breakIndex <= start) {
+      return breakIndex;
+    }
+    if (runStart <= start) {
+      return breakIndex;
+    }
+    return /\s/.test(text[breakIndex] ?? "") ? runStart : breakIndex;
+  };
+
+  if (lastOutsideParenNewlineBreak > start) {
+    return lastOutsideParenNewlineBreak;
   }
-  if (lastWhitespaceBreak > start) {
-    return lastWhitespaceBreak;
+  if (lastOutsideParenWhitespaceBreak > start) {
+    return resolveWhitespaceBreak(
+      lastOutsideParenWhitespaceBreak,
+      lastOutsideParenWhitespaceRunStart,
+    );
+  }
+  if (lastAnyNewlineBreak > start) {
+    return lastAnyNewlineBreak;
+  }
+  if (lastAnyWhitespaceBreak > start) {
+    return resolveWhitespaceBreak(lastAnyWhitespaceBreak, lastAnyWhitespaceRunStart);
   }
   return maxEnd;
 }
@@ -586,6 +626,9 @@ function renderTelegramChunksWithinHtmlLimit(
       continue;
     }
     const html = wrapFileReferencesInHtml(renderTelegramHtml(chunk));
+    if (chunk.text.trim().length === 0) {
+      continue;
+    }
     if (html.length <= normalizedLimit || chunk.text.length <= 1) {
       rendered.push({ html, text: chunk.text });
       continue;

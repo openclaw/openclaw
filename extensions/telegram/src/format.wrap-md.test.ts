@@ -179,8 +179,21 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     const input = "**Which of these**";
     const chunks = markdownToTelegramChunks(input, 16);
     expect(chunks.map((chunk) => chunk.text)).toEqual(["Which of ", "these"]);
-    expect(chunks.map((chunk) => chunk.text).join("")).toBe("Which of these");
     expect(chunks.every((chunk) => chunk.html.length <= 16)).toBe(true);
+  });
+
+  it("falls back to in-paren word boundaries when the parenthesis is unbalanced", () => {
+    const input = "**foo (bar baz qux quux**";
+    const chunks = markdownToTelegramChunks(input, 20);
+    expect(chunks.map((chunk) => chunk.text)).toEqual(["foo", "(bar baz qux ", "quux"]);
+    expect(chunks.every((chunk) => chunk.html.length <= 20)).toBe(true);
+  });
+
+  it("does not emit whitespace-only chunks during html-limit retry splitting", () => {
+    const input = "**ab  <<**";
+    const chunks = markdownToTelegramChunks(input, 11);
+    expect(chunks.every((chunk) => chunk.text.trim().length > 0)).toBe(true);
+    expect(chunks.every((chunk) => chunk.html.length <= 11)).toBe(true);
   });
 });
 
