@@ -338,6 +338,8 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
+  /** Maximum time in seconds for a single compaction operation (default: 900). */
+  timeoutSeconds?: number;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

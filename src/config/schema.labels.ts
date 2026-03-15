@@ -474,6 +474,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
   "agents.defaults.compaction.postIndexSync": "Compaction Post-Index Sync",
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
+  "agents.defaults.compaction.timeoutSeconds": "Compaction Timeout (Seconds)",
   "agents.defaults.compaction.model": "Compaction Model Override",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",

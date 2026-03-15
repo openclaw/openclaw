@@ -13,6 +13,17 @@ export function shouldFlagCompactionTimeout(signal: CompactionTimeoutSignal): bo
   return signal.isCompactionPendingOrRetrying || signal.isCompactionInFlight;
 }
 
+export function resolveRunTimeoutDuringCompaction(params: {
+  isCompactionPendingOrRetrying: boolean;
+  isCompactionInFlight: boolean;
+  graceAlreadyUsed: boolean;
+}): "extend" | "abort" {
+  if (!params.isCompactionPendingOrRetrying && !params.isCompactionInFlight) {
+    return "abort";
+  }
+  return params.graceAlreadyUsed ? "abort" : "extend";
+}
+
 export type SnapshotSelectionParams = {
   timedOutDuringCompaction: boolean;
   preCompactionSnapshot: AgentMessage[] | null;
