@@ -1063,7 +1063,9 @@
                   "automation/webhook",
                   "automation/gmail-pubsub",
                   "automation/poll",
-                  "automation/auth-monitoring"
+                  "automation/auth-monitoring",
+                  "automation/teams-academic-chat-canvas-mvp",
+                  "automation/teams-academic-chat-mvp-example"
                 ]
               },
               {
