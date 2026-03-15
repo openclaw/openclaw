@@ -92,6 +92,34 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.updatedAt).toBe(before);
   });
 
+  it("rejects empty provider or model IDs without mutating the entry", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-empty",
+      updatedAt: before,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+    };
+
+    const emptyProvider = applyModelOverrideToSessionEntry({
+      entry,
+      selection: { provider: "", model: "gpt-5.2" },
+    });
+    expect(emptyProvider.updated).toBe(false);
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.updatedAt).toBe(before);
+
+    const emptyModel = applyModelOverrideToSessionEntry({
+      entry,
+      selection: { provider: "openai", model: "  " },
+    });
+    expect(emptyModel.updated).toBe(false);
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.updatedAt).toBe(before);
+  });
+
   it("clears stale contextTokens when switching back to the default model", () => {
     const before = Date.now() - 5_000;
     const entry: SessionEntry = {
