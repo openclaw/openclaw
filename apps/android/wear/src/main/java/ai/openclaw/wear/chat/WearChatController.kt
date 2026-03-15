@@ -34,7 +34,6 @@ class WearChatController(
   private companion object {
     private const val PENDING_RUN_TIMEOUT_MS = 120_000L
     private const val PENDING_HISTORY_REFRESH_MS = 1_500L
-    private const val MAX_COMPLETED_RUN_IDS = 24
   }
 
   private data class PendingRunSnapshot(
@@ -95,7 +94,6 @@ class WearChatController(
   private val pendingRunTimeoutJobs = mutableMapOf<String, Job>()
   private val queuedOutboundMessages = linkedMapOf<String, QueuedOutboundMessage>()
   private val dispatchJobs = mutableMapOf<String, Job>()
-  private val completedRunIds = linkedSetOf<String>()
   private var lastAnnouncedAssistantId: String? = null
   private var lastSyncedHistory: List<WearChatMessage> = emptyList()
   private var hasSyncedHistory = false
@@ -119,9 +117,6 @@ class WearChatController(
     hasSyncedHistory = false
     clearPendingRuns()
     clearQueuedOutboundMessages()
-    synchronized(completedRunIds) {
-      completedRunIds.clear()
-    }
     startEventsCollection()
   }
 
@@ -313,11 +308,6 @@ class WearChatController(
           if (actualRunId != runId) {
             replacePendingRunId(from = runId, to = actualRunId)
           }
-          if (consumeCompletedRunId(actualRunId)) {
-            clearPendingRun(actualRunId)
-            _streamingText.value = null
-            refreshHistoryImmediately(emitLatestAssistantReply = true)
-          }
         } catch (e: Throwable) {
           if (e.isCancelledRequest() && isPendingRun(runId)) {
             synchronized(queuedOutboundMessages) {
@@ -380,7 +370,7 @@ class WearChatController(
 
     when (payload.str("state")) {
       "delta" -> {
-        if (runId != null && !ensureTrackedPendingRun(runId)) return
+        if (runId != null && !isPendingRun(runId)) return
         val message = payload["message"].asObj()
         if (message?.str("role") == "assistant") {
           val content = (message["content"] as? JsonArray) ?: return
@@ -396,15 +386,12 @@ class WearChatController(
         }
       }
       "final", "aborted", "error" -> {
+        if (runId != null && !isPendingRun(runId)) return
         val state = payload.str("state")
         if (state == "error") {
           _errorText.value =
             payload.str("errorMessage")?.takeIf { it.isNotBlank() }
               ?: stringResolver(R.string.wear_chat_error_failed)
-        }
-
-        if (runId != null && !ensureTrackedPendingRun(runId)) {
-          rememberCompletedRunId(runId)
         }
 
         if (runId != null && isPendingRun(runId)) {
@@ -424,9 +411,11 @@ class WearChatController(
     val payload = parseObject(payloadJson) ?: return
     val sessionKey = payload.str("sessionKey")
     if (!sessionKey.isNullOrEmpty() && sessionKey != _sessionKey.value) return
+    val runId = payload.str("runId")
 
     when (payload.str("stream")) {
       "assistant" -> {
+        if (runId != null && !isPendingRun(runId)) return
         val data = payload["data"].asObj()
         val text = data?.str("text")
         if (!text.isNullOrEmpty()) {
@@ -612,33 +601,6 @@ class WearChatController(
     return synchronized(pendingRuns) { pendingRuns.containsKey(runId) }
   }
 
-  private fun ensureTrackedPendingRun(runId: String): Boolean {
-    if (isPendingRun(runId)) return true
-    return synchronized(pendingRuns) {
-      if (pendingRuns.containsKey(runId)) {
-        true
-      } else if (pendingRuns.size == 1) {
-        val existingRunId = pendingRuns.keys.first()
-        if (existingRunId == runId) {
-          true
-        } else {
-          val snapshot = pendingRuns.remove(existingRunId)
-          if (snapshot != null) {
-            pendingRuns[runId] = snapshot
-            cancelPendingRunTimeout(existingRunId)
-            armPendingRunTimeout(runId)
-            consumeCompletedRunId(runId)
-            true
-          } else {
-            false
-          }
-        }
-      } else {
-        false
-      }
-    }
-  }
-
   private fun ensurePendingHistoryRefreshLoop() {
     if (pendingHistoryRefreshJob?.isActive == true) return
     pendingHistoryRefreshJob =
@@ -691,20 +653,6 @@ class WearChatController(
 
   private fun hasPendingRuns(): Boolean {
     return synchronized(pendingRuns) { pendingRuns.isNotEmpty() }
-  }
-
-  private fun rememberCompletedRunId(runId: String) {
-    synchronized(completedRunIds) {
-      completedRunIds.add(runId)
-      while (completedRunIds.size > MAX_COMPLETED_RUN_IDS) {
-        val oldestRunId = completedRunIds.firstOrNull() ?: break
-        completedRunIds.remove(oldestRunId)
-      }
-    }
-  }
-
-  private fun consumeCompletedRunId(runId: String): Boolean {
-    return synchronized(completedRunIds) { completedRunIds.remove(runId) }
   }
 
   private fun replacePendingRunId(from: String, to: String) {
