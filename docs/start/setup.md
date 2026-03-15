@@ -23,7 +23,7 @@ Last updated: 2026-01-01
 
 ## Prereqs (from source)
 
-- Node `>=22.16`
+- Node `>=22.16.0`
 - `pnpm`
 - Docker (optional; only for containerized setup/e2e — see [Docker](/install/docker))
 
