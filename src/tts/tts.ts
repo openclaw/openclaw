@@ -28,13 +28,18 @@ import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
+  DEFAULT_MINIMAX_MODEL,
+  DEFAULT_MINIMAX_VOICE,
   DEFAULT_OPENAI_BASE_URL,
   edgeTTS,
   elevenLabsTTS,
   inferEdgeExtension,
+  inferMiniMaxExtension,
   isValidOpenAIModel,
   isValidOpenAIVoice,
   isValidVoiceId,
+  MINIMAX_EMOTIONS,
+  minimaxTTS,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   resolveOpenAITtsInstructions,
@@ -43,6 +48,7 @@ import {
   scheduleCleanup,
   summarizeText,
 } from "./tts-core.js";
+export { MINIMAX_EMOTIONS } from "./tts-core.js";
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -121,6 +127,17 @@ export type ResolvedTtsConfig = {
     speed?: number;
     instructions?: string;
   };
+  minimax: {
+    apiKey?: string;
+    model: string;
+    voice: string;
+    speed?: number;
+    vol?: number;
+    pitch?: number;
+    emotion?: (typeof MINIMAX_EMOTIONS)[number];
+    outputFormat: string;
+    sampleRate?: number;
+  };
   edge: {
     enabled: boolean;
     voice: string;
@@ -174,6 +191,11 @@ export type TtsDirectiveOverrides = {
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  minimax?: {
+    voice?: string;
+    model?: string;
+    emotion?: (typeof MINIMAX_EMOTIONS)[number];
   };
 };
 
@@ -309,6 +331,20 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
       speed: raw.openai?.speed,
       instructions: raw.openai?.instructions?.trim() || undefined,
+    },
+    minimax: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.minimax?.apiKey,
+        path: "messages.tts.minimax.apiKey",
+      }),
+      model: raw.minimax?.model?.trim() || DEFAULT_MINIMAX_MODEL,
+      voice: raw.minimax?.voice?.trim() || DEFAULT_MINIMAX_VOICE,
+      speed: raw.minimax?.speed,
+      vol: raw.minimax?.vol,
+      pitch: raw.minimax?.pitch,
+      emotion: raw.minimax?.emotion,
+      outputFormat: raw.minimax?.outputFormat ?? "mp3",
+      sampleRate: raw.minimax?.sampleRate,
     },
     edge: {
       enabled: raw.edge?.enabled ?? true,
@@ -461,6 +497,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "minimax")) {
+    return "minimax";
+  }
   return "edge";
 }
 
@@ -528,10 +567,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "minimax") {
+    return config.minimax.apiKey || process.env.MINIMAX_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "minimax", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -714,6 +756,23 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+      } else if (provider === "minimax") {
+        const minimaxVoiceOverride = params.overrides?.minimax?.voice;
+        const minimaxModelOverride = params.overrides?.minimax?.model;
+        const minimaxEmotionOverride = params.overrides?.minimax?.emotion;
+        audioBuffer = await minimaxTTS({
+          text: params.text,
+          apiKey,
+          model: minimaxModelOverride ?? config.minimax.model,
+          voice: minimaxVoiceOverride ?? config.minimax.voice,
+          speed: config.minimax.speed,
+          vol: config.minimax.vol,
+          pitch: config.minimax.pitch,
+          emotion: minimaxEmotionOverride ?? config.minimax.emotion,
+          outputFormat: config.minimax.outputFormat,
+          sampleRate: config.minimax.sampleRate,
+          timeoutMs: config.timeoutMs,
+        });
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -735,7 +794,12 @@ export async function textToSpeech(params: {
       const tempRoot = resolvePreferredOpenClawTmpDir();
       mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
       const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-      const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
+      // MiniMax format is configurable; derive extension from it rather than output.extension.
+      const extension =
+        provider === "minimax"
+          ? inferMiniMaxExtension(config.minimax.outputFormat)
+          : output.extension;
+      const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
 
@@ -744,8 +808,14 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
-        voiceCompatible: output.voiceCompatible,
+        outputFormat:
+          provider === "openai"
+            ? output.openai
+            : provider === "minimax"
+              ? config.minimax.outputFormat
+              : output.elevenlabs,
+        // MiniMax does not support opus; voice-bubble channels fall back to mp3.
+        voiceCompatible: provider === "minimax" ? false : output.voiceCompatible,
       };
     } catch (err) {
       errors.push(formatTtsProviderError(provider, err));
@@ -778,6 +848,10 @@ export async function textToSpeechTelephony(params: {
     try {
       if (provider === "edge") {
         errors.push("edge: unsupported for telephony");
+        continue;
+      }
+      if (provider === "minimax") {
+        errors.push("minimax: unsupported for telephony");
         continue;
       }
 

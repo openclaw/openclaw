@@ -51,7 +51,7 @@ vi.mock("../agents/custom-api-registry.js", () => ({
   ensureCustomApiRegistered: vi.fn(),
 }));
 
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
+const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider, resolveTtsApiKey } = tts;
 
 const {
   isValidVoiceId,
@@ -310,6 +310,40 @@ describe("tts", () => {
       expect(result.overrides.provider).toBe("edge");
     });
 
+    it("accepts minimax as provider override", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:provider=minimax]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("minimax");
+    });
+
+    it("sets minimax voice via minimax_voice directive", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowVoice: true });
+      const input = "[[tts:minimax_voice=female-shaonv]] Hello";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.minimax?.voice).toBe("female-shaonv");
+      expect(result.cleanedText.trim()).toBe("Hello");
+    });
+
+    it("sets minimax emotion via minimax_emotion directive", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowVoiceSettings: true });
+      const input = "[[tts:minimax_emotion=happy]] Hello";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.minimax?.emotion).toBe("happy");
+    });
+
+    it("rejects invalid minimax emotion", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowVoiceSettings: true });
+      const input = "[[tts:minimax_emotion=robot]] Hello";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.minimax?.emotion).toBeUndefined();
+      expect(result.warnings).toContain('invalid MiniMax emotion "robot"');
+    });
+
     it("rejects provider override by default while keeping voice overrides enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:provider=edge voice=alloy]] world";
@@ -523,6 +557,17 @@ describe("tts", () => {
             OPENAI_API_KEY: undefined,
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
+            MINIMAX_API_KEY: "test-minimax-key",
+          },
+          prefsPath: "/tmp/tts-prefs-minimax.json",
+          expected: "minimax",
+        },
+        {
+          env: {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+            MINIMAX_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-edge.json",
           expected: "edge",
@@ -588,6 +633,43 @@ describe("tts", () => {
         const config = resolveTtsConfig(baseCfg);
         expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
       });
+    });
+  });
+
+  describe("resolveTtsConfig – minimax", () => {
+    const baseCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    it("defaults to built-in model and voice when no minimax config given", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(config.minimax.model).toBe("speech-2.8-hd");
+      expect(config.minimax.voice).toBe("male-qn-qingse");
+      expect(config.minimax.apiKey).toBeUndefined();
+    });
+
+    it("picks up MINIMAX_API_KEY env var", () => {
+      withEnv({ MINIMAX_API_KEY: "test-mm-key" }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        const key = resolveTtsApiKey(config, "minimax");
+        expect(key).toBe("test-mm-key");
+      });
+    });
+
+    it("respects config model and voice overrides", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            minimax: { model: "speech-02-turbo", voice: "female-shaonv", speed: 1.2 },
+          },
+        },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.minimax.model).toBe("speech-02-turbo");
+      expect(config.minimax.voice).toBe("female-shaonv");
+      expect(config.minimax.speed).toBe(1.2);
     });
   });
 

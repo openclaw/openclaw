@@ -156,7 +156,12 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "minimax" ||
+              rawValue === "edge"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -322,6 +327,28 @@ export function parseTtsDirectives(
               ...overrides.elevenlabs,
               seed: normalizeSeed(Number.parseInt(rawValue, 10)),
             };
+            break;
+          case "minimax_voice":
+          case "minimax_voice_id":
+            if (!policy.allowVoice) {
+              break;
+            }
+            if (rawValue) {
+              overrides.minimax = { ...overrides.minimax, voice: rawValue };
+            }
+            break;
+          case "minimax_emotion":
+            if (!policy.allowVoiceSettings) {
+              break;
+            }
+            if ((MINIMAX_EMOTIONS as readonly string[]).includes(rawValue)) {
+              overrides.minimax = {
+                ...overrides.minimax,
+                emotion: rawValue as (typeof MINIMAX_EMOTIONS)[number],
+              };
+            } else {
+              warnings.push(`invalid MiniMax emotion "${rawValue}"`);
+            }
             break;
           default:
             break;
@@ -720,5 +747,113 @@ export async function edgeTTS(params: {
 
   if (size === 0) {
     throw new Error("Edge TTS produced empty audio file");
+  }
+}
+
+const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.chat/v1";
+export const DEFAULT_MINIMAX_MODEL = "speech-2.8-hd";
+export const DEFAULT_MINIMAX_VOICE = "male-qn-qingse";
+export const MINIMAX_OUTPUT_FORMATS = ["mp3", "pcm", "flac", "wav"] as const;
+export const MINIMAX_EMOTIONS = [
+  "happy",
+  "sad",
+  "angry",
+  "fearful",
+  "disgusted",
+  "surprised",
+  "calm",
+  "fluent",
+  "whisper",
+] as const;
+const MINIMAX_VALID_SAMPLE_RATES = new Set([8000, 16000, 22050, 24000, 32000, 44100]);
+
+export function inferMiniMaxExtension(outputFormat: string): string {
+  switch (outputFormat) {
+    case "flac":
+      return ".flac";
+    case "wav":
+      return ".wav";
+    case "pcm":
+      return ".pcm";
+    default:
+      return ".mp3";
+  }
+}
+
+export async function minimaxTTS(params: {
+  text: string;
+  apiKey: string;
+  model: string;
+  voice: string;
+  speed?: number;
+  vol?: number;
+  pitch?: number;
+  emotion?: string;
+  outputFormat?: string;
+  sampleRate?: number;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, model, voice, timeoutMs } = params;
+  const speed = params.speed ?? 1.0;
+  const vol = params.vol ?? 1.0;
+  const pitch = params.pitch ?? 0;
+  const outputFormat = params.outputFormat ?? "mp3";
+  const sampleRate = MINIMAX_VALID_SAMPLE_RATES.has(params.sampleRate ?? 0)
+    ? params.sampleRate!
+    : 32000;
+  // bitrate only applies to mp3
+  const audioBitrate = outputFormat === "mp3" ? 128000 : undefined;
+
+  const voiceSetting: Record<string, unknown> = { voice_id: voice, speed, vol, pitch };
+  if (params.emotion) {
+    voiceSetting.emotion = params.emotion;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${DEFAULT_MINIMAX_BASE_URL}/t2a_v2`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        text,
+        stream: false,
+        voice_setting: voiceSetting,
+        audio_setting: {
+          sample_rate: sampleRate,
+          ...(audioBitrate != null && { bitrate: audioBitrate }),
+          format: outputFormat,
+          channel: 1,
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`MiniMax TTS API error (${response.status}): ${body.slice(0, 200)}`);
+    }
+
+    const json = (await response.json()) as {
+      base_resp?: { status_code?: number; status_msg?: string };
+      data?: { audio?: string };
+    };
+    if (json.base_resp?.status_code !== 0) {
+      throw new Error(
+        `MiniMax TTS error: ${json.base_resp?.status_msg ?? "unknown"} (code ${json.base_resp?.status_code})`,
+      );
+    }
+    const hexAudio = json.data?.audio;
+    if (!hexAudio) {
+      throw new Error("MiniMax TTS: empty audio in response");
+    }
+    return Buffer.from(hexAudio, "hex");
+  } finally {
+    clearTimeout(timeout);
   }
 }
