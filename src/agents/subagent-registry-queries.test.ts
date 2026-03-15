@@ -172,7 +172,9 @@ describe("subagent registry query regressions", () => {
       }),
     );
 
-    expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(0);
+    // Parent run still has cleanupCompletedAt=undefined, so it remains active
+    // even after all descendants are done — cleanup must finalize first.
+    expect(countActiveRunsForSessionFromRuns(runs, "agent:main:main")).toBe(1);
   });
 
   it("scopes direct child listings to the requester run window when requesterRunId is provided", () => {

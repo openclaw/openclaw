@@ -312,9 +312,30 @@ describe("subagents utils", () => {
 
   it("formats run status from outcome and timestamps", () => {
     expect(formatRunStatus({ ...baseRun })).toBe("running");
-    expect(formatRunStatus({ ...baseRun, endedAt: 2000, outcome: { status: "ok" } })).toBe("done");
+    expect(
+      formatRunStatus({
+        ...baseRun,
+        endedAt: 2000,
+        cleanupCompletedAt: 2100,
+        outcome: { status: "ok" },
+      }),
+    ).toBe("done");
+    expect(
+      formatRunStatus({
+        ...baseRun,
+        endedAt: 2000,
+        cleanupCompletedAt: 2100,
+        outcome: { status: "timeout" },
+      }),
+    ).toBe("timeout");
+  });
+
+  it("returns completing when endedAt is set but cleanup is pending", () => {
+    expect(formatRunStatus({ ...baseRun, endedAt: 2000, outcome: { status: "ok" } })).toBe(
+      "completing",
+    );
     expect(formatRunStatus({ ...baseRun, endedAt: 2000, outcome: { status: "timeout" } })).toBe(
-      "timeout",
+      "completing",
     );
   });
 
