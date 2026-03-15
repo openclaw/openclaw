@@ -23,6 +23,7 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -289,6 +290,67 @@ export type ProviderPreparedRuntimeAuth = {
 };
 
 /**
+ * Usage/billing auth input for providers that expose quota/usage endpoints.
+ *
+ * This hook is intentionally separate from `prepareRuntimeAuth`: usage
+ * snapshots often need a different credential source than live inference
+ * requests, and they run outside the embedded runner.
+ *
+ * The helper methods cover the common OpenClaw auth resolution paths:
+ *
+ * - `resolveApiKeyFromConfigAndStore`: env/config/plain token/api_key profiles
+ * - `resolveOAuthToken`: oauth/token profiles resolved through the auth store
+ *
+ * Plugins can still do extra provider-specific work on top (for example parse a
+ * token blob, read a legacy credential file, or pick between aliases).
+ */
+export type ProviderResolveUsageAuthContext = {
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  resolveApiKeyFromConfigAndStore: (params?: {
+    providerIds?: string[];
+    envDirect?: Array<string | undefined>;
+  }) => string | undefined;
+  resolveOAuthToken: () => Promise<ProviderResolvedUsageAuth | null>;
+};
+
+/**
+ * Result of `resolveUsageAuth`.
+ *
+ * `token` is the credential used for provider usage/billing endpoints.
+ * `accountId` is optional provider-specific metadata used by some usage APIs.
+ */
+export type ProviderResolvedUsageAuth = {
+  token: string;
+  accountId?: string;
+};
+
+/**
+ * Usage/quota snapshot input for providers that own their usage endpoint
+ * fetch/parsing behavior.
+ *
+ * This hook runs after `resolveUsageAuth` succeeds. Core still owns summary
+ * fan-out, timeout wrapping, filtering, and formatting; the provider plugin
+ * owns the provider-specific HTTP request + response normalization.
+ *
+ * Return `null`/`undefined` to fall back to legacy core fetchers.
+ */
+export type ProviderFetchUsageSnapshotContext = {
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  token: string;
+  accountId?: string;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+};
+
+/**
  * Provider-owned extra-param normalization before OpenClaw builds its generic
  * stream option wrapper.
  *
@@ -464,6 +526,32 @@ export type ProviderPlugin = {
   prepareRuntimeAuth?: (
     ctx: ProviderPrepareRuntimeAuthContext,
   ) => Promise<ProviderPreparedRuntimeAuth | null | undefined>;
+  /**
+   * Usage/billing auth resolution hook.
+   *
+   * Called by provider-usage surfaces (`/usage`, status snapshots, reporting)
+   * before OpenClaw falls back to legacy core auth resolution. Use this when a
+   * provider's usage endpoint needs provider-owned token extraction, blob
+   * parsing, or alias handling.
+   */
+  resolveUsageAuth?: (
+    ctx: ProviderResolveUsageAuthContext,
+  ) =>
+    | Promise<ProviderResolvedUsageAuth | null | undefined>
+    | ProviderResolvedUsageAuth
+    | null
+    | undefined;
+  /**
+   * Usage/quota snapshot fetch hook.
+   *
+   * Called after `resolveUsageAuth` by `/usage` and related reporting surfaces.
+   * Use this when the provider's usage endpoint or payload shape is
+   * provider-specific and you want that logic to live with the provider plugin
+   * instead of the core switchboard.
+   */
+  fetchUsageSnapshot?: (
+    ctx: ProviderFetchUsageSnapshotContext,
+  ) => Promise<ProviderUsageSnapshot | null | undefined> | ProviderUsageSnapshot | null | undefined;
   /**
    * Provider-owned cache TTL eligibility.
    *
