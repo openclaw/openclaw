@@ -319,7 +319,7 @@ type MaybeCreateDiscordAutoThreadParams = {
   messageChannelId?: string;
   isGuildMessage: boolean;
   isDirectMessage?: boolean;
-  directUserId?: string | null;
+  directUserId?: string;
   channelConfig?: DiscordChannelConfigResolved | null;
   threadChannel?: DiscordThreadChannel | null;
   channelType?: ChannelType;
@@ -341,7 +341,7 @@ export async function resolveDiscordAutoThreadReplyPlan(
   // the correct DM channel. Using channel:<dmChannelId> fails for DMs because
   // reply delivery expects a guild/thread channel ID, not a DM channel ID.
   const originalReplyTarget =
-    params.isDirectMessage && params.directUserId
+    params.isDirectMessage && params.directUserId != null && params.directUserId !== ""
       ? `user:${params.directUserId}`
       : `channel:${targetChannelId}`;
   const createdThreadId = await maybeCreateDiscordAutoThread({
