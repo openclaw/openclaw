@@ -1,5 +1,6 @@
+import { ExternalLink, FileText, X, ZoomIn } from "lucide-react";
 import { marked } from "marked";
-import React, { memo, useCallback, useId, useMemo, useState } from "react";
+import React, { memo, useCallback, useEffect, useId, useMemo, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
@@ -11,6 +12,8 @@ export type MarkdownProps = {
   id?: string;
   className?: string;
   components?: Partial<Components>;
+  /** Agent ID for converting workspace file paths to inline image URLs. */
+  agentId?: string;
 };
 
 function parseMarkdownIntoBlocks(markdown: string): string[] {
@@ -60,6 +63,102 @@ function AnchorButton({ id }: { id: string }) {
     >
       {copied ? "✓" : "#"}
     </button>
+  );
+}
+
+/** Lightbox that fetches + renders a markdown file in a modal overlay. */
+function MarkdownFileLightbox({
+  url,
+  fileName,
+  onClose,
+}: {
+  url: string;
+  fileName: string;
+  onClose: () => void;
+}) {
+  const [content, setContent] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    fetch(url)
+      .then((r) => {
+        if (!r.ok) {
+          throw new Error(`${r.status}`);
+        }
+        return r.text();
+      })
+      .then(setContent)
+      .catch(() => setError(true));
+  }, [url]);
+
+  // Close on Escape key
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in-0 duration-150"
+      onClick={onClose}
+    >
+      <button
+        className="absolute top-4 right-4 z-10 rounded-full bg-black/50 p-2 text-white/80 hover:text-white hover:bg-black/70 transition-colors"
+        onClick={onClose}
+      >
+        <X className="h-5 w-5" />
+      </button>
+      <div
+        className="bg-card border border-border rounded-xl shadow-2xl max-w-[90vw] max-h-[90vh] w-[800px] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-3 border-b border-border/50 shrink-0">
+          <span className="text-sm font-medium text-foreground truncate">{fileName}</span>
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 text-xs text-primary/70 hover:text-primary transition-colors shrink-0 ml-3"
+          >
+            <ExternalLink className="h-3 w-3" />
+            Raw
+          </a>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-4 prose prose-sm prose-chat max-w-none">
+          {error && <p className="text-destructive text-sm">Failed to load file</p>}
+          {content === null && !error && (
+            <p className="text-muted-foreground text-sm animate-pulse">Loading...</p>
+          )}
+          {content !== null && <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Clickable card for markdown files that opens a lightbox preview. */
+function MarkdownFileCard({ src, fileName }: { src: string; fileName: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="my-3 flex items-center gap-2.5 px-4 py-2.5 rounded-lg border border-border bg-muted/30 hover:bg-muted/60 transition-colors cursor-pointer w-full text-left"
+      >
+        <FileText className="h-4 w-4 text-primary/60 shrink-0" />
+        <span className="text-sm font-medium text-foreground truncate">{fileName}</span>
+        <span className="ml-auto text-xs text-muted-foreground shrink-0">Preview</span>
+      </button>
+      {open && (
+        <MarkdownFileLightbox url={src} fileName={fileName} onClose={() => setOpen(false)} />
+      )}
+    </>
   );
 }
 
@@ -191,19 +290,93 @@ const INITIAL_COMPONENTS: Partial<Components> = {
     );
   },
 
-  // ── Images ──
+  // ── Images (clickable lightbox) & PDF embeds (open in new tab) ──
   img: function Img({ src, alt }) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const [lightboxOpen, setLightboxOpen] = useState(false);
+
     if (!src) {
       return null;
     }
+
+    // Markdown files: clickable card that opens a lightbox.
+    if (alt?.startsWith("md:")) {
+      const fileName = alt.slice(3) || "Markdown file";
+      return <MarkdownFileCard src={src} fileName={fileName} />;
+    }
+
+    // PDF embeds: render inline preview + "Open in new tab" button.
+    if (alt?.startsWith("pdf:")) {
+      const title = alt.slice(4) || "PDF";
+      return (
+        <div className="my-4 rounded-lg border border-border overflow-hidden group/pdf">
+          <div className="flex items-center justify-between bg-muted/50 px-3 py-1.5 border-b border-border/50">
+            <span className="text-xs font-medium text-muted-foreground truncate">{title}</span>
+            <a
+              href={src}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-[11px] text-primary/70 hover:text-primary transition-colors shrink-0"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Open
+            </a>
+          </div>
+          <iframe src={src} title={title} className="w-full" style={{ height: "600px" }} />
+        </div>
+      );
+    }
+
+    // Images: clickable thumbnail that opens a lightbox overlay.
     return (
-      <img
-        src={src}
-        alt={alt ?? ""}
-        className="my-4 rounded-lg border border-border"
-        style={{ maxWidth: "100%", height: "auto", display: "block" }}
-        loading="eager"
-      />
+      <>
+        <button
+          type="button"
+          onClick={() => setLightboxOpen(true)}
+          className="group/img my-4 rounded-lg border border-border overflow-hidden cursor-zoom-in relative block"
+        >
+          <img
+            src={src}
+            alt={alt ?? ""}
+            style={{ maxWidth: "100%", height: "auto", display: "block" }}
+            loading="eager"
+          />
+          <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover/img:bg-black/20 transition-colors">
+            <ZoomIn className="h-6 w-6 text-white opacity-0 group-hover/img:opacity-80 transition-opacity drop-shadow-md" />
+          </span>
+        </button>
+
+        {/* Lightbox overlay */}
+        {lightboxOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in-0 duration-150"
+            onClick={() => setLightboxOpen(false)}
+          >
+            <button
+              className="absolute top-4 right-4 z-10 rounded-full bg-black/50 p-2 text-white/80 hover:text-white hover:bg-black/70 transition-colors"
+              onClick={() => setLightboxOpen(false)}
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <a
+              href={src}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="absolute top-4 right-16 z-10 rounded-full bg-black/50 p-2 text-white/80 hover:text-white hover:bg-black/70 transition-colors"
+              title="Open in new tab"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ExternalLink className="h-5 w-5" />
+            </a>
+            <img
+              src={src}
+              alt={alt ?? ""}
+              className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        )}
+      </>
     );
   },
 
@@ -274,15 +447,63 @@ const MemoizedMarkdownBlock = memo(
 
 MemoizedMarkdownBlock.displayName = "MemoizedMarkdownBlock";
 
+/**
+ * Pre-process markdown text to convert workspace file paths into inline previews.
+ * Handles images (png, jpg, gif, webp, svg) and PDFs.
+ * Handles both default workspace (`~/.openclaw/workspace/`) and agent-scoped
+ * workspaces (`~/.openclaw/agents/{id}/workspace/`).
+ * Also handles paths wrapped in backticks (inline code) — the backticks are
+ * removed so the preview renders properly.
+ */
+function rewriteWorkspaceFilePaths(text: string, agentId: string): string {
+  // Match workspace file paths, optionally wrapped in single backticks.
+  // Two workspace layouts:
+  //   ~/.openclaw/workspace/{path}                   (default agent)
+  //   ~/.openclaw/agents/{id}/workspace/{path}       (named agent)
+  // With absolute prefix variants:
+  //   /Users/xxx/.openclaw/...
+  //   /home/xxx/.openclaw/...
+  const filePathRe =
+    /`?((?:~|\/(?:Users|home)\/[^\s/`]+)\/\.openclaw\/(?:agents\/[^\s/`]+\/)?workspace\/([\w./_-]+\.(?:png|jpe?g|gif|webp|svg|pdf|md|mdx|markdown)))`?/gi;
+
+  return text.replace(filePathRe, (match, _fullPath: string, relativePath: string) => {
+    // Skip if already inside markdown image/link syntax (preceded by ![ or ]( )
+    const idx = text.indexOf(match);
+    if (idx > 0) {
+      const before = text.slice(Math.max(0, idx - 2), idx);
+      if (before.endsWith("![") || before.endsWith("](")) {
+        return match;
+      }
+    }
+    const segments = relativePath.split("/").map(encodeURIComponent).join("/");
+    const url = `/api/workspace-files/${encodeURIComponent(agentId)}/${segments}`;
+    const fileName = relativePath.split("/").pop() ?? relativePath;
+    const isPdf = /\.pdf$/i.test(relativePath);
+    const isMd = /\.(?:md|mdx|markdown)$/i.test(relativePath);
+    if (isPdf) {
+      return `\n![pdf:${fileName}](${url})\n`;
+    }
+    if (isMd) {
+      return `\n![md:${fileName}](${url})\n`;
+    }
+    return `\n![${fileName}](${url})\n`;
+  });
+}
+
 function MarkdownComponent({
   children,
   id,
   className,
   components = INITIAL_COMPONENTS,
+  agentId,
 }: MarkdownProps) {
   const generatedId = useId();
   const blockId = id ?? generatedId;
-  const blocks = useMemo(() => parseMarkdownIntoBlocks(children), [children]);
+  const processedChildren = useMemo(
+    () => (agentId ? rewriteWorkspaceFilePaths(children, agentId) : children),
+    [children, agentId],
+  );
+  const blocks = useMemo(() => parseMarkdownIntoBlocks(processedChildren), [processedChildren]);
 
   return (
     <div className={className}>

@@ -768,8 +768,58 @@ export function AgentBrowsePage() {
           <span className="text-xs text-muted-foreground">{row.requires ?? "—"}</span>
         ),
       },
+      {
+        key: "actions" as unknown as keyof MarketplaceAgent,
+        header: "Actions",
+        render: (row) => {
+          const isInstalled = row.installStatus?.startsWith("installed");
+          if (!isInstalled) {
+            return null;
+          }
+          return (
+            <div className="flex items-center gap-1">
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-7"
+                title="Edit agent"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void navigate(`/agents/${row.id}`);
+                }}
+              >
+                <Pencil className="size-3" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-7 text-destructive hover:text-destructive"
+                title="Remove agent"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  if (
+                    !window.confirm(
+                      `Remove agent "${row.name}"? This deletes the agent folder and config entry.`,
+                    )
+                  ) {
+                    return;
+                  }
+                  try {
+                    await sendRpc("agents.marketplace.remove", { agentId: row.id });
+                    void fetchAgents();
+                  } catch (err) {
+                    console.error("Remove failed:", err);
+                  }
+                }}
+              >
+                <Trash2 className="size-3" />
+              </Button>
+            </div>
+          );
+        },
+      },
     ],
-    [handleInstall, installing],
+    [handleInstall, installing, sendRpc, fetchAgents, navigate],
   );
 
   const isBundleView = category === "bundle";

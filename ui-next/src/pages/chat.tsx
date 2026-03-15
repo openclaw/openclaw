@@ -7,6 +7,7 @@ import {
   useActiveAgentLabel,
   useActiveAgentName,
   useActiveAgentMeta,
+  useActiveAgentId,
 } from "@/components/chat/chat-header";
 import { ChatInput } from "@/components/chat/chat-input";
 import { ChatLayout } from "@/components/chat/chat-layout";
@@ -69,6 +70,7 @@ export function ChatPage() {
   const activeAgentLabel = useActiveAgentLabel(agentMap);
   const activeAgentName = useActiveAgentName(agentMap);
   const { role: activeAgentRole, department: activeAgentDepartment } = useActiveAgentMeta(agentMap);
+  const activeAgentId = useActiveAgentId();
   const placeholder = useDynamicPlaceholder(activeAgentLabel);
 
   // Draft state from store
@@ -808,6 +810,10 @@ export function ChatPage() {
                           onCopyId={handleCopyId}
                           onDelete={handleDeleteMessage}
                           showPlanCard={i === lastPlanMessageIndex}
+                          sessionComplete={
+                            i === lastPlanMessageIndex && !isStreaming && !isSendPending
+                          }
+                          agentId={activeAgentId}
                         />
                       </div>
                     );

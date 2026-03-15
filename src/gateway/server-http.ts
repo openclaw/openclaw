@@ -68,6 +68,7 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import { handleWorkspaceFilesHttpRequest } from "./workspace-files-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -645,6 +646,16 @@ export function createGatewayHttpServer(opts: {
           name: "tools-invoke",
           run: () =>
             handleToolsInvokeHttpRequest(req, res, {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        },
+        {
+          name: "workspace-files",
+          run: () =>
+            handleWorkspaceFilesHttpRequest(req, res, {
               auth: resolvedAuth,
               trustedProxies,
               allowRealIpFallback,

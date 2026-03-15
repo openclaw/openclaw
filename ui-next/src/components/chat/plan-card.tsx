@@ -102,16 +102,32 @@ export function extractPlanSteps(text: string): { steps: PlanStep[]; rest: strin
   return { steps, rest };
 }
 
-export function PlanCard({ steps, className }: { steps: PlanStep[]; className?: string }) {
+export function PlanCard({
+  steps,
+  className,
+  sessionComplete = false,
+}: {
+  steps: PlanStep[];
+  className?: string;
+  /** When true (session finished, not streaming), mark all remaining steps as done. */
+  sessionComplete?: boolean;
+}) {
   const [collapsed, setCollapsed] = useState(false);
 
-  const doneCount = useMemo(() => steps.filter((s) => s.done).length, [steps]);
-  const total = steps.length;
+  // When the session is complete (not streaming), auto-mark remaining steps as done.
+  // The LLM often forgets to re-emit the final checklist with all steps checked.
+  const effectiveSteps = useMemo(
+    () => (sessionComplete ? steps.map((s) => (s.done ? s : { ...s, done: true })) : steps),
+    [steps, sessionComplete],
+  );
+
+  const doneCount = useMemo(() => effectiveSteps.filter((s) => s.done).length, [effectiveSteps]);
+  const total = effectiveSteps.length;
   const allDone = doneCount === total;
   const progress = total > 0 ? (doneCount / total) * 100 : 0;
 
   // Find the first incomplete step (currently active)
-  const activeIndex = steps.findIndex((s) => !s.done);
+  const activeIndex = effectiveSteps.findIndex((s) => !s.done);
 
   return (
     <div
@@ -151,7 +167,7 @@ export function PlanCard({ steps, className }: { steps: PlanStep[]; className?: 
       {/* Steps */}
       {!collapsed && (
         <div className="px-3 py-1.5 space-y-0.5">
-          {steps.map((step, i) => {
+          {effectiveSteps.map((step, i) => {
             const isActive = i === activeIndex;
             return (
               <div

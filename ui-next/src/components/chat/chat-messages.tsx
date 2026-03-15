@@ -557,6 +557,8 @@ export function ChatMessageBubble({
   onCopyId,
   onDelete,
   showPlanCard = true,
+  sessionComplete = false,
+  agentId,
 }: {
   msg: ChatMessage;
   index: number;
@@ -579,6 +581,10 @@ export function ChatMessageBubble({
   onDelete?: (msg: ChatMessage) => void;
   /** Only render the PlanCard on this message (avoids duplicate cards across intermediate messages). */
   showPlanCard?: boolean;
+  /** Session is complete (not streaming) — auto-complete remaining plan steps. */
+  sessionComplete?: boolean;
+  /** Agent ID for workspace file URL construction (inline image previews). */
+  agentId?: string;
 }) {
   const text = getMessageText(msg);
   const isUser = msg.role === "user";
@@ -722,6 +728,7 @@ export function ChatMessageBubble({
             cards={toolCards}
             displayMode={toolDisplayMode}
             onViewOutput={onViewToolOutput}
+            agentId={agentId}
           />
         </div>
       );
@@ -736,6 +743,7 @@ export function ChatMessageBubble({
           cards={[{ kind: "result", name: "tool", text: resultText }]}
           displayMode={toolDisplayMode}
           onViewOutput={onViewToolOutput}
+          agentId={agentId}
         />
       </div>
     );
@@ -772,6 +780,7 @@ export function ChatMessageBubble({
                 cards={toolCards}
                 displayMode={toolDisplayMode}
                 onViewOutput={onViewToolOutput}
+                agentId={agentId}
               />
             </div>
           )}
@@ -782,10 +791,16 @@ export function ChatMessageBubble({
               const hasPlan = showPlanCard && planSteps.length >= 2;
               return (
                 <>
-                  {hasPlan && <PlanCard steps={planSteps} className="mb-3" />}
+                  {hasPlan && (
+                    <PlanCard
+                      steps={planSteps}
+                      className="mb-3"
+                      sessionComplete={sessionComplete}
+                    />
+                  )}
                   {(hasPlan ? planRest : displayContent) && (
                     <div className="prose prose-sm prose-chat max-w-none break-words leading-relaxed font-sans">
-                      <Markdown>{hasPlan ? planRest : displayContent}</Markdown>
+                      <Markdown agentId={agentId}>{hasPlan ? planRest : displayContent}</Markdown>
                     </div>
                   )}
                 </>

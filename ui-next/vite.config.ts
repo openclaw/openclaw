@@ -102,6 +102,11 @@ export default defineConfig({
         rewriteWsOrigin: true,
         rewrite: (p) => p.replace(/^\/gw-ws/, ""),
       },
+      // Proxy workspace file requests to the gateway for inline image rendering.
+      "/api/workspace-files": {
+        target: "https://localhost:18789",
+        secure: false,
+      },
     },
   },
 });

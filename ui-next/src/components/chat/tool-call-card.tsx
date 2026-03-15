@@ -1,5 +1,17 @@
-import { Wrench, ChevronDown, ChevronRight, Check, Eye, Zap } from "lucide-react";
-import { useState } from "react";
+import {
+  Wrench,
+  ChevronDown,
+  ChevronRight,
+  Check,
+  Eye,
+  Zap,
+  ExternalLink,
+  X,
+  ZoomIn,
+  FileText,
+} from "lucide-react";
+import { useState, useEffect } from "react";
+import { Markdown } from "@/components/ui/custom/prompt/markdown";
 import { cn } from "@/lib/utils";
 import type { ChatMessageContent, MessageUsage } from "@/store/chat-store";
 
@@ -28,6 +40,77 @@ export type ToolCardData = {
    *  undefined = no result merged yet, "" = empty result (no output). */
   resultText?: string;
 };
+
+// ─── Workspace File Preview Detection ───
+
+const READ_IMAGE_RE = /^Read image file \[image\/(png|jpeg|gif|webp|svg\+xml)\]$/;
+
+/** File extensions we can preview inline. */
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg)$/i;
+const PDF_EXTENSION = /\.pdf$/i;
+const MARKDOWN_EXTENSION = /\.(?:md|mdx|markdown)$/i;
+
+type FilePreview = { kind: "image" | "pdf" | "markdown"; url: string; fileName?: string };
+
+/**
+ * Build a workspace file URL from an agent ID and a file path.
+ * Handles both relative paths and absolute paths under the workspace.
+ * Supports both default workspace (~/.openclaw/workspace/) and
+ * agent-scoped workspace (~/.openclaw/agents/{id}/workspace/).
+ */
+export function buildWorkspaceFileUrl(agentId: string, filePath: string): string {
+  // Strip home directory prefixes for URL construction.
+  let relativePath = filePath
+    // Agent-scoped workspace: ~/.openclaw/agents/{id}/workspace/
+    .replace(/^~\/\.openclaw\/agents\/[^/]+\/workspace\//, "")
+    .replace(/^\/[^/]+\/[^/]+\/\.openclaw\/agents\/[^/]+\/workspace\//, "")
+    // Default workspace: ~/.openclaw/workspace/
+    .replace(/^~\/\.openclaw\/workspace\//, "")
+    .replace(/^\/[^/]+\/[^/]+\/\.openclaw\/workspace\//, "");
+  // If still absolute, use basename as a safe fallback.
+  if (relativePath.startsWith("/")) {
+    relativePath = relativePath.split("/").pop() ?? relativePath;
+  }
+  return `/api/workspace-files/${encodeURIComponent(agentId)}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/**
+ * Detect if a tool card has a workspace file that can be previewed inline.
+ * Returns the file URL and kind (image/pdf) if applicable, undefined otherwise.
+ */
+function resolveToolFilePreview(card: ToolCardData, agentId?: string): FilePreview | undefined {
+  if (!agentId) {
+    return undefined;
+  }
+
+  const resultText = card.resultText ?? card.text ?? "";
+  const isReadTool = card.name.toLowerCase() === "read";
+
+  // Extract file path from tool call args.
+  const args = card.args as Record<string, unknown> | undefined;
+  const filePath = (args?.path ?? args?.file_path) as string | undefined;
+  if (!filePath) {
+    return undefined;
+  }
+
+  // Image read results: "Read image file [image/png]"
+  if (isReadTool && READ_IMAGE_RE.test(resultText.trim()) && IMAGE_EXTENSIONS.test(filePath)) {
+    return { kind: "image", url: buildWorkspaceFileUrl(agentId, filePath) };
+  }
+
+  // PDF: any tool that references a .pdf workspace file
+  if (PDF_EXTENSION.test(filePath)) {
+    return { kind: "pdf", url: buildWorkspaceFileUrl(agentId, filePath) };
+  }
+
+  // Markdown: any tool that references a .md workspace file
+  if (MARKDOWN_EXTENSION.test(filePath)) {
+    const fileName = filePath.split("/").pop() ?? filePath;
+    return { kind: "markdown", url: buildWorkspaceFileUrl(agentId, filePath), fileName };
+  }
+
+  return undefined;
+}
 
 // ─── Tool Detail Resolution ───
 
@@ -224,21 +307,207 @@ function formatArgs(args: unknown): string {
   }
 }
 
+/** Markdown file lightbox: fetches content and renders in a modal. */
+function MarkdownLightbox({
+  url,
+  fileName,
+  onClose,
+}: {
+  url: string;
+  fileName: string;
+  onClose: () => void;
+}) {
+  const [content, setContent] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    fetch(url)
+      .then((r) => {
+        if (!r.ok) {
+          throw new Error(`${r.status}`);
+        }
+        return r.text();
+      })
+      .then(setContent)
+      .catch(() => setError(true));
+  }, [url]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in-0 duration-150"
+      onClick={onClose}
+    >
+      <button
+        className="absolute top-4 right-4 z-10 rounded-full bg-black/50 p-2 text-white/80 hover:text-white hover:bg-black/70 transition-colors"
+        onClick={onClose}
+      >
+        <X className="h-5 w-5" />
+      </button>
+      <div
+        className="bg-card border border-border rounded-xl shadow-2xl max-w-[90vw] max-h-[90vh] w-[800px] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-3 border-b border-border/50 shrink-0">
+          <span className="text-sm font-medium text-foreground truncate">{fileName}</span>
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 text-xs text-primary/70 hover:text-primary transition-colors shrink-0 ml-3"
+          >
+            <ExternalLink className="h-3 w-3" />
+            Raw
+          </a>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-4 prose prose-sm prose-chat max-w-none">
+          {error && <p className="text-destructive text-sm">Failed to load file</p>}
+          {content === null && !error && (
+            <p className="text-muted-foreground text-sm">Loading...</p>
+          )}
+          {content !== null && <Markdown>{content}</Markdown>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Inline preview for workspace files (images, PDFs, markdown) with interactive viewing. */
+function WorkspaceFilePreview({ preview, alt }: { preview: FilePreview; alt?: string }) {
+  const [failed, setFailed] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  if (failed) {
+    return null;
+  }
+
+  // Markdown: show a compact clickable card, lightbox fetches + renders content.
+  if (preview.kind === "markdown") {
+    const title = preview.fileName ?? alt ?? "Markdown file";
+    return (
+      <>
+        <div className="border-t border-border/50 px-3 py-2">
+          <button
+            type="button"
+            onClick={() => setLightboxOpen(true)}
+            className="flex items-center gap-2 px-3 py-2 rounded-md border border-border bg-muted/30 hover:bg-muted/60 transition-colors cursor-pointer w-full text-left"
+          >
+            <FileText className="h-4 w-4 text-primary/60 shrink-0" />
+            <span className="text-xs font-medium text-foreground truncate">{title}</span>
+            <span className="ml-auto text-[10px] text-muted-foreground shrink-0">Preview</span>
+          </button>
+        </div>
+        {lightboxOpen && (
+          <MarkdownLightbox
+            url={preview.url}
+            fileName={title}
+            onClose={() => setLightboxOpen(false)}
+          />
+        )}
+      </>
+    );
+  }
+
+  if (preview.kind === "pdf") {
+    const title = alt ?? "PDF";
+    return (
+      <div className="border-t border-border/50">
+        <div className="flex items-center justify-between px-3 py-1.5 bg-muted/30">
+          <span className="text-[11px] font-medium text-muted-foreground truncate">{title}</span>
+          <a
+            href={preview.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 text-[10px] text-primary/70 hover:text-primary transition-colors shrink-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExternalLink className="h-3 w-3" />
+            Open
+          </a>
+        </div>
+        <iframe
+          src={preview.url}
+          title={title}
+          className="w-full border-t border-border/30"
+          style={{ height: "400px" }}
+          onError={() => setFailed(true)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="border-t border-border/50 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setLightboxOpen(true)}
+          className="group/img rounded-md border border-border overflow-hidden cursor-zoom-in relative block"
+        >
+          <img
+            src={preview.url}
+            alt={alt ?? "workspace file"}
+            className="max-h-64 max-w-full object-contain"
+            loading="eager"
+            onError={() => setFailed(true)}
+          />
+          <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover/img:bg-black/20 transition-colors">
+            <ZoomIn className="h-5 w-5 text-white opacity-0 group-hover/img:opacity-80 transition-opacity drop-shadow-md" />
+          </span>
+        </button>
+      </div>
+
+      {/* Lightbox overlay */}
+      {lightboxOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in-0 duration-150"
+          onClick={() => setLightboxOpen(false)}
+        >
+          <button
+            className="absolute top-4 right-4 z-10 rounded-full bg-black/50 p-2 text-white/80 hover:text-white hover:bg-black/70 transition-colors"
+            onClick={() => setLightboxOpen(false)}
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <a
+            href={preview.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="absolute top-4 right-16 z-10 rounded-full bg-black/50 p-2 text-white/80 hover:text-white hover:bg-black/70 transition-colors"
+            title="Open in new tab"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExternalLink className="h-5 w-5" />
+          </a>
+          <img
+            src={preview.url}
+            alt={alt ?? "workspace file"}
+            className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
 /** A single tool card: shows tool name, detail, args (collapsed), and optionally merged result. */
 function ToolCard({
   card,
   onViewOutput,
   defaultExpanded = false,
+  agentId,
 }: {
   card: ToolCardData;
   onViewOutput?: (name: string, content: string) => void;
   /** When true, the card starts in expanded state (used in "expanded" display mode). */
   defaultExpanded?: boolean;
+  /** Current agent ID, used to build workspace file URLs. */
+  agentId?: string;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const isCall = card.kind === "call";
   const formattedArgs = isCall ? formatArgs(card.args) : "";
   const hasArgs = isCall && formattedArgs.length > 0;
+  const filePreview = resolveToolFilePreview(card, agentId);
 
   // Standalone result card (tool_result block within a message)
   const hasResult = !isCall && card.text != null;
@@ -392,6 +661,9 @@ function ToolCard({
           </pre>
         </div>
       )}
+
+      {/* Inline workspace file preview (images + PDFs) */}
+      {filePreview && <WorkspaceFilePreview preview={filePreview} alt={card.detail} />}
     </div>
   );
 }
@@ -443,10 +715,13 @@ export function ToolCallCard({
   cards,
   displayMode = "collapsed",
   onViewOutput,
+  agentId,
 }: {
   cards: ToolCardData[];
   displayMode?: ToolDisplayMode;
   onViewOutput?: (name: string, content: string) => void;
+  /** Agent ID for building workspace file URLs (inline image previews). */
+  agentId?: string;
 }) {
   const [aggregateExpanded, setAggregateExpanded] = useState(false);
 
@@ -463,6 +738,7 @@ export function ToolCallCard({
             key={`${card.kind}-${card.name}-${i}`}
             card={card}
             onViewOutput={onViewOutput}
+            agentId={agentId}
             defaultExpanded
           />
         ))}
@@ -506,7 +782,12 @@ export function ToolCallCard({
         </div>
       )}
       {cards.map((card, i) => (
-        <ToolCard key={`${card.kind}-${card.name}-${i}`} card={card} onViewOutput={onViewOutput} />
+        <ToolCard
+          key={`${card.kind}-${card.name}-${i}`}
+          card={card}
+          onViewOutput={onViewOutput}
+          agentId={agentId}
+        />
       ))}
     </div>
   );

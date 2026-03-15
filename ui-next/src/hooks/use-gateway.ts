@@ -289,11 +289,36 @@ function handleChatEvent(payload: unknown) {
   // sessions accumulate their state silently until the user switches to them.
   const targetKey = sessionKey ? normalizeSessionKey(sessionKey) : chatStore.activeSessionKey;
 
+  // When a chat event arrives for a DIFFERENT session key than the active one,
+  // and the active session has a pending send (optimistic user message waiting),
+  // transfer the optimistic state to the new key and switch to it. This happens
+  // when the server creates a new UUID-based session (e.g., "agent:main:6e9e2b3f")
+  // but the UI was on "main" or "agent:main:main".
+  const activeKey = chatStore.activeSessionKey;
+  if (targetKey !== activeKey && state === "started") {
+    const activeState = chatStore.getSessionState(activeKey);
+    if (activeState.isSendPending || activeState.messages.length > 0) {
+      const targetState = chatStore.getSessionState(targetKey);
+      if (targetState.messages.length === 0) {
+        // Transfer optimistic messages to the new session key
+        chatStore.setMessages(activeState.messages, undefined, targetKey);
+      }
+      // Switch to the new session
+      chatStore.setActiveSessionKey(targetKey);
+    }
+  }
+
   // Any chat event means the server is handling our request — clear pending
-  // for the target session.
+  // for the target session AND the old active session (if different).
   const targetSession = chatStore.getSessionState(targetKey);
   if (targetSession.isSendPending) {
     chatStore.setSendPending(false, targetKey);
+  }
+  if (targetKey !== activeKey) {
+    const oldActive = chatStore.getSessionState(activeKey);
+    if (oldActive.isSendPending) {
+      chatStore.setSendPending(false, activeKey);
+    }
   }
 
   switch (state) {

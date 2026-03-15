@@ -176,8 +176,14 @@ export function CreateAgentDialog() {
           agentId: state.agentId,
           agentName: state.name,
         });
+        const agentMd = res?.agentMd ?? "";
+        // Extract YAML frontmatter from the full AGENT.md content.
+        // The manifest RPC expects pure YAML, not the full markdown.
+        const fmMatch = agentMd.match(/^---\s*\n([\s\S]*?)\n---/);
+        const yamlManifest = fmMatch ? fmMatch[1] : "";
         update({
-          promptContent: res?.agentMd ?? "",
+          manifest: yamlManifest,
+          promptContent: agentMd,
           workspaceFiles: res?.workspaceFiles ?? [],
           validationError: "",
         });

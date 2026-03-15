@@ -94,6 +94,20 @@ export function useAgentMap() {
   return agentMap;
 }
 
+/** Derive the active agent ID from the current session. */
+export function useActiveAgentId(): string | undefined {
+  const sessions = useChatStore((s) => s.sessions);
+  const activeSessionKey = useChatStore((s) => s.activeSessionKey);
+
+  return useMemo(() => {
+    const session = sessions.find((s) => s.key === activeSessionKey);
+    return (
+      session?.agentId ??
+      (activeSessionKey?.startsWith("agent:") ? activeSessionKey.split(":")[1] : undefined)
+    );
+  }, [sessions, activeSessionKey]);
+}
+
 export function useActiveAgentEmoji(agentMap: Map<string, AgentRow>) {
   const sessions = useChatStore((s) => s.sessions);
   const activeSessionKey = useChatStore((s) => s.activeSessionKey);
