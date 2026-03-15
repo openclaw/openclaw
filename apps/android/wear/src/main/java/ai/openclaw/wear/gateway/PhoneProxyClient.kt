@@ -9,6 +9,7 @@ import com.google.android.gms.wearable.Wearable
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -52,6 +53,44 @@ internal data class ProxyMessageEvent(
   val sourceNodeId: String,
   val data: ByteArray,
 )
+
+internal data class ProxyHandshake(
+  val ready: Boolean,
+  val statusText: String?,
+)
+
+internal data class ProxyNodeSelection(
+  val node: ProxyNode?,
+  val failureStatus: String,
+)
+
+internal suspend fun selectReadyProxyNode(
+  nodes: List<ProxyNode>,
+  notRespondingStatus: String,
+  gatewayUnavailableStatus: String,
+  probe: suspend (ProxyNode) -> ProxyHandshake?,
+): ProxyNodeSelection {
+  var lastFailureStatus = notRespondingStatus
+  for (node in nodes) {
+    val handshake =
+      try {
+        probe(node)
+      } catch (e: Throwable) {
+        if (e is CancellationException) throw e
+        null
+      }
+    if (handshake == null) {
+      lastFailureStatus = notRespondingStatus
+      continue
+    }
+    if (!handshake.ready) {
+      lastFailureStatus = handshake.statusText?.takeIf { it.isNotBlank() } ?: gatewayUnavailableStatus
+      continue
+    }
+    return ProxyNodeSelection(node = node, failureStatus = lastFailureStatus)
+  }
+  return ProxyNodeSelection(node = null, failureStatus = lastFailureStatus)
+}
 
 internal fun interface ProxyMessageListener {
   fun onMessageReceived(event: ProxyMessageEvent)
@@ -120,18 +159,13 @@ class PhoneProxyClient internal constructor(
   private val scope: CoroutineScope,
   private val messageTransport: ProxyMessageTransport,
   private val nodeFinder: ProxyNodeFinder,
-) : GatewayClientInterface {
+  ) : GatewayClientInterface {
   constructor(context: Context) : this(
     stringResolver = context::getString,
     formattedStringResolver = { id, args -> context.getString(id, *args) },
     scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     messageTransport = WearableMessageTransport(Wearable.getMessageClient(context)),
     nodeFinder = WearableNodeFinder(Wearable.getNodeClient(context)),
-  )
-
-  private data class ProxyHandshake(
-    val ready: Boolean,
-    val statusText: String?,
   )
 
   private data class PendingProbe(
@@ -343,28 +377,26 @@ class PhoneProxyClient internal constructor(
         return
       }
 
-      var lastFailureStatus = stringResolver(R.string.wear_status_phone_not_responding)
-      for (phone in nodes) {
-        if (generation != connectionGeneration) return
-        val handshake = probePhoneNode(phone, generation)
-        if (handshake == null) {
-          lastFailureStatus = stringResolver(R.string.wear_status_phone_not_responding)
-          continue
+      val selection =
+        selectReadyProxyNode(
+          nodes = nodes,
+          notRespondingStatus = stringResolver(R.string.wear_status_phone_not_responding),
+          gatewayUnavailableStatus = stringResolver(R.string.wear_status_phone_gateway_unavailable),
+        ) { phone ->
+          if (generation != connectionGeneration) {
+            throw CancellationException("Superseded phone probe")
+          }
+          probePhoneNode(phone, generation)
         }
-        if (!handshake.ready) {
-          lastFailureStatus =
-            handshake.statusText?.takeIf { it.isNotBlank() }
-              ?: stringResolver(R.string.wear_status_phone_gateway_unavailable)
-          continue
-        }
-        acceptConnectedPhoneNode(phone.id, generation)
+      selection.node?.let { readyNode ->
+        acceptConnectedPhoneNode(readyNode.id, generation)
         return
       }
 
       if (generation != connectionGeneration) return
       _connected.value = false
       phoneNodeId = null
-      _statusText.value = lastFailureStatus
+      _statusText.value = selection.failureStatus
       scheduleReconnect(generation = generation)
     } catch (e: Throwable) {
       if (generation != connectionGeneration) return
@@ -382,21 +414,40 @@ class PhoneProxyClient internal constructor(
     }
     _statusText.value = stringResolver(R.string.wear_status_pinging_phone)
     return try {
-      val sent =
-        withTimeoutOrNull(MESSAGE_SEND_TIMEOUT_MS) {
-          messageTransport.sendMessage(phone.id, PING_PATH, ByteArray(0))
-        }
-      if (sent == null) {
-        Log.w(TAG, "Timed out sending ping to phone ${phone.displayName ?: phone.id}")
+      if (!sendProbePing(phone, generation)) {
         return null
       }
       withTimeoutOrNull(PHONE_PONG_TIMEOUT_MS) { probe.result.await() }
+    } catch (e: Throwable) {
+      if (e is CancellationException && generation == connectionGeneration) {
+        throw e
+      }
+      Log.w(TAG, "Failed probing phone ${phone.displayName ?: phone.id}: ${e.message}")
+      null
     } finally {
       synchronized(probeLock) {
         if (pendingProbe === probe) {
           pendingProbe = null
         }
       }
+    }
+  }
+
+  private suspend fun sendProbePing(phone: ProxyNode, generation: Long): Boolean {
+    return try {
+      sendMessageWithTimeout(
+        nodeId = phone.id,
+        path = PING_PATH,
+        data = ByteArray(0),
+        timeoutMs = MESSAGE_SEND_TIMEOUT_MS,
+      )
+      true
+    } catch (e: Throwable) {
+      if (e is CancellationException && generation == connectionGeneration) {
+        throw e
+      }
+      Log.w(TAG, "Failed probing phone ${phone.displayName ?: phone.id}: ${e.message}")
+      false
     }
   }
 

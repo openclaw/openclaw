@@ -190,6 +190,31 @@ class PhoneProxyClientTest {
   }
 
   @Test
+  fun `selectReadyProxyNode keeps trying after per-node probe exceptions`() = runTest {
+    val attempts = mutableListOf<String>()
+    val selection =
+      selectReadyProxyNode(
+        nodes =
+          listOf(
+            ProxyNode(id = "bad-node", displayName = "Bad phone", isNearby = true),
+            ProxyNode(id = "good-node", displayName = "Good phone", isNearby = false),
+          ),
+        notRespondingStatus = "Phone not responding, retrying…",
+        gatewayUnavailableStatus = "Gateway unavailable",
+      ) { node ->
+        attempts += node.id
+        if (node.id == "bad-node") {
+          throw Exception("stale node")
+        } else {
+          ProxyHandshake(ready = true, statusText = null)
+        }
+      }
+
+    assertEquals(listOf("bad-node", "good-node"), attempts)
+    assertEquals("good-node", selection.node?.id)
+  }
+
+  @Test
   fun `connect tries the next node after a not ready pong`() = runTest {
     val scope = TestScope(StandardTestDispatcher(testScheduler))
     val messageTransport = FakeProxyMessageTransport()

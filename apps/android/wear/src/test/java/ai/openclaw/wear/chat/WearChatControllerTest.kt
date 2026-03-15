@@ -30,7 +30,7 @@ import kotlinx.serialization.json.jsonPrimitive
 @OptIn(ExperimentalCoroutinesApi::class)
 class WearChatControllerTest {
   @Test
-  fun `final event clears sending when gateway returns a different run id`() = runTest {
+  fun `final event clears sending for the tracked local run id`() = runTest {
     val client = FakeGatewayClient()
     val controllerScope = TestScope(StandardTestDispatcher(testScheduler))
     val controller = WearChatController(controllerScope, client, ::testString)
@@ -38,7 +38,7 @@ class WearChatControllerTest {
 
     client.historyResponses += """{"messages":[]}"""
     client.historyResponses += historyJson(userText = "Ping", assistantText = "Pong")
-    client.chatSendResponse = """{"runId":"server-run"}"""
+    client.chatSendResponse = """{"runId":"local-run"}"""
 
     controller.sendMessage("Ping")
     runCurrent()
@@ -48,7 +48,7 @@ class WearChatControllerTest {
     client.emitEvent(
       GatewayEvent(
         event = "chat",
-        payloadJson = """{"sessionKey":"main","state":"final","runId":"server-run"}""",
+        payloadJson = """{"sessionKey":"main","state":"final","runId":"local-run"}""",
       ),
     )
     advanceUntilIdle()
@@ -180,7 +180,7 @@ class WearChatControllerTest {
     client.emitEvent(
       GatewayEvent(
         event = "chat",
-        payloadJson = """{"sessionKey":"main","state":"final","runId":"server-run"}""",
+        payloadJson = """{"sessionKey":"main","state":"final","runId":"local-run"}""",
       ),
     )
     advanceUntilIdle()
@@ -188,7 +188,7 @@ class WearChatControllerTest {
     assertFalse(controller.isSending.value)
     assertEquals(listOf("Ping", "Pong"), controller.messages.value.map { it.text })
 
-    client.chatSendDeferred?.complete("""{"runId":"server-run"}""")
+    client.chatSendDeferred?.complete("""{"runId":"local-run"}""")
     advanceUntilIdle()
     controllerScope.cancel()
   }
@@ -211,7 +211,7 @@ class WearChatControllerTest {
     client.emitEvent(
       GatewayEvent(
         event = "chat",
-        payloadJson = """{"sessionKey":"main","state":"final","runId":"server-run"}""",
+        payloadJson = """{"sessionKey":"main","state":"final","runId":"local-run"}""",
       ),
     )
     advanceUntilIdle()
@@ -404,6 +404,42 @@ class WearChatControllerTest {
         ?.content ?: error("missing message field")
 
     assertEquals("How are you?", message)
+    controllerScope.cancel()
+  }
+
+  @Test
+  fun `foreign run ids do not affect the local pending send`() = runTest {
+    val client = FakeGatewayClient().apply {
+      chatSendDeferred = CompletableDeferred()
+      historyResponse = """{"messages":[]}"""
+    }
+    val controllerScope = TestScope(StandardTestDispatcher(testScheduler))
+    val controller = WearChatController(controllerScope, client, ::testString)
+    advanceUntilIdle()
+
+    controller.sendMessage("Stay pending")
+    runCurrent()
+    assertTrue(controller.isSending.value)
+
+    client.emitEvent(
+      GatewayEvent(
+        event = "chat",
+        payloadJson = """{"sessionKey":"main","state":"final","runId":"foreign-run"}""",
+      ),
+    )
+    client.emitEvent(
+      GatewayEvent(
+        event = "agent",
+        payloadJson = """{"sessionKey":"main","runId":"foreign-run","stream":"assistant","data":{"text":"foreign delta"}}""",
+      ),
+    )
+    runCurrent()
+
+    assertTrue(controller.isSending.value)
+    assertEquals(listOf("Stay pending"), controller.messages.value.map { it.text })
+    assertEquals(null, controller.streamingText.value)
+    assertEquals(1, client.requests.count { it.first == "chat.history" })
+
     controllerScope.cancel()
   }
 }
