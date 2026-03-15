@@ -102,20 +102,20 @@ export type CommandRegistrationResult = {
   error?: string;
 };
 
-/**
- * Register a plugin command.
- * Returns an error if the command name is invalid or reserved.
- */
-export function registerPluginCommand(
-  pluginId: string,
-  command: OpenClawPluginCommandDefinition,
-): CommandRegistrationResult {
-  // Prevent registration while commands are being processed
-  if (registryLocked) {
-    return { ok: false, error: "Cannot register commands while processing is in progress" };
-  }
+export type CommandValidationResult =
+  | {
+      ok: true;
+      name: string;
+      description: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
 
-  // Validate handler is a function
+export function validatePluginCommandDefinition(
+  command: OpenClawPluginCommandDefinition,
+): CommandValidationResult {
   if (typeof command.handler !== "function") {
     return { ok: false, error: "Command handler must be a function" };
   }
@@ -137,6 +137,32 @@ export function registerPluginCommand(
   if (validationError) {
     return { ok: false, error: validationError };
   }
+
+  return {
+    ok: true,
+    name,
+    description,
+  };
+}
+
+/**
+ * Register a plugin command.
+ * Returns an error if the command name is invalid or reserved.
+ */
+export function registerPluginCommand(
+  pluginId: string,
+  command: OpenClawPluginCommandDefinition,
+): CommandRegistrationResult {
+  // Prevent registration while commands are being processed
+  if (registryLocked) {
+    return { ok: false, error: "Cannot register commands while processing is in progress" };
+  }
+
+  const validation = validatePluginCommandDefinition(command);
+  if (!validation.ok) {
+    return { ok: false, error: validation.error };
+  }
+  const { name, description } = validation;
 
   const key = `/${name.toLowerCase()}`;
 

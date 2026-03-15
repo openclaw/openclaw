@@ -645,6 +645,48 @@ describe("loadOpenClawPlugins", () => {
     expect(matchPluginCommand("/cachedcmd")).not.toBeNull();
   });
 
+  it("keeps malformed read-only commands as diagnostics instead of cached activation failures", () => {
+    const plugin = writePlugin({
+      id: "broken-command",
+      filename: "broken-command.cjs",
+      body: `module.exports = {
+        id: "broken-command",
+        register(api) {
+          api.registerCommand({
+            name: "broken",
+            handler: async () => ({ text: "ok" }),
+          });
+        },
+      };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["broken-command"],
+        },
+      },
+    };
+
+    const inactiveRegistry = loadOpenClawPlugins({
+      ...options,
+      activate: false,
+    });
+    expect(inactiveRegistry.commands).toHaveLength(0);
+    expect(
+      inactiveRegistry.diagnostics.some((entry) =>
+        entry.message.includes("Command description must be a string"),
+      ),
+    ).toBe(true);
+
+    const activeRegistry = loadOpenClawPlugins(options);
+
+    expect(activeRegistry).toBe(inactiveRegistry);
+    expect(matchPluginCommand("/broken")).toBeNull();
+  });
+
   it("does not reuse cached bundled plugin registries across env changes", () => {
     const bundledA = makeTempDir();
     const bundledB = makeTempDir();

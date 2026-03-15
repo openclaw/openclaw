@@ -10,7 +10,7 @@ import type {
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
-import { registerPluginCommand, validateCommandName } from "./commands.js";
+import { registerPluginCommand, validatePluginCommandDefinition } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
@@ -497,16 +497,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
-    const name = command.name.trim();
-    if (!name) {
+    const validation = validatePluginCommandDefinition(command);
+    if (!validation.ok) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "command registration missing name",
+        message: `command registration failed: ${validation.error}`,
       });
       return;
     }
+    const { name, description } = validation;
 
     if (registryParams.registerGlobalCommands !== false) {
       // Register with the plugin command system (validates name and checks for duplicates)
@@ -521,16 +522,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         return;
       }
     } else {
-      const validationError = validateCommandName(name);
-      if (validationError) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `command registration failed: ${validationError}`,
-        });
-        return;
-      }
       const normalizedName = name.toLowerCase();
       const duplicate = registry.commands.find(
         (entry) => entry.command.name.trim().toLowerCase() === normalizedName,
@@ -549,7 +540,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.commands.push(name);
     registry.commands.push({
       pluginId: record.id,
-      command,
+      command: {
+        ...command,
+        name,
+        description,
+      },
       source: record.source,
     });
   };
