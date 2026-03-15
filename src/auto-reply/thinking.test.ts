@@ -5,6 +5,7 @@ import {
   normalizeReasoningLevel,
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
+  supportsXHighThinking,
 } from "./thinking.js";
 
 describe("normalizeThinkLevel", () => {
@@ -40,6 +41,10 @@ describe("normalizeThinkLevel", () => {
     expect(normalizeThinkLevel("auto")).toBe("adaptive");
     expect(normalizeThinkLevel("Adaptive")).toBe("adaptive");
   });
+
+  it('maps "max" to xhigh', () => {
+    expect(normalizeThinkLevel("max")).toBe("xhigh");
+  });
 });
 
 describe("listThinkingLevels", () => {
@@ -62,6 +67,11 @@ describe("listThinkingLevels", () => {
   it("includes xhigh for github-copilot gpt-5.2 refs", () => {
     expect(listThinkingLevels("github-copilot", "gpt-5.2")).toContain("xhigh");
     expect(listThinkingLevels("github-copilot", "gpt-5.2-codex")).toContain("xhigh");
+  });
+
+  it("includes xhigh for anthropic claude-opus-4-6", () => {
+    expect(listThinkingLevels("anthropic", "claude-opus-4-6")).toContain("xhigh");
+    expect(supportsXHighThinking("anthropic", "claude-opus-4-6")).toBe(true);
   });
 
   it("excludes xhigh for non-codex models", () => {
