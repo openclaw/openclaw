@@ -265,7 +265,8 @@ describe("web monitor inbox", () => {
             remoteJid: "999@s.whatsapp.net",
           },
           message: { conversation: "old message" },
-          messageTimestamp: nowSeconds(),
+          // Simulate old history sync payload so append is read-marked but not auto-replied.
+          messageTimestamp: nowSeconds() - 120,
           pushName: "History Sender",
         },
       ],
