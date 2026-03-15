@@ -2545,6 +2545,53 @@
   background: var(--bg);
 }
 
+.json-collapse {
+  margin: 0.4rem 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--panel-2);
+}
+
+.json-collapse > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style: none;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.json-collapse > summary::-webkit-details-marker {
+  display: none;
+}
+
+.json-collapse > summary::marker {
+  content: "";
+}
+
+.json-collapse > summary::before {
+  content: "▸";
+  color: var(--accent);
+  transition: transform 0.15s ease;
+}
+
+.json-collapse[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.json-collapse > summary:hover {
+  background: color-mix(in srgb, var(--panel-2) 88%, var(--accent-soft));
+}
+
+.json-collapse .code-block-wrapper {
+  border-top: 1px solid var(--border);
+}
+
 .chat-stamp {
   font-size: 11px;
   color: var(--muted);
