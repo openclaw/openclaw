@@ -215,7 +215,7 @@ describe("Cron issue regressions", () => {
     });
 
     const updated = await cron.update(created.id, {
-      delivery: { bestEffort: true },
+      delivery: { mode: "announce", bestEffort: true },
     });
 
     expect(updated.delivery).toEqual({
