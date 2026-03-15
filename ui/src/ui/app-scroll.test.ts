@@ -27,6 +27,7 @@ function createScrollHost(
     scrollTop,
     clientHeight,
     style: { overflowY } as unknown as CSSStyleDeclaration,
+    scrollTo: undefined as ((options?: ScrollToOptions) => void) | undefined,
   };
   const threadInner: {
     lastElementChild: null;
