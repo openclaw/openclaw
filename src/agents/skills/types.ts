@@ -46,6 +46,13 @@ export type SkillCommandDispatchSpec = {
    * - raw: forward the raw args string (no core parsing).
    */
   argMode?: "raw";
+  /**
+   * Fixed shell command to execute directly via `sh -c`.
+   * When set, the command runs deterministically at the gateway level
+   * without invoking the tool by name.  The command string comes from
+   * operator-authored SKILL.md frontmatter (`command-exec`).
+   */
+  commandExec?: string;
 };
 
 export type SkillCommandSpec = {

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
@@ -204,6 +205,47 @@ export async function handleInlineActions(params: {
     }
 
     const dispatch = skillInvocation.command.dispatch;
+    if (dispatch?.kind === "tool" && dispatch.commandExec) {
+      // command-exec: run a fixed shell command directly (no tool lookup).
+      // Args are passed as $1 to avoid shell injection from user input.
+      const rawArgs = (skillInvocation.args ?? "").trim();
+      const spawnArgs = ["sh", "-c", dispatch.commandExec, "--"];
+      if (rawArgs) {
+        spawnArgs.push(rawArgs);
+      }
+      try {
+        const result = spawnSync(spawnArgs[0], spawnArgs.slice(1), {
+          encoding: "utf-8",
+          timeout: 15_000,
+          env: { ...process.env },
+        });
+        if (result.error) {
+          const isTimeout =
+            result.error.message.includes("ETIMEDOUT") || result.signal === "SIGTERM";
+          typing.cleanup();
+          return {
+            kind: "reply",
+            reply: { text: isTimeout ? "❌ Command timed out." : `❌ ${result.error.message}` },
+          };
+        }
+        const text = (result.stdout ?? "").trim() || (result.stderr ?? "").trim() || "✅ Done.";
+        if (result.status !== 0) {
+          typing.cleanup();
+          return {
+            kind: "reply",
+            reply: {
+              text: `❌ Exit ${result.status}: ${(result.stderr ?? "").trim() || text}`,
+            },
+          };
+        }
+        typing.cleanup();
+        return { kind: "reply", reply: { text } };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        typing.cleanup();
+        return { kind: "reply", reply: { text: `❌ ${message}` } };
+      }
+    }
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const channel =
