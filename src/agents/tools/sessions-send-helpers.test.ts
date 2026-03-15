@@ -49,6 +49,15 @@ describe("resolveAnnounceTargetFromKey", () => {
     });
   });
 
+  it("prefers account-scoped direct parsing even when the account id matches a kind token", () => {
+    expect(resolveAnnounceTargetFromKey("agent:main:slack:dm:direct:U123")).toEqual({
+      channel: "slack",
+      to: "user:U123",
+      accountId: "dm",
+      threadId: undefined,
+    });
+  });
+
   it("preserves non-integer thread ids", () => {
     expect(
       resolveAnnounceTargetFromKey("agent:main:slack:channel:C0123ABC:thread:1234567890.123456"),

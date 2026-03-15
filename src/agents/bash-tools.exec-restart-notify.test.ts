@@ -58,4 +58,16 @@ describe("bash-tools exec restart notify", () => {
     expect(env.OPENCLAW_RESTART_NOTIFY_TO).toBe("user:thread:abc");
     expect(env.OPENCLAW_RESTART_NOTIFY_THREAD_ID).toBeUndefined();
   });
+
+  it("suppresses thread ids for per-peer direct session keys", () => {
+    const env: Record<string, string> = {};
+
+    applyExecRestartNotifyEnv({
+      command: "openclaw gateway restart",
+      env,
+      sessionKey: "agent:main:direct:user:thread:abc",
+    });
+
+    expect(env.OPENCLAW_RESTART_NOTIFY_THREAD_ID).toBeUndefined();
+  });
 });

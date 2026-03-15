@@ -19,7 +19,14 @@ function isTopLevelOpenClawOption(arg: string): boolean {
 function isDirectSessionKey(sessionKey: string): boolean {
   const rawParts = sessionKey.split(":").filter(Boolean);
   const parts = rawParts.length >= 3 && rawParts[0] === "agent" ? rawParts.slice(2) : rawParts;
-  return parts[1] === "direct" || parts[1] === "dm" || parts[2] === "direct" || parts[2] === "dm";
+  return (
+    parts[0] === "direct" ||
+    parts[0] === "dm" ||
+    parts[1] === "direct" ||
+    parts[1] === "dm" ||
+    parts[2] === "direct" ||
+    parts[2] === "dm"
+  );
 }
 
 export function isOpenClawGatewayRestartCommand(command: string): boolean {

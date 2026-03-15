@@ -49,17 +49,15 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   }
 
   const [channelRaw, second, third, ...remaining] = parts;
-  const kind = isAnnounceTargetSessionKind(second)
-    ? second
-    : isAnnounceTargetSessionKind(third)
-      ? third
-      : null;
+  const hasAccountScopedKind = isAnnounceTargetSessionKind(third);
+  const hasDirectKind = isAnnounceTargetSessionKind(second);
+  const kind = hasAccountScopedKind ? third : hasDirectKind ? second : null;
   if (!kind || !channelRaw) {
     return null;
   }
 
-  const accountId = kind === third ? second?.trim() || undefined : undefined;
-  const rest = kind === third ? remaining : [third, ...remaining].filter(Boolean);
+  const accountId = hasAccountScopedKind ? second?.trim() || undefined : undefined;
+  const rest = hasAccountScopedKind ? remaining : [third, ...remaining].filter(Boolean);
   const restJoined = rest.join(":").trim();
   if (!restJoined) {
     return null;
