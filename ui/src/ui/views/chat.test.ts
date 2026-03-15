@@ -565,16 +565,16 @@ describe("chat view", () => {
     expect(modelSelect).not.toBeNull();
     expect(modelSelect?.value).toBe("");
 
-    modelSelect!.value = "gpt-5-mini";
+    modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
-      model: "gpt-5-mini",
+      model: "openai/gpt-5-mini",
     });
     expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
-    expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
+    expect(state.sessionsResult?.sessions[0]?.model).toBe("openai/gpt-5-mini");
     vi.unstubAllGlobals();
   });
 
@@ -585,7 +585,7 @@ describe("chat view", () => {
         ok: false,
       } satisfies Partial<Response>),
     );
-    const { state, request } = createChatHeaderState({ model: "gpt-5-mini" });
+    const { state, request } = createChatHeaderState({ model: "openai/gpt-5-mini" });
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
@@ -593,7 +593,7 @@ describe("chat view", () => {
       'select[data-chat-model-select="true"]',
     );
     expect(modelSelect).not.toBeNull();
-    expect(modelSelect?.value).toBe("gpt-5-mini");
+    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
 
     modelSelect!.value = "";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -637,7 +637,7 @@ describe("chat view", () => {
     );
     expect(modelSelect).not.toBeNull();
 
-    modelSelect!.value = "gpt-5-mini";
+    modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
     render(renderChatSessionSelect(state), container);
@@ -645,7 +645,46 @@ describe("chat view", () => {
     const rerendered = container.querySelector<HTMLSelectElement>(
       'select[data-chat-model-select="true"]',
     );
-    expect(rerendered?.value).toBe("gpt-5-mini");
+    expect(rerendered?.value).toBe("openai/gpt-5-mini");
+    vi.unstubAllGlobals();
+  });
+
+  it("supports backward-compatible selection of models with bare IDs from old sessions", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    // Simulate an old session that stored a bare model ID without provider prefix
+    state.chatModelOverrides["main"] = "gpt-5-mini";
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          label: null,
+          displayName: "Main",
+          model: "gpt-5-mini", // bare model ID from old session
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    // The selector should match the prefixed catalog entry (openai/gpt-5-mini) 
+    // when the override is the bare ID (gpt-5-mini)
+    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
     vi.unstubAllGlobals();
   });
 
