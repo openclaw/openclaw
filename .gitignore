@@ -133,3 +133,9 @@ ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
 docs/superpowers
+<<<<<<< Updated upstream
+=======
+apps/macos/OpenClawMac.xcodeproj/project.xcworkspace/xcuserdata/laurent.xcuserdatad/UserInterfaceState.xcuserstate
+apps/macos/OpenClawMac.xcodeproj/xcuserdata/laurent.xcuserdatad/xcschemes/xcschememanagement.plist
+apps/macos/OpenClawMac.xcodeproj/project.xcworkspace/xcuserdata/laurent.xcuserdatad/UserInterfaceState.xcuserstate
+>>>>>>> Stashed changes

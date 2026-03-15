@@ -118,7 +118,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,
-            attachments: attachments)
+            attachments: attachments,
+            timeoutMs: 600_000)
     }
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {

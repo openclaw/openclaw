@@ -22,7 +22,7 @@ if (mode !== "lint" && mode !== "format" && mode !== "format-json") {
 }
 
 const lintExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
-const formatExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".md", ".mdx"]);
+const formatExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
 const jsonExts = new Set([".json"]);
 
 const shouldSelect = (filePath) => {
