@@ -11,10 +11,10 @@ export function createRuntimeLogging(): PluginRuntime["logging"] {
         level: opts?.level ? normalizeLogLevel(opts.level) : undefined,
       });
       return {
-        debug: (message) => logger.debug?.(message),
-        info: (message) => logger.info(message),
-        warn: (message) => logger.warn(message),
-        error: (message) => logger.error(message),
+        debug: (message, meta) => logger.debug?.(message, meta),
+        info: (message, meta) => logger.info(message, meta),
+        warn: (message, meta) => logger.warn(message, meta),
+        error: (message, meta) => logger.error(message, meta),
       };
     },
   };
