@@ -142,6 +142,11 @@ Telegram:
 - Preview streaming is skipped when Telegram block streaming is explicitly enabled (to avoid double-streaming).
 - `/reasoning stream` can write reasoning to preview.
 
+Matrix:
+
+- `/reasoning stream` can write reasoning into one transient Matrix message.
+- OpenClaw edits that message as reasoning changes and redacts it before the final answer is delivered.
+
 Discord:
 
 - Uses send + edit preview messages.

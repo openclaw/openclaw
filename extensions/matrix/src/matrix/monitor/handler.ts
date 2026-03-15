@@ -1,6 +1,7 @@
 import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import {
   DEFAULT_ACCOUNT_ID,
+  createDraftStreamLoop,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
@@ -23,7 +24,9 @@ import {
   parsePollStartContent,
   type PollStartContent,
 } from "../poll-types.js";
+import { enqueueSend } from "../send-queue.js";
 import { reactMatrixMessage, sendMessageMatrix, sendTypingMatrix } from "../send.js";
+import { buildReplyRelation, buildTextContent, buildThreadRelation } from "../send/formatting.js";
 import { enforceMatrixDirectMessageAccess, resolveMatrixAccessState } from "./access-policy.js";
 import {
   normalizeMatrixAllowList,
@@ -674,6 +677,84 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
+      const reasoningDraftState = {
+        messageId: undefined as string | undefined,
+        lastText: "",
+        stopUpdates: false,
+      };
+      const reasoningDraftLoop = createDraftStreamLoop({
+        throttleMs: 0,
+        isStopped: () => reasoningDraftState.stopUpdates,
+        sendOrEditStreamMessage: async (text: string) => {
+          const trimmedText = text.trim();
+          if (!trimmedText || trimmedText === reasoningDraftState.lastText) {
+            return;
+          }
+          reasoningDraftState.lastText = trimmedText;
+          if (!reasoningDraftState.messageId) {
+            const relation = threadTarget
+              ? buildThreadRelation(threadTarget, replyToMode === "off" ? undefined : messageId)
+              : buildReplyRelation(replyToMode === "off" ? undefined : messageId);
+            const eventId = await enqueueSend(
+              roomId,
+              async () => await client.sendMessage(roomId, buildTextContent(trimmedText, relation)),
+            );
+            if (eventId) {
+              reasoningDraftState.messageId = eventId;
+            }
+            return;
+          }
+          await enqueueSend(
+            roomId,
+            async () =>
+              await client.sendMessage(roomId, {
+                msgtype: "m.text",
+                body: `* ${trimmedText}`,
+                "m.new_content": {
+                  msgtype: "m.text",
+                  body: trimmedText,
+                },
+                "m.relates_to": {
+                  rel_type: RelationType.Replace,
+                  event_id: reasoningDraftState.messageId,
+                },
+              }),
+          );
+        },
+      });
+      const enqueueReasoningDraftUpdate = async (text?: string) => {
+        const trimmedText = text?.trim();
+        if (!trimmedText || reasoningDraftState.stopUpdates) {
+          return;
+        }
+        reasoningDraftLoop.update(trimmedText);
+        try {
+          await reasoningDraftLoop.flush();
+        } catch (err) {
+          runtime.error?.(`matrix reasoning draft update failed: ${String(err)}`);
+        }
+      };
+      const clearReasoningDraft = async () => {
+        reasoningDraftState.stopUpdates = true;
+        reasoningDraftLoop.stop();
+        try {
+          await reasoningDraftLoop.waitForInFlight();
+        } catch (err) {
+          logVerboseMessage(`matrix reasoning draft in-flight update failed: ${String(err)}`);
+        }
+        if (!reasoningDraftState.messageId) {
+          return;
+        }
+        const eventId = reasoningDraftState.messageId;
+        try {
+          await enqueueSend(roomId, async () => await client.redactEvent(roomId, eventId));
+          reasoningDraftState.messageId = undefined;
+          reasoningDraftState.lastText = "";
+        } catch (err) {
+          logVerboseMessage(`matrix reasoning draft cleanup failed (${eventId}): ${String(err)}`);
+        }
+      };
+
       let didSendReply = false;
       const tableMode = core.channel.text.resolveMarkdownTableMode({
         cfg,
@@ -714,7 +795,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           ...prefixOptions,
           humanDelay,
           typingCallbacks,
-          deliver: async (payload) => {
+          deliver: async (payload, info) => {
+            if (info.kind === "final") {
+              await clearReasoningDraft();
+            }
             await deliverMatrixReplies({
               replies: [payload],
               roomId,
@@ -737,11 +821,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         cfg,
         ctxPayload,
         dispatcher,
-        onSettled: () => {
+        onSettled: async () => {
+          await clearReasoningDraft();
           markDispatchIdle();
         },
         replyOptions: {
           ...replyOptions,
+          onReasoningStream: async (payload) => {
+            await enqueueReasoningDraftUpdate(payload.text);
+          },
           skillFilter: roomConfig?.skills,
           onModelSelected,
         },

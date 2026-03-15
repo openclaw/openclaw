@@ -15,6 +15,7 @@ export {
   resolveAllowlistCandidates,
   resolveAllowlistMatchByCandidates,
 } from "../channels/allowlist-match.js";
+export { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export type { NormalizedLocation } from "../channels/location.js";
