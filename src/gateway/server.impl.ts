@@ -33,6 +33,7 @@ import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { resolveHttpApprovalPolicy } from "../infra/http-approval-policy.js";
 import { resolveHttpAllowAlwaysPattern } from "../infra/http-approvals.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
@@ -822,7 +823,10 @@ export async function startGatewayServer(
               (httpPolicy.agents as Record<string, { allowlist?: Array<{ pattern: string }> }>) ??
               {};
             const agent = agents[target] ?? {};
-            const allowlist = Array.isArray(agent.allowlist) ? [...agent.allowlist] : [];
+            // Start from the agent's effective (resolved) allowlist so global
+            // entries are preserved when creating the first per-agent override.
+            const resolved = resolveHttpApprovalPolicy({ cfg, agentId: target });
+            const allowlist = [...resolved.allowlist];
             if (!allowlist.some((e) => e.pattern === pattern)) {
               allowlist.push({ pattern });
               agents[target] = { ...agent, allowlist };
@@ -897,10 +901,18 @@ export async function startGatewayServer(
     nodeUnsubscribeAll,
     hasConnectedMobileNode: hasMobileNodeConnected,
     hasExecApprovalClients: (excludeConnId?: string | null) => {
+      // Client modes that connect with approval scopes but never act on
+      // approval events. Excluding them avoids false-positive approver
+      // detection that would force the full wait timeout in headless setups.
+      const NON_APPROVER_MODES = new Set(["backend", "node", "probe", "test"]);
       for (const gatewayClient of clients) {
         // Skip the requester's own connection so backend/self-connections
         // don't falsely satisfy the "has approver" check.
         if (excludeConnId && gatewayClient.connId === excludeConnId) {
+          continue;
+        }
+        const clientMode = gatewayClient.connect?.client?.mode;
+        if (clientMode && NON_APPROVER_MODES.has(clientMode)) {
           continue;
         }
         const scopes = Array.isArray(gatewayClient.connect.scopes)
