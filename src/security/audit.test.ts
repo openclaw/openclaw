@@ -9,8 +9,8 @@ import {
   collectInstalledSkillsCodeSafetyFindings,
   collectPluginsCodeSafetyFindings,
 } from "./audit-extra.js";
-import type { SecurityAuditOptions, SecurityAuditReport } from "./audit.js";
-import { runSecurityAudit } from "./audit.js";
+import type { SecurityAuditFinding, SecurityAuditOptions, SecurityAuditReport } from "./audit.js";
+import { correlateFindingConflicts, runSecurityAudit } from "./audit.js";
 import * as skillScanner from "./skill-scanner.js";
 
 const isWindows = process.platform === "win32";
@@ -3667,5 +3667,264 @@ description: test skill
       expect(warning?.severity).toBe("warn");
       expect(warning?.detail).toContain("gateway.auth.token");
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Conflicting finding correlation unit + integration tests
+// ---------------------------------------------------------------------------
+
+function makeFindings(...checkIds: string[]): SecurityAuditFinding[] {
+  return checkIds.map((id) => ({ checkId: id, severity: "warn" as const, title: id, detail: id }));
+}
+
+describe("correlateFindingConflicts", () => {
+  it("returns empty when no rule matches", () => {
+    expect(
+      correlateFindingConflicts(makeFindings("gateway.bind_no_auth", "logging.redact_off")),
+    ).toHaveLength(0);
+  });
+
+  it("returns empty when only one side of a pair is present", () => {
+    expect(
+      correlateFindingConflicts(makeFindings("gateway.http.session_key_override_enabled")),
+    ).toHaveLength(0);
+    expect(correlateFindingConflicts(makeFindings("gateway.http.no_auth"))).toHaveLength(0);
+  });
+
+  it("emits session_key_override_with_no_auth (critical) when both trigger findings are present", () => {
+    const correlations = correlateFindingConflicts(
+      makeFindings("gateway.http.session_key_override_enabled", "gateway.http.no_auth"),
+    );
+    expect(correlations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "correlation.gateway.session_key_override_with_no_auth",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("emits deny_commands_false_safety (critical) when both trigger findings are present", () => {
+    const correlations = correlateFindingConflicts(
+      makeFindings(
+        "gateway.nodes.deny_commands_ineffective",
+        "gateway.nodes.allow_commands_dangerous",
+      ),
+    );
+    expect(correlations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "correlation.gateway.deny_commands_false_safety",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("emits sandbox_off_with_interpreter_safebins (critical) when both trigger findings are present", () => {
+    const correlations = correlateFindingConflicts(
+      makeFindings("sandbox.docker_config_mode_off", "tools.exec.safe_bins_interpreter_unprofiled"),
+    );
+    expect(correlations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "correlation.exec.sandbox_off_with_interpreter_safebins",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("emits control_ui_cors_fully_disabled (critical) when both CORS findings are present", () => {
+    const correlations = correlateFindingConflicts(
+      makeFindings(
+        "gateway.control_ui.allowed_origins_wildcard",
+        "gateway.control_ui.host_header_origin_fallback",
+      ),
+    );
+    expect(correlations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "correlation.gateway.control_ui_cors_fully_disabled",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("emits discord_open_groups_elevated_no_allowlist (critical) when both findings are present", () => {
+    const correlations = correlateFindingConflicts(
+      makeFindings(
+        "channels.discord.commands.native.no_allowlists",
+        "security.exposure.open_groups_with_elevated",
+      ),
+    );
+    expect(correlations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "correlation.channels.discord_open_groups_elevated_no_allowlist",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("emits slack_open_groups_elevated_no_allowlist (critical) when both findings are present", () => {
+    const correlations = correlateFindingConflicts(
+      makeFindings(
+        "channels.slack.commands.slash.no_allowlists",
+        "security.exposure.open_groups_with_elevated",
+      ),
+    );
+    expect(correlations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "correlation.channels.slack_open_groups_elevated_no_allowlist",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("is idempotent — does not re-emit a correlation finding already in the list", () => {
+    const findings = makeFindings(
+      "gateway.http.session_key_override_enabled",
+      "gateway.http.no_auth",
+      "correlation.gateway.session_key_override_with_no_auth",
+    );
+    const correlations = correlateFindingConflicts(findings);
+    const dupes = correlations.filter(
+      (f) => f.checkId === "correlation.gateway.session_key_override_with_no_auth",
+    );
+    expect(dupes).toHaveLength(0);
+  });
+
+  it("can emit multiple independent correlations in one pass", () => {
+    const correlations = correlateFindingConflicts(
+      makeFindings(
+        "gateway.http.session_key_override_enabled",
+        "gateway.http.no_auth",
+        "gateway.nodes.deny_commands_ineffective",
+        "gateway.nodes.allow_commands_dangerous",
+      ),
+    );
+    expect(
+      correlations.some(
+        (f) => f.checkId === "correlation.gateway.session_key_override_with_no_auth",
+      ),
+    ).toBe(true);
+    expect(
+      correlations.some((f) => f.checkId === "correlation.gateway.deny_commands_false_safety"),
+    ).toBe(true);
+  });
+});
+
+describe("runSecurityAudit correlation integration", () => {
+  it("surfaces session-key override + no-auth compound risk through full audit", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: { mode: "none" },
+        http: { endpoints: { chatCompletions: { enabled: true } } },
+      },
+    };
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+    expect(
+      res.findings.some(
+        (f) => f.checkId === "correlation.gateway.session_key_override_with_no_auth",
+      ),
+    ).toBe(true);
+    const correlation = res.findings.find(
+      (f) => f.checkId === "correlation.gateway.session_key_override_with_no_auth",
+    );
+    expect(correlation?.severity).toBe("critical");
+    // Summary must account for the correlation finding.
+    expect(res.summary.critical).toBeGreaterThanOrEqual(1);
+  });
+
+  it("surfaces deny-commands false safety compound risk through full audit", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          // "camera.*" is pattern-like (contains wildcard) → triggers deny_commands_ineffective
+          denyCommands: ["camera.*"],
+          // "camera.snap" is dangerous → triggers allow_commands_dangerous
+          allowCommands: ["camera.snap"],
+        },
+      },
+    };
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+    expect(
+      res.findings.some((f) => f.checkId === "correlation.gateway.deny_commands_false_safety"),
+    ).toBe(true);
+    expect(
+      res.findings.find((f) => f.checkId === "correlation.gateway.deny_commands_false_safety")
+        ?.severity,
+    ).toBe("critical");
+  });
+
+  it("surfaces sandbox-off + interpreter-safebins compound risk through full audit", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "off",
+            // non-empty docker config triggers sandbox.docker_config_mode_off
+            docker: { image: "alpine" } as unknown as never,
+          },
+        },
+      },
+      tools: {
+        // "python" is an interpreter-like bin → triggers safe_bins_interpreter_unprofiled
+        exec: { safeBins: ["python"] } as unknown as never,
+      },
+    };
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+    expect(
+      res.findings.some(
+        (f) => f.checkId === "correlation.exec.sandbox_off_with_interpreter_safebins",
+      ),
+    ).toBe(true);
+    expect(
+      res.findings.find(
+        (f) => f.checkId === "correlation.exec.sandbox_off_with_interpreter_safebins",
+      )?.severity,
+    ).toBe("critical");
+  });
+
+  it("surfaces CORS double-disable compound risk through full audit", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        controlUi: {
+          allowedOrigins: ["*"],
+          dangerouslyAllowHostHeaderOriginFallback: true,
+        },
+      },
+    };
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+    expect(
+      res.findings.some((f) => f.checkId === "correlation.gateway.control_ui_cors_fully_disabled"),
+    ).toBe(true);
+    expect(
+      res.findings.find((f) => f.checkId === "correlation.gateway.control_ui_cors_fully_disabled")
+        ?.severity,
+    ).toBe("critical");
   });
 });

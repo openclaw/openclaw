@@ -1128,6 +1128,150 @@ async function createAuditExecutionContext(
   };
 }
 
+/**
+ * Describes a rule that fires when all listed check IDs are present in the findings, emitting a
+ * composite finding to surface the compound risk. Prevents "false sense of security" situations
+ * where individually-minor findings combine into a significantly worse posture.
+ */
+type CorrelationRule = {
+  checkId: string;
+  requires: string[];
+  severity: SecurityAuditSeverity;
+  title: string;
+  detail: string;
+  remediation?: string;
+};
+
+const CORRELATION_RULES: CorrelationRule[] = [
+  {
+    // info finding (session-key override) + no-auth = anyone can target any session
+    checkId: "correlation.gateway.session_key_override_with_no_auth",
+    requires: ["gateway.http.session_key_override_enabled", "gateway.http.no_auth"],
+    severity: "critical",
+    title: "HTTP session-key override is active on an unauthenticated gateway",
+    detail:
+      "gateway.http.session_key_override_enabled allows callers to route requests to arbitrary sessions via x-openclaw-session-key. " +
+      "gateway.http.no_auth means the HTTP API requires no credential. " +
+      "Combined, any network-reachable client can target any session without restriction — the per-request session routing provides no isolation.",
+    remediation:
+      "Set gateway.auth (token recommended) to require a shared secret before session routing is reachable, " +
+      "or disable the HTTP API endpoints that accept session-key overrides.",
+  },
+  {
+    // ineffective deny list + dangerous allow list = deny list gives false protection
+    checkId: "correlation.gateway.deny_commands_false_safety",
+    requires: ["gateway.nodes.deny_commands_ineffective", "gateway.nodes.allow_commands_dangerous"],
+    severity: "critical",
+    title: "Ineffective denyCommands mask dangerous allowCommands",
+    detail:
+      "gateway.nodes.deny_commands_ineffective: the denyCommands patterns do not match the command names as expected, so the deny list is not blocking. " +
+      "gateway.nodes.allow_commands_dangerous: dangerous node commands (camera/screen/contacts/SMS) are explicitly enabled. " +
+      "Together, the deny list gives a false sense of protection — the dangerous commands are reachable despite appearing blocked.",
+    remediation:
+      "Fix denyCommands entries to use exact command names (for example: camera.snap, sms.send) rather than patterns. " +
+      "Re-audit after correcting the deny list.",
+  },
+  {
+    // docker sandbox is a no-op + interpreter bins in safeBins = code runs on host via interpreters
+    checkId: "correlation.exec.sandbox_off_with_interpreter_safebins",
+    requires: ["sandbox.docker_config_mode_off", "tools.exec.safe_bins_interpreter_unprofiled"],
+    severity: "critical",
+    title: "Sandbox is disabled while interpreter binaries are allowed via safeBins",
+    detail:
+      "sandbox.docker_config_mode_off: Docker sandbox settings are present but the sandbox mode is off, so commands run directly on the host. " +
+      "tools.exec.safe_bins_interpreter_unprofiled: interpreter/runtime binaries (for example python, node, bash) are included in safeBins without hardened profiles. " +
+      "Combined, arbitrary code can be executed on the host through interpreter bins with no container boundary.",
+    remediation:
+      "Enable Docker sandbox mode (agents.defaults.sandbox.mode) or remove interpreter binaries from safeBins. " +
+      "If interpreters are needed in safeBins, define strict tools.exec.safeBinProfiles.<bin> rules to constrain their arguments.",
+  },
+  {
+    // wildcard CORS + host-header origin fallback = all cross-origin protection is gone
+    checkId: "correlation.gateway.control_ui_cors_fully_disabled",
+    requires: [
+      "gateway.control_ui.allowed_origins_wildcard",
+      "gateway.control_ui.host_header_origin_fallback",
+    ],
+    severity: "critical",
+    title: "All Control UI cross-origin protections are simultaneously disabled",
+    detail:
+      'gateway.control_ui.allowed_origins_wildcard: allowedOrigins contains "*", disabling origin allowlisting. ' +
+      "gateway.control_ui.host_header_origin_fallback: dangerouslyAllowHostHeaderOriginFallback=true also weakens DNS-rebinding protections. " +
+      "Together, there is no effective cross-origin boundary for the Control UI — CORS and Host-header checks provide no protection.",
+    remediation:
+      "Replace the wildcard with explicit trusted origins and disable dangerouslyAllowHostHeaderOriginFallback. " +
+      "Fix both findings; resolving only one still leaves the other bypass path open.",
+  },
+  {
+    // open Discord + no allowlists + elevated tools = any group member can trigger elevated ops
+    checkId: "correlation.channels.discord_open_groups_elevated_no_allowlist",
+    requires: [
+      "channels.discord.commands.native.no_allowlists",
+      "security.exposure.open_groups_with_elevated",
+    ],
+    severity: "critical",
+    title: "Discord open groups expose elevated tools with no command allowlists",
+    detail:
+      "channels.discord.commands.native.no_allowlists: Discord native commands have no allowFrom restrictions. " +
+      "security.exposure.open_groups_with_elevated: open group channels expose elevated tools. " +
+      "Combined, any Discord user in those channels can invoke elevated (file-system, runtime, or privileged) tool operations without restriction.",
+    remediation:
+      "Configure allowFrom lists on Discord channels to restrict who can invoke commands, " +
+      "or remove elevated tool access from open group channels.",
+  },
+  {
+    // open Slack + no allowlists + elevated tools = same as Discord case
+    checkId: "correlation.channels.slack_open_groups_elevated_no_allowlist",
+    requires: [
+      "channels.slack.commands.slash.no_allowlists",
+      "security.exposure.open_groups_with_elevated",
+    ],
+    severity: "critical",
+    title: "Slack open groups expose elevated tools with no slash-command allowlists",
+    detail:
+      "channels.slack.commands.slash.no_allowlists: Slack slash commands have no allowFrom restrictions. " +
+      "security.exposure.open_groups_with_elevated: open group channels expose elevated tools. " +
+      "Combined, any Slack workspace member in those channels can invoke elevated tool operations without restriction.",
+    remediation:
+      "Configure allowFrom lists on Slack channels to restrict who can invoke commands, " +
+      "or remove elevated tool access from open group channels.",
+  },
+];
+
+/**
+ * Correlates existing findings to surface compound risks that each individual finding understates
+ * in isolation. Returns only the newly generated correlation findings; callers should append these
+ * to the existing findings list and recompute the summary.
+ *
+ * This prevents a "false sense of security" scenario where individually-minor findings (for
+ * example `info`-severity session-key override) combine with other findings to create a
+ * significantly worse overall posture than the per-finding summaries imply.
+ */
+export function correlateFindingConflicts(
+  findings: SecurityAuditFinding[],
+): SecurityAuditFinding[] {
+  const presentIds = new Set(findings.map((f) => f.checkId));
+  const correlations: SecurityAuditFinding[] = [];
+
+  for (const rule of CORRELATION_RULES) {
+    // Skip if this correlation finding was already emitted (idempotent across repeated calls).
+    if (presentIds.has(rule.checkId)) {
+      continue;
+    }
+    if (rule.requires.every((id) => presentIds.has(id))) {
+      correlations.push({
+        checkId: rule.checkId,
+        severity: rule.severity,
+        title: rule.title,
+        detail: rule.detail,
+        remediation: rule.remediation,
+      });
+    }
+  }
+
+  return correlations;
+}
+
 export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<SecurityAuditReport> {
   const findings: SecurityAuditFinding[] = [];
   const context = await createAuditExecutionContext(opts);
@@ -1247,6 +1391,9 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       remediation: `Set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD in this shell or resolve the external secret provider, then re-run "${formatCliCommand("openclaw security audit --deep")}".`,
     });
   }
+
+  // Surface compound risks that individual findings understate in isolation.
+  findings.push(...correlateFindingConflicts(findings));
 
   const summary = countBySeverity(findings);
   return { ts: Date.now(), summary, findings, deep };
