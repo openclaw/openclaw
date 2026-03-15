@@ -302,6 +302,29 @@ export async function getReplyFromConfig(
     });
   };
 
+  // Daily/scheduled resets bypass command handling, so hooks are never
+  // emitted for them.  Detect this case (new session without an explicit
+  // /new or /reset command) and emit hooks so session-memory flush runs.
+  const isExplicitResetCommand = /^\/(new|reset)(?:\s|$)/.test(command.commandBodyNormalized);
+  if (
+    isNewSession &&
+    !resetTriggered &&
+    !isExplicitResetCommand &&
+    previousSessionEntry &&
+    command.isAuthorizedSender
+  ) {
+    await emitResetCommandHooks({
+      action: "new",
+      ctx,
+      cfg,
+      command,
+      sessionKey,
+      sessionEntry,
+      previousSessionEntry,
+      workspaceDir,
+    });
+  }
+
   const inlineActionResult = await handleInlineActions({
     ctx,
     sessionCtx,
