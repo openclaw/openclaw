@@ -1,0 +1,9 @@
+{
+  "id": "vercel-ai-gateway",
+  "providers": ["vercel-ai-gateway"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
