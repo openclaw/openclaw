@@ -2,6 +2,8 @@ import { LitElement, html, css } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { AppState } from "./app-state";
 import type { AppMode, UsageVariant } from "./types";
+import { type Language, getTranslation } from "./i18n";
+import { loadLanguagePreference } from "../product/storage";
 
 @customElement("app-shell")
 export class AppShell extends LitElement {
@@ -88,9 +90,11 @@ export class AppShell extends LitElement {
 
   @state() private mode: AppMode = "use";
   @state() private variant: UsageVariant = "native";
+  @state() private language: Language = "zh";
 
   connectedCallback(): void {
     super.connectedCallback();
+    this.language = loadLanguagePreference();
     this.mode = this.appState.mode;
     this.variant = this.appState.variant;
     this.unsubscribe = this.appState.subscribe(() => {
@@ -112,6 +116,10 @@ export class AppShell extends LitElement {
     this.appState.setVariant(variant);
   }
 
+  private t(key: Parameters<typeof getTranslation>[1]): string {
+    return getTranslation(this.language, key);
+  }
+
   private renderVariantButton(variant: UsageVariant, label: string) {
     return html`
       <button
@@ -130,18 +138,18 @@ export class AppShell extends LitElement {
           class=${this.mode === "use" ? "active" : ""}
           @click=${() => this.switchMode("use")}
         >
-          USE
+          ${this.t("modeUse")}
         </button>
         <button
           class=${this.mode === "control" ? "active" : ""}
           @click=${() => this.switchMode("control")}
         >
-          CONTROL
+          ${this.t("modeControl")}
         </button>
       </div>
 
       <div class="floating-bar variant-switcher">
-        <span class="bar-label">usage</span>
+        <span class="bar-label">${this.t("usageLabel")}</span>
         ${this.renderVariantButton("native", "Native")}
         ${this.renderVariantButton("mission", "Mission")}
         ${this.renderVariantButton("star", "Star")}

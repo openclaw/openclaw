@@ -71,6 +71,19 @@ export const translations = {
     language: "语言",
     chinese: "中文",
     english: "English",
+
+    // App Shell
+    modeUse: "USE",
+    modeControl: "CONTROL",
+    usageLabel: "usage",
+
+    // Error messages
+    loadStatusError: "加载状态失败",
+    loadChatHistoryError: "加载聊天记录失败",
+    connectionClosed: "连接关闭",
+    eventSequenceGap: "事件序列出现缺口：期望 {expected}，收到 {received}",
+    sendError: "发送失败",
+    checkpointRefRequired: "请先填写要恢复的 checkpoint ref",
   },
   en: {
     // Control Mode - Main sections
@@ -142,13 +155,32 @@ export const translations = {
     language: "Language",
     chinese: "中文",
     english: "English",
+
+    // App Shell
+    modeUse: "USE",
+    modeControl: "CONTROL",
+    usageLabel: "usage",
+
+    // Error messages
+    loadStatusError: "Failed to load status",
+    loadChatHistoryError: "Failed to load chat history",
+    connectionClosed: "Connection closed",
+    eventSequenceGap: "Event sequence gap: expected {expected}, received {received}",
+    sendError: "Send failed",
+    checkpointRefRequired: "Please enter a checkpoint ref to restore",
   },
 } as const;
 
 export type TranslationKey = keyof typeof translations.zh;
 
-export function getTranslation(lang: Language, key: TranslationKey): string {
-  return translations[lang][key];
+export function getTranslation(lang: Language, key: TranslationKey, params?: Record<string, string | number>): string {
+  let text = translations[lang][key];
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      text = text.replace(`{${k}}`, String(v));
+    });
+  }
+  return text;
 }
 
 export function detectBrowserLanguage(): Language {

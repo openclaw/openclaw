@@ -443,8 +443,8 @@ export class ControlModeView extends LitElement {
   @state() checkpointHistoryLoading = false;
   @state() language: Language = loadLanguagePreference() ?? detectBrowserLanguage();
 
-  private t(key: string): string {
-    return getTranslation(this.language, key as any);
+  private t(key: TranslationKey, params?: Record<string, string | number>): string {
+    return getTranslation(this.language, key, params);
   }
 
   private toggleLanguage() {
@@ -464,7 +464,6 @@ export class ControlModeView extends LitElement {
     });
     persistGatewayToken(this.gatewayToken);
     this.connect();
-    void this.loadCheckpointHistory();
   }
 
   disconnectedCallback(): void {
@@ -486,7 +485,7 @@ export class ControlModeView extends LitElement {
       this.health = health ?? null;
       this.statusSummary = status ?? null;
     } catch (error) {
-      this.errorMessage = `加载状态失败：${String(error)}`;
+      this.errorMessage = `${this.t("loadStatusError")}：${String(error)}`;
     }
   }
 
@@ -519,7 +518,7 @@ export class ControlModeView extends LitElement {
         })
         .filter((item): item is ChatMessage => item !== null);
     } catch (error) {
-      this.errorMessage = `加载聊天记录失败：${String(error)}`;
+      this.errorMessage = `${this.t("loadChatHistoryError")}：${String(error)}`;
     } finally {
       this.chatLoading = false;
     }
@@ -634,13 +633,14 @@ export class ControlModeView extends LitElement {
         void this.loadSummaries();
         void this.loadSessionsList();
         void this.loadChatHistory();
+        void this.loadCheckpointHistory();
       },
       onClose: ({ code, reason, error }) => {
         if (this.client !== client) {
           return;
         }
         this.connectionState = error ? "error" : "disconnected";
-        this.errorMessage = error?.message ?? `连接关闭 (${code}) ${reason || ""}`.trim();
+        this.errorMessage = error?.message ?? `${this.t("connectionClosed")} (${code}) ${reason || ""}`.trim();
       },
       onEvent: (evt) => {
         if (this.client !== client) {
@@ -652,7 +652,7 @@ export class ControlModeView extends LitElement {
         }
       },
       onGap: ({ expected, received }) => {
-        this.errorMessage = `事件序列出现缺口：期望 ${expected}，收到 ${received}`;
+        this.errorMessage = this.t("eventSequenceGap", { expected: String(expected), received: String(received) });
       },
     });
 
@@ -682,12 +682,12 @@ export class ControlModeView extends LitElement {
     } catch (error) {
       this.chatSending = false;
       this.chatRunId = null;
-      this.errorMessage = `发送失败：${String(error)}`;
+      this.errorMessage = `${this.t("sendError")}：${String(error)}`;
       this.chatMessages = [
         ...this.chatMessages,
         {
           role: "system",
-          text: `发送失败：${String(error)}`,
+          text: `${this.t("sendError")}：${String(error)}`,
           timestamp: Date.now(),
           kind: "status",
         },
@@ -720,7 +720,7 @@ export class ControlModeView extends LitElement {
   private async triggerRestore() {
     const ref = this.restoreRef.trim();
     if (!ref) {
-      this.errorMessage = "请先填写要恢复的 checkpoint ref";
+      this.errorMessage = this.t("checkpointRefRequired");
       return;
     }
     const userText = `恢复 checkpoint：${ref}`;
