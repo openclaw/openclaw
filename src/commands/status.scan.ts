@@ -22,6 +22,8 @@ import {
 import { getStatusSummary } from "./status.summary.js";
 import { getUpdateCheckResult } from "./status.update.js";
 
+const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
+
 type MemoryStatusSnapshot = MemoryProviderStatus & {
   agentId: string;
 };
@@ -231,7 +233,11 @@ async function scanStatusJsonFast(opts: {
     gatewayProbeAuthWarning,
     gatewayProbe,
   } = gatewaySnapshot;
-  const gatewayReachable = gatewayProbe?.ok === true;
+  const gatewayReachable =
+    gatewayProbe?.ok === true ||
+    (gatewayProbe?.ok === false &&
+      gatewayProbe.connectLatencyMs != null &&
+      MISSING_SCOPE_PATTERN.test(gatewayProbe.error ?? ""));
   const gatewaySelf = gatewayProbe?.presence
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;
@@ -341,7 +347,11 @@ export async function scanStatus(
         gatewayProbeAuthWarning,
         gatewayProbe,
       } = await resolveGatewayProbeSnapshot({ cfg, opts });
-      const gatewayReachable = gatewayProbe?.ok === true;
+      const gatewayReachable =
+        gatewayProbe?.ok === true ||
+        (gatewayProbe?.ok === false &&
+          gatewayProbe.connectLatencyMs != null &&
+          MISSING_SCOPE_PATTERN.test(gatewayProbe.error ?? ""));
       const gatewaySelf = gatewayProbe?.presence
         ? pickGatewaySelfPresence(gatewayProbe.presence)
         : null;
