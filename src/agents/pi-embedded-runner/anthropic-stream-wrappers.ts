@@ -212,11 +212,14 @@ export function resolveCacheRetention(
   provider: string,
 ): CacheRetention | undefined {
   const isAnthropicDirect = provider === "anthropic";
+  // Cloudflare AI Gateway proxies the Anthropic Messages API and passes
+  // cache_control through, so treat it like direct Anthropic (#46709).
+  const isCloudflareAnthropicProxy = provider === "cloudflare-ai-gateway";
   const hasBedrockOverride =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
   const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
 
-  if (!isAnthropicDirect && !isAnthropicBedrock) {
+  if (!isAnthropicDirect && !isCloudflareAnthropicProxy && !isAnthropicBedrock) {
     return undefined;
   }
 
@@ -233,7 +236,7 @@ export function resolveCacheRetention(
     return "long";
   }
 
-  return isAnthropicDirect ? "short" : undefined;
+  return isAnthropicDirect || isCloudflareAnthropicProxy ? "short" : undefined;
 }
 
 export function resolveAnthropicBetas(
