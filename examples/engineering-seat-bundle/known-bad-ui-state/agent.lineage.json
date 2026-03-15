@@ -1,0 +1,42 @@
+{
+  "kind": "agent.lineage",
+  "schemaVersion": 1,
+  "lineageId": "lineage.engineering-seat.alpha",
+  "agentId": "engineering-seat",
+  "canonical": true,
+  "seat": {
+    "seatId": "engineering-seat-alpha",
+    "seatKind": "engineering",
+    "registryNamespace": "openclaw.engineering"
+  },
+  "designStudio": {
+    "studioId": "design-studio",
+    "outputId": "design-studio-output-2026-03-15",
+    "outputVersion": 1,
+    "outputDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "exportedAt": "2026-03-15T00:00:00Z"
+  },
+  "parents": [],
+  "provenance": {
+    "sourceOfTruth": "design-studio",
+    "authoredAt": "2026-03-15T00:00:00Z",
+    "authoredBy": "mission-m11",
+    "sourceCommit": "2cd5145dd4f3190d086b2ab6d0ec16982f8d700c",
+    "inputs": [
+      {
+        "kind": "brief",
+        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    ]
+  },
+  "trace": {
+    "traceNamespace": "trace.engineering-seat.alpha",
+    "receiptNamespace": "receipt.engineering-seat.alpha",
+    "routeLawNamespace": "route-law.engineering-seat.alpha",
+    "approvalNamespace": "approval.engineering-seat.alpha"
+  },
+  "receipts": {
+    "lineageDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "admissionContractDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  }
+}

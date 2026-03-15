@@ -1,0 +1,228 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.ai/schemas/agent.policy.schema.json",
+  "title": "OpenClaw Agent Policy Manifest",
+  "description": "Frozen policy manifest for M11 lineage admission and registry gating.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schemaVersion",
+    "policyId",
+    "lineage",
+    "registry",
+    "admission",
+    "deterministicRejects",
+    "approvals",
+    "provenance",
+    "trace",
+    "receipts"
+  ],
+  "properties": {
+    "kind": {
+      "const": "agent.policy"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "policyId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._/-]{2,127}$"
+    },
+    "lineage": {
+      "$ref": "#/definitions/lineageBinding"
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "recordKey"],
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{2,127}$"
+        },
+        "recordKey": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{2,127}$"
+        }
+      }
+    },
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lineageRequired",
+        "runtimeManifestRequired",
+        "policyManifestRequired",
+        "registryWriteRequiresCanonicalLineage"
+      ],
+      "properties": {
+        "lineageRequired": {
+          "const": true
+        },
+        "runtimeManifestRequired": {
+          "const": true
+        },
+        "policyManifestRequired": {
+          "const": true
+        },
+        "registryWriteRequiresCanonicalLineage": {
+          "const": true
+        }
+      }
+    },
+    "deterministicRejects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unknownTopLevelField",
+        "uiStatePresentedAsTruth",
+        "nonCanonicalLineage",
+        "digestMismatch",
+        "missingProvenance",
+        "missingApprovalNamespace"
+      ],
+      "properties": {
+        "unknownTopLevelField": {
+          "const": true
+        },
+        "uiStatePresentedAsTruth": {
+          "const": true
+        },
+        "nonCanonicalLineage": {
+          "const": true
+        },
+        "digestMismatch": {
+          "const": true
+        },
+        "missingProvenance": {
+          "const": true
+        },
+        "missingApprovalNamespace": {
+          "const": true
+        }
+      }
+    },
+    "approvals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "requiredFor"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["manual", "preapproved"]
+        },
+        "requiredFor": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "registry-write",
+              "runtime-change",
+              "policy-change",
+              "route-law-change",
+              "tool-elevation"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceOfTruth",
+        "authoredAt",
+        "authoredBy",
+        "designStudioOutputDigest",
+        "lineageDigest"
+      ],
+      "properties": {
+        "sourceOfTruth": {
+          "const": "policy-manifest"
+        },
+        "authoredAt": {
+          "$ref": "#/definitions/timestamp"
+        },
+        "authoredBy": {
+          "type": "string",
+          "minLength": 1
+        },
+        "designStudioOutputDigest": {
+          "$ref": "#/definitions/sha256Digest"
+        },
+        "lineageDigest": {
+          "$ref": "#/definitions/sha256Digest"
+        }
+      }
+    },
+    "trace": {
+      "$ref": "#/definitions/traceEnvelope"
+    },
+    "receipts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policyDigest", "lineageDigest", "runtimeDigest"],
+      "properties": {
+        "policyDigest": {
+          "$ref": "#/definitions/sha256Digest"
+        },
+        "lineageDigest": {
+          "$ref": "#/definitions/sha256Digest"
+        },
+        "runtimeDigest": {
+          "$ref": "#/definitions/sha256Digest"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "sha256Digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "lineageBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lineageId", "lineageDigest"],
+      "properties": {
+        "lineageId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{2,127}$"
+        },
+        "lineageDigest": {
+          "$ref": "#/definitions/sha256Digest"
+        }
+      }
+    },
+    "traceEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traceNamespace", "receiptNamespace", "routeLawNamespace", "approvalNamespace"],
+      "properties": {
+        "traceNamespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{2,127}$"
+        },
+        "receiptNamespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{2,127}$"
+        },
+        "routeLawNamespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{2,127}$"
+        },
+        "approvalNamespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{2,127}$"
+        }
+      }
+    }
+  }
+}
