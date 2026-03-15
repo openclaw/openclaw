@@ -19,7 +19,11 @@ set -euo pipefail
 
 payload="$(cat)"
 case "${MOCK_CURL_MODE:-success}" in
-  success)
+  success|partial-public-surface)
+    if [[ "${MOCK_CURL_MODE:-success}" == "partial-public-surface" && "$payload" == *"vaultV2transactions"* ]]; then
+      printf '%s\n' 'curl: (28) transactions probe timed out' >&2
+      exit 28
+    fi
     if [[ "$payload" == *"vaultV2transactions"* ]]; then
       printf '%s\n' '{"data":{"vaultV2transactions":{"items":[{"hash":"0xabc","type":"deposit"}]}}}'
       exit 0
@@ -189,6 +193,23 @@ request_failed_output="$(
 printf '%s\n' "$request_failed_output" | jq -e '
   .probes.exact_query_replay.ok == "request_failed"
   and (.probes.exact_query_replay.first_error | contains("operation timed out"))
+' >/dev/null
+
+partial_surface_output="$(
+  env PATH="${BIN_NO_CAST}:/usr/bin:/bin" \
+    MOCK_CURL_MODE=partial-public-surface \
+    bash "$SCRIPT_PATH" \
+      --address 0x123 \
+      --chain-id 8453 \
+      --query "$QUERY" \
+      --variables-json "$VARIABLES"
+)"
+
+printf '%s\n' "$partial_surface_output" | jq -e '
+  .summary.public_surface_split == "failed"
+  and .probes.minimal_by_address.ok == "yes"
+  and .probes.vaultV2s_address_in.ok == "yes"
+  and .probes.vaultV2transactions.ok == "request_failed"
 ' >/dev/null
 
 rpc_failed_output="$(

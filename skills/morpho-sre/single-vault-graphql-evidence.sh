@@ -353,7 +353,7 @@ jq -nc \
     summary: {
       exact_query_replay: $exact_probe.ok,
       healthy_control_check: $control_probe.ok,
-      public_surface_split: (if $by_address_probe.ok != "request_failed" or $list_probe.ok != "request_failed" or $transactions_probe.ok != "request_failed" then "captured" else "failed" end),
+      public_surface_split: (if $by_address_probe.ok != "request_failed" and $list_probe.ok != "request_failed" and $transactions_probe.ok != "request_failed" then "captured" else "failed" end),
       direct_rpc_check: ($rpc_probe.status // "skipped")
     },
     evidence_line: (
@@ -361,7 +361,7 @@ jq -nc \
       + " chainId=" + ($chain_id | tostring)
       + " exact_query_replay=" + $exact_probe.ok
       + " healthy_control_check=" + $control_probe.ok
-      + " public_surface_split=" + (if $by_address_probe.ok != "request_failed" or $list_probe.ok != "request_failed" or $transactions_probe.ok != "request_failed" then "captured" else "failed" end)
+      + " public_surface_split=" + (if $by_address_probe.ok != "request_failed" and $list_probe.ok != "request_failed" and $transactions_probe.ok != "request_failed" then "captured" else "failed" end)
       + " direct_rpc_check=" + ($rpc_probe.status // "skipped")
     )
   }'
