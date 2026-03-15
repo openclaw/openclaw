@@ -860,4 +860,10 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+
+  it("classifies Codex streaming server_error as timeout for failover", () => {
+    const codexError =
+      'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request.","param":null},"sequence_number":2}';
+    expect(classifyFailoverReason(codexError)).toBe("timeout");
+  });
 });
