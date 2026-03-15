@@ -139,6 +139,7 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
 
 vi.mock("../runs.js", () => ({
   setActiveEmbeddedRun: () => {},
+  updateActiveEmbeddedRunSnapshot: () => {},
   clearActiveEmbeddedRun: () => {},
 }));
 
@@ -216,6 +217,7 @@ function createSubscriptionMock() {
     toolMetas: [] as Array<{ toolName: string; meta?: string }>,
     unsubscribe: () => {},
     deliveredCommentarySegmentIds: () => [] as string[],
+    getPendingCommentaryDeliveryCount: () => 1,
     waitForCommentaryDelivery: async () => {},
     abortCommentaryDelivery: () => {},
     waitForCompactionRetry: async () => {},
@@ -406,6 +408,85 @@ describe("runEmbeddedAttempt live commentary forwarding", () => {
 
     expect(result.promptError).toBeNull();
     expect(abortCommentaryDelivery).toHaveBeenCalledTimes(1);
+  });
+
+  it("scales the final commentary delivery wait by queued commentary sends", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commentary-queue-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commentary-queue-agent-"));
+    tempPaths.push(workspaceDir, agentDir);
+
+    hoisted.resolveSandboxContextMock.mockResolvedValue(
+      createPiToolsSandboxContext({
+        workspaceDir,
+        fsBridge: createHostSandboxFsBridge(workspaceDir),
+        tools: { allow: [], deny: [] },
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    hoisted.createAgentSessionMock.mockImplementation(async () => {
+      const session: MutableSession = {
+        sessionId: "embedded-session",
+        messages: [],
+        isCompacting: false,
+        isStreaming: false,
+        agent: {
+          replaceMessages: (messages: unknown[]) => {
+            session.messages = [...messages];
+          },
+        },
+        prompt: async () => {},
+        abort: async () => {},
+        dispose: () => {},
+        steer: async () => {},
+      };
+
+      return { session };
+    });
+
+    const abortCommentaryDelivery = vi.fn();
+    hoisted.subscribeEmbeddedPiSessionMock.mockImplementation(() => ({
+      ...createSubscriptionMock(),
+      getPendingCommentaryDeliveryCount: () => 3,
+      waitForCommentaryDelivery: () =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 10);
+        }),
+      abortCommentaryDelivery,
+    }));
+
+    const model = {
+      api: "openai-completions",
+      provider: "openai",
+      compat: {},
+      contextWindow: 8192,
+      input: ["text"],
+    } as unknown as Model<Api>;
+
+    const result = await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:main",
+      sessionFile: path.join(workspaceDir, "session.jsonl"),
+      workspaceDir,
+      agentDir,
+      config: {},
+      prompt: "wait for queued commentary",
+      timeoutMs: 10_000,
+      blockReplyTimeoutMs: 5,
+      runId: "run-commentary-queue",
+      provider: "openai",
+      modelId: "gpt-test",
+      model,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+      onCommentaryReply: vi.fn(),
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(abortCommentaryDelivery).not.toHaveBeenCalled();
   });
 
   it("aborts commentary delivery promptly when the run abort signal fires", async () => {

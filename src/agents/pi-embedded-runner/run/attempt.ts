@@ -2190,17 +2190,20 @@ export async function runEmbeddedAttempt(
       const waitForCommentaryDeliveryBounded = async (
         waitForCommentaryDelivery: () => Promise<void>,
         abortCommentaryDelivery: (reason?: unknown) => void,
+        getPendingCommentaryDeliveryCount: () => number,
       ) => {
         if (!params.onCommentaryReply) {
           return;
         }
+        const pendingCount = Math.max(1, getPendingCommentaryDeliveryCount());
+        const aggregateCommentaryDeliveryTimeoutMs = commentaryDeliveryTimeoutMs * pendingCount;
         let timer: NodeJS.Timeout | undefined;
         const timeoutError = new Error(
-          `commentary delivery timed out after ${commentaryDeliveryTimeoutMs}ms`,
+          `commentary delivery timed out after ${aggregateCommentaryDeliveryTimeoutMs}ms`,
         );
         timeoutError.name = "AbortError";
         const timeoutPromise = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(timeoutError), commentaryDeliveryTimeoutMs);
+          timer = setTimeout(() => reject(timeoutError), aggregateCommentaryDeliveryTimeoutMs);
         });
         try {
           await abortable(Promise.race([waitForCommentaryDelivery(), timeoutPromise]));
@@ -2209,7 +2212,7 @@ export async function runEmbeddedAttempt(
           if (err === timeoutError) {
             if (!isProbeSession) {
               log.warn(
-                `commentary delivery wait timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${commentaryDeliveryTimeoutMs}`,
+                `commentary delivery wait timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${aggregateCommentaryDeliveryTimeoutMs} pendingCount=${pendingCount}`,
               );
             }
             return;
@@ -2264,6 +2267,7 @@ export async function runEmbeddedAttempt(
         toolMetas,
         unsubscribe,
         deliveredCommentarySegmentIds,
+        getPendingCommentaryDeliveryCount,
         waitForCommentaryDelivery,
         abortCommentaryDelivery,
         waitForCompactionRetry,
@@ -2650,7 +2654,11 @@ export async function runEmbeddedAttempt(
         }
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
-        await waitForCommentaryDeliveryBounded(waitForCommentaryDelivery, abortCommentaryDelivery);
+        await waitForCommentaryDeliveryBounded(
+          waitForCommentaryDelivery,
+          abortCommentaryDelivery,
+          getPendingCommentaryDeliveryCount,
+        );
 
         if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
           try {

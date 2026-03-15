@@ -792,6 +792,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getUsageTotals,
     getCompactionCount: () => compactionCount,
     deliveredCommentarySegmentIds: () => Array.from(state.deliveredCommentarySegmentIds),
+    getPendingCommentaryDeliveryCount: () => state.pendingCommentarySegmentIds.size,
     waitForCommentaryDelivery,
     abortCommentaryDelivery,
     waitForCompactionRetry: () => {
