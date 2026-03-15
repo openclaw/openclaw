@@ -127,12 +127,9 @@ export function createSessionsSpawnTool(
           }>)
         : undefined;
 
-      if (streamTo && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
-        });
-      }
+      // Silently ignore streamTo for non-ACP runtimes — schema-following models
+      // may include it because it's visible in the tool schema.
+      const effectiveStreamTo = runtime === "acp" ? streamTo : undefined;
 
       if (resumeSessionId && runtime !== "acp") {
         return jsonResult({
@@ -159,7 +156,7 @@ export function createSessionsSpawnTool(
             mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
             thread,
             sandbox,
-            streamTo,
+            streamTo: effectiveStreamTo,
           },
           {
             agentSessionKey: opts?.agentSessionKey,
