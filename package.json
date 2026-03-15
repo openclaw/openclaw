@@ -116,6 +116,10 @@
       "types": "./dist/plugin-sdk/googlechat.d.ts",
       "default": "./dist/plugin-sdk/googlechat.js"
     },
+    "./plugin-sdk/health-tracker": {
+      "types": "./dist/plugin-sdk/health-tracker.d.ts",
+      "default": "./dist/plugin-sdk/health-tracker.js"
+    },
     "./plugin-sdk/irc": {
       "types": "./dist/plugin-sdk/irc.d.ts",
       "default": "./dist/plugin-sdk/irc.js"

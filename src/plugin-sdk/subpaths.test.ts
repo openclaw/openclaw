@@ -22,6 +22,7 @@ const bundledExtensionSubpathLoaders = [
     load: () => import("openclaw/plugin-sdk/google-gemini-cli-auth"),
   },
   { id: "googlechat", load: () => import("openclaw/plugin-sdk/googlechat") },
+  { id: "health-tracker", load: () => import("openclaw/plugin-sdk/health-tracker") },
   { id: "irc", load: () => import("openclaw/plugin-sdk/irc") },
   { id: "llm-task", load: () => import("openclaw/plugin-sdk/llm-task") },
   { id: "lobster", load: () => import("openclaw/plugin-sdk/lobster") },

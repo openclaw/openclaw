@@ -351,6 +351,12 @@ importers:
         specifier: '>=2026.3.11'
         version: 2026.3.13(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
+  extensions/health-tracker:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+
   extensions/imessage: {}
 
   extensions/irc:
