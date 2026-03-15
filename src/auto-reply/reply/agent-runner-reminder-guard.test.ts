@@ -99,7 +99,7 @@ describe("appendUnscheduledReminderNote", () => {
   it("only appends once across multiple payloads", () => {
     const payloads = [{ text: "I'll remind you about A." }, { text: "I'll remind you about B." }];
     const result = appendUnscheduledReminderNote(payloads as unknown as ReplyPayload[]);
-    const count = result.filter((p) => p.text.includes(UNSCHEDULED_REMINDER_NOTE)).length;
+    const count = result.filter((p) => p.text?.includes(UNSCHEDULED_REMINDER_NOTE)).length;
     expect(count).toBe(1);
   });
 });
