@@ -505,6 +505,17 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
 }
 
 export function armTimer(state: CronServiceState) {
+  // If a timer tick is currently executing, don't interfere with its timer.
+  // The running tick will call armTimer() in its finally block after setting
+  // state.running = false, ensuring proper timer re-arm without race conditions.
+  // Without this guard, rapid add()/remove() calls can clear the watchdog timer
+  // set by armRunningRecheckTimer(), leaving the scheduler without a safety net
+  // if execution hangs.
+  // See: https://github.com/openclaw/openclaw/issues/18121
+  if (state.running) {
+    state.deps.log.debug({}, "cron: armTimer skipped - tick in progress");
+    return;
+  }
   if (state.timer) {
     clearTimeout(state.timer);
   }
