@@ -1,4 +1,4 @@
-import { intro, note, outro, spinner } from "@clack/prompts";
+import { confirm, intro, isCancel, note, outro, spinner } from "@clack/prompts";
 import { ensureAuthProfileStore, upsertAuthProfile } from "../agents/auth-profiles.js";
 import { updateConfig } from "../commands/models/shared.js";
 import { applyAuthProfileConfig } from "../commands/onboard-auth.js";
@@ -28,6 +28,8 @@ type DeviceTokenResponse =
       error: string;
       error_description?: string;
       error_uri?: string;
+      /** Returned by `slow_down` — the new minimum polling interval in seconds. */
+      interval?: number;
     };
 
 function parseJsonResponse<T>(value: unknown): T {
@@ -74,7 +76,15 @@ async function pollForAccessToken(params: {
     grant_type: "urn:ietf:params:oauth:grant-type:device_code",
   });
 
+  let intervalMs = params.intervalMs;
+
   while (Date.now() < params.expiresAt) {
+    // Always wait before polling — avoids immediate `authorization_pending`
+    // on the first request which triggers GitHub's slow_down backoff.
+    await new Promise((r) => setTimeout(r, intervalMs));
+
+    if (Date.now() >= params.expiresAt) break;
+
     const res = await fetch(ACCESS_TOKEN_URL, {
       method: "POST",
       headers: {
@@ -95,11 +105,16 @@ async function pollForAccessToken(params: {
 
     const err = "error" in json ? json.error : "unknown";
     if (err === "authorization_pending") {
-      await new Promise((r) => setTimeout(r, params.intervalMs));
       continue;
     }
     if (err === "slow_down") {
-      await new Promise((r) => setTimeout(r, params.intervalMs + 2000));
+      // GitHub returns the new required minimum interval in seconds.
+      // Respect it exactly rather than adding an arbitrary fixed offset.
+      if ("interval" in json && typeof json.interval === "number") {
+        intervalMs = json.interval * 1000;
+      } else {
+        intervalMs += 5000;
+      }
       continue;
     }
     if (err === "expired_token") {
@@ -115,7 +130,7 @@ async function pollForAccessToken(params: {
 }
 
 export async function githubCopilotLoginCommand(
-  opts: { profileId?: string; yes?: boolean },
+  opts: { profileId?: string; yes?: boolean; wait?: boolean },
   runtime: RuntimeEnv,
 ) {
   if (!process.stdin.isTTY) {
@@ -145,6 +160,17 @@ export async function githubCopilotLoginCommand(
     [`Visit: ${device.verification_uri}`, `Code: ${device.user_code}`].join("\n"),
     stylePromptTitle("Authorize"),
   );
+
+  if (opts.wait) {
+    // Print plain-text lines so the URL is easy to copy in terminals (e.g. WSL)
+    // where the clack box rendering prevents ctrl+click link detection.
+    process.stdout.write(`\n  URL:  ${device.verification_uri}\n  Code: ${device.user_code}\n\n`);
+
+    const ready = await confirm({ message: "Have you authorized the code in your browser?" });
+    if (isCancel(ready) || !ready) {
+      throw new Error("GitHub login cancelled");
+    }
+  }
 
   const expiresAt = Date.now() + device.expires_in * 1000;
   const intervalMs = Math.max(1000, device.interval * 1000);

@@ -366,12 +366,14 @@ export function registerModelsCli(program: Command) {
     .description("Login to GitHub Copilot via GitHub device flow (TTY required)")
     .option("--profile-id <id>", "Auth profile id (default: github-copilot:github)")
     .option("--yes", "Overwrite existing profile without prompting", false)
+    .option("--wait", "Prompt for confirmation before polling (useful in WSL/remote terminals where the browser doesn't auto-open)", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
         await githubCopilotLoginCommand(
           {
             profileId: opts.profileId as string | undefined,
             yes: Boolean(opts.yes),
+            wait: Boolean(opts.wait),
           },
           defaultRuntime,
         );
