@@ -1,3 +1,5 @@
+import { parseFenceSpans } from "../markdown/fences.js";
+
 export type InlineDirectiveParseResult = {
   text: string;
   audioAsVoice: boolean;
@@ -18,10 +20,29 @@ const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+  const fences = parseFenceSpans(text);
+  if (fences.length === 0) {
+    // No code blocks — safe to normalize everything
+    return text
+      .replace(/[ \t]+/g, " ")
+      .replace(/[ \t]*\n[ \t]*/g, "\n")
+      .trim();
+  }
+  // Normalize only outside fenced code blocks
+  let result = "";
+  let cursor = 0;
+  for (const span of fences) {
+    // Normalize text before this fence
+    const before = text.slice(cursor, span.start);
+    result += before.replace(/[ \t]+/g, " ").replace(/[ \t]*\n[ \t]*/g, "\n");
+    // Preserve fenced content verbatim
+    result += text.slice(span.start, span.end);
+    cursor = span.end;
+  }
+  // Normalize text after last fence
+  const after = text.slice(cursor);
+  result += after.replace(/[ \t]+/g, " ").replace(/[ \t]*\n[ \t]*/g, "\n");
+  return result.trim();
 }
 
 type StripInlineDirectiveTagsResult = {

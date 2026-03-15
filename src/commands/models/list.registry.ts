@@ -160,7 +160,7 @@ export function toModelRow(params: {
     };
   }
 
-  const input = model.input.join("+") || "text";
+  const input = model.input?.join("+") || "text";
   const local = isLocalBaseUrl(model.baseUrl);
   const modelIsAvailable = availableKeys?.has(modelKey(model.provider, model.id)) ?? false;
   // Prefer model-level registry availability when present.
