@@ -21,6 +21,8 @@ export const __setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
     maxChatHistoryMessagesBytes = value;
   }
 };
+// Restore 10s timeout: 3s (from #44089) was too aggressive for CLI on slow systems
+// (e.g. device identity load + signature, disk I/O). Fixes #47103.
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const getHandshakeTimeoutMs = () => {
   // User-facing env var (works in all environments); test-only var gated behind VITEST
