@@ -57,6 +57,8 @@ const SessionStatusToolSchema = Type.Object({
   model: Type.Optional(Type.String()),
 });
 
+type ModelCatalog = Awaited<ReturnType<typeof loadModelCatalog>>;
+
 function resolveSessionEntry(params: {
   store: Record<string, SessionEntry>;
   keyRaw: string;
@@ -120,6 +122,7 @@ async function resolveModelOverride(params: {
   raw: string;
   sessionEntry?: SessionEntry;
   agentId: string;
+  catalog?: ModelCatalog;
 }): Promise<
   | { kind: "reset" }
   | {
@@ -148,7 +151,7 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     defaultProvider: currentProvider,
   });
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const catalog = params.catalog ?? (await loadModelCatalog({ config: params.cfg }));
   const allowed = buildAllowedModelSet({
     cfg: params.cfg,
     catalog,
@@ -289,6 +292,13 @@ export function createSessionStatusTool(opts?: {
         : requesterAgentId;
       let storePath = resolveStorePath(cfg.session?.store, { agentId });
       let store = loadSessionStore(storePath);
+      let modelCatalog: ModelCatalog | undefined;
+      const getModelCatalog = async () => {
+        if (!modelCatalog) {
+          modelCatalog = await loadModelCatalog({ config: cfg });
+        }
+        return modelCatalog;
+      };
 
       // Resolve against the requester-scoped store first to avoid leaking default agent data.
       let resolved = resolveSessionEntry({
@@ -343,6 +353,7 @@ export function createSessionStatusTool(opts?: {
           raw: modelRaw,
           sessionEntry: resolved.entry,
           agentId,
+          catalog: await getModelCatalog(),
         });
         const nextEntry: SessionEntry = { ...resolved.entry };
         const applied = applyModelOverrideToSessionEntry({
@@ -377,12 +388,11 @@ export function createSessionStatusTool(opts?: {
         resolved.entry.thinkingLevel,
       );
       if (!resolvedThinkForCard) {
-        const catalog = await loadModelCatalog({ config: cfg });
         resolvedThinkForCard = resolveThinkingDefault({
           cfg,
           provider: providerForCard,
           model: modelForCard,
-          catalog,
+          catalog: await getModelCatalog(),
         });
       }
       if (

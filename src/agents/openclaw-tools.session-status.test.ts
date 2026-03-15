@@ -222,6 +222,39 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("Think: xhigh");
   });
 
+  it("downgrades xhigh to high when the selected model does not support xhigh", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {
+              params: { thinking: "xhigh" },
+            },
+          },
+        },
+      },
+      tools: {
+        agentToAgent: { enabled: false },
+      },
+    };
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-thinking-downgrade", {});
+    const details = result.details as { ok?: boolean; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.statusText).toContain("Think: high");
+    expect(details.statusText).not.toContain("Think: xhigh");
+  });
+
   it("errors for unknown session keys", async () => {
     resetSessionStore({
       main: { sessionId: "s1", updatedAt: 10 },
