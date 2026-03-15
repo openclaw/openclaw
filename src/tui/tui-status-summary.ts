@@ -52,7 +52,7 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
   }
 
   const defaults = summary.sessions?.defaults;
-  const defaultModel = defaults?.model ?? "unknown";
+  const defaultModel = defaults?.variesByAgent ? "varies by agent" : (defaults?.model ?? "unknown");
   const defaultCtx =
     typeof defaults?.contextTokens === "number"
       ? ` (${formatTokenCount(defaults.contextTokens)} ctx)`

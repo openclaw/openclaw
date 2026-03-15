@@ -1,6 +1,9 @@
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import {
+  resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
+} from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -80,6 +83,33 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
   };
 }
 
+function resolveStatusSessionDefaults(cfg: OpenClawConfig, agentIds: string[]) {
+  const effectiveAgentIds = agentIds.length > 0 ? agentIds : [undefined];
+  const resolvedDefaults = effectiveAgentIds.map((agentId) =>
+    resolveDefaultModelForAgent({ cfg, agentId }),
+  );
+  const uniqueModels = new Set(
+    resolvedDefaults.map((resolved) => `${resolved.provider}/${resolved.model}`),
+  );
+  const contextTokens = resolvedDefaults.map(
+    (resolved) =>
+      resolveContextTokensForModel({
+        cfg,
+        provider: resolved.provider ?? DEFAULT_PROVIDER,
+        model: resolved.model ?? DEFAULT_MODEL,
+        contextTokensOverride: cfg.agents?.defaults?.contextTokens,
+        fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      }) ?? DEFAULT_CONTEXT_TOKENS,
+  );
+  const uniqueContextTokens = new Set(contextTokens);
+  return {
+    model: uniqueModels.size === 1 ? (resolvedDefaults[0]?.model ?? DEFAULT_MODEL) : null,
+    contextTokens:
+      uniqueContextTokens.size === 1 ? (contextTokens[0] ?? DEFAULT_CONTEXT_TOKENS) : null,
+    variesByAgent: uniqueModels.size > 1,
+  };
+}
+
 export async function getStatusSummary(
   options: {
     includeSensitive?: boolean;
@@ -122,6 +152,10 @@ export async function getStatusSummary(
       contextTokensOverride: cfg.agents?.defaults?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
     }) ?? DEFAULT_CONTEXT_TOKENS;
+  const sessionDefaults = resolveStatusSessionDefaults(
+    cfg,
+    agentList.agents.map((agent) => agent.id),
+  );
 
   const now = Date.now();
   const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
@@ -233,10 +267,7 @@ export async function getStatusSummary(
     sessions: {
       paths: Array.from(paths),
       count: totalSessions,
-      defaults: {
-        model: configModel ?? null,
-        contextTokens: configContextTokens ?? null,
-      },
+      defaults: sessionDefaults,
       recent,
       byAgent,
     },

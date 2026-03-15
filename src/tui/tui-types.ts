@@ -82,7 +82,11 @@ export type GatewayStatusSummary = {
   sessions?: {
     paths?: string[];
     count?: number;
-    defaults?: { model?: string | null; contextTokens?: number | null };
+    defaults?: {
+      model?: string | null;
+      contextTokens?: number | null;
+      variesByAgent?: boolean;
+    };
     recent?: Array<{
       agentId?: string;
       key: string;
