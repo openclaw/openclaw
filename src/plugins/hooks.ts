@@ -154,11 +154,12 @@ function getHooksForNameAndPlugin<K extends PluginHookName>(
 }
 
 /**
- * Deep-merge two messageMeta bags.  Top-level keys are plugin-namespaced
- * (e.g. `"memory-lancedb"`) and each plugin's value is an object whose
- * array-valued keys are concatenated so multiple hook phases can each
- * contribute entries without overwriting each other. Scalar keys inside a
- * plugin namespace use last-wins semantics.
+ * Deep-merge two messageMeta bags.  Top-level keys are plugin IDs
+ * (auto-injected by the hook runner via {@link namespaceMessageMeta})
+ * and each plugin's value is an object whose array-valued keys are
+ * concatenated so multiple hook phases can each contribute entries
+ * without overwriting each other. Scalar keys inside a plugin
+ * namespace use last-wins semantics.
  */
 function mergeMessageMeta(
   acc: Record<string, unknown> | undefined,
@@ -201,6 +202,24 @@ function mergeMessageMeta(
     }
   }
   return merged;
+}
+
+/**
+ * Wrap a handler result's `messageMeta` inside a `{ [pluginId]: ... }` envelope.
+ * This is called by the hook runner **before** merging so that each plugin's
+ * meta is isolated under its own key — a plugin returning `{ displayStripPatterns: [...] }`
+ * becomes `{ "memory-lancedb": { displayStripPatterns: [...] } }` automatically.
+ * Plugins cannot write into another plugin's namespace because the runner
+ * controls the wrapping.
+ */
+function namespaceMessageMeta(
+  result: { messageMeta?: Record<string, unknown> } | undefined | null,
+  pluginId: string,
+): void {
+  if (!result?.messageMeta || Object.keys(result.messageMeta).length === 0) {
+    return;
+  }
+  result.messageMeta = { [pluginId]: result.messageMeta };
 }
 
 /**
@@ -339,6 +358,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         )(event, ctx);
 
         if (handlerResult !== undefined && handlerResult !== null) {
+          // Auto-namespace messageMeta by pluginId so plugins cannot write
+          // into another plugin's namespace.  The plugin returns flat meta
+          // (e.g. { displayStripPatterns: [...] }) and we wrap it as
+          // { [pluginId]: { displayStripPatterns: [...] } }.
+          namespaceMessageMeta(handlerResult, hook.pluginId);
           if (mergeResults && result !== undefined) {
             result = mergeResults(result, handlerResult);
           } else {
