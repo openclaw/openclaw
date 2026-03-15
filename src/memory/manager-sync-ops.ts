@@ -378,9 +378,12 @@ export abstract class MemoryManagerSyncOps {
     if (!this.sources.has("memory") || !this.settings.sync.watch || this.watcher) {
       return;
     }
+    const rootMemory = path.join(this.workspaceDir, "MEMORY.md");
+    const altMemory = path.join(this.workspaceDir, "memory.md");
     const watchPaths = new Set<string>([
-      path.join(this.workspaceDir, "MEMORY.md"),
-      path.join(this.workspaceDir, "memory.md"),
+      rootMemory,
+      // Only watch memory.md when MEMORY.md is absent. Avoid duplicates on case-insensitive filesystems.
+      ...(fsSync.existsSync(rootMemory) ? [] : [altMemory]),
       path.join(this.workspaceDir, "memory", "**", "*.md"),
     ]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);

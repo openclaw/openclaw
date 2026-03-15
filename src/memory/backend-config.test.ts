@@ -1,5 +1,7 @@
+import fsSync from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
@@ -13,9 +15,24 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd).toBeUndefined();
   });
 
+  let tmpWorkspace = "";
+
+  beforeEach(() => {
+    tmpWorkspace = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-backend-config-"));
+  });
+
+  afterEach(() => {
+    if (tmpWorkspace) {
+      fsSync.rmSync(tmpWorkspace, { recursive: true, force: true });
+    }
+  });
+
   it("resolves qmd backend with default collections", () => {
+    // Create a canonical MEMORY.md so memory.md fallback should not be included.
+    fsSync.writeFileSync(path.join(tmpWorkspace, "MEMORY.md"), "# Memory\n");
+
     const cfg = {
-      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      agents: { defaults: { workspace: tmpWorkspace } },
       memory: {
         backend: "qmd",
         qmd: {},
@@ -23,7 +40,8 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.backend).toBe("qmd");
-    expect(resolved.qmd?.collections.length).toBeGreaterThanOrEqual(3);
+    // When canonical MEMORY.md exists, memory.md fallback is omitted.
+    expect(resolved.qmd?.collections.length).toBeGreaterThanOrEqual(2);
     expect(resolved.qmd?.command).toBe("qmd");
     expect(resolved.qmd?.searchMode).toBe("search");
     expect(resolved.qmd?.update.intervalMs).toBeGreaterThan(0);
@@ -33,7 +51,8 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.update.embedTimeoutMs).toBe(120_000);
     const names = new Set((resolved.qmd?.collections ?? []).map((collection) => collection.name));
     expect(names.has("memory-root-main")).toBe(true);
-    expect(names.has("memory-alt-main")).toBe(true);
+    // memory-alt-main is only included when MEMORY.md is absent.
+    expect(names.has("memory-alt-main")).toBe(false);
     expect(names.has("memory-dir-main")).toBe(true);
   });
 

@@ -90,8 +90,15 @@ describe("media store redirects", () => {
     expect(path.extname(saved.path)).toBe(".txt");
     expect(await fs.readFile(saved.path, "utf8")).toBe("redirected");
     const stat = await fs.stat(saved.path);
-    const expectedMode = process.platform === "win32" ? 0o666 : 0o644;
-    expect(stat.mode & 0o777).toBe(expectedMode);
+    const mode = stat.mode & 0o777;
+    // File permissions can be affected by umask on posix systems (e.g. 0o644 -> 0o600).
+    // Assert the invariants we actually care about: writable by owner, not executable.
+    if (process.platform === "win32") {
+      expect(mode).toBe(0o666);
+    } else {
+      expect(mode & 0o200).toBe(0o200); // owner writable
+      expect(mode & 0o111).toBe(0o000); // not executable
+    }
   });
 
   it("fails when redirect response omits location header", async () => {
