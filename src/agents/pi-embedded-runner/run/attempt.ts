@@ -1804,8 +1804,33 @@ export async function runEmbeddedAttempt(
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
 
+      // ── before_tools_resolve hook ──
+      // Allows plugins to filter, reorder, or annotate tools before they are sent to the LLM.
+      let resolvedTools = tools;
+      if (hookRunner?.hasHooks("before_tools_resolve")) {
+        const toolsResult = await hookRunner.runBeforeToolsResolve(
+          {
+            tools: tools.map((t) => ({ name: t.name, description: t.description ?? "", parameters: t.parameters })),
+            sessionKey: sandboxSessionKey,
+            agentId: sessionAgentId,
+            modelId: params.modelId,
+            provider: params.provider,
+          },
+          {
+            agentId: sessionAgentId,
+            sessionKey: sandboxSessionKey,
+            sessionId: params.sessionId,
+          },
+        );
+        if (toolsResult?.tools) {
+          // Filter the original tools array to only include names returned by the hook
+          const allowedNames = new Set(toolsResult.tools.map((t: { name: string }) => t.name));
+          resolvedTools = tools.filter((t) => allowedNames.has(t.name));
+        }
+      }
+
       const { builtInTools, customTools } = splitSdkTools({
-        tools,
+        tools: resolvedTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
 

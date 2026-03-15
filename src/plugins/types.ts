@@ -424,6 +424,7 @@ export type PluginDiagnostic = {
 export type PluginHookName =
   | "before_model_resolve"
   | "before_prompt_build"
+  | "before_tools_resolve"
   | "before_agent_start"
   | "llm_input"
   | "llm_output"
@@ -559,6 +560,21 @@ type AssertAllPluginPromptMutationResultFieldsListed =
   MissingPluginPromptMutationResultFields extends never ? true : never;
 const assertAllPluginPromptMutationResultFieldsListed: AssertAllPluginPromptMutationResultFieldsListed = true;
 void assertAllPluginPromptMutationResultFieldsListed;
+
+// before_tools_resolve hook — filter/reorder tools before sending to LLM
+export type PluginHookBeforeToolsResolveEvent = {
+  /** The full tool array after assembly and sanitization. */
+  tools: Array<{ name: string; description?: string; parameters?: unknown; [k: string]: unknown }>;
+  sessionKey?: string;
+  agentId?: string;
+  modelId?: string;
+  provider?: string;
+};
+
+export type PluginHookBeforeToolsResolveResult = {
+  /** Filtered/reordered tool array. If omitted, tools are unchanged. */
+  tools?: Array<{ name: string; description?: string; parameters?: unknown; [k: string]: unknown }>;
+};
 
 // before_agent_start hook (legacy compatibility: combines both phases)
 export type PluginHookBeforeAgentStartEvent = {
@@ -899,6 +915,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void;
+  before_tools_resolve: (
+    event: PluginHookBeforeToolsResolveEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHookBeforeToolsResolveResult | void>
+    | PluginHookBeforeToolsResolveResult
+    | void;
   before_agent_start: (
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
