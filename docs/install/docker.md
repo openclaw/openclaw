@@ -833,6 +833,28 @@ Example:
 
 ## Troubleshooting
 
+### Gateway fails to start after `./docker-setup.sh`
+
+If the gateway container logs show either of these errors:
+
+1. **`Missing config. Run openclaw setup or set gateway.mode=local (or pass --allow-unconfigured).`**  
+   The Compose command overrides the image CMD and must allow startup before config is ready. The repo’s `docker-compose.yml` includes `--allow-unconfigured` in the gateway command for this reason. If you use a custom compose file, add that flag so the gateway can start even when config is missing or `gateway.mode` is not yet `local`.
+
+2. **`non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`**  
+   When the gateway binds to a non-loopback address (e.g. `lan`), the Control UI requires an explicit origin allowlist. `docker-setup.sh` runs `ensure_control_ui_allowed_origins` and sets `gateway.controlUi.allowedOrigins` (e.g. `["http://127.0.0.1:18789","http://localhost:18789"]`) before starting the gateway. If you started the gateway without running the full setup, set it manually:
+
+   ```bash
+   docker compose run --rm openclaw-cli config set gateway.mode local
+   docker compose run --rm openclaw-cli config set gateway.controlUi.allowedOrigins '["http://127.0.0.1:18789","http://localhost:18789"]' --strict-json
+   docker compose up -d openclaw-gateway
+   ```
+
+   Replace `18789` with your `OPENCLAW_GATEWAY_PORT` value if you changed the default.
+
+   Then pull the latest repo (so the compose command includes `--allow-unconfigured`) and run `./docker-setup.sh` again, or keep the manual config and restart the gateway.
+
+### Sandbox and permissions
+
 - Image missing: build with [`scripts/sandbox-setup.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/sandbox-setup.sh) or set `agents.defaults.sandbox.docker.image`.
 - Container not running: it will auto-create per session on demand.
 - Permission errors in sandbox: set `docker.user` to a UID:GID that matches your

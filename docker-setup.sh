@@ -104,22 +104,28 @@ ensure_control_ui_allowed_origins() {
     return 0
   fi
 
+  # Non-loopback bind (e.g. lan) requires explicit allowedOrigins or gateway fails to start.
   local allowed_origin_json
   local current_allowed_origins
-  allowed_origin_json="$(printf '["http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT")"
+  allowed_origin_json="$(printf '["http://127.0.0.1:%s","http://localhost:%s"]' "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT")"
   current_allowed_origins="$(
     docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
       config get gateway.controlUi.allowedOrigins 2>/dev/null || true
   )"
   current_allowed_origins="${current_allowed_origins//$'\r'/}"
+  current_allowed_origins="${current_allowed_origins#"${current_allowed_origins%%[![:space:]]*}"}"
+  current_allowed_origins="${current_allowed_origins%"${current_allowed_origins##*[![:space:]]}"}"
 
   if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
     echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
     return 0
   fi
 
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json >/dev/null
+  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json; then
+    echo "WARNING: Failed to set gateway.controlUi.allowedOrigins. Gateway may fail to start with: non-loopback Control UI requires gateway.controlUi.allowedOrigins" >&2
+    return 1
+  fi
   echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
 }
 
