@@ -14,6 +14,7 @@ import {
 } from "./auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
+  FailoverError,
   coerceToFailoverError,
   describeFailoverError,
   isFailoverError,
@@ -36,6 +37,7 @@ const log = createSubsystemLogger("model-fallback");
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  abortSignal?: AbortSignal;
 };
 
 type ModelFallbackRunFn<T> = (
@@ -516,6 +518,8 @@ export async function runWithModelFallback<T>(params: {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
+  /** Per-candidate timeout in ms. When set and fallback candidates exist, non-last candidates are raced against this timeout so a hanging primary cannot starve fallbacks. */
+  attemptTimeoutMs?: number;
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
 }): Promise<ModelFallbackRunResult<T>> {
@@ -658,12 +662,54 @@ export async function runWithModelFallback<T>(params: {
       }
     }
 
-    const attemptRun = await runFallbackAttempt({
-      run: params.run,
-      ...candidate,
-      attempts,
-      options: runOptions,
-    });
+    const isLastCandidate = i === candidates.length - 1;
+    const useAttemptTimeout =
+      params.attemptTimeoutMs != null &&
+      params.attemptTimeoutMs > 0 &&
+      hasFallbackCandidates &&
+      !isLastCandidate;
+
+    let attemptRun: { success: ModelFallbackRunResult<T> } | { error: unknown };
+    if (useAttemptTimeout) {
+      const timeoutMs = params.attemptTimeoutMs!;
+      const attemptAbort = new AbortController();
+      const attemptOptions: ModelFallbackRunOptions = {
+        ...runOptions,
+        abortSignal: attemptAbort.signal,
+      };
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      attemptRun = await Promise.race([
+        runFallbackAttempt({
+          run: params.run,
+          ...candidate,
+          attempts,
+          options: attemptOptions,
+        }),
+        new Promise<{ error: FailoverError }>((resolve) => {
+          timeoutHandle = setTimeout(() => {
+            resolve({
+              error: new FailoverError(
+                `Fallback attempt timed out after ${timeoutMs}ms for ${candidate.provider}/${candidate.model}`,
+                {
+                  reason: "timeout",
+                  provider: candidate.provider,
+                  model: candidate.model,
+                },
+              ),
+            });
+            attemptAbort.abort();
+          }, timeoutMs);
+        }),
+      ]);
+      clearTimeout(timeoutHandle);
+    } else {
+      attemptRun = await runFallbackAttempt({
+        run: params.run,
+        ...candidate,
+        attempts,
+        options: runOptions,
+      });
+    }
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
         logModelFallbackDecision({

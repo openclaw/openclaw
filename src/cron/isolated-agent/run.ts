@@ -40,6 +40,7 @@ import {
 } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentModelFallbackAttemptTimeoutMs } from "../../config/model-input.js";
 import {
   resolveSessionTranscriptPath,
   setSessionRuntimeModel,
@@ -559,6 +560,10 @@ export async function runCronIsolatedAgentTurn(params: {
         agentDir,
         fallbacksOverride:
           payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
+        attemptTimeoutMs: resolveAgentModelFallbackAttemptTimeoutMs(
+          resolveAgentConfig(params.cfg, agentId)?.model,
+          cfgWithAgentDefaults?.agents?.defaults?.model,
+        ),
         run: async (providerOverride, modelOverride, runOptions) => {
           if (abortSignal?.aborted) {
             throw new Error(abortReason());
@@ -632,7 +637,7 @@ export async function runCronIsolatedAgentTurn(params: {
             requireExplicitMessageTarget: toolPolicy.requireExplicitMessageTarget,
             disableMessageTool: toolPolicy.disableMessageTool,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-            abortSignal,
+            abortSignal: runOptions?.abortSignal ?? abortSignal,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
           });

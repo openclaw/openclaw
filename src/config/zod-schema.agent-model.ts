@@ -6,6 +6,7 @@ export const AgentModelSchema = z.union([
     .object({
       primary: z.string().optional(),
       fallbacks: z.array(z.string()).optional(),
+      fallbackAttemptTimeoutSeconds: z.number().nonnegative().optional(),
     })
     .strict(),
 ]);

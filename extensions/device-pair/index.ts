@@ -389,6 +389,9 @@ export default function register(api: OpenClawPluginApi) {
         if (!approved) {
           return { text: "Pairing request not found." };
         }
+        if (approved.status === "forbidden") {
+          return { text: `Pairing forbidden: missing scope ${approved.missingScope}.` };
+        }
         const label = approved.device.displayName?.trim() || approved.device.deviceId;
         const platform = approved.device.platform?.trim();
         const platformLabel = platform ? ` (${platform})` : "";
