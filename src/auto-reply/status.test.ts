@@ -681,6 +681,28 @@ describe("buildStatusMessage", () => {
       { prefix: "openclaw-status-" },
     );
   });
+
+  it("shows unknown context when cached total tokens are marked stale", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "sess-stale",
+        updatedAt: 0,
+        totalTokens: 0,
+        totalTokensFresh: false,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("Context: ?/32k");
+  });
 });
 
 describe("buildCommandsMessage", () => {
