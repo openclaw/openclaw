@@ -156,35 +156,29 @@ async function checkModelCatalog(cfg: OpenClawConfig, results: CheckConfigResult
       defaultModel: DEFAULT_MODEL,
     });
 
-    const primaryRef = parseModelRef(defaultModel, defaultProvider);
-    if (primaryRef) {
-      const status = getModelRefStatus({
-        cfg,
-        catalog,
-        ref: primaryRef,
-        defaultProvider,
-        defaultModel,
-      });
-      if (!status.inCatalog) {
-        results.push({
-          category: "model",
-          label: "Model catalog",
-          status: "warn",
-          message: `primary model "${status.key}" not in catalog (may fail at runtime)`,
-        });
-      } else {
-        results.push({
-          category: "model",
-          label: "Model catalog",
-          status: "ok",
-        });
-      }
-    } else {
+    // Use the already-resolved provider directly as the ref instead of re-parsing.
+    // Re-parsing breaks models whose IDs contain "/" (e.g., OpenRouter refs like
+    // "openrouter/anthropic/claude-sonnet-4-5" would be split incorrectly).
+    const ref = { provider: defaultProvider, model: defaultModel };
+    const status = getModelRefStatus({
+      cfg,
+      catalog,
+      ref,
+      defaultProvider,
+      defaultModel,
+    });
+    if (!status.inCatalog) {
       results.push({
         category: "model",
         label: "Model catalog",
         status: "warn",
-        message: "skipped — primary model ref could not be parsed",
+        message: `primary model "${status.key}" not in catalog (may fail at runtime)`,
+      });
+    } else {
+      results.push({
+        category: "model",
+        label: "Model catalog",
+        status: "ok",
       });
     }
   } catch (err) {
