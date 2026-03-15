@@ -517,8 +517,41 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   if (agentId) {
     params.__agentId = agentId;
   }
-  const mirrorMediaUrls =
-    mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
+  // Build mirror context with incremental truncation to avoid memory/CPU exhaustion
+  const MAX_MIRROR_CHARS = 10_000;
+  const MAX_MIRROR_MEDIA_URLS = 25;
+
+  let mirrorText = "";
+  let remaining = MAX_MIRROR_CHARS;
+  let truncated = false;
+
+  if (message && remaining > 0) {
+    if (message.length <= remaining) {
+      mirrorText = message;
+      remaining -= message.length;
+    } else {
+      mirrorText = message.slice(0, remaining);
+      truncated = true;
+      remaining = 0;
+    }
+  }
+
+  if (truncated) {
+    mirrorText += "\n\n[truncated]";
+  }
+
+  // Build media URLs with early exit
+  const mirrorMediaUrls: string[] = [];
+  const allMediaUrls = mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : [];
+  for (const url of allMediaUrls) {
+    if (mirrorMediaUrls.length >= MAX_MIRROR_MEDIA_URLS) {
+      break;
+    }
+    if (url && url.trim()) {
+      mirrorMediaUrls.push(url.trim());
+    }
+  }
+
   throwIfAborted(abortSignal);
   const send = await executeSendAction({
     ctx: {
@@ -536,8 +569,8 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
           ? {
               sessionKey: outboundRoute.sessionKey,
               agentId,
-              text: message,
-              mediaUrls: mirrorMediaUrls,
+              text: mirrorText || undefined,
+              mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
             }
           : undefined,
       abortSignal,

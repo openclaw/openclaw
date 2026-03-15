@@ -25,7 +25,7 @@ describe("Discord Session Key Continuity", () => {
     });
 
     expect(dmKey).toBe("agent:main:main");
-    expect(groupKey).toBe("agent:main:discord:channel:channel456");
+    expect(groupKey).toBe("agent:main:discord:default:channel:channel456");
     expect(dmKey).not.toBe(groupKey);
   });
 
@@ -48,7 +48,7 @@ describe("Discord Session Key Continuity", () => {
     });
 
     expect(dmKey).toBe("agent:main:direct:user123");
-    expect(groupKey).toBe("agent:main:discord:channel:channel456");
+    expect(groupKey).toBe("agent:main:discord:default:channel:channel456");
     expect(dmKey).not.toBe(groupKey);
   });
 
