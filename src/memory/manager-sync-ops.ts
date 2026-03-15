@@ -20,12 +20,12 @@ import {
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "../extension-host/embedding-runtime.js";
+import { runExtensionHostEmbeddingSync } from "../extension-host/embedding-sync-execution.js";
 import {
   buildEmbeddingIndexMeta,
   type EmbeddingIndexMeta,
   metaSourcesDiffer as extensionHostMetaSourcesDiffer,
   normalizeEmbeddingMetaSources,
-  resolveEmbeddingSyncPlan,
   shouldUseUnsafeEmbeddingReindex,
 } from "../extension-host/embedding-sync-planning.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -946,108 +946,51 @@ export abstract class MemoryManagerSyncOps {
     const configuredSources = this.resolveConfiguredSourcesForMeta();
     const configuredScopeHash = this.resolveConfiguredScopeHash();
     const targetSessionFiles = this.normalizeTargetSessionFiles(params?.sessionFiles);
-    const hasTargetSessionFiles = targetSessionFiles !== null;
-    const syncPlan = resolveEmbeddingSyncPlan({
+    await runExtensionHostEmbeddingSync({
+      reason: params?.reason,
       force: params?.force,
-      hasTargetSessionFiles,
       targetSessionFiles,
+      vectorReady,
+      meta,
+      configuredSources,
+      configuredScopeHash,
+      provider: this.provider,
+      providerKey: this.providerKey,
+      chunkTokens: this.settings.chunking.tokens,
+      chunkOverlap: this.settings.chunking.overlap,
       sessionsEnabled: this.sources.has("sessions"),
       dirty: this.dirty,
       shouldSyncSessions: this.shouldSyncSessions(params, false),
       useUnsafeReindex: shouldUseUnsafeEmbeddingReindex(),
-      vectorReady,
-      meta,
-      provider: this.provider,
-      providerKey: this.providerKey,
-      configuredSources,
-      configuredScopeHash,
-      chunkTokens: this.settings.chunking.tokens,
-      chunkOverlap: this.settings.chunking.overlap,
-    });
-    if (syncPlan.kind === "targeted-sessions") {
-      // Post-compaction refreshes should only update the explicit transcript files and
-      // leave broader reindex/dirty-work decisions to the regular sync path.
-      try {
-        await this.syncSessionFiles({
-          needsFullReindex: false,
-          targetSessionFiles: syncPlan.targetSessionFiles,
-          progress: progress ?? undefined,
-        });
-        this.clearSyncedSessionFiles(new Set(syncPlan.targetSessionFiles));
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        const activated =
-          this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
-        if (activated) {
-          if (shouldUseUnsafeEmbeddingReindex()) {
-            await this.runUnsafeReindex({
-              reason: params?.reason,
-              force: true,
-              progress: progress ?? undefined,
-            });
-          } else {
-            await this.runSafeReindex({
-              reason: params?.reason,
-              force: true,
-              progress: progress ?? undefined,
-            });
-          }
-          return;
-        }
-        throw err;
-      }
-      return;
-    }
-    try {
-      if (syncPlan.kind === "full-reindex") {
-        if (syncPlan.unsafe) {
-          await this.runUnsafeReindex({
-            reason: params?.reason,
-            force: params?.force,
-            progress: progress ?? undefined,
-          });
-        } else {
-          await this.runSafeReindex({
-            reason: params?.reason,
-            force: params?.force,
-            progress: progress ?? undefined,
-          });
-        }
-        return;
-      }
-
-      if (syncPlan.shouldSyncMemory) {
-        await this.syncMemoryFiles({ needsFullReindex: false, progress: progress ?? undefined });
-        this.dirty = false;
-      }
-
-      if (syncPlan.shouldSyncSessions) {
-        await this.syncSessionFiles({
-          needsFullReindex: false,
-          targetSessionFiles: syncPlan.targetSessionFiles,
-          progress: progress ?? undefined,
-        });
-        this.sessionsDirty = false;
+      hasDirtySessionFiles: this.sessionsDirtyFiles.size > 0,
+      progress: progress ?? undefined,
+      syncMemoryFiles: async (syncParams) => {
+        await this.syncMemoryFiles(syncParams);
+      },
+      syncSessionFiles: async (syncParams) => {
+        await this.syncSessionFiles(syncParams);
+      },
+      clearSyncedSessionFiles: (sessionFiles) => {
+        this.clearSyncedSessionFiles(sessionFiles);
+      },
+      clearAllSessionDirtyFiles: () => {
         this.sessionsDirtyFiles.clear();
-      } else if (this.sessionsDirtyFiles.size > 0) {
-        this.sessionsDirty = true;
-      } else {
-        this.sessionsDirty = false;
-      }
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      const activated =
-        this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
-      if (activated) {
-        await this.runSafeReindex({
-          reason: params?.reason ?? "fallback",
-          force: true,
-          progress: progress ?? undefined,
-        });
-        return;
-      }
-      throw err;
-    }
+      },
+      setDirty: (value) => {
+        this.dirty = value;
+      },
+      setSessionsDirty: (value) => {
+        this.sessionsDirty = value;
+      },
+      shouldFallbackOnError: (message) => this.shouldFallbackOnError(message),
+      activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
+      runSafeReindex: async (reindexParams) => {
+        await this.runSafeReindex(reindexParams);
+      },
+      runUnsafeReindex: async (reindexParams) => {
+        await this.runUnsafeReindex(reindexParams);
+      },
+    });
   }
 
   private shouldFallbackOnError(message: string): boolean {
