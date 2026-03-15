@@ -463,7 +463,7 @@ async function finishPreparedManualRun(
 
   let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
-    coreResult = await executeJobCoreWithTimeout(state, executionJob);
+    coreResult = await executeJobCoreWithTimeout(state, executionJob, mode !== undefined);
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
   }
@@ -556,6 +556,9 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
 
   const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
   void enqueueCommandInLane(
+    // Manual `cron run` dispatch must occupy the cron lane itself to count
+    // towards `cron.maxConcurrentRuns` (#43008). The inner isolated execution
+    // detects this and bypasses its own enqueue to avoid self-deadlock.
     CommandLane.Cron,
     async () => {
       const result = await run(state, id, mode);
