@@ -443,6 +443,52 @@ describe("sanitizeToolCallInputs", () => {
     expect((toolCalls[0] as { id?: unknown }).id).toBe("call_1");
     expect((toolCalls[0] as { arguments?: unknown }).arguments).toEqual({ path: "/tmp/test" });
   });
+
+  it("drops tool calls with synthetic call_auto/callauto names", () => {
+    const toolCalls = sanitizeAssistantToolCalls([
+      { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
+      { type: "toolCall", id: "call_bad_1", name: "callauto", arguments: {} },
+      { type: "toolCall", id: "call_bad_2", name: "call_auto_1", arguments: {} },
+      { type: "toolUse", id: "call_bad_3", name: "CallAuto", input: {} },
+      { type: "functionCall", id: "call_bad_4", name: "call_auto_42", arguments: {} },
+    ]);
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+  });
+
+  it("does not let callauto-style names poison later transcript turns", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_bad", name: "call_auto_1", arguments: {} }],
+      },
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_good", name: "read", arguments: {} }],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+
+    // First assistant message dropped (only contained the bad tool call).
+    // User message and second assistant message preserved.
+    expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
+    const toolCalls = getAssistantToolCallBlocks(out.slice(1));
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+  });
+
+  it("drops synthetic call_auto names even without an allowlist", () => {
+    const toolCalls = sanitizeAssistantToolCalls([
+      { type: "toolCall", id: "call_1", name: "callauto", arguments: {} },
+      { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
+    ]);
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("exec");
+  });
 });
 
 describe("stripToolResultDetails", () => {

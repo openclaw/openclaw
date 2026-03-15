@@ -943,6 +943,92 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCallA.id).toBe("edit:22");
     expect(finalToolCallB.id).toBe("call_auto_1");
   });
+
+  it("rejects synthetic call_auto_* names and clears them to empty", async () => {
+    const finalToolCall = { type: "toolCall", id: "real_id_123", name: "call_auto_1" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec", "read"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("");
+  });
+
+  it("rejects mangled callauto names as synthetic IDs", async () => {
+    const finalToolCall = { type: "toolCall", id: "real_id_456", name: "callauto" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec", "read"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("");
+  });
+
+  it("recovers tool name from real ID when name is a synthetic auto ID", async () => {
+    const finalToolCall = { type: "toolCall", id: "functions.exec2", name: "call_auto_1" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("exec");
+  });
+
+  it("does not infer tool names from synthetic call_auto_* IDs", async () => {
+    const finalToolCall = { type: "toolCall", id: "call_auto_3", name: "" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec", "read"]));
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("");
+  });
+
+  it("rejects callauto in live streamed partial and message events", async () => {
+    const partialToolCall = { type: "toolCall", name: "callauto" };
+    const messageToolCall = { type: "toolCall", name: "call_auto_2" };
+    const finalToolCall = { type: "toolCall", name: "CallAuto" };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const { baseFn } = createEventStream({ event, finalToolCall });
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["exec"]));
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("");
+    expect(messageToolCall.name).toBe("");
+    expect(finalToolCall.name).toBe("");
+  });
 });
 
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
