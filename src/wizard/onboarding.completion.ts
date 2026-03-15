@@ -30,13 +30,41 @@ async function resolveProfileHint(shell: ShellCompletionStatus["shell"]): Promis
   if (shell === "fish") {
     return "~/.config/fish/config.fish";
   }
-  // Best-effort. PowerShell profile path varies; restart hint is still correct.
+  // Resolve PowerShell profile path from $PROFILE env or known default locations.
+  if (shell === "powershell") {
+    if (process.env.PROFILE) {
+      return process.env.PROFILE;
+    }
+    // On macOS/Linux (pwsh), the profile lives under ~/.config/powershell.
+    if (process.platform !== "win32") {
+      const xdgProfile = path.join(
+        home,
+        ".config",
+        "powershell",
+        "Microsoft.PowerShell_profile.ps1",
+      );
+      return xdgProfile;
+    }
+    const docsDir = process.env.USERPROFILE
+      ? path.join(process.env.USERPROFILE, "Documents")
+      : path.join(home, "Documents");
+    // Prefer PowerShell 7+ path, fall back to Windows PowerShell 5.x path.
+    const ps7Profile = path.join(docsDir, "PowerShell", "Microsoft.PowerShell_profile.ps1");
+    if (await pathExists(ps7Profile)) {
+      return ps7Profile;
+    }
+    const ps5Profile = path.join(docsDir, "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1");
+    if (await pathExists(ps5Profile)) {
+      return ps5Profile;
+    }
+    return ps7Profile;
+  }
   return "$PROFILE";
 }
 
 function formatReloadHint(shell: ShellCompletionStatus["shell"], profileHint: string): string {
   if (shell === "powershell") {
-    return "Restart your shell (or reload your PowerShell profile).";
+    return `Restart your shell or run: . "${profileHint}"`;
   }
   return `Restart your shell or run: source ${profileHint}`;
 }
