@@ -1350,7 +1350,7 @@
                 "pages": ["reference/credits"]
               },
               {
-                "group": "Release notes",
+                "group": "Release policy",
                 "pages": ["reference/RELEASING", "reference/test"]
               },
               {
@@ -1931,7 +1931,7 @@
                 "pages": ["zh-CN/reference/credits"]
               },
               {
-                "group": "发布说明",
+                "group": "发布策略",
                 "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
               },
               {

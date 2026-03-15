@@ -194,5 +194,5 @@ x-i18n:
 ## 测试 + 发布
 
 - [测试](/reference/test)
-- [发布检查清单](/reference/RELEASING)
+- [发布策略](/reference/RELEASING)
 - [设备型号](/reference/device-models)

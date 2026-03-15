@@ -1,31 +1,42 @@
 ---
-title: "Release Checklist"
-summary: "Maintainer release procedure lives in the private maintainer repo"
+title: "Release Policy"
+summary: "Public release channels, version naming, and cadence"
 read_when:
-  - Looking for the maintainer release procedure
-  - Tracing release automation in this repo
+  - Looking for public release channel definitions
+  - Looking for version naming and cadence
 ---
 
-# Release Checklist (npm + macOS)
+# Release Policy
 
-OpenClaw release procedure is maintained in the private `openclaw/maintainers`
-repo. This public repo keeps the workflows and scripts, but not the maintainer
-runbook.
+OpenClaw has three public release lanes:
 
-Maintainers: use the private release manual:
+- stable: tagged releases that publish to npm `latest`
+- beta: prerelease tags that publish to npm `beta`
+- dev: the moving head of `main`
 
-- [`release/README.md`](https://github.com/openclaw/maintainers/blob/main/release/README.md)
+## Version naming
 
-Public code and automation references in this repo:
+- Stable release version: `YYYY.M.D`
+  - Git tag: `vYYYY.M.D`
+- Beta prerelease version: `YYYY.M.D-beta.N`
+  - Git tag: `vYYYY.M.D-beta.N`
+- Do not zero-pad month or day
+- `latest` means the current stable npm release
+- `beta` means the current prerelease npm release
+- Beta releases may ship before the macOS app catches up
+
+## Release cadence
+
+- Releases move beta-first
+- Stable follows only after the latest beta is validated
+- Detailed release procedure, approvals, credentials, and recovery notes are
+  maintainer-only
+
+## Public references
 
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
 - [`scripts/openclaw-npm-release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-release-check.ts)
-- [`scripts/openclaw-npm-publish.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-publish.sh)
-- [`scripts/release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/release-check.ts)
-- [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
-- [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh)
-- [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)
-- [`appcast.xml`](https://github.com/openclaw/openclaw/blob/main/appcast.xml)
 
-Approvals, credentials, recovery notes, and the actual release steps stay in
-the maintainer repo.
+Maintainers use the private release manual in
+[`openclaw/maintainers/release/README.md`](https://github.com/openclaw/maintainers/blob/main/release/README.md)
+for the actual runbook.
