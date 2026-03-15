@@ -64,11 +64,11 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     : undefined;
   const preferredProviderId =
     prefixedProviderId ||
-    resolvePreferredProviderForAuthChoice({
+    (await resolvePreferredProviderForAuthChoice({
       choice: params.authChoice,
       config: params.nextConfig,
       workspaceDir,
-    });
+    }));
   const resolutionConfig = buildIsolatedProviderResolutionConfig(
     params.nextConfig,
     preferredProviderId,
