@@ -449,7 +449,10 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         // ignore diagnostics failures
       }
       await maybeExplainGatewayServiceStop();
-      defaultRuntime.exit(1);
+      // Exit 0 when another instance is already running so that macOS
+      // LaunchAgent (KeepAlive: true) does not enter a restart loop.
+      // The gateway is healthy — there is nothing to retry.
+      defaultRuntime.exit(0);
       return;
     }
     defaultRuntime.error(`Gateway failed to start: ${String(err)}`);

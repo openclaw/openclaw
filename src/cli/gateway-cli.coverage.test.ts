@@ -229,7 +229,10 @@ describe("gateway-cli coverage", () => {
     startGatewayServer.mockRejectedValueOnce(
       new GatewayLockError("another gateway instance is already listening"),
     );
-    await expectGatewayExit(["gateway", "--token", "test-token", "--allow-unconfigured"]);
+    // GatewayLockError exits 0 (not 1) so LaunchAgent won't restart-loop
+    await expect(
+      runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
+    ).rejects.toThrow("__exit__:0");
 
     expect(startGatewayServer).toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
