@@ -24,7 +24,7 @@ const relaunchGatewayScheduledTask = vi.hoisted(() =>
 );
 
 vi.mock("../infra/windows-task-restart.js", () => ({
-  relaunchGatewayScheduledTask: (env: NodeJS.ProcessEnv) => relaunchGatewayScheduledTask(env),
+  relaunchGatewayScheduledTask,
 }));
 
 const { restartScheduledTask, stopScheduledTask } = await import("./schtasks.js");
