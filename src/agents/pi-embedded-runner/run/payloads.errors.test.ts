@@ -294,16 +294,16 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(0);
   });
 
+  it("suppresses mutating tool errors when messages.suppressToolErrors is enabled", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "write", error: "connection timeout" },
+      config: { messages: { suppressToolErrors: true } },
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
   it.each([
-    {
-      name: "still shows mutating tool errors when messages.suppressToolErrors is enabled",
-      payload: {
-        lastToolError: { toolName: "write", error: "connection timeout" },
-        config: { messages: { suppressToolErrors: true } },
-      },
-      title: "Write",
-      absentDetail: "connection timeout",
-    },
     {
       name: "shows recoverable tool errors for mutating tools",
       payload: {
@@ -329,14 +329,25 @@ describe("buildEmbeddedRunPayloads", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Done."],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: { toolName: "write", error: "file missing" },
+      lastToolError: { toolName: "write", error: "path required" },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Done.");
+  });
+
+  it("shows non-recoverable mutating tool errors when assistant output exists", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "write", error: "disk full" },
     });
 
     expect(payloads).toHaveLength(2);
     expect(payloads[0]?.text).toBe("Done.");
     expect(payloads[1]?.isError).toBe(true);
     expect(payloads[1]?.text).toContain("Write");
-    expect(payloads[1]?.text).not.toContain("missing");
+    expect(payloads[1]?.text).not.toContain("disk full");
   });
 
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
