@@ -399,7 +399,7 @@ Organize tasks in logical phases with dependencies.`,
 }
 
 // ============================================
-// Task Execution with Status Updates
+// Task Execution with Subagent
 // ============================================
 
 async function executeSpec(session: Session): Promise<string> {
@@ -407,82 +407,120 @@ async function executeSpec(session: Session): Promise<string> {
     return "❌ No tasks generated. Run `/spec tasks` first";
   }
 
+  // Count total tasks
+  const totalTasks = (session.tasks.match(/^- \[.\]/gm) || []).length;
+
+  // Spawn subagent to execute tasks
   const result = await sessions_spawn({
     runtime: "subagent",
-    label: "execute-spec",
-    task: `Execute tasks from this spec with progress tracking.
+    label: `spec-exec-${session.id}`,
+    task: `You are executing a spec-driven project. Follow these instructions carefully:
 
-Spec:
+## Context
+You are working on: "${session.request}"
+
+## Spec
 ${session.spec}
 
-Tasks:
+## Design
+${session.design}
+
+## Tasks to Complete
 ${session.tasks}
 
+## Execution Rules
+1. Execute tasks ONE BY ONE in order
+2. For each task:
+   - Announce: "🔄 Starting Task X.Y: <task name>"
+   - Complete the task
+   - Report: "✅ Completed Task X.Y: <what was done>"
+3. After each task, update progress
+4. If you encounter errors, report them and continue with next task
+5. When ALL tasks are complete, announce: "🎉 All tasks completed!"
+
+## Important
+- Work systematically through the task list
+- Report progress after EACH task
+- Include task numbers in your reports (e.g., "Task 1.1")
+- Be specific about what you did for each task
+- If a task requires files, create them in the appropriate location
+
+## Output Format
 For each task:
-1. Mark as processing: [~] Task X
-2. Complete the task
-3. Mark as completed: [x] Task X
-4. Report progress
+🔄 Starting Task X.Y: <name>
+[work happens]
+✅ Completed Task X.Y: <description of what was done>
 
-Return a summary with task numbers completed.
-
-Format response like:
-- ✅ Task 1.1: Completed - description
-- ✅ Task 1.2: Completed - description
-- 🔄 Task 2.1: In progress...`,
+Final summary:
+📊 Progress: X/${totalTasks} tasks completed
+🎉 All tasks completed! (when done)`,
     mode: "run",
   });
 
-  // Parse result to update task statuses
+  // Parse the output to update task statuses
   const output = result.output;
 
-  // Look for completed tasks in output
-  const completedMatches = output.match(/(?:✅|Task\s+(\d+\.\d+).*?(?:Completed|Done))/gi);
-  if (completedMatches) {
-    for (const match of completedMatches) {
-      const taskNum = match.match(/\d+\.\d+/)?.[0];
-      if (taskNum) {
-        await markTaskCompleted(session, taskNum);
-      }
-    }
+  // Extract completed tasks from output
+  const completedPattern = /✅ (?:Completed|Done)?\s*Task\s+(\d+\.\d+)/gi;
+  let match;
+  const completedTasks: string[] = [];
+
+  while ((match = completedPattern.exec(output)) !== null) {
+    completedTasks.push(match[1]);
   }
 
-  // Look for processing tasks
-  const processingMatches = output.match(/(?:🔄|Task\s+(\d+\.\d+).*?(?:In progress|Processing))/gi);
-  if (processingMatches) {
-    for (const match of processingMatches) {
-      const taskNum = match.match(/\d+\.\d+/)?.[0];
-      if (taskNum) {
-        await markTaskProcessing(session, taskNum);
-      }
-    }
+  // Update each completed task
+  for (const taskNum of completedTasks) {
+    await markTaskCompleted(session, taskNum);
   }
 
-  let summary = `🚀 **Execution Progress**\n\n`;
-  summary += "─".repeat(50) + "\n";
-  summary += output + "\n";
-  summary += "─".repeat(50) + "\n\n";
-
-  // Count tasks
+  // Build progress report
   const completedCount = (session.tasks.match(/\[x\]/g) || []).length;
   const processingCount = (session.tasks.match(/\[~\]/g) || []).length;
   const pendingCount = (session.tasks.match(/\[ \]/g) || []).length;
-  const total = completedCount + processingCount + pendingCount;
 
-  summary += `📊 **Progress**: ${completedCount}/${total} completed`;
+  let report = `🚀 **Execution Report**\n\n`;
+  report += "─".repeat(60) + "\n\n";
+  report += `**Session**: ${session.id}\n`;
+  report += `**Feature**: ${session.request}\n\n`;
+  report += "─".repeat(60) + "\n\n";
+
+  report += `📊 **Progress**: ${completedCount}/${totalTasks} tasks completed`;
   if (processingCount > 0) {
-    summary += ` (${processingCount} in progress)`;
+    report += ` (${processingCount} in progress)`;
   }
-  summary += `\n\n`;
+  if (pendingCount > 0) {
+    report += ` (${pendingCount} pending)`;
+  }
+  report += `\n\n`;
 
-  if (completedCount === total) {
-    summary += `🎉 **All tasks completed!**\n`;
+  // Progress bar
+  const percent = Math.round((completedCount / totalTasks) * 100);
+  const barLength = 20;
+  const filled = Math.round((percent / 100) * barLength);
+  const empty = barLength - filled;
+  report += `[${"█".repeat(filled)}${"░".repeat(empty)}] ${percent}%\n\n`;
+
+  report += "─".repeat(60) + "\n\n";
+
+  if (completedCount === totalTasks) {
+    report += `🎉 **All tasks completed!**\n\n`;
+    report += `✅ Session Status: **DONE**\n\n`;
     session.status = "done";
   } else {
-    summary += `💡 **Next**: Continue with remaining tasks or run \`/spec execute\` again\n`;
+    report += `💡 **Next Steps**:\n`;
+    report += `- Continue execution with remaining tasks\n`;
+    report += `- Run \`/spec execute\` again to continue\n`;
+    report += `- Or manually check tasks in \`${getSessionDir(session)}/tasks.md\`\n`;
   }
 
-  return summary;
+  report += "\n" + "─".repeat(60) + "\n";
+  report += `\n📁 **Session Files**:\n`;
+  report += `- \`${getSessionDir(session)}/spec.md\` - Requirements\n`;
+  report += `- \`${getSessionDir(session)}/design.md\` - Architecture\n`;
+  report += `- \`${getSessionDir(session)}/tasks.md\` - Task checklist\n`;
+
+  return report;
 }
 
 // ============================================
