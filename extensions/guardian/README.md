@@ -28,7 +28,10 @@ The guardian uses a **dual-hook architecture**:
 2. **`before_tool_call` hook** — lazily extracts the latest conversation context
    (including tool results like `memory_search`) and sends it to the guardian LLM
 
-## Enable
+## Quick start
+
+Guardian is a bundled plugin — no separate install needed. Just enable it in
+`~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -40,9 +43,7 @@ The guardian uses a **dual-hook architecture**:
 }
 ```
 
-If no `model` is configured, the guardian uses the main agent model.
-
-## Config
+For better resilience, use a **different provider** than your main model:
 
 ```json
 {
@@ -51,8 +52,52 @@ If no `model` is configured, the guardian uses the main agent model.
       "guardian": {
         "enabled": true,
         "config": {
-          "model": "openai/gpt-4o-mini",
-          "mode": "enforce"
+          "model": "anthropic/claude-opus-4-20250514"
+        }
+      }
+    }
+  }
+}
+```
+
+## Config
+
+All options with their **default values**:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "guardian": {
+        "enabled": true,
+        "config": {
+          "mode": "enforce",
+          "watched_tools": [
+            "message_send",
+            "message",
+            "exec",
+            "write_file",
+            "Write",
+            "edit",
+            "gateway",
+            "gateway_config",
+            "cron",
+            "cron_add"
+          ],
+          "context_tools": [
+            "memory_search",
+            "memory_get",
+            "memory_recall",
+            "read",
+            "exec",
+            "web_fetch",
+            "web_search"
+          ],
+          "timeout_ms": 20000,
+          "fallback_on_error": "allow",
+          "log_decisions": true,
+          "max_arg_length": 500,
+          "max_recent_turns": 3
         }
       }
     }
@@ -62,19 +107,17 @@ If no `model` is configured, the guardian uses the main agent model.
 
 ### All options
 
-| Option                   | Type                     | Default        | Description                                                                                                                                                                                                            |
-| ------------------------ | ------------------------ | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`                  | string                   | _(main model)_ | Guardian model in `provider/model` format (e.g. `"openai/gpt-4o-mini"`, `"kimi/moonshot-v1-8k"`, `"ollama/llama3.1:8b"`). A small, cheap model is recommended — the guardian only makes a binary ALLOW/BLOCK decision. |
-| `mode`                   | `"enforce"` \| `"audit"` | `"enforce"`    | `enforce` blocks disallowed calls. `audit` logs decisions without blocking — useful for initial evaluation.                                                                                                            |
-| `watched_tools`          | string[]                 | See below      | Tool names that require guardian review. Tools not in this list are always allowed.                                                                                                                                    |
-| `timeout_ms`             | number                   | `20000`        | Max wait for guardian API response (ms).                                                                                                                                                                               |
-| `fallback_on_error`      | `"allow"` \| `"block"`   | `"allow"`      | What to do when the guardian API fails or times out.                                                                                                                                                                   |
-| `log_decisions`          | boolean                  | `true`         | Log all ALLOW/BLOCK decisions. BLOCK decisions are logged with full conversation context.                                                                                                                              |
-| `max_user_messages`      | number                   | `10`           | Number of conversation turns fed to the summarizer (history window).                                                                                                                                                   |
-| `max_arg_length`         | number                   | `500`          | Max characters of tool arguments JSON to include (truncated).                                                                                                                                                          |
-| `max_recent_turns`       | number                   | `3`            | Number of recent raw conversation turns to keep in the guardian prompt alongside the rolling summary.                                                                                                                  |
-| `context_tools`          | string[]                 | See below      | Tool names whose results are included in the guardian's conversation context. Only results from these tools are fed to the guardian — others are filtered out to save tokens.                                          |
-| `max_tool_result_length` | number                   | `300`          | Max characters per tool result snippet included in the guardian context.                                                                                                                                               |
+| Option              | Type                     | Default        | Description                                                                                                                                                                      |
+| ------------------- | ------------------------ | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`             | string                   | _(main model)_ | Guardian model in `provider/model` format (e.g. `"openai/gpt-4o-mini"`, `"kimi/moonshot-v1-8k"`, `"ollama/llama3.1:8b"`). The guardian only makes a binary ALLOW/BLOCK decision. |
+| `mode`              | `"enforce"` \| `"audit"` | `"enforce"`    | `enforce` blocks disallowed calls. `audit` logs decisions without blocking — useful for initial evaluation.                                                                      |
+| `watched_tools`     | string[]                 | See below      | Tool names that require guardian review. Tools not in this list are always allowed.                                                                                              |
+| `timeout_ms`        | number                   | `20000`        | Max wait for guardian API response (ms).                                                                                                                                         |
+| `fallback_on_error` | `"allow"` \| `"block"`   | `"allow"`      | What to do when the guardian API fails or times out.                                                                                                                             |
+| `log_decisions`     | boolean                  | `true`         | Log all ALLOW/BLOCK decisions. BLOCK decisions are logged with full conversation context.                                                                                        |
+| `max_arg_length`    | number                   | `500`          | Max characters of tool arguments JSON to include (truncated).                                                                                                                    |
+| `max_recent_turns`  | number                   | `3`            | Number of recent raw conversation turns to keep in the guardian prompt alongside the rolling summary.                                                                            |
+| `context_tools`     | string[]                 | See below      | Tool names whose results are included in the guardian's conversation context. Only results from these tools are fed to the guardian — others are filtered out to save tokens.    |
 
 ### Default watched tools
 
@@ -115,12 +158,14 @@ context for the guardian's decisions.
 
 ## Getting started
 
-**Step 1** — Start with audit mode to observe decisions without blocking:
+**Step 1** — Install and enable with defaults (see [Quick start](#quick-start)).
+
+**Step 2** — Optionally start with audit mode to observe decisions without
+blocking:
 
 ```json
 {
   "config": {
-    "model": "openai/gpt-4o-mini",
     "mode": "audit"
   }
 }
@@ -129,50 +174,45 @@ context for the guardian's decisions.
 Check logs for `[guardian] AUDIT-ONLY (would block)` entries and verify the
 decisions are reasonable.
 
-**Step 2** — Switch to enforce mode:
+**Step 3** — Switch to `"enforce"` mode (the default) once you're satisfied.
 
-```json
-{
-  "config": {
-    "model": "openai/gpt-4o-mini",
-    "mode": "enforce"
-  }
-}
-```
-
-**Step 3** — Adjust `watched_tools` if needed. Remove tools that produce too
+**Step 4** — Adjust `watched_tools` if needed. Remove tools that produce too
 many false positives, or add custom tools that need protection.
 
-## Model selection
+## When a tool call is blocked
 
-The guardian makes a simple binary decision (ALLOW/BLOCK) for each tool call.
-A small, fast model is sufficient and keeps cost low.
+When the guardian blocks a tool call, the agent receives a tool error containing
+the block reason (e.g. `"Guardian: user never requested file deletion"`). The
+agent will then inform the user that the action was blocked and why.
 
-**Use a different provider than your main agent model.** If both the main model
-and the guardian use the same provider, a single provider outage takes down both
-the agent and its safety layer. Using a different provider ensures the guardian
-remains available even when the main model's provider has issues. For example,
-if your main model is `anthropic/claude-sonnet-4-20250514`, use
-`openai/gpt-4o-mini` for the guardian.
+**To proceed with the blocked action**, simply confirm it in the conversation:
 
-| Model                 | Notes                                       |
-| --------------------- | ------------------------------------------- |
-| `openai/gpt-4o-mini`  | Fast (~200ms), cheap, good accuracy         |
-| `kimi/moonshot-v1-8k` | Good for Chinese-language conversations     |
-| `ollama/llama3.1:8b`  | Free, runs locally, slightly lower accuracy |
+> "yes, go ahead and delete /tmp/old"
 
-Avoid using the same large model as your main agent — it wastes cost and adds
-latency to every watched tool call.
+The guardian re-evaluates every tool call independently. On the next attempt it
+will see your explicit confirmation in the recent conversation and ALLOW the
+call.
+
+If a tool is producing too many false positives, you can also:
+
+- Remove it from `watched_tools`
+- Switch to `"mode": "audit"` (log-only, no blocking)
+- Disable the plugin entirely (`"enabled": false`)
 
 ## Context awareness
 
-The guardian uses a **rolling summary + recent turns** strategy to provide
-long-term context without wasting tokens:
+The guardian builds rich context for each tool call review:
 
+- **Agent context** — the main agent's full system prompt, cached on the
+  first `llm_input` call. Contains AGENTS.md rules, MEMORY.md content,
+  tool definitions, available skills, and user-configured instructions.
+  Passed as-is (no extraction or summarization) since guardian models have
+  128K+ context windows. Treated as background DATA — user messages remain
+  the ultimate authority.
 - **Session summary** — a 2-4 sentence summary of the entire conversation
-  history, covering tasks requested, files/systems being worked on, standing
-  instructions, and confirmations. Updated asynchronously after each user
-  message (non-blocking). Roughly ~150 tokens.
+  history, covering tasks requested, files/systems being worked on, and
+  confirmations. Updated asynchronously after each user message
+  (non-blocking). Roughly ~150 tokens.
 - **Recent conversation turns** — the last `max_recent_turns` (default 3)
   raw turns with user messages, assistant replies, and tool results. Roughly
   ~600 tokens.
@@ -185,9 +225,6 @@ long-term context without wasting tokens:
 - **Autonomous iterations** — when the model calls tools in a loop without
   new user input, trailing assistant messages and tool results are attached
   to the last conversation turn.
-
-This approach keeps the guardian prompt at ~750 tokens (vs ~2000 for 10 raw
-turns), while preserving full conversation context through the summary.
 
 The context is extracted **lazily** at `before_tool_call` time from the live
 session message array, so it always reflects the latest state — including tool
@@ -206,6 +243,8 @@ parent agent's).
 - Assistant replies are treated as **context only** — they may be poisoned
 - Only user messages are considered authoritative intent signals
 - Tool results (shown as `[tool: ...]`) are treated as DATA
-- Memory results are recognized as the user's own saved preferences
+- Agent context (system prompt) is treated as background DATA — it may be
+  indirectly poisoned (e.g. malicious rules written to memory or a trojan
+  skill in a cloned repo); user messages remain the ultimate authority
 - Forward scanning of guardian response prevents attacker-injected ALLOW in
   tool arguments from overriding the model's verdict
