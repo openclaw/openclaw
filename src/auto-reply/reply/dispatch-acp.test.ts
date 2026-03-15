@@ -48,6 +48,10 @@ const sessionMetaMocks = vi.hoisted(() => ({
   >(() => null),
 }));
 
+const transcriptMocks = vi.hoisted(() => ({
+  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "mock" })),
+}));
+
 const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
@@ -79,6 +83,11 @@ vi.mock("../../tts/tts.js", () => ({
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
     sessionMetaMocks.readAcpSessionEntry(params),
+}));
+
+vi.mock("../../config/sessions.js", () => ({
+  appendAssistantMessageToSessionTranscript: (params: unknown) =>
+    transcriptMocks.appendAssistantMessageToSessionTranscript(params),
 }));
 
 vi.mock("../../infra/outbound/session-binding-service.js", () => ({
@@ -230,6 +239,11 @@ describe("tryDispatchAcpReply", () => {
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     sessionMetaMocks.readAcpSessionEntry.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockReset();
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockResolvedValue({
+      ok: true,
+      sessionFile: "mock",
+    });
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
   });
@@ -434,5 +448,41 @@ describe("tryDispatchAcpReply", () => {
         text: expect.stringContaining("ACP_DISPATCH_DISABLED"),
       }),
     );
+  });
+
+  it("mirrors successful ACP replies into the session transcript", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("ACP_RUNTIME_OK");
+
+    await runDispatch({
+      bodyForAgent: "test",
+    });
+
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "codex",
+      sessionKey,
+      text: "ACP_RUNTIME_OK",
+    });
+  });
+
+  it("mirrors ACP error replies into the session transcript", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockRejectedValueOnce(
+      new AcpRuntimeError("ACP_TURN_FAILED", "ACP turn failed before completion."),
+    );
+
+    await runDispatch({
+      bodyForAgent: "test",
+    });
+
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "codex",
+        sessionKey,
+      }),
+    );
+    expect(
+      transcriptMocks.appendAssistantMessageToSessionTranscript.mock.calls[0]?.[0]?.text,
+    ).toContain("ACP_TURN_FAILED");
   });
 });

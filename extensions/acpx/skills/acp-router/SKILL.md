@@ -70,6 +70,12 @@ Required behavior:
 5. Set `agentId` explicitly unless ACP default agent is known.
 6. Do not ask user to run slash commands or CLI when this path works directly.
 
+For deterministic smoke/compliance checks, phrase the task as:
+
+- `Reply with exactly this text and nothing else: <TOKEN>`
+
+Do not use softer wording like `Reply with exactly: <TOKEN>` for compliance tests, because some harnesses may prepend commentary.
+
 Example:
 
 User: "spawn a test codex session in thread and tell it to say hi"

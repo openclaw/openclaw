@@ -11,6 +11,7 @@ import {
 } from "../../acp/runtime/session-identity.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -314,6 +315,19 @@ export async function tryDispatchAcpReply(params: {
     await projector.flush(true);
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
+    if (accumulatedBlockText.trim()) {
+      try {
+        await appendAssistantMessageToSessionTranscript({
+          agentId: resolvedAcpAgent,
+          sessionKey,
+          text: accumulatedBlockText,
+        });
+      } catch (error) {
+        logVerbose(
+          `dispatch-acp: transcript mirror failed for ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     if (ttsMode === "final" && delivery.getBlockCount() > 0 && accumulatedBlockText.trim()) {
       try {
         const ttsSyntheticReply = await maybeApplyTtsToPayload({
@@ -374,8 +388,20 @@ export async function tryDispatchAcpReply(params: {
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "ACP turn failed before completion.",
     });
+    const acpErrorText = formatAcpRuntimeErrorText(acpError);
+    try {
+      await appendAssistantMessageToSessionTranscript({
+        agentId: resolvedAcpAgent,
+        sessionKey,
+        text: acpErrorText,
+      });
+    } catch (error) {
+      logVerbose(
+        `dispatch-acp: transcript mirror failed for ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     const delivered = await delivery.deliver("final", {
-      text: formatAcpRuntimeErrorText(acpError),
+      text: acpErrorText,
       isError: true,
     });
     queuedFinal = queuedFinal || delivered;
