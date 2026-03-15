@@ -773,6 +773,9 @@ export async function spawnAcpDirect(
   }
   try {
     const shouldDeliver = useInlineDelivery || useExternalRunDelivery;
+    log.info(
+      `[acp-spawn] callGateway session=${sessionKey} deliver=${shouldDeliver} channel=${requesterOrigin?.channel ?? "(none)"} to=${inferredDeliveryTo ?? "(none)"} mode=${spawnMode}`,
+    );
     const response = await callGateway<{ runId?: string }>({
       method: "agent",
       params: {
@@ -791,6 +794,7 @@ export async function spawnAcpDirect(
     if (typeof response?.runId === "string" && response.runId.trim()) {
       childRunId = response.runId.trim();
     }
+    log.info(`[acp-spawn] accepted runId=${childRunId} session=${sessionKey}`);
   } catch (err) {
     parentRelay?.dispose();
     await cleanupFailedAcpSpawn({

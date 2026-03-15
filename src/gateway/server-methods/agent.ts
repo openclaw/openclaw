@@ -22,6 +22,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -55,6 +56,8 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
+
+const agentDispatchLog = createSubsystemLogger("gateway/agent-dispatch");
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import {
@@ -145,8 +148,16 @@ function dispatchAgentRunFromGateway(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
 }) {
+  const sessionKey = params.ingressOpts.sessionKey ?? "(no key)";
+  const deliver = params.ingressOpts.deliver ?? false;
+  const channel = params.ingressOpts.channel ?? "(none)";
+  agentDispatchLog.info(
+    `[acp-dispatch] START runId=${params.runId} session=${sessionKey} deliver=${deliver} channel=${channel}`,
+  );
+
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
+      agentDispatchLog.info(`[acp-dispatch] OK runId=${params.runId} session=${sessionKey}`);
       const payload = {
         runId: params.runId,
         status: "ok" as const,
@@ -167,6 +178,9 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err) => {
+      agentDispatchLog.error(
+        `[acp-dispatch] FAIL runId=${params.runId} session=${sessionKey} error=${String(err)}`,
+      );
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: params.runId,
