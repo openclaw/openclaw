@@ -130,6 +130,46 @@ describe("workspace lock manager", () => {
     await lock.release();
   });
 
+  it("preserves parseable payload when refresh write fails", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "refresh-failure.txt");
+    const lock = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    const beforeRaw = await fs.readFile(lock.lockPath, "utf8");
+    const before = JSON.parse(beforeRaw) as { token: string };
+
+    const realOpen = fs.open.bind(fs);
+    const openSpy = vi
+      .spyOn(fs, "open")
+      .mockImplementationOnce(async (...args: Parameters<typeof fs.open>) => {
+        const handle = await realOpen(...args);
+        const originalWrite = handle.write.bind(handle);
+        let failNextWrite = true;
+        handle.write = (async (...writeArgs: Parameters<typeof handle.write>) => {
+          if (failNextWrite) {
+            failNextWrite = false;
+            throw new Error("simulated write failure");
+          }
+          return originalWrite(...writeArgs);
+        }) as typeof handle.write;
+        return handle;
+      });
+
+    await lock.refresh();
+
+    const afterRaw = await fs.readFile(lock.lockPath, "utf8");
+    const after = JSON.parse(afterRaw) as { token: string };
+    expect(after.token).toBe(before.token);
+
+    openSpy.mockRestore();
+    await lock.release();
+  });
+
   it("does not remove lock file after ownership changed", async () => {
     const dir = await makeCaseDir();
     const target = path.join(dir, "owner.txt");
