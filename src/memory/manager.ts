@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -153,10 +157,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return pending;
     }
     const createPromise = (async () => {
+      // #8131: when provider is "local" we do not require remote API keys.
+      // When resolved provider is "auto" (e.g. defaults missing in merge), createEmbeddingProvider
+      // may pick a remote provider and ignore explicit local. Only force "local" when the global
+      // default is local and the agent did NOT override provider (fixes #29318; see PR review P1).
+      const requestedDefault = cfg.agents?.defaults?.memorySearch?.provider;
+      const agentProviderOverride = resolveAgentConfig(cfg, agentId)?.memorySearch?.provider;
+      const effectiveProvider =
+        requestedDefault === "local" &&
+        settings.provider === "auto" &&
+        agentProviderOverride === undefined
+          ? "local"
+          : settings.provider;
+
       const providerResult = await createEmbeddingProvider({
         config: cfg,
         agentDir: resolveAgentDir(cfg, agentId),
-        provider: settings.provider,
+        provider: effectiveProvider,
         remote: settings.remote,
         model: settings.model,
         outputDimensionality: settings.outputDimensionality,
