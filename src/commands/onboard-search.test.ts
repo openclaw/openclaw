@@ -104,6 +104,17 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-test-key");
   });
 
+  it("sets provider for duckduckgo without prompting for an API key", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "duckduckgo",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("duckduckgo");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(prompter.text).not.toHaveBeenCalled();
+  });
+
   it("sets provider and key for gemini", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({
@@ -243,6 +254,17 @@ describe("setupSearch", () => {
     }
   });
 
+  it("quickstart skips key prompt for duckduckgo", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({ selectValue: "duckduckgo" });
+    const result = await setupSearch(cfg, runtime, prompter, {
+      quickstartDefaults: true,
+    });
+    expect(result.tools?.web?.search?.provider).toBe("duckduckgo");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(prompter.text).not.toHaveBeenCalled();
+  });
+
   it("stores env-backed SecretRef when secretInputMode=ref for perplexity", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({ selectValue: "perplexity" });
@@ -283,9 +305,9 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-plain");
   });
 
-  it("exports all 5 providers in SEARCH_PROVIDER_OPTIONS", () => {
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(5);
+  it("exports all 6 providers in SEARCH_PROVIDER_OPTIONS", () => {
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity"]);
+    expect(values).toEqual(["brave", "duckduckgo", "gemini", "grok", "kimi", "perplexity"]);
   });
 });

@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = "brave" | "duckduckgo" | "gemini" | "grok" | "kimi" | "perplexity";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -29,6 +29,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     envKeys: ["BRAVE_API_KEY"],
     placeholder: "BSA...",
     signupUrl: "https://brave.com/search/api/",
+  },
+  {
+    value: "duckduckgo",
+    label: "DuckDuckGo",
+    hint: "Free HTML search · no API key required",
+    envKeys: [],
+    placeholder: "No API key required",
+    signupUrl: "https://duckduckgo.com/",
   },
   {
     value: "gemini",
@@ -73,6 +81,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
   switch (provider) {
     case "brave":
       return search?.apiKey;
+    case "duckduckgo":
+      return undefined;
     case "gemini":
       return search?.gemini?.apiKey;
     case "grok":
@@ -244,6 +254,10 @@ export async function setupSearch(
   }
 
   const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === choice)!;
+  if (choice === "duckduckgo") {
+    return preserveDisabledState(config, applyProviderOnly(config, choice));
+  }
+
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
