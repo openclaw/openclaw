@@ -87,4 +87,29 @@ describe("resolveGatewayProgramArguments", () => {
       "18789",
     ]);
   });
+
+  it("forwards gateway bind mode into the service command", async () => {
+    const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw");
+    const indexPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/index.js");
+    process.argv = ["node", argv1];
+    fsMocks.realpath.mockRejectedValue(new Error("no realpath"));
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === indexPath) {
+        return;
+      }
+      throw new Error("missing");
+    });
+
+    const result = await resolveGatewayProgramArguments({ port: 18789, bind: "lan" });
+
+    expect(result.programArguments).toEqual([
+      process.execPath,
+      indexPath,
+      "gateway",
+      "--port",
+      "18789",
+      "--bind",
+      "lan",
+    ]);
+  });
 });

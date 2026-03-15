@@ -69,6 +69,7 @@ export async function buildGatewayInstallPlan(params: {
   });
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
+    bind: params.config?.gateway?.bind,
     dev: devMode,
     runtime: params.runtime,
     nodePath,

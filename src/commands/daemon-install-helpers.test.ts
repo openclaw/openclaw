@@ -98,6 +98,29 @@ describe("buildGatewayInstallPlan", () => {
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
   });
 
+  it("forwards configured gateway bind mode into the service command", async () => {
+    mockNodeGatewayPlanFixture();
+
+    await buildGatewayInstallPlan({
+      env: {},
+      port: 3000,
+      runtime: "node",
+      config: {
+        gateway: {
+          bind: "lan",
+        },
+      },
+    });
+
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith({
+      port: 3000,
+      bind: "lan",
+      dev: false,
+      runtime: "node",
+      nodePath: "/opt/node",
+    });
+  });
+
   it("emits warnings when renderSystemNodeWarning returns one", async () => {
     const warn = vi.fn();
     mockNodeGatewayPlanFixture({
