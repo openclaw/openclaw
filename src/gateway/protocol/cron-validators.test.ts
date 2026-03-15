@@ -107,6 +107,27 @@ describe("cron protocol validators", () => {
     expect(validateCronRunsParams({ id: "job-1", offset: -1 })).toBe(false);
   });
 
+  it("accepts agentTurn add params with outputHistory", () => {
+    expect(
+      validateCronAddParams({
+        name: "daily-briefing",
+        schedule: { kind: "cron", expr: "0 8 * * *" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "Send briefing", outputHistory: true },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts update params with outputHistory in payload patch", () => {
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { payload: { kind: "agentTurn", message: "updated", outputHistory: true } },
+      }),
+    ).toBe(true);
+  });
+
   it("accepts all-scope runs with multi-select filters", () => {
     expect(
       validateCronRunsParams({
