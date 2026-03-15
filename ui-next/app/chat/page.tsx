@@ -13,6 +13,7 @@ import type {
   SessionsPatchResult,
 } from "@/lib/types";
 import { useGateway, useGatewayEvents } from "@/lib/use-gateway";
+import { SpecPanel } from "./spec-panel";
 
 // ============================================
 // Types
@@ -916,7 +917,7 @@ export default function ChatPage() {
   // ============================================
 
   const addSystemMessage = useCallback((content: string) => {
-    if (!selectedSessionKey) return;
+    if (!selectedSessionKey) {return;}
     setSessionMessages((prev) => ({
       ...prev,
       [selectedSessionKey]: [
@@ -938,7 +939,7 @@ export default function ChatPage() {
       }
 
       const addSystem = (content: string) => {
-        if (!selectedSessionKey) return;
+        if (!selectedSessionKey) {return;}
         setSessionMessages((prev) => ({
           ...prev,
           [selectedSessionKey]: [
@@ -1607,7 +1608,7 @@ export default function ChatPage() {
       <div
         style={{
           ...styles.layout,
-          gridTemplateColumns: isSidebarVisible ? "240px 1fr" : "1fr",
+          gridTemplateColumns: isSidebarVisible ? "240px 1fr 380px" : "1fr 380px",
         }}
       >
         {/* Sessions Sidebar */}
@@ -1674,7 +1675,7 @@ export default function ChatPage() {
         )}
 
         {/* Chat Area */}
-        <div style={styles.card}>
+        <div style={{ ...styles.card, flex: 1 }}>
           {/* Chat Header */}
           <div
             style={{
@@ -1948,6 +1949,13 @@ export default function ChatPage() {
           )}
         </div>
       </div>
+
+      {/* Spec-First Panel */}
+      {specFirstEnabled && (
+        <div style={{ width: 380, flexShrink: 0 }}>
+          <SpecPanel />
+        </div>
+      )}
 
       {/* Clear Chat Confirmation Modal */}
       {showClearConfirm && (
