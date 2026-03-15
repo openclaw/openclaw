@@ -56,11 +56,15 @@ export function resolveHttpApprovalPolicy(params: {
     normalizeHttpSecurity(wildcardConfig?.askFallback) ??
     globalAskFallback;
 
-  const agentAllowlist = [
-    ...normalizeAllowlist(wildcardConfig?.allowlist),
-    ...normalizeAllowlist(agentConfig?.allowlist),
-    ...globalAllowlist,
-  ];
+  // Per-agent or wildcard allowlist overrides global (does not merge).
+  // This lets operators narrow access for specific agents.
+  const hasAgentOverride = agentConfig?.allowlist != null || wildcardConfig?.allowlist != null;
+  const agentAllowlist = hasAgentOverride
+    ? [
+        ...normalizeAllowlist(wildcardConfig?.allowlist),
+        ...normalizeAllowlist(agentConfig?.allowlist),
+      ]
+    : globalAllowlist;
 
   return {
     security: agentSecurity,

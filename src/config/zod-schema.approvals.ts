@@ -37,20 +37,23 @@ const HttpAllowlistEntrySchema = z
   })
   .strict();
 
+const HttpSecurityEnum = z.enum(["deny", "allowlist", "full"]);
+const HttpAskEnum = z.enum(["off", "on-miss", "always"]);
+
 const HttpApprovalsAgentSchema = z
   .object({
-    security: z.string().optional(),
-    ask: z.string().optional(),
-    askFallback: z.string().optional(),
+    security: HttpSecurityEnum.optional(),
+    ask: HttpAskEnum.optional(),
+    askFallback: HttpSecurityEnum.optional(),
     allowlist: z.array(HttpAllowlistEntrySchema).optional(),
   })
   .strict();
 
 const HttpApprovalsToolConfigSchema = z
   .object({
-    security: z.string().optional(),
-    ask: z.string().optional(),
-    askFallback: z.string().optional(),
+    security: HttpSecurityEnum.optional(),
+    ask: HttpAskEnum.optional(),
+    askFallback: HttpSecurityEnum.optional(),
     agents: z.record(z.string(), HttpApprovalsAgentSchema).optional(),
     allowlist: z.array(HttpAllowlistEntrySchema).optional(),
   })
