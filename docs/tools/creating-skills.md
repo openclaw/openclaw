@@ -53,6 +53,18 @@ Ask your agent to "refresh skills" or restart the gateway. OpenClaw will discove
 - **Safety First**: If your skill uses `bash`, ensure the prompts don't allow arbitrary command injection from untrusted user input.
 - **Test Locally**: Use `openclaw agent --message "use my new skill"` to test.
 
+## Advanced Features
+
+Once your basic skill is working, explore these powerful features documented in the [Skills Reference](./skills.md):
+
+- **Conditional activation** — Use `requires.bins`, `requires.env`, or `requires.config` in your frontmatter to gate when the skill loads. See [Gating](./skills.md#gating-load-time-filters).
+- **Environment & API key injection** — Skills can receive secrets and environment variables at runtime. See [Environment injection](./skills.md#environment-injection-per-agent-run).
+- **Multi-command skills** — Use `command-dispatch` and `command-tool` for skills that expose subcommands. See [Format](./skills.md#format-agentskills--pi-compatible).
+- **Template variables** — Use `{baseDir}` and other placeholders for portable paths in tool definitions.
+- **Invocation control** — Set `user-invocable` or `disable-model-invocation` to control how the skill is triggered.
+- **Config overrides** — Customize skill behavior per-agent via `openclaw.json`. See [Config overrides](./skills.md#config-overrides-openclawjson).
+- **Testing** — Run `openclaw skill test <name>` to validate your skill locally before publishing.
+
 ## Shared Skills
 
 You can also browse and contribute skills to [ClawHub](https://clawhub.com).
