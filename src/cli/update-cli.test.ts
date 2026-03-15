@@ -275,7 +275,7 @@ describe("update-cli", () => {
       packageManager: "pnpm",
       git: {
         root: "/test/path",
-        sha: "abcdef1234567890",
+        sha: "abcdef1234567890", // pragma: allowlist secret
         tag: "v1.2.3",
         branch: "main",
         upstream: "origin/main",
@@ -382,11 +382,79 @@ describe("update-cli", () => {
 
   it.each([
     {
-      name: "defaults to dev channel for git installs when unset",
+      name: "defaults to stable channel for tagged git installs when unset",
       mode: "git" as const,
       options: {},
       prepare: async () => {},
+      expectedChannel: "stable" as const,
+      expectedTag: undefined as string | undefined,
+    },
+    {
+      name: "defaults to dev channel for untagged git branch installs when unset",
+      mode: "git" as const,
+      options: {},
+      prepare: async () => {
+        vi.mocked(checkUpdateStatus).mockResolvedValue({
+          root: "/test/path",
+          installKind: "git",
+          packageManager: "pnpm",
+          git: {
+            root: "/test/path",
+            sha: "abcdef1234567890", // pragma: allowlist secret
+            tag: null,
+            branch: "main",
+            upstream: "origin/main",
+            dirty: false,
+            ahead: 0,
+            behind: 0,
+            fetchOk: true,
+          },
+          deps: {
+            manager: "pnpm",
+            status: "ok",
+            lockfilePath: "/test/path/pnpm-lock.yaml",
+            markerPath: "/test/path/node_modules",
+          },
+          registry: {
+            latestVersion: "1.2.3",
+          },
+        });
+      },
       expectedChannel: "dev" as const,
+      expectedTag: undefined as string | undefined,
+    },
+    {
+      name: "defaults to beta channel for beta-tagged git installs when unset",
+      mode: "git" as const,
+      options: {},
+      prepare: async () => {
+        vi.mocked(checkUpdateStatus).mockResolvedValue({
+          root: "/test/path",
+          installKind: "git",
+          packageManager: "pnpm",
+          git: {
+            root: "/test/path",
+            sha: "abcdef1234567890", // pragma: allowlist secret
+            tag: "v1.2.3-beta.1",
+            branch: "main",
+            upstream: "origin/main",
+            dirty: false,
+            ahead: 0,
+            behind: 0,
+            fetchOk: true,
+          },
+          deps: {
+            manager: "pnpm",
+            status: "ok",
+            lockfilePath: "/test/path/pnpm-lock.yaml",
+            markerPath: "/test/path/node_modules",
+          },
+          registry: {
+            latestVersion: "1.2.3",
+          },
+        });
+      },
+      expectedChannel: "beta" as const,
       expectedTag: undefined as string | undefined,
     },
     {
