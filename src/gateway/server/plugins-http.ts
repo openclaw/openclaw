@@ -1,11 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import type { GatewayRequestOptions } from "../server-methods/types.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import { PROTOCOL_VERSION } from "../protocol/index.js";
-import type { GatewayRequestOptions } from "../server-methods/types.js";
 import {
   resolvePluginRoutePathContext,
   type PluginRoutePathContext,
@@ -64,6 +64,12 @@ export function createGatewayPluginRequestHandler(params: {
   log: SubsystemLogger;
 }): PluginHttpRequestHandler {
   const { registry, log } = params;
+  // Share the authoritative registry via process so it is reachable across
+  // jiti VM realm boundaries.  Plugin loading through jiti may create
+  // separate VM contexts where the registry object identity differs; this
+  // ensures findMatchingPluginHttpRoutes can fall back to the real routes.
+  (process as unknown as { __openclawPluginRegistry?: PluginRegistry }).__openclawPluginRegistry =
+    registry;
   return async (req, res, providedPathContext, dispatchContext) => {
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {

@@ -23,7 +23,19 @@ export function findMatchingPluginHttpRoutes(
   registry: PluginRegistry,
   context: PluginRoutePathContext,
 ): PluginHttpRouteEntry[] {
-  const routes = registry.httpRoutes ?? [];
+  const ownRoutes = registry.httpRoutes ?? [];
+  // When plugins are loaded through jiti, the registry passed here may come
+  // from a different VM realm than the one that owns the HTTP routes.  Fall
+  // back to the authoritative registry stored on process by
+  // createGatewayPluginRequestHandler only when the local registry is empty.
+  const liveRegistry = (process as unknown as { __openclawPluginRegistry?: PluginRegistry })
+    .__openclawPluginRegistry;
+  const routes =
+    ownRoutes.length > 0
+      ? ownRoutes
+      : liveRegistry && liveRegistry !== registry
+        ? (liveRegistry.httpRoutes ?? [])
+        : ownRoutes;
   if (routes.length === 0) {
     return [];
   }

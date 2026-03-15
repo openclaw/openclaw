@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
@@ -129,6 +129,10 @@ async function invokeSecureGatewayRoute(params: { gatewayAuthSatisfied: boolean 
 }
 
 describe("createGatewayPluginRequestHandler", () => {
+  beforeEach(() => {
+    (process as unknown as { __openclawPluginRegistry?: unknown }).__openclawPluginRegistry =
+      undefined;
+  });
   it("caps unauthenticated plugin routes to non-admin subagent scopes", async () => {
     loadOpenClawPlugins.mockReset();
     handleGatewayRequest.mockReset();
@@ -310,6 +314,10 @@ describe("createGatewayPluginRequestHandler", () => {
 });
 
 describe("plugin HTTP route auth checks", () => {
+  beforeEach(() => {
+    (process as unknown as { __openclawPluginRegistry?: unknown }).__openclawPluginRegistry =
+      undefined;
+  });
   const deeplyEncodedChannelPath =
     "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile";
   const decodeOverflowPublicPath = `/googlechat${buildRepeatedEncodedSlash(40)}public`;
