@@ -3047,47 +3047,39 @@ public struct ExecApprovalsTrustStatusParams: Codable, Sendable {
 public struct ExecApprovalsTrustParams: Codable, Sendable {
     public let agentid: String?
     public let minutes: Int
-    public let grantedby: String?
     public let force: Bool?
 
     public init(
         agentid: String?,
         minutes: Int,
-        grantedby: String?,
         force: Bool?)
     {
         self.agentid = agentid
         self.minutes = minutes
-        self.grantedby = grantedby
         self.force = force
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
         case minutes
-        case grantedby = "grantedBy"
         case force
     }
 }
 
 public struct ExecApprovalsUntrustParams: Codable, Sendable {
     public let agentid: String?
-    public let revokedby: String?
     public let keepaudit: Bool?
 
     public init(
         agentid: String?,
-        revokedby: String?,
         keepaudit: Bool?)
     {
         self.agentid = agentid
-        self.revokedby = revokedby
         self.keepaudit = keepaudit
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
-        case revokedby = "revokedBy"
         case keepaudit = "keepAudit"
     }
 }
