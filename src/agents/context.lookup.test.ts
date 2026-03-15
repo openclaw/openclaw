@@ -84,6 +84,9 @@ describe("lookupContextTokens", () => {
     process.argv = ["node", "openclaw", "--profile", "--", "config", "validate"];
     try {
       await import("./context.js");
+      // The eager warmup is deferred via queueMicrotask to avoid TDZ errors
+      // (see #45085), so flush the microtask queue before asserting.
+      await Promise.resolve();
       expect(loadConfigMock).toHaveBeenCalledTimes(1);
     } finally {
       process.argv = argvSnapshot;

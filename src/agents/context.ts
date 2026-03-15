@@ -209,9 +209,13 @@ export function lookupContextTokens(modelId?: string): number | undefined {
 }
 
 if (!shouldSkipEagerContextWindowWarmup()) {
-  // Keep prior behavior where model limits begin loading during startup.
-  // This avoids a cold-start miss on the first context token lookup.
-  void ensureContextWindowCacheLoaded();
+  // Defer the warmup to avoid a Temporal Dead Zone (TDZ) error when
+  // module-level constants (e.g. ANTHROPIC_MODEL_ALIASES in
+  // model-selection.ts) are referenced before they are initialized.
+  // `queueMicrotask` runs after all top-level module code has executed,
+  // preserving the eager semantics while avoiding the TDZ.
+  // See: https://github.com/openclaw/openclaw/issues/45085
+  queueMicrotask(() => void ensureContextWindowCacheLoaded());
 }
 
 function resolveConfiguredModelParams(
