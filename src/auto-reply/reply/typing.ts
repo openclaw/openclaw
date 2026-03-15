@@ -90,9 +90,10 @@ export function createTypingController(params: {
       clearTimeout(typingTtlTimer);
     }
     typingTtlTimer = setTimeout(() => {
-      if (!typingLoop.isRunning()) {
-        return;
-      }
+      // Always clean up when TTL fires, even if the loop was stopped
+      // externally (e.g., by a WebSocket disconnect/reconnect). Skipping
+      // cleanup here left the controller unsealed, so late events or
+      // reconnects could restart typing indefinitely (#27926).
       log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`);
       cleanup();
     }, typingTtlMs);
