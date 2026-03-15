@@ -121,7 +121,7 @@ openclaw message send "Hello, ERNIE!"
 openclaw config get
 
 # Check provider status
-openclaw channels status --probe
+openclaw models status --probe
 ```
 
 ## Model Details
