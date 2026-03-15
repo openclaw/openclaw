@@ -102,6 +102,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
   "gateway.channelHealthCheckMinutes":
     "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
+  "gateway.channelHealthMonitorEnabled":
+    "Global enable switch for the gateway channel health monitor. Set false to disable all health-monitor-initiated channel restarts; per-channel healthMonitor.enabled overrides can further disable individual channels or accounts when the global monitor stays on.",
   "gateway.channelStaleEventThresholdMinutes":
     "How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
   "gateway.channelMaxRestartsPerHour":

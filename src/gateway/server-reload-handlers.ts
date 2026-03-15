@@ -104,10 +104,11 @@ export function createGatewayReloadHandlers(params: {
 
     if (plan.restartHealthMonitor) {
       state.channelHealthMonitor?.stop();
+      const enabled = nextConfig.gateway?.channelHealthMonitorEnabled !== false;
       const minutes = nextConfig.gateway?.channelHealthCheckMinutes;
       const staleMinutes = nextConfig.gateway?.channelStaleEventThresholdMinutes;
       nextState.channelHealthMonitor =
-        minutes === 0
+        !enabled || minutes === 0
           ? null
           : params.createHealthMonitor({
               checkIntervalMs: (minutes ?? 5) * 60_000,

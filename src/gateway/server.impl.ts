@@ -755,8 +755,9 @@ export async function startGatewayServer(
       }
     : startHeartbeatRunner({ cfg: cfgAtStart });
 
+  const healthMonitorEnabled = cfgAtStart.gateway?.channelHealthMonitorEnabled !== false;
   const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
-  const healthCheckDisabled = healthCheckMinutes === 0;
+  const healthCheckDisabled = !healthMonitorEnabled || healthCheckMinutes === 0;
   const staleEventThresholdMinutes = cfgAtStart.gateway?.channelStaleEventThresholdMinutes;
   const maxRestartsPerHour = cfgAtStart.gateway?.channelMaxRestartsPerHour;
   let channelHealthMonitor = healthCheckDisabled

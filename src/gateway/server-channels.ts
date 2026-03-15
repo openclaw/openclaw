@@ -31,6 +31,16 @@ type ChannelRuntimeStore = {
   runtimes: Map<string, ChannelAccountSnapshot>;
 };
 
+type RawHealthMonitorEntry = {
+  healthMonitor?: {
+    enabled?: boolean;
+  };
+};
+
+type RawChannelConfig = RawHealthMonitorEntry & {
+  accounts?: Record<string, RawHealthMonitorEntry | undefined>;
+};
+
 function createRuntimeStore(): ChannelRuntimeStore {
   return {
     aborts: new Map(),
@@ -105,6 +115,7 @@ export type ChannelManager = {
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
+  isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
 };
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
@@ -118,6 +129,26 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const manuallyStopped = new Set<string>();
 
   const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
+
+  const isHealthMonitorEnabled = (channelId: ChannelId, accountId: string): boolean => {
+    const cfg = loadConfig();
+    if (cfg.gateway?.channelHealthMonitorEnabled === false) {
+      return false;
+    }
+
+    const channelConfig = cfg.channels?.[channelId] as RawChannelConfig | undefined;
+    const accountOverride = channelConfig?.accounts?.[accountId]?.healthMonitor?.enabled;
+    if (typeof accountOverride === "boolean") {
+      return accountOverride;
+    }
+
+    const channelOverride = channelConfig?.healthMonitor?.enabled;
+    if (typeof channelOverride === "boolean") {
+      return channelOverride;
+    }
+
+    return true;
+  };
 
   const getStore = (channelId: ChannelId): ChannelRuntimeStore => {
     const existing = channelStores.get(channelId);
@@ -453,5 +484,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStopped_,
     resetRestartAttempts: resetRestartAttempts_,
+    isHealthMonitorEnabled,
   };
 }

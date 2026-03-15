@@ -426,6 +426,12 @@ export type GatewayConfig = {
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
   /**
+   * Global enable switch for the channel health monitor.
+   * Set to false to disable health-monitor-driven channel restarts entirely.
+   * Default: true.
+   */
+  channelHealthMonitorEnabled?: boolean;
+  /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.
    * Set to 0 to disable. Default: 5.
