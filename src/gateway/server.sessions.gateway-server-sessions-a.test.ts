@@ -102,8 +102,11 @@ vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../discord/monitor/thread-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../discord/monitor/thread-bindings.js")>();
+vi.mock("../../extensions/discord/src/monitor/thread-bindings.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../extensions/discord/src/monitor/thread-bindings.js")
+    >();
   return {
     ...actual,
     unbindThreadBindingsBySessionKey: (params: unknown) =>

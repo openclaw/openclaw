@@ -1,5 +1,6 @@
 import { filterToolsByPolicy } from "./pi-tools.policy.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import { isKnownCoreToolId } from "./tool-catalog.js";
 import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
@@ -91,9 +92,15 @@ export function applyToolPolicyPipeline(params: {
       const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
       if (resolved.unknownAllowlist.length > 0) {
         const entries = resolved.unknownAllowlist.join(", ");
-        const suffix = resolved.strippedAllowlist
-          ? "Ignoring allowlist so core tools remain available. Use tools.alsoAllow for additive plugin tool enablement."
-          : "These entries won't match any tool unless the plugin is enabled.";
+        const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
+          isKnownCoreToolId(entry),
+        );
+        const otherEntries = resolved.unknownAllowlist.filter((entry) => !isKnownCoreToolId(entry));
+        const suffix = describeUnknownAllowlistSuffix({
+          strippedAllowlist: resolved.strippedAllowlist,
+          hasGatedCoreEntries: gatedCoreEntries.length > 0,
+          hasOtherEntries: otherEntries.length > 0,
+        });
         params.warn(
           `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`,
         );
@@ -105,4 +112,21 @@ export function applyToolPolicyPipeline(params: {
     filtered = expanded ? filterToolsByPolicy(filtered, expanded) : filtered;
   }
   return filtered;
+}
+
+function describeUnknownAllowlistSuffix(params: {
+  strippedAllowlist: boolean;
+  hasGatedCoreEntries: boolean;
+  hasOtherEntries: boolean;
+}): string {
+  const preface = params.strippedAllowlist
+    ? "Ignoring allowlist so core tools remain available."
+    : "";
+  const detail =
+    params.hasGatedCoreEntries && params.hasOtherEntries
+      ? "Some entries are shipped core tools but unavailable in the current runtime/provider/model/config; other entries won't match any tool unless the plugin is enabled."
+      : params.hasGatedCoreEntries
+        ? "These entries are shipped core tools but unavailable in the current runtime/provider/model/config."
+        : "These entries won't match any tool unless the plugin is enabled.";
+  return preface ? `${preface} ${detail}` : detail;
 }
