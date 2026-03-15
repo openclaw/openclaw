@@ -385,7 +385,30 @@ describe("update-cli", () => {
       name: "defaults to dev channel for git installs when unset",
       mode: "git" as const,
       options: {},
-      prepare: async () => {},
+      prepare: async () => {
+        vi.mocked(checkUpdateStatus).mockResolvedValue({
+          root: "/test/path",
+          installKind: "git",
+          packageManager: "pnpm",
+          git: {
+            root: "/test/path",
+            sha: "abcdef1234567890",
+            tag: null,
+            branch: null,
+            upstream: null,
+            dirty: false,
+            ahead: 0,
+            behind: 0,
+            fetchOk: true,
+          },
+          deps: {
+            manager: "pnpm",
+            status: "ok",
+            lockfilePath: "/test/path/pnpm-lock.yaml",
+            markerPath: "/test/path/node_modules",
+          },
+        });
+      },
       expectedChannel: "dev" as const,
       expectedTag: undefined as string | undefined,
     },
