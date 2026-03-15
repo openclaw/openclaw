@@ -22,6 +22,8 @@ type TelegramMessageProcessorDeps = Omit<
   streamMode: TelegramStreamMode;
   textLimit: number;
   opts: Pick<TelegramBotOptions, "token">;
+  /** Maximum outbound media size in bytes (from configured mediaMaxMb). */
+  mediaMaxBytes?: number;
 };
 
 export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
@@ -46,6 +48,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     streamMode,
     textLimit,
     opts,
+    mediaMaxBytes,
   } = deps;
 
   return async (
@@ -90,6 +93,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         textLimit,
         telegramCfg,
         opts,
+        mediaMaxBytes,
       });
     } catch (err) {
       runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
