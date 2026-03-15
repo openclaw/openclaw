@@ -247,26 +247,30 @@ export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): s
   return undefined;
 }
 
-function resolveAwsSdkAuthInfo(env: NodeJS.ProcessEnv = process.env): {
+function resolveAwsSdkAuthInfo(
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+): {
   mode: "aws-sdk" | "api-key";
   source: string;
   apiKey?: string;
 } {
   const applied = new Set(getShellEnvAppliedKeys());
-  const bearerToken = resolveBedrockBearerToken(env);
-  if (bearerToken) {
-    // Bearer token auth: return the actual token so the downstream pipeline
-    // stores it as a runtime API key and the stream wrapper injects it as
-    // an Authorization: Bearer header (bypassing AWS SDK signing).
-    return {
-      mode: "api-key",
-      apiKey: bearerToken,
-      source: resolveEnvSourceLabel({
-        applied,
-        envVars: [AWS_BEARER_ENV],
-        label: AWS_BEARER_ENV,
-      }),
-    };
+  // Only check bearer token for Bedrock providers to avoid leaking Bedrock
+  // credentials to unrelated providers that also use aws-sdk auth.
+  if (normalizeProviderId(provider) === "amazon-bedrock") {
+    const bearerToken = resolveBedrockBearerToken(env);
+    if (bearerToken) {
+      return {
+        mode: "api-key",
+        apiKey: bearerToken,
+        source: resolveEnvSourceLabel({
+          applied,
+          envVars: [AWS_BEARER_ENV],
+          label: AWS_BEARER_ENV,
+        }),
+      };
+    }
   }
   if (env[AWS_ACCESS_KEY_ENV]?.trim() && env[AWS_SECRET_KEY_ENV]?.trim()) {
     return {
@@ -330,7 +334,7 @@ export async function resolveApiKeyForProvider(params: {
 
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
-    return resolveAwsSdkAuthInfo();
+    return resolveAwsSdkAuthInfo(provider);
   }
 
   const order = resolveAuthProfileOrder({
@@ -382,7 +386,7 @@ export async function resolveApiKeyForProvider(params: {
 
   const normalized = normalizeProviderId(provider);
   if (authOverride === undefined && normalized === "amazon-bedrock") {
-    const awsAuth = resolveAwsSdkAuthInfo();
+    const awsAuth = resolveAwsSdkAuthInfo(provider);
     return {
       apiKey: awsAuth.apiKey,
       source: awsAuth.source,

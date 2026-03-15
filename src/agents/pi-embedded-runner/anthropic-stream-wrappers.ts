@@ -400,7 +400,16 @@ export function createBedrockBearerTokenWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const merged: Record<string, string> = { ...options?.headers };
+    const merged: Record<string, string> = {};
+    // Copy existing headers, stripping any case-insensitive Authorization
+    // variant to avoid duplicate/comma-joined values in the request.
+    if (options?.headers) {
+      for (const [key, value] of Object.entries(options.headers)) {
+        if (key.toLowerCase() !== "authorization") {
+          merged[key] = value;
+        }
+      }
+    }
     merged.Authorization = `Bearer ${bearerToken}`;
     return underlying(model, context, {
       ...options,

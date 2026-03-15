@@ -562,6 +562,35 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     ).rejects.toThrow('No API key found for provider "custom"');
   });
 
+  it("does not leak bearer token to non-bedrock provider with aws-sdk auth", async () => {
+    await withEnvAsync(
+      {
+        AWS_BEARER_TOKEN_BEDROCK: "bedrock-only-token", // pragma: allowlist secret
+        AWS_ACCESS_KEY_ID: "access",
+        AWS_SECRET_ACCESS_KEY: "secret", // pragma: allowlist secret
+      },
+      async () => {
+        const auth = await resolveApiKeyForProvider({
+          provider: "google-vertex",
+          cfg: {
+            models: {
+              providers: {
+                "google-vertex": {
+                  auth: "aws-sdk",
+                  models: [],
+                },
+              },
+            },
+          },
+        });
+
+        // Non-Bedrock provider should get aws-sdk mode, not the bearer token.
+        expect(auth.mode).toBe("aws-sdk");
+        expect(auth.apiKey).toBeUndefined();
+      },
+    );
+  });
+
   it("keeps built-in aws-sdk fallback for local baseUrl overrides", async () => {
     await withEnvAsync({ AWS_BEARER_TOKEN_BEDROCK: undefined }, async () => {
       const auth = await resolveApiKeyForProvider({

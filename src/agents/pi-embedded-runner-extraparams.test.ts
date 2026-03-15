@@ -2508,6 +2508,42 @@ describe("applyExtraParamsToAgent", () => {
     }
   });
 
+  it("replaces pre-existing lowercase authorization header with Bearer token", () => {
+    const prev = process.env.AWS_BEARER_TOKEN_BEDROCK;
+    process.env.AWS_BEARER_TOKEN_BEDROCK = "bedrock-test-token"; // pragma: allowlist secret
+    try {
+      const { calls, agent } = createOptionsCaptureAgent();
+
+      applyExtraParamsToAgent(agent, undefined, "amazon-bedrock", "us.anthropic.claude-sonnet-4-5");
+
+      const model = {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-sonnet-4-5",
+      } as Model<"bedrock-converse-stream">;
+      const context: Context = { messages: [] };
+
+      void agent.streamFn?.(model, context, {
+        headers: { authorization: "Basic old-creds", "X-Custom": "1" },
+      });
+
+      expect(calls).toHaveLength(1);
+      const headers = calls[0]?.headers ?? {};
+      // Should have replaced lowercase authorization, not both.
+      expect(headers).toMatchObject({
+        "X-Custom": "1",
+        Authorization: "Bearer bedrock-test-token",
+      });
+      expect(headers).not.toHaveProperty("authorization");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.AWS_BEARER_TOKEN_BEDROCK;
+      } else {
+        process.env.AWS_BEARER_TOKEN_BEDROCK = prev;
+      }
+    }
+  });
+
   it("does not inject Bearer header when AWS_BEARER_TOKEN_BEDROCK is not set", () => {
     const prev = process.env.AWS_BEARER_TOKEN_BEDROCK;
     delete process.env.AWS_BEARER_TOKEN_BEDROCK;
