@@ -23,6 +23,19 @@ const { restartScheduledTask, stopScheduledTask } = await import("./schtasks.js"
 const GATEWAY_PORT = 18789;
 const SUCCESS_RESPONSE = { code: 0, stdout: "", stderr: "" } as const;
 
+function expectGatewayTermination(pid: number, options?: { nthCall?: number }) {
+  // Windows cleanup shells out to taskkill.exe directly; non-Windows uses killProcessTree.
+  if (process.platform === "win32") {
+    expect(killProcessTree).not.toHaveBeenCalled();
+    return;
+  }
+  if (typeof options?.nthCall === "number") {
+    expect(killProcessTree).toHaveBeenNthCalledWith(options.nthCall, pid, { graceMs: 300 });
+    return;
+  }
+  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
+}
+
 function pushSuccessfulSchtasksResponses(count: number) {
   for (let i = 0; i < count; i += 1) {
     schtasksResponses.push({ ...SUCCESS_RESPONSE });
@@ -57,14 +70,6 @@ function busyPortUsage(
     ],
     hints: [],
   };
-}
-
-function expectGatewayTermination(pid: number) {
-  if (process.platform === "win32") {
-    expect(killProcessTree).not.toHaveBeenCalled();
-    return;
-  }
-  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
 }
 
 async function withPreparedGatewayTask(
@@ -119,11 +124,9 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       await stopScheduledTask({ env, stdout });
 
+      expectGatewayTermination(4242, { nthCall: 1 });
       if (process.platform !== "win32") {
-        expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
         expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), { graceMs: 300 });
-      } else {
-        expect(killProcessTree).not.toHaveBeenCalled();
       }
       expect(inspectPortUsage.mock.calls.length).toBeGreaterThanOrEqual(22);
     });

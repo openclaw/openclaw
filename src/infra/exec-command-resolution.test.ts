@@ -192,14 +192,16 @@ describe("exec-command-resolution", () => {
 
   it("resolves allowlist candidate paths from unresolved raw executables", () => {
     expect(
-      resolveAllowlistCandidatePath(
-        {
-          rawExecutable: "~/bin/tool",
-          executableName: "tool",
-        },
-        "/tmp",
+      path.normalize(
+        resolveAllowlistCandidatePath(
+          {
+            rawExecutable: "~/bin/tool",
+            executableName: "tool",
+          },
+          "/tmp",
+        ) ?? "",
       ),
-    ).toContain("/bin/tool");
+    ).toContain(path.normalize(path.join("bin", "tool")));
 
     expect(
       resolveAllowlistCandidatePath(

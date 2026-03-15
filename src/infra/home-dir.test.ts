@@ -103,13 +103,13 @@ describe("expandHomePrefix", () => {
       opts: {
         env: { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv,
       },
-      expected: `${path.resolve("/srv/openclaw-home")}/x`,
+      expected: path.resolve("/srv/openclaw-home/x"),
     },
     {
       name: "expands exact ~ using explicit home",
       input: "~",
       opts: { home: " /srv/openclaw-home " },
-      expected: "/srv/openclaw-home",
+      expected: path.resolve("/srv/openclaw-home"),
     },
     {
       name: "expands ~\\\\ using resolved env home",
@@ -117,7 +117,7 @@ describe("expandHomePrefix", () => {
       opts: {
         env: { HOME: "/home/alice" } as NodeJS.ProcessEnv,
       },
-      expected: `${path.resolve("/home/alice")}\\x`,
+      expected: path.resolve("/home/alice\\x"),
     },
     {
       name: "keeps non-tilde values unchanged",
