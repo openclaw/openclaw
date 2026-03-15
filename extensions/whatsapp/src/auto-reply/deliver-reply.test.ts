@@ -448,17 +448,20 @@ describe("deliverWebReply", () => {
 
   it("keeps deferred audio text separate from later media items", async () => {
     const msg = makeMsg();
-    (loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void })
-      .mockResolvedValueOnce({
-        buffer: Buffer.from("aud"),
-        contentType: "audio/mpeg",
-        kind: "audio",
-      })
-      .mockResolvedValueOnce({
-        buffer: Buffer.from("img"),
-        contentType: "image/jpeg",
-        kind: "image",
-      });
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("aud"),
+      contentType: "audio/mpeg",
+      kind: "audio",
+    });
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("img"),
+      contentType: "image/jpeg",
+      kind: "image",
+    });
 
     await deliverWebReply({
       replyResult: {

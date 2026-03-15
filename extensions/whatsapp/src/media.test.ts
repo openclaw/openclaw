@@ -38,10 +38,9 @@ vi.mock("../../../src/media/mime.js", async () => {
 });
 
 vi.mock("../../../src/media/ffmpeg-exec.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../src/media/ffmpeg-exec.js")>(
-      "../../../src/media/ffmpeg-exec.js",
-    );
+  const actual = await vi.importActual<typeof import("../../../src/media/ffmpeg-exec.js")>(
+    "../../../src/media/ffmpeg-exec.js",
+  );
   runFfprobeMock.mockImplementation((...args: Parameters<typeof actual.runFfprobe>) =>
     actual.runFfprobe(...args),
   );
