@@ -49,9 +49,15 @@ export function updateCache(
     contextTools,
     totalTurnsProcessed: totalTurns,
     lastSummarizedTurnCount: existing?.lastSummarizedTurnCount ?? 0,
-    isSystemTrigger: isSystemTriggerPrompt(currentPrompt),
-    standingInstructions: existing?.standingInstructions,
-    standingInstructionsResolved: existing?.standingInstructionsResolved ?? false,
+    // Preserve isSystemTrigger when currentPrompt is empty (agent loop continuation).
+    // During a heartbeat cycle, llm_input fires multiple times: first with the
+    // heartbeat prompt (isSystemTrigger=true), then without a prompt as the agent
+    // loop continues after tool results. Without preservation, the flag resets to
+    // false and heartbeat tool calls reach the guardian unnecessarily.
+    isSystemTrigger: currentPrompt
+      ? isSystemTriggerPrompt(currentPrompt)
+      : (existing?.isSystemTrigger ?? false),
+    agentSystemPrompt: existing?.agentSystemPrompt,
     updatedAt: Date.now(),
   });
 
@@ -193,49 +199,29 @@ export function isSystemTrigger(sessionKey: string): boolean {
 }
 
 /**
- * Get the standing instructions for a session.
+ * Get the cached agent system prompt for a session.
  */
-export function getStandingInstructions(sessionKey: string): string | undefined {
+export function getAgentSystemPrompt(sessionKey: string): string | undefined {
   const entry = cache.get(sessionKey);
-  return entry?.standingInstructions;
+  return entry?.agentSystemPrompt;
 }
 
 /**
- * Update the standing instructions for a session.
+ * Cache the agent's system prompt (set once, preserved on subsequent calls).
  */
-export function updateStandingInstructions(
-  sessionKey: string,
-  instructions: string | undefined,
-): void {
+export function setAgentSystemPrompt(sessionKey: string, systemPrompt: string): void {
   const entry = cache.get(sessionKey);
   if (!entry) return;
-  entry.standingInstructions = instructions;
-  entry.standingInstructionsResolved = true;
+  if (!entry.agentSystemPrompt) {
+    entry.agentSystemPrompt = systemPrompt;
+  }
 }
 
 /**
- * Check whether standing instructions have been resolved (extraction attempted).
+ * Check whether a session exists in the cache.
  */
-export function isStandingInstructionsResolved(sessionKey: string): boolean {
-  const entry = cache.get(sessionKey);
-  return entry?.standingInstructionsResolved ?? false;
-}
-
-/**
- * Get the available skills for a session.
- */
-export function getAvailableSkills(sessionKey: string): string | undefined {
-  const entry = cache.get(sessionKey);
-  return entry?.availableSkills;
-}
-
-/**
- * Update the available skills for a session.
- */
-export function updateAvailableSkills(sessionKey: string, skills: string | undefined): void {
-  const entry = cache.get(sessionKey);
-  if (!entry) return;
-  entry.availableSkills = skills;
+export function hasSession(sessionKey: string): boolean {
+  return cache.has(sessionKey);
 }
 
 /**

@@ -9,9 +9,9 @@ import {
   markSummaryComplete,
   isSummaryInProgress,
   isSystemTrigger,
-  getStandingInstructions,
-  updateStandingInstructions,
-  isStandingInstructionsResolved,
+  getAgentSystemPrompt,
+  setAgentSystemPrompt,
+  hasSession,
   getTotalTurns,
   clearCache,
   cacheSize,
@@ -555,6 +555,37 @@ describe("message-cache", () => {
     it("returns false for unknown sessions", () => {
       expect(isSystemTrigger("nonexistent")).toBe(false);
     });
+
+    it("preserves isSystemTrigger when subsequent llm_input has no prompt", () => {
+      // Heartbeat fires with prompt → isSystemTrigger=true
+      updateCache("s1", [], "heartbeat", 3, NO_FILTER);
+      expect(isSystemTrigger("s1")).toBe(true);
+
+      // Agent loop continues without prompt (tool result processed) → should preserve true
+      updateCache("s1", [{ role: "user", content: "heartbeat" }], undefined, 3, NO_FILTER);
+      expect(isSystemTrigger("s1")).toBe(true);
+    });
+
+    it("resets isSystemTrigger when a real user message arrives", () => {
+      updateCache("s1", [], "heartbeat", 3, NO_FILTER);
+      expect(isSystemTrigger("s1")).toBe(true);
+
+      // Real user message arrives → should reset to false
+      updateCache(
+        "s1",
+        [{ role: "user", content: "heartbeat" }],
+        "Deploy my project",
+        3,
+        NO_FILTER,
+      );
+      expect(isSystemTrigger("s1")).toBe(false);
+    });
+
+    it("does not inherit system trigger from a different session's history", () => {
+      // Fresh session with no prompt → should be false (not inherited)
+      updateCache("s1", [], undefined, 3, NO_FILTER);
+      expect(isSystemTrigger("s1")).toBe(false);
+    });
   });
 
   describe("getRecentTurns filters system turns", () => {
@@ -599,41 +630,6 @@ describe("message-cache", () => {
       updateCache("s1", history, undefined, 10, NO_FILTER);
       const turns = getRecentTurns("s1");
       expect(turns).toEqual([{ user: "Do something", assistant: undefined }]);
-    });
-  });
-
-  describe("standing instructions", () => {
-    it("starts unresolved with no instructions", () => {
-      updateCache("s1", [], undefined, 3, NO_FILTER);
-      expect(isStandingInstructionsResolved("s1")).toBe(false);
-      expect(getStandingInstructions("s1")).toBeUndefined();
-    });
-
-    it("stores and retrieves standing instructions", () => {
-      updateCache("s1", [], undefined, 3, NO_FILTER);
-      updateStandingInstructions("s1", "- Always copy reports to Google Drive");
-      expect(getStandingInstructions("s1")).toBe("- Always copy reports to Google Drive");
-      expect(isStandingInstructionsResolved("s1")).toBe(true);
-    });
-
-    it("marks as resolved even with undefined instructions (no standing instructions found)", () => {
-      updateCache("s1", [], undefined, 3, NO_FILTER);
-      updateStandingInstructions("s1", undefined);
-      expect(isStandingInstructionsResolved("s1")).toBe(true);
-      expect(getStandingInstructions("s1")).toBeUndefined();
-    });
-
-    it("preserves standing instructions across updateCache calls", () => {
-      updateCache("s1", [], undefined, 3, NO_FILTER);
-      updateStandingInstructions("s1", "- Run tests before committing");
-      updateCache("s1", [{ role: "user", content: "hello" }], undefined, 3, NO_FILTER);
-      expect(getStandingInstructions("s1")).toBe("- Run tests before committing");
-      expect(isStandingInstructionsResolved("s1")).toBe(true);
-    });
-
-    it("returns undefined for unknown session", () => {
-      expect(getStandingInstructions("nonexistent")).toBeUndefined();
-      expect(isStandingInstructionsResolved("nonexistent")).toBe(false);
     });
   });
 
@@ -711,6 +707,54 @@ describe("message-cache", () => {
 
       const turns = getRecentTurns("session-1");
       expect(turns).toEqual([]);
+    });
+  });
+
+  describe("agentSystemPrompt", () => {
+    it("starts as undefined for new sessions", () => {
+      updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
+      expect(getAgentSystemPrompt("s1")).toBeUndefined();
+    });
+
+    it("is set via setAgentSystemPrompt", () => {
+      updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
+      setAgentSystemPrompt("s1", "You are a helpful assistant.");
+      expect(getAgentSystemPrompt("s1")).toBe("You are a helpful assistant.");
+    });
+
+    it("is not overwritten on subsequent setAgentSystemPrompt calls", () => {
+      updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
+      setAgentSystemPrompt("s1", "First system prompt");
+      setAgentSystemPrompt("s1", "Second system prompt");
+      expect(getAgentSystemPrompt("s1")).toBe("First system prompt");
+    });
+
+    it("persists across updateCache calls", () => {
+      updateCache("s1", [{ role: "user", content: "msg1" }], undefined, 3, NO_FILTER);
+      setAgentSystemPrompt("s1", "Cached prompt");
+      updateCache("s1", [{ role: "user", content: "msg2" }], undefined, 3, NO_FILTER);
+      expect(getAgentSystemPrompt("s1")).toBe("Cached prompt");
+    });
+
+    it("returns undefined for unknown sessions", () => {
+      expect(getAgentSystemPrompt("nonexistent")).toBeUndefined();
+    });
+  });
+
+  describe("hasSession", () => {
+    it("returns true for existing sessions", () => {
+      updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
+      expect(hasSession("s1")).toBe(true);
+    });
+
+    it("returns false for unknown sessions", () => {
+      expect(hasSession("nonexistent")).toBe(false);
+    });
+
+    it("returns false after clearCache", () => {
+      updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
+      clearCache();
+      expect(hasSession("s1")).toBe(false);
     });
   });
 });
