@@ -81,6 +81,10 @@ export type MatrixConfig = {
   chunkMode?: "length" | "newline";
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Max group/channel messages to keep as history context (0 disables). */
+  historyLimit?: number;
+  /** Max DM turns to keep as history context. */
+  dmHistoryLimit?: number;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
   /** Auto-join invites (always|allowlist|off). Default: always. */
