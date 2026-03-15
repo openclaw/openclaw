@@ -438,6 +438,7 @@ export type PluginHookName =
   | "after_tool_call"
   | "tool_result_persist"
   | "before_message_write"
+  | "before_context_send"
   | "session_start"
   | "session_end"
   | "subagent_spawning"
@@ -464,6 +465,7 @@ export const PLUGIN_HOOK_NAMES = [
   "after_tool_call",
   "tool_result_persist",
   "before_message_write",
+  "before_context_send",
   "session_start",
   "session_end",
   "subagent_spawning",
@@ -771,6 +773,35 @@ export type PluginHookBeforeMessageWriteResult = {
   message?: AgentMessage; // Optional: modified message to write instead
 };
 
+// before_context_send hook
+/**
+ * Context for the before_context_send hook.
+ *
+ * This hook runs inside pi-agent-core's synchronous `context` event.
+ * The ExtensionContext provides limited metadata; we expose what's available.
+ */
+export type PluginHookBeforeContextSendContext = {
+  /** Session manager instance (opaque to plugins, but available for advanced use) */
+  sessionManager?: unknown;
+};
+
+export type PluginHookBeforeContextSendEvent = {
+  /**
+   * The messages array about to be sent to the LLM, after context pruning.
+   * Handlers may return a modified array (e.g. deduplicate tool results,
+   * supersede stale writes, purge old error inputs, filter sensitive content).
+   */
+  messages: AgentMessage[];
+};
+
+export type PluginHookBeforeContextSendResult = {
+  /**
+   * Optional modified messages array. If provided, replaces the messages
+   * for subsequent handlers and the final LLM call.
+   */
+  messages?: AgentMessage[];
+};
+
 // Session context
 export type PluginHookSessionContext = {
   agentId?: string;
@@ -949,6 +980,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeMessageWriteEvent,
     ctx: { agentId?: string; sessionKey?: string },
   ) => PluginHookBeforeMessageWriteResult | void;
+  before_context_send: (
+    event: PluginHookBeforeContextSendEvent,
+    ctx: PluginHookBeforeContextSendContext,
+  ) => PluginHookBeforeContextSendResult | void;
   session_start: (
     event: PluginHookSessionStartEvent,
     ctx: PluginHookSessionContext,

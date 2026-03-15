@@ -103,6 +103,9 @@ export type {
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
+  PluginHookBeforeContextSendEvent,
+  PluginHookBeforeContextSendResult,
+  PluginHookBeforeContextSendContext,
 } from "../plugins/types.js";
 export type {
   GatewayRequestHandler,

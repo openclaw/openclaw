@@ -50,6 +50,9 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookBeforeContextSendEvent,
+  PluginHookBeforeContextSendResult,
+  PluginHookBeforeContextSendContext,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -81,6 +84,9 @@ export type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookBeforeContextSendEvent,
+  PluginHookBeforeContextSendResult,
+  PluginHookBeforeContextSendContext,
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
@@ -598,6 +604,72 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return undefined;
   }
 
+  /**
+   * Run before_context_send hook.
+   *
+   * This hook is intentionally synchronous because it runs inside the
+   * pi-agent-core `context` event handler which is sync.
+   *
+   * Handlers are executed sequentially in priority order (higher first).
+   * Each handler may return `{ messages }` to replace the messages array
+   * passed to the next handler.
+   */
+  function runBeforeContextSend(
+    event: PluginHookBeforeContextSendEvent,
+    ctx: PluginHookBeforeContextSendContext,
+  ): PluginHookBeforeContextSendResult | undefined {
+    const hooks = getHooksForName(registry, "before_context_send");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(`[hooks] running before_context_send (${hooks.length} handlers, sequential)`);
+
+    let current = event.messages;
+
+    for (const hook of hooks) {
+      try {
+        // oxlint-disable-next-line typescript/no-explicit-any
+        const out = (hook.handler as any)({ ...event, messages: current }, ctx) as
+          | PluginHookBeforeContextSendResult
+          | void
+          | Promise<unknown>;
+
+        // Guard against accidental async handlers (this hook is sync-only).
+        // oxlint-disable-next-line typescript/no-explicit-any
+        if (out && typeof (out as any).then === "function") {
+          const msg =
+            `[hooks] before_context_send handler from ${hook.pluginId} returned a Promise; ` +
+            `this hook is synchronous and the result was ignored.`;
+          if (catchErrors) {
+            logger?.warn?.(msg);
+            continue;
+          }
+          throw new Error(msg);
+        }
+
+        const next = (out as PluginHookBeforeContextSendResult | undefined)?.messages;
+        if (next) {
+          current = next;
+        }
+      } catch (err) {
+        const msg = `[hooks] before_context_send handler from ${hook.pluginId} failed: ${String(err)}`;
+        if (catchErrors) {
+          logger?.error(msg);
+        } else {
+          throw new Error(msg, { cause: err });
+        }
+      }
+    }
+
+    // If messages were modified by any handler, return them.
+    if (current !== event.messages) {
+      return { messages: current };
+    }
+
+    return undefined;
+  }
+
   // =========================================================================
   // Session Hooks
   // =========================================================================
@@ -743,6 +815,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,
+    runBeforeContextSend,
     // Session hooks
     runSessionStart,
     runSessionEnd,

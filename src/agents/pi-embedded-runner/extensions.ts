@@ -92,10 +92,18 @@ export function buildEmbeddedExtensionFactories(params: {
     });
     factories.push(compactionSafeguardExtension);
   }
+
+  // Always load context-pruning extension to support before_context_send hooks,
+  // even when pruning itself is disabled. The extension will set up pruning
+  // runtime only when cache-ttl mode is configured.
   const pruningFactory = buildContextPruningFactory(params);
   if (pruningFactory) {
     factories.push(pruningFactory);
+  } else {
+    // No pruning configured, but we still need the extension for before_context_send hooks
+    factories.push(contextPruningExtension);
   }
+
   return factories;
 }
 
