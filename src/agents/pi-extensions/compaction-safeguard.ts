@@ -740,15 +740,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "was not called and model was not passed through runtime registry.",
         );
       }
-      return { cancel: true };
+      return undefined;
     }
 
     const apiKey = await ctx.modelRegistry.getApiKey(model);
     if (!apiKey) {
-      log.warn(
-        "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
-      );
-      return { cancel: true };
+      log.warn("Compaction safeguard: no API key available; falling back to built-in compaction.");
+      return undefined;
     }
 
     try {
