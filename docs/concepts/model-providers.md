@@ -22,7 +22,8 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Provider plugins can also own provider runtime behavior via
   `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
   `capabilities`, `prepareExtraParams`, `wrapStreamFn`,
-  `isCacheTtlEligible`, and `prepareRuntimeAuth`.
+  `isCacheTtlEligible`, `prepareRuntimeAuth`, `resolveUsageAuth`, and
+  `fetchUsageSnapshot`.
 
 ## Plugin-owned provider behavior
 
@@ -43,22 +44,32 @@ Typical split:
 - `isCacheTtlEligible`: provider decides which upstream model ids support prompt-cache TTL
 - `prepareRuntimeAuth`: provider turns a configured credential into a short
   lived runtime token
+- `resolveUsageAuth`: provider resolves usage/quota credentials for `/usage`
+  and related status/reporting surfaces
+- `fetchUsageSnapshot`: provider owns the usage endpoint fetch/parsing while
+  core still owns the summary shell and formatting
 
 Current bundled examples:
 
 - `openrouter`: pass-through model ids, request wrappers, provider capability
   hints, and cache-TTL policy
 - `github-copilot`: forward-compat model fallback, Claude-thinking transcript
-  hints, and runtime token exchange
+  hints, runtime token exchange, and usage endpoint fetching
 - `openai-codex`: forward-compat model fallback, transport normalization, and
-  default transport params
+  default transport params plus usage endpoint fetching
+- `google-gemini-cli`: Gemini 3.1 forward-compat fallback plus usage-token
+  parsing and quota endpoint fetching for usage surfaces
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
 - `kilocode`: shared transport, plugin-owned request headers, reasoning payload
   normalization, Gemini transcript hints, and cache-TTL policy
+- `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
+  policy, and usage auth + quota fetching
+- `mistral`, `opencode`, and `opencode-go`: plugin-owned capability metadata
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`,
-  `minimax`, `minimax-portal`, `modelstudio`, `nvidia`, `qianfan`,
-  `qwen-portal`, `synthetic`, `together`, `venice`, `vercel-ai-gateway`,
-  `volcengine`, and `xiaomi`: plugin-owned catalogs only
+  `minimax-portal`, `modelstudio`, `nvidia`, `qianfan`, `qwen-portal`,
+  `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine`:
+  plugin-owned catalogs only
+- `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
 
 That covers providers that still fit OpenClaw's normal transports. A provider
 that needs a totally custom request executor is a separate, deeper extension
