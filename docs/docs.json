@@ -61,7 +61,7 @@
     },
     {
       "source": "/cron",
-      "destination": "/cron-jobs"
+      "destination": "/automation/cron-jobs"
     },
     {
       "source": "/minimax",
@@ -509,11 +509,11 @@
     },
     {
       "source": "/model",
-      "destination": "/models"
+      "destination": "/concepts/models"
     },
     {
       "source": "/model/",
-      "destination": "/models"
+      "destination": "/concepts/models"
     },
     {
       "source": "/models",

@@ -106,10 +106,10 @@ The Gateway is the single source of truth for sessions, routing, and channel con
     openclaw onboard --install-daemon
     ```
   </Step>
-  <Step title="Pair WhatsApp and start the Gateway">
+  <Step title="Check the Gateway and open the Control UI">
     ```bash
-    openclaw channels login
-    openclaw gateway --port 18789
+    openclaw gateway status
+    openclaw dashboard
     ```
   </Step>
 </Steps>
