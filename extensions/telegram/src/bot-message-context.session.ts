@@ -38,6 +38,24 @@ import {
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 
+function normalizeTelegramCommandBodyForDirectives(
+  rawBody: string,
+  options?: { botUsername?: string },
+): string {
+  const trimmed = rawBody.trim();
+  if (!trimmed.startsWith("/")) {
+    return trimmed;
+  }
+  const newline = trimmed.indexOf("\n");
+  if (newline === -1) {
+    return normalizeCommandBody(trimmed, options);
+  }
+  const firstLine = trimmed.slice(0, newline).trim();
+  const rest = trimmed.slice(newline + 1);
+  const normalizedFirstLine = normalizeCommandBody(firstLine, options);
+  return rest ? `${normalizedFirstLine}\n${rest}` : normalizedFirstLine;
+}
+
 export async function buildTelegramInboundContextPayload(params: {
   cfg: OpenClawConfig;
   primaryCtx: TelegramContext;
@@ -173,9 +191,14 @@ export async function buildTelegramInboundContextPayload(params: {
     groupConfig,
     topicConfig,
   });
-  const commandBody = normalizeCommandBody(rawBody, {
+  const commandNormalizeOptions = {
     botUsername: primaryCtx.me?.username?.toLowerCase(),
-  });
+  };
+  const commandBody = normalizeCommandBody(rawBody, commandNormalizeOptions);
+  const bodyForCommands = normalizeTelegramCommandBodyForDirectives(
+    rawBody,
+    commandNormalizeOptions,
+  );
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
       ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
@@ -189,6 +212,9 @@ export async function buildTelegramInboundContextPayload(params: {
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: bodyText,
+    // Keep Telegram command parsing aligned with normalized /command@bot handling
+    // while still preserving multiline one-shot bodies after the first line.
+    BodyForCommands: bodyForCommands,
     InboundHistory: inboundHistory,
     RawBody: rawBody,
     CommandBody: commandBody,

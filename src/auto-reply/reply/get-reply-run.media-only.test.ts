@@ -208,6 +208,24 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
+  it("surfaces unsupported explicit xhigh requests for one-shot think messages", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        directives: {
+          hasThinkDirective: false,
+          thinkLevel: undefined,
+          oneShotThinkLevel: "xhigh",
+        } as never,
+        resolvedThinkLevel: "xhigh",
+      }),
+    );
+
+    expect(result).toEqual({
+      text: expect.stringContaining('Thinking level "xhigh" is only supported for'),
+    });
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
   it("omits auth key labels from /new and /reset confirmation messages", async () => {
     await runPreparedReply(
       baseParams({

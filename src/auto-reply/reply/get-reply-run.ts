@@ -391,7 +391,9 @@ export async function runPreparedReply(
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
   if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-    const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
+    const explicitThink =
+      (directives.hasThinkDirective && directives.thinkLevel !== undefined) ||
+      directives.oneShotThinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {

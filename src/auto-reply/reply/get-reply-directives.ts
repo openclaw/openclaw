@@ -5,6 +5,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { isOneShotThinkMessage } from "../command-detection.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -24,6 +25,10 @@ import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+
+function stripLeadingMentionPunctuationBeforeCommand(text: string): string {
+  return text.replace(/^[\s,.;:!?，。！？、:：'"()[\]{}-]+(?=\/)/u, "").trimStart();
+}
 
 export type ReplyDirectiveContinuation = {
   commandSource: string;
@@ -244,14 +249,31 @@ export async function resolveReplyDirectives(params: {
         modelAliases: configuredAliases,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
+        const oneShotCandidate = stripStructuralPrefixes(commandText);
+        const oneShotCandidateNoMentions = isGroup
+          ? stripMentions(oneShotCandidate, ctx, cfg, agentId)
+          : oneShotCandidate;
+        const normalizedOneShotCandidate = stripLeadingMentionPunctuationBeforeCommand(
+          oneShotCandidateNoMentions,
+        );
+        // Check the mention-stripped command text so group messages like "@bot /think high ..."
+        // still preserve the one-shot level, while mid-text "/think" mentions remain plain text.
+        const oneShotThinkLevel =
+          parsedDirectives.hasThinkDirective &&
+          isOneShotThinkMessage(normalizedOneShotCandidate, {
+            botUsername: ctx.BotUsername,
+          })
+            ? parsedDirectives.thinkLevel
+            : undefined;
         const allowInlineStatus =
           parsedDirectives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender;
         parsedDirectives = allowInlineStatus
           ? {
               ...clearInlineDirectives(parsedDirectives.cleaned),
               hasStatusDirective: true,
+              oneShotThinkLevel,
             }
-          : clearInlineDirectives(parsedDirectives.cleaned);
+          : { ...clearInlineDirectives(parsedDirectives.cleaned), oneShotThinkLevel };
       }
     }
   }
@@ -262,6 +284,7 @@ export async function resolveReplyDirectives(params: {
     : {
         ...parsedDirectives,
         hasThinkDirective: false,
+        oneShotThinkLevel: undefined,
         hasVerboseDirective: false,
         hasFastDirective: false,
         hasReasoningDirective: false,
@@ -342,8 +365,13 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
+  // thinkLevel: session-persistent directive (pure `/think <level>` command).
+  // oneShotThinkLevel: non-persistent, set when `/think <level> <body>` has message text.
+  // In one-shot path, thinkLevel is cleared by clearInlineDirectives; oneShotThinkLevel carries it.
   const resolvedThinkLevel =
-    directives.thinkLevel ?? (sessionEntry?.thinkingLevel as ThinkLevel | undefined);
+    directives.thinkLevel ??
+    directives.oneShotThinkLevel ??
+    (sessionEntry?.thinkingLevel as ThinkLevel | undefined);
   const resolvedFastMode =
     directives.fastMode ??
     resolveFastModeState({

@@ -234,6 +234,65 @@ describe("trigger handling", () => {
         getRunEmbeddedPiAgentMock().mockClear();
       }
 
+      {
+        const cfg = makeCfg(home);
+        cfg.agents = {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            thinkingDefault: "off",
+          },
+        };
+        const storePath = cfg.session?.store;
+        if (!storePath) {
+          throw new Error("missing session store path");
+        }
+
+        mockRunEmbeddedPiAgentOk();
+        const oneShotRes = await getReplyFromConfig(
+          {
+            Body: "/think high explain this change",
+            From: "+1004",
+            To: "+2000",
+            Provider: "whatsapp",
+            Surface: "whatsapp",
+            SenderE164: "+1004",
+            CommandAuthorized: true,
+          },
+          {},
+          cfg,
+        );
+
+        expect(maybeReplyText(oneShotRes)).toBe("ok");
+        expect(getRunEmbeddedPiAgentMock()).toHaveBeenCalledOnce();
+        const oneShotCall = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0];
+        expect(oneShotCall?.thinkLevel).toBe("high");
+        expect(oneShotCall?.prompt).toContain("explain this change");
+        expect(oneShotCall?.prompt).not.toContain("/think high");
+        const storeAfterOneShot = loadSessionStore(storePath);
+        expect(storeAfterOneShot[MAIN_SESSION_KEY]?.thinkingLevel).toBeUndefined();
+
+        getRunEmbeddedPiAgentMock().mockClear();
+        mockRunEmbeddedPiAgentOk();
+        const followupRes = await getReplyFromConfig(
+          {
+            Body: "hello again",
+            From: "+1004",
+            To: "+2000",
+            Provider: "whatsapp",
+            Surface: "whatsapp",
+            SenderE164: "+1004",
+          },
+          {},
+          cfg,
+        );
+
+        expect(maybeReplyText(followupRes)).toBe("ok");
+        expect(getRunEmbeddedPiAgentMock()).toHaveBeenCalledOnce();
+        const followupCall = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0];
+        expect(followupCall?.thinkLevel).toBe("off");
+      }
+
       const modelCases = [
         {
           label: "heartbeat-override",
