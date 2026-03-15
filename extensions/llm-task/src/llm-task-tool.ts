@@ -84,9 +84,22 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Lobster workflows via openclaw.invoke.",
     parameters: Type.Object({
       prompt: Type.String({ description: "Task instruction for the LLM." }),
-      input: Type.Optional(Type.Unknown({ description: "Optional input payload for the task." })),
+      // NOTE: Use Type.Unsafe with explicit type instead of Type.Unknown();
+      // Type.Unknown() emits schema without a "type" field, which llama.cpp
+      // rejects during JSON schema-to-grammar conversion (400 Bad Request).
+      input: Type.Optional(
+        Type.Unsafe<Record<string, unknown>>({
+          type: "object",
+          additionalProperties: true,
+          description: "Optional input payload for the task. Must be a JSON object.",
+        }),
+      ),
       schema: Type.Optional(
-        Type.Unknown({ description: "Optional JSON Schema to validate the returned JSON." }),
+        Type.Unsafe<Record<string, unknown>>({
+          type: "object",
+          additionalProperties: true,
+          description: "Optional JSON Schema to validate the returned JSON.",
+        }),
       ),
       provider: Type.Optional(
         Type.String({ description: "Provider override (e.g. openai-codex, anthropic)." }),
@@ -183,7 +196,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       };
 
       // oxlint-disable-next-line typescript/no-explicit-any
-      const input = (params as any).input as unknown;
+      const input = (params as any).input as Record<string, unknown> | undefined;
+      if (input != null && (typeof input !== "object" || Array.isArray(input))) {
+        throw new Error("input must be a JSON object (not an array, string, or scalar)");
+      }
       let inputJson: string;
       try {
         inputJson = JSON.stringify(input ?? null, null, 2);
