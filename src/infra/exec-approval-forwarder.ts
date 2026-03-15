@@ -442,6 +442,10 @@ export function createExecApprovalForwarder(
   const nowMs = deps.nowMs ?? Date.now;
   const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;
   const configKey = deps.configKey ?? "exec";
+  // Discord's component-based exec approval handler only consumes
+  // exec.approval.* events. HTTP approvals have no Discord component handler,
+  // so the exec-only suppression logic must be skipped for HTTP forwarding.
+  const skipDiscordSuppression = configKey === "http";
   const pending = new Map<string, PendingApproval>();
 
   const handleRequested = async (request: ExecApprovalRequest): Promise<boolean> => {
@@ -458,7 +462,7 @@ export function createExecApprovalForwarder(
         : []),
     ].filter(
       (target) =>
-        !shouldSkipDiscordForwarding(target, cfg) &&
+        (skipDiscordSuppression || !shouldSkipDiscordForwarding(target, cfg)) &&
         !shouldSkipTelegramForwarding({ target, cfg, request }),
     );
 
@@ -533,7 +537,7 @@ export function createExecApprovalForwarder(
           : []),
       ].filter(
         (target) =>
-          !shouldSkipDiscordForwarding(target, cfg) &&
+          (skipDiscordSuppression || !shouldSkipDiscordForwarding(target, cfg)) &&
           !shouldSkipTelegramForwarding({ target, cfg, request }),
       );
     }

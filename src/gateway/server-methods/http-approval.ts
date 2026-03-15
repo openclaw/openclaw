@@ -129,7 +129,9 @@ export function createHttpApprovalHandlers(
         { dropIfSlow: true },
       );
 
-      const hasApprovalClients = context.hasExecApprovalClients?.() ?? false;
+      // Exclude the requester's own socket so backend/self-connections (e.g.
+      // callGatewayTool for web_fetch) don't satisfy the approver check.
+      const hasApprovalClients = context.hasExecApprovalClients?.(client?.connId ?? null) ?? false;
       let forwarded = false;
       if (opts?.forwarder) {
         try {
