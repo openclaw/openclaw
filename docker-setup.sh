@@ -492,6 +492,13 @@ echo "  ${COMPOSE_HINT} run --rm openclaw-cli channels add --channel discord --t
 echo "Docs: https://docs.openclaw.ai/channels"
 
 echo ""
+echo "==> Cleaning up stale containers"
+# Remove leftover containers and orphan networks from previous runs.
+# Abnormal exits (kill -9, power loss, OOM-kill) bypass --rm cleanup, leaving
+# ghost containers that cause port/name conflicts on the next start.
+docker compose "${COMPOSE_ARGS[@]}" down --remove-orphans || true
+
+echo ""
 echo "==> Starting gateway"
 docker compose "${COMPOSE_ARGS[@]}" up -d openclaw-gateway
 
