@@ -45,12 +45,12 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
-  npm: `@icesword760/openclaw-wechat`
-  repo: `https://github.com/icesword0760/openclaw-wechat`
-  install: `openclaw plugins install @icesword760/openclaw-wechat`
-
 - **AARI Execution Firewall** — Pre-execution firewall for OpenClaw agents with ALLOW / WARN / BLOCK policy enforcement and audit trail.
   npm: `@aari/aari-firewall`
   repo: `https://github.com/aari-ai/openclaw-aari`
   install: `openclaw plugins install @aari/aari-firewall`
+
+- **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
+  npm: `@icesword760/openclaw-wechat`
+  repo: `https://github.com/icesword0760/openclaw-wechat`
+  install: `openclaw plugins install @icesword760/openclaw-wechat`
