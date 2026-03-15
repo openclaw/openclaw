@@ -797,7 +797,10 @@ export async function startGatewayServer(
   // HTTP approvals share the same manager type but use a separate instance
   // so pending IDs do not collide between exec and HTTP approval namespaces.
   const httpApprovalManager = new ExecApprovalManager();
-  const httpApprovalHandlers = createHttpApprovalHandlers(httpApprovalManager);
+  const httpApprovalForwarder = createExecApprovalForwarder();
+  const httpApprovalHandlers = createHttpApprovalHandlers(httpApprovalManager, {
+    forwarder: httpApprovalForwarder,
+  });
   const secretsHandlers = createSecretsHandlers({
     reloadSecrets: async () => {
       const active = getActiveSecretsRuntimeSnapshot();

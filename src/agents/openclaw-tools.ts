@@ -121,13 +121,19 @@ export function createOpenClawTools(
     sandboxed: options?.sandboxed,
     runtimeFirecrawl: runtimeWebTools?.fetch.firecrawl,
   });
+  // Resolve the effective agent ID for HTTP approval policy.
+  // Prefer requesterAgentIdOverride (used by cron/hook sessions that run without
+  // a session key) over session-key-derived agent ID.
+  const httpApprovalAgentId =
+    options?.requesterAgentIdOverride ??
+    resolveSessionAgentId({
+      sessionKey: options?.agentSessionKey,
+      config: options?.config,
+    });
   const webFetchTool = rawWebFetchTool
     ? withHttpApprovalGate(rawWebFetchTool, {
         config: options?.config,
-        agentId: resolveSessionAgentId({
-          sessionKey: options?.agentSessionKey,
-          config: options?.config,
-        }),
+        agentId: httpApprovalAgentId,
         sessionKey: options?.agentSessionKey,
         turnSourceChannel: options?.agentChannel,
         turnSourceTo: options?.agentTo,

@@ -81,9 +81,29 @@ function normalizeUrlForMatch(url: string): string | null {
   }
 }
 
+/**
+ * Normalize a host-only pattern so it matches any path.
+ * For example, `https://api.example.com` becomes `https://api.example.com/**`
+ * because URL normalization always adds at least a trailing `/` to host-only URLs.
+ */
+function normalizePatternForHostOnlyMatch(pattern: string): string {
+  // Check if the pattern looks like a full URL (protocol + host) with no path.
+  // A host-only pattern ends right after the host portion with no `/` after `://`.
+  const protocolEnd = pattern.indexOf("://");
+  if (protocolEnd === -1) {
+    return pattern;
+  }
+  const afterProtocol = pattern.slice(protocolEnd + 3);
+  // If there's no `/` after the host, append `/**` to match any path.
+  if (!afterProtocol.includes("/")) {
+    return `${pattern}/**`;
+  }
+  return pattern;
+}
+
 function matchesUrlPattern(normalizedUrl: string, pattern: string): boolean {
   const lowerUrl = normalizedUrl.toLowerCase();
-  const lowerPattern = pattern.toLowerCase().trim();
+  const lowerPattern = normalizePatternForHostOnlyMatch(pattern.toLowerCase().trim());
   if (!lowerPattern) {
     return false;
   }

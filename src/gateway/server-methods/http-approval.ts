@@ -6,6 +6,7 @@
  * difference is the event names and the payload shape.
  */
 
+import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import {
   DEFAULT_HTTP_APPROVAL_TIMEOUT_MS,
@@ -15,7 +16,10 @@ import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-export function createHttpApprovalHandlers(manager: ExecApprovalManager): GatewayRequestHandlers {
+export function createHttpApprovalHandlers(
+  manager: ExecApprovalManager,
+  opts?: { forwarder?: ExecApprovalForwarder },
+): GatewayRequestHandlers {
   return {
     "http.approval.request": async ({ params, respond, context, client }) => {
       const p = params as {
@@ -113,7 +117,21 @@ export function createHttpApprovalHandlers(manager: ExecApprovalManager): Gatewa
       );
 
       const hasApprovalClients = context.hasExecApprovalClients?.() ?? false;
-      if (!hasApprovalClients) {
+      let forwarded = false;
+      if (opts?.forwarder) {
+        try {
+          forwarded = await opts.forwarder.handleRequested({
+            id: record.id,
+            request: record.request,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          });
+        } catch (err) {
+          context.logGateway?.error?.(`http approvals: forward request failed: ${String(err)}`);
+        }
+      }
+
+      if (!hasApprovalClients && !forwarded) {
         manager.expire(record.id, "no-approval-route");
         respond(
           true,
@@ -235,6 +253,17 @@ export function createHttpApprovalHandlers(manager: ExecApprovalManager): Gatewa
         { id: approvalId, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
         { dropIfSlow: true },
       );
+      void opts?.forwarder
+        ?.handleResolved({
+          id: approvalId,
+          decision,
+          resolvedBy,
+          ts: Date.now(),
+          request: snapshot?.request,
+        })
+        .catch((err) => {
+          context.logGateway?.error?.(`http approvals: forward resolve failed: ${String(err)}`);
+        });
       respond(true, { ok: true }, undefined);
     },
   };

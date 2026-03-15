@@ -66,7 +66,9 @@ export function withHttpApprovalGate(
   return {
     ...tool,
     execute: async (toolCallId: string, args: Record<string, unknown>) => {
-      const url = typeof args.url === "string" ? args.url.trim() : "";
+      // Check all known URL parameter shapes: url, navigate, targetUrl.
+      // Browser tools use targetUrl (via readTargetUrlParam in browser-tool.ts).
+      const url = extractUrlFromArgs(args);
       if (!url) {
         // Let the original tool handle the missing URL error.
         return originalExecute(toolCallId, args);
@@ -180,8 +182,10 @@ async function requestHttpApproval(params: {
     );
     return normalizeDecision(decisionResult?.decision);
   } catch {
-    // Network/gateway error: treat as no decision (askFallback applies).
-    return null;
+    // Network/gateway error: block (deny) to avoid failing open.
+    // If the approval channel is unhealthy, the safe default is to deny
+    // rather than silently allowing the request through.
+    return "deny";
   }
 }
 
@@ -190,4 +194,24 @@ function normalizeDecision(value: unknown): HttpApprovalDecision {
     return value;
   }
   return null;
+}
+
+/**
+ * Extract the target URL from tool call args.
+ * Handles multiple parameter shapes:
+ *   - `url` (web_fetch, browser navigate)
+ *   - `targetUrl` (browser open/navigate via readTargetUrlParam)
+ *   - `navigate` (legacy browser navigate)
+ */
+function extractUrlFromArgs(args: Record<string, unknown>): string {
+  for (const key of ["url", "targetUrl", "navigate"]) {
+    const value = args[key];
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+  }
+  return "";
 }

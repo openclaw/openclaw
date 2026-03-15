@@ -104,6 +104,25 @@ describe("matchHttpAllowlist", () => {
     // Fragment is stripped during normalization, so the path matches
     expect(matchHttpAllowlist([entry], "https://example.com/page#section")).toBe(entry);
   });
+
+  it("matches host-only pattern without explicit path", () => {
+    const entry = { pattern: "https://api.example.com" };
+    // Host-only patterns should match any path since URL normalization
+    // always adds at least a trailing `/`.
+    expect(matchHttpAllowlist([entry], "https://api.example.com")).toBe(entry);
+    expect(matchHttpAllowlist([entry], "https://api.example.com/")).toBe(entry);
+    expect(matchHttpAllowlist([entry], "https://api.example.com/v1/data")).toBe(entry);
+    // Different host should not match
+    expect(matchHttpAllowlist([entry], "https://other.example.com/")).toBeNull();
+  });
+
+  it("matches ? as single-character glob wildcard in path", () => {
+    const entry = { pattern: "https://example.com/v?/data" };
+    expect(matchHttpAllowlist([entry], "https://example.com/v1/data")).toBe(entry);
+    expect(matchHttpAllowlist([entry], "https://example.com/v2/data")).toBe(entry);
+    // ? should not match /
+    expect(matchHttpAllowlist([entry], "https://example.com/v/data")).toBeNull();
+  });
 });
 
 describe("evaluateHttpAllowlist", () => {
