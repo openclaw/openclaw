@@ -77,9 +77,10 @@ export const handleSetTopicNameCommand: CommandHandler = async (params, allowTex
       timeoutMs: 10_000,
     });
   } catch (err) {
+    logVerbose(`/set_topic_name gateway error: ${String(err)}`);
     return {
       shouldContinue: false,
-      reply: { text: `❌ Failed to set topic name: ${String(err)}` },
+      reply: { text: "❌ Failed to set topic name. Please try again later." },
     };
   }
 
