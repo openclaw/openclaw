@@ -19,7 +19,41 @@ import {
   type LineChannelData,
   type ResolvedLineAccount,
 } from "openclaw/plugin-sdk/line";
+import { resolveLineOutboundMedia, type LineOutboundMediaResolved } from "./outbound-media.js";
 import { getLineRuntime } from "./runtime.js";
+
+// Extended LineChannelData type with outbound media fields not yet in the SDK type.
+type LineChannelDataWithMedia = LineChannelData & {
+  previewImageUrl?: string;
+  durationMs?: number;
+  trackingId?: string;
+};
+
+// Build a raw LINE API message object from a resolved outbound media result.
+// Used for the inline quick-reply batch path where raw message objects are required.
+function buildLineMediaMessageObject(resolved: LineOutboundMediaResolved): Record<string, unknown> {
+  switch (resolved.mediaKind) {
+    case "video":
+      return {
+        type: "video",
+        originalContentUrl: resolved.mediaUrl,
+        previewImageUrl: resolved.previewImageUrl ?? resolved.mediaUrl,
+        ...(resolved.trackingId ? { trackingId: resolved.trackingId } : {}),
+      };
+    case "audio":
+      return {
+        type: "audio",
+        originalContentUrl: resolved.mediaUrl,
+        duration: resolved.durationMs ?? 60000,
+      };
+    default: // "image"
+      return {
+        type: "image",
+        originalContentUrl: resolved.mediaUrl,
+        previewImageUrl: resolved.previewImageUrl ?? resolved.mediaUrl,
+      };
+  }
+}
 
 // LINE channel metadata
 const meta = {
@@ -299,9 +333,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     deliveryMode: "direct",
     chunker: (text, limit) => getLineRuntime().channel.text.chunkMarkdownText(text, limit),
     textChunkLimit: 5000, // LINE allows up to 5000 characters per text message
-    sendPayload: async ({ to, payload, accountId, cfg }) => {
+    sendPayload: async ({ to, payload, accountId, cfg, mediaLocalRoots }) => {
       const runtime = getLineRuntime();
-      const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+      const lineData = (payload.channelData?.line as LineChannelDataWithMedia | undefined) ?? {};
       const sendText = runtime.channel.line.pushMessageLine;
       const sendBatch = runtime.channel.line.pushMessagesLine;
       const sendFlex = runtime.channel.line.pushFlexMessage;
@@ -349,9 +383,23 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
       const sendMediaMessages = async () => {
         for (const url of mediaUrls) {
+          const trimmed = url?.trim();
+          if (!trimmed) {
+            continue;
+          }
+          const resolved = await resolveLineOutboundMedia(trimmed, {
+            mediaLocalRoots,
+            previewImageUrl: lineData.previewImageUrl,
+            durationMs: lineData.durationMs,
+            trackingId: lineData.trackingId,
+          });
           lastResult = await runtime.channel.line.sendMessageLine(to, "", {
             verbose: false,
-            mediaUrl: url,
+            mediaUrl: resolved.mediaUrl,
+            mediaKind: resolved.mediaKind,
+            previewImageUrl: resolved.previewImageUrl,
+            durationMs: resolved.durationMs,
+            trackingId: resolved.trackingId,
             cfg,
             accountId: accountId ?? undefined,
           });
@@ -457,11 +505,13 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
           if (!trimmed) {
             continue;
           }
-          quickReplyMessages.push({
-            type: "image",
-            originalContentUrl: trimmed,
-            previewImageUrl: trimmed,
+          const resolved = await resolveLineOutboundMedia(trimmed, {
+            mediaLocalRoots,
+            previewImageUrl: lineData.previewImageUrl,
+            durationMs: lineData.durationMs,
+            trackingId: lineData.trackingId,
           });
+          quickReplyMessages.push(buildLineMediaMessageObject(resolved));
         }
         if (quickReplyMessages.length > 0 && quickReply) {
           const lastIndex = quickReplyMessages.length - 1;
@@ -516,11 +566,27 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
 
       return { channel: "line", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots }) => {
       const send = getLineRuntime().channel.line.sendMessageLine;
+      let resolvedMediaUrl = mediaUrl;
+      let resolvedMediaKind: "image" | "video" | "audio" | undefined;
+      let resolvedPreviewImageUrl: string | undefined;
+      let resolvedDurationMs: number | undefined;
+      if (mediaUrl?.trim()) {
+        const resolved = await resolveLineOutboundMedia(mediaUrl.trim(), {
+          mediaLocalRoots,
+        });
+        resolvedMediaUrl = resolved.mediaUrl;
+        resolvedMediaKind = resolved.mediaKind;
+        resolvedPreviewImageUrl = resolved.previewImageUrl;
+        resolvedDurationMs = resolved.durationMs;
+      }
       const result = await send(to, text, {
         verbose: false,
-        mediaUrl,
+        mediaUrl: resolvedMediaUrl,
+        mediaKind: resolvedMediaKind,
+        previewImageUrl: resolvedPreviewImageUrl,
+        durationMs: resolvedDurationMs,
         cfg,
         accountId: accountId ?? undefined,
       });
