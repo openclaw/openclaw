@@ -11,6 +11,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../../auth.js";
+import { isTrustedProxyAddress } from "../../net.js";
 
 type HandshakeConnectAuth = {
   token?: string;
@@ -49,10 +50,28 @@ function trimToUndefined(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/**
+ * Extract token from WebSocket upgrade request headers.
+ * This allows a trusted reverse proxy to inject X-OpenClaw-Token header
+ * for browser clients that cannot send custom WebSocket headers.
+ *
+ * Note: Only X-OpenClaw-Token is extracted, not Authorization: Bearer.
+ * The standard Authorization header may contain unrelated OAuth/OIDC tokens
+ * that would cause spurious rate-limit hits if treated as gateway auth.
+ */
+function extractHeaderToken(req: IncomingMessage): string | undefined {
+  const headerToken = req.headers["x-openclaw-token"];
+  if (typeof headerToken === "string" && headerToken.trim()) {
+    return headerToken.trim();
+  }
+  return undefined;
+}
+
 function resolveSharedConnectAuth(
   connectAuth: HandshakeConnectAuth | null | undefined,
+  headerToken?: string,
 ): { token?: string; password?: string } | undefined {
-  const token = trimToUndefined(connectAuth?.token);
+  const token = trimToUndefined(connectAuth?.token) ?? headerToken;
   const password = trimToUndefined(connectAuth?.password);
   if (!token && !password) {
     return undefined;
@@ -81,6 +100,19 @@ function resolveBootstrapTokenCandidate(
   return trimToUndefined(connectAuth?.bootstrapToken);
 }
 
+/**
+ * Resolve auth state for a WebSocket connect handshake.
+ *
+ * When the request comes from a trusted proxy (gateway.trustedProxies),
+ * extracts X-OpenClaw-Token header and uses it as shared auth. This enables
+ * browser clients behind a reverse proxy to authenticate without device pairing
+ * when gateway.controlUi.dangerouslyDisableDeviceAuth is enabled.
+ *
+ * Limitations:
+ * - Header token is only used as shared auth, not as device token candidate.
+ *   Browser clients authing solely via header need dangerouslyDisableDeviceAuth: true
+ *   or must pass primary auth (token/password) via authorizeWsControlUiGatewayConnect.
+ */
 export async function resolveConnectAuthState(params: {
   resolvedAuth: ResolvedGatewayAuth;
   connectAuth: HandshakeConnectAuth | null | undefined;
@@ -91,7 +123,15 @@ export async function resolveConnectAuthState(params: {
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
 }): Promise<ConnectAuthState> {
-  const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
+  // Check if request comes from a trusted proxy - if so, we can use header token
+  const remoteAddr = params.req.socket?.remoteAddress;
+  const isFromTrustedProxy = isTrustedProxyAddress(remoteAddr, params.trustedProxies);
+
+  // Extract token from HTTP headers (for browser clients behind trusted proxy)
+  // Only use header token when request comes from a trusted proxy to prevent spoofing
+  const headerToken = isFromTrustedProxy ? extractHeaderToken(params.req) : undefined;
+
+  const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth, headerToken);
   const sharedAuthProvided = Boolean(sharedConnectAuth);
   const bootstrapTokenCandidate = params.hasDeviceIdentity
     ? resolveBootstrapTokenCandidate(params.connectAuth)
