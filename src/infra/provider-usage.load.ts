@@ -1,3 +1,5 @@
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { resolveProviderUsageSnapshotWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
@@ -27,14 +29,88 @@ type UsageSummaryOptions = {
   providers?: UsageProviderId[];
   auth?: ProviderAuth[];
   agentDir?: string;
+  workspaceDir?: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
 };
+
+async function fetchProviderUsageSnapshot(params: {
+  auth: ProviderAuth;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  agentDir?: string;
+  workspaceDir?: string;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+}): Promise<ProviderUsageSnapshot> {
+  const pluginSnapshot = await resolveProviderUsageSnapshotWithPlugin({
+    provider: params.auth.provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    context: {
+      config: params.config,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      provider: params.auth.provider,
+      token: params.auth.token,
+      accountId: params.auth.accountId,
+      timeoutMs: params.timeoutMs,
+      fetchFn: params.fetchFn,
+    },
+  });
+  if (pluginSnapshot) {
+    return pluginSnapshot;
+  }
+
+  switch (params.auth.provider) {
+    case "anthropic":
+      return await fetchClaudeUsage(params.auth.token, params.timeoutMs, params.fetchFn);
+    case "github-copilot":
+      return await fetchCopilotUsage(params.auth.token, params.timeoutMs, params.fetchFn);
+    case "google-gemini-cli":
+      return await fetchGeminiUsage(
+        params.auth.token,
+        params.timeoutMs,
+        params.fetchFn,
+        params.auth.provider,
+      );
+    case "openai-codex":
+      return await fetchCodexUsage(
+        params.auth.token,
+        params.auth.accountId,
+        params.timeoutMs,
+        params.fetchFn,
+      );
+    case "minimax":
+      return await fetchMinimaxUsage(params.auth.token, params.timeoutMs, params.fetchFn);
+    case "xiaomi":
+      return {
+        provider: "xiaomi",
+        displayName: PROVIDER_LABELS.xiaomi,
+        windows: [],
+      };
+    case "zai":
+      return await fetchZaiUsage(params.auth.token, params.timeoutMs, params.fetchFn);
+    default:
+      return {
+        provider: params.auth.provider,
+        displayName: PROVIDER_LABELS[params.auth.provider],
+        windows: [],
+        error: "Unsupported provider",
+      };
+  }
+}
 
 export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
   const now = opts.now ?? Date.now();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const config = opts.config ?? loadConfig();
+  const env = opts.env ?? process.env;
   const fetchFn = resolveFetch(opts.fetch);
   if (!fetchFn) {
     throw new Error("fetch is not available");
@@ -51,35 +127,15 @@ export async function loadProviderUsageSummary(
 
   const tasks = auths.map((auth) =>
     withTimeout(
-      (async (): Promise<ProviderUsageSnapshot> => {
-        switch (auth.provider) {
-          case "anthropic":
-            return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn);
-          case "github-copilot":
-            return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
-          case "google-gemini-cli":
-            return await fetchGeminiUsage(auth.token, timeoutMs, fetchFn, auth.provider);
-          case "openai-codex":
-            return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
-          case "minimax":
-            return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
-          case "xiaomi":
-            return {
-              provider: "xiaomi",
-              displayName: PROVIDER_LABELS.xiaomi,
-              windows: [],
-            };
-          case "zai":
-            return await fetchZaiUsage(auth.token, timeoutMs, fetchFn);
-          default:
-            return {
-              provider: auth.provider,
-              displayName: PROVIDER_LABELS[auth.provider],
-              windows: [],
-              error: "Unsupported provider",
-            };
-        }
-      })(),
+      fetchProviderUsageSnapshot({
+        auth,
+        config,
+        env,
+        agentDir: opts.agentDir,
+        workspaceDir: opts.workspaceDir,
+        timeoutMs,
+        fetchFn,
+      }),
       timeoutMs + 1000,
       {
         provider: auth.provider,

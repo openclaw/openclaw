@@ -10,7 +10,9 @@ vi.mock("./providers.js", () => ({
 import {
   prepareProviderExtraParams,
   resolveProviderCacheTtlEligibility,
+  resolveProviderUsageSnapshotWithPlugin,
   resolveProviderCapabilitiesWithPlugin,
+  resolveProviderUsageAuthWithPlugin,
   normalizeProviderResolvedModelWithPlugin,
   prepareProviderDynamicModel,
   prepareProviderRuntimeAuth,
@@ -66,6 +68,15 @@ describe("provider-runtime", () => {
       baseUrl: "https://runtime.example.com/v1",
       expiresAt: 123,
     }));
+    const resolveUsageAuth = vi.fn(async () => ({
+      token: "usage-token",
+      accountId: "usage-account",
+    }));
+    const fetchUsageSnapshot = vi.fn(async () => ({
+      provider: "zai" as const,
+      displayName: "Demo",
+      windows: [{ label: "Day", usedPercent: 25 }],
+    }));
     resolvePluginProvidersMock.mockReturnValue([
       {
         id: "demo",
@@ -86,6 +97,8 @@ describe("provider-runtime", () => {
           api: "openai-codex-responses",
         }),
         prepareRuntimeAuth,
+        resolveUsageAuth,
+        fetchUsageSnapshot,
         isCacheTtlEligible: ({ modelId }) => modelId.startsWith("anthropic/"),
       },
     ]);
@@ -176,6 +189,41 @@ describe("provider-runtime", () => {
       expiresAt: 123,
     });
 
+    await expect(
+      resolveProviderUsageAuthWithPlugin({
+        provider: "demo",
+        env: process.env,
+        context: {
+          config: {} as never,
+          env: process.env,
+          provider: "demo",
+          resolveApiKeyFromConfigAndStore: () => "source-token",
+          resolveOAuthToken: async () => null,
+        },
+      }),
+    ).resolves.toMatchObject({
+      token: "usage-token",
+      accountId: "usage-account",
+    });
+
+    await expect(
+      resolveProviderUsageSnapshotWithPlugin({
+        provider: "demo",
+        env: process.env,
+        context: {
+          config: {} as never,
+          env: process.env,
+          provider: "demo",
+          token: "usage-token",
+          timeoutMs: 5_000,
+          fetchFn: vi.fn() as never,
+        },
+      }),
+    ).resolves.toMatchObject({
+      provider: "zai",
+      windows: [{ label: "Day", usedPercent: 25 }],
+    });
+
     expect(
       resolveProviderCacheTtlEligibility({
         provider: "demo",
@@ -188,5 +236,7 @@ describe("provider-runtime", () => {
 
     expect(prepareDynamicModel).toHaveBeenCalledTimes(1);
     expect(prepareRuntimeAuth).toHaveBeenCalledTimes(1);
+    expect(resolveUsageAuth).toHaveBeenCalledTimes(1);
+    expect(fetchUsageSnapshot).toHaveBeenCalledTimes(1);
   });
 });

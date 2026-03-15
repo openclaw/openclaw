@@ -3,9 +3,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginProviders } from "./providers.js";
 import type {
   ProviderCacheTtlEligibilityContext,
+  ProviderFetchUsageSnapshotContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
   ProviderPrepareRuntimeAuthContext,
+  ProviderResolveUsageAuthContext,
   ProviderPlugin,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
@@ -111,6 +113,26 @@ export async function prepareProviderRuntimeAuth(params: {
   context: ProviderPrepareRuntimeAuthContext;
 }) {
   return await resolveProviderRuntimePlugin(params)?.prepareRuntimeAuth?.(params.context);
+}
+
+export async function resolveProviderUsageAuthWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderResolveUsageAuthContext;
+}) {
+  return await resolveProviderRuntimePlugin(params)?.resolveUsageAuth?.(params.context);
+}
+
+export async function resolveProviderUsageSnapshotWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderFetchUsageSnapshotContext;
+}) {
+  return await resolveProviderRuntimePlugin(params)?.fetchUsageSnapshot?.(params.context);
 }
 
 export function resolveProviderCacheTtlEligibility(params: {
