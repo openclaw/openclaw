@@ -1,3 +1,76 @@
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) {
+    return true;
+  }
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) {
+      return false;
+    }
+    for (let i = 0; i < a.length; i += 1) {
+      if (!deepEqual(a[i], b[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    for (const key of keys) {
+      if (!deepEqual(a[key], b[key])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+function mergePatchDiff(base: unknown, next: unknown): unknown {
+  if (deepEqual(base, next)) {
+    return undefined;
+  }
+
+  if (isPlainObject(base) && isPlainObject(next)) {
+    const patch: Record<string, unknown> = {};
+    const keys = new Set([...Object.keys(base), ...Object.keys(next)]);
+
+    for (const key of keys) {
+      if (!(key in next)) {
+        patch[key] = null;
+        continue;
+      }
+      if (!(key in base)) {
+        patch[key] = next[key];
+        continue;
+      }
+      const child = mergePatchDiff(base[key], next[key]);
+      if (child !== undefined) {
+        patch[key] = child;
+      }
+    }
+
+    return Object.keys(patch).length > 0 ? patch : undefined;
+  }
+
+  // Arrays and primitive values are replaced as whole values under RFC 7396.
+  return next;
+}
+
+export function buildMergePatch(
+  base: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  const diff = mergePatchDiff(base, next);
+  if (isPlainObject(diff)) {
+    return diff;
+  }
+  return {};
+}
+
 export function cloneConfigObject<T>(value: T): T {
   if (typeof structuredClone === "function") {
     return structuredClone(value);

@@ -3,6 +3,7 @@ import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../typ
 import type { JsonSchema } from "../views/config-form.shared.ts";
 import { coerceFormValues } from "./config/form-coerce.ts";
 import {
+  buildMergePatch,
   cloneConfigObject,
   removePathValue,
   serializeConfigForm,
@@ -134,13 +135,25 @@ export async function saveConfig(state: ConfigState) {
   state.configSaving = true;
   state.lastError = null;
   try {
-    const raw = serializeFormForSubmit(state);
     const baseHash = state.configSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Config hash missing; reload and retry.";
       return;
     }
-    await state.client.request("config.set", { raw, baseHash });
+
+    if (state.configFormMode === "form" && state.configForm && state.configFormOriginal) {
+      const schema = asJsonSchema(state.configSchema);
+      const next = schema
+        ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
+        : state.configForm;
+      const patch = buildMergePatch(state.configFormOriginal, next);
+      const rawPatch = serializeConfigForm(patch);
+      await state.client.request("config.patch", { raw: rawPatch, baseHash });
+    } else {
+      const raw = serializeFormForSubmit(state);
+      await state.client.request("config.set", { raw, baseHash });
+    }
+
     state.configFormDirty = false;
     await loadConfig(state);
   } catch (err) {

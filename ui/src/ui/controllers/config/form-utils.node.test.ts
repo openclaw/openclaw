@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { JsonSchema } from "../../views/config-form.shared.ts";
 import { coerceFormValues } from "./form-coerce.ts";
-import { cloneConfigObject, serializeConfigForm, setPathValue } from "./form-utils.ts";
+import {
+  buildMergePatch,
+  cloneConfigObject,
+  serializeConfigForm,
+  setPathValue,
+} from "./form-utils.ts";
 
 /**
  * Minimal model provider schema matching the Zod-generated JSON Schema for
@@ -451,5 +456,34 @@ describe("coerceFormValues", () => {
     const form = { flag: "true" };
     const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
     expect(coerced.flag).toBe(true);
+  });
+});
+
+describe("buildMergePatch", () => {
+  it("returns only changed nested keys", () => {
+    const base = { update: { channel: "stable", checkOnStart: true } };
+    const next = { update: { channel: "stable", checkOnStart: false } };
+
+    expect(buildMergePatch(base, next)).toEqual({
+      update: { checkOnStart: false },
+    });
+  });
+
+  it("uses null for removed keys", () => {
+    const base = { update: { channel: "stable", checkOnStart: true } };
+    const next = { update: { checkOnStart: true } };
+
+    expect(buildMergePatch(base, next)).toEqual({
+      update: { channel: null },
+    });
+  });
+
+  it("replaces arrays as whole values", () => {
+    const base = { channels: { telegram: { allowFrom: ["1", "2"] } } };
+    const next = { channels: { telegram: { allowFrom: ["1", "2", "3"] } } };
+
+    expect(buildMergePatch(base, next)).toEqual({
+      channels: { telegram: { allowFrom: ["1", "2", "3"] } },
+    });
   });
 });
