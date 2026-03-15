@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **AARI Execution Firewall** — Pre-execution firewall for OpenClaw agents with ALLOW / WARN / BLOCK policy enforcement and audit trail.
+  npm: `@aari/aari-firewall`
+  repo: `https://github.com/aari-ai/openclaw-aari`
+  install: `openclaw plugins install @aari/aari-firewall`
