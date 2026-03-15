@@ -409,6 +409,17 @@ function isExtensionRelayPageNeutralizationCoolingDown(page: Page): boolean {
   return true;
 }
 
+async function awaitExtensionRelayPageNeutralization(
+  work: Promise<void>,
+  timeoutMs?: number,
+): Promise<void> {
+  if (typeof timeoutMs === "number" && timeoutMs > 0) {
+    await withTimeout(work, timeoutMs, "Extension relay neutralization timed out");
+    return;
+  }
+  await work;
+}
+
 async function neutralizeExtensionRelayPageMedia(page: Page, timeoutMs?: number): Promise<void> {
   if (neutralizedExtensionRelayPages.has(page)) {
     return;
@@ -416,7 +427,18 @@ async function neutralizeExtensionRelayPageMedia(page: Page, timeoutMs?: number)
   if (isExtensionRelayPageNeutralizationCoolingDown(page)) {
     return;
   }
-  if (inFlightExtensionRelayPageNeutralizations.has(page)) {
+  const existing = inFlightExtensionRelayPageNeutralizations.get(page);
+  if (existing) {
+    try {
+      await awaitExtensionRelayPageNeutralization(existing, timeoutMs);
+    } catch (error) {
+      if (error instanceof Error && error.message === "Extension relay neutralization timed out") {
+        extensionRelayPageNeutralizationCooldownUntil.set(
+          page,
+          Date.now() + EXTENSION_RELAY_PAGE_NEUTRALIZE_RETRY_COOLDOWN_MS,
+        );
+      }
+    }
     return;
   }
   const work = Promise.resolve().then(async () => {
@@ -437,11 +459,7 @@ async function neutralizeExtensionRelayPageMedia(page: Page, timeoutMs?: number)
       }
     });
   try {
-    if (typeof timeoutMs === "number" && timeoutMs > 0) {
-      await withTimeout(work, timeoutMs, "Extension relay neutralization timed out");
-    } else {
-      await work;
-    }
+    await awaitExtensionRelayPageNeutralization(work, timeoutMs);
   } catch (error) {
     if (error instanceof Error && error.message === "Extension relay neutralization timed out") {
       extensionRelayPageNeutralizationCooldownUntil.set(

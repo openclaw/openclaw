@@ -8,7 +8,8 @@ vi.mock("./extension-relay.js", () => extensionRelayMocks);
 
 const { chromium } = await import("playwright-core");
 const chromeModule = await import("./chrome.js");
-const { closePlaywrightBrowserConnection, getPageForTargetId } = await import("./pw-session.js");
+const { closePlaywrightBrowserConnection, getPageForTargetId, listPagesViaPlaywright } =
+  await import("./pw-session.js");
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
@@ -247,6 +248,55 @@ describe("pw-session getPageForTargetId", () => {
       expect(pageEmulateMediaSpies[0]).toHaveBeenNthCalledWith(1, { colorScheme: null });
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("awaits in-flight relay neutralization for concurrent lookups of the same page", async () => {
+    extensionRelayMocks.getChromeExtensionRelayAuthHeaders.mockReturnValue({});
+    const deferredNeutralization = createDeferred<void>();
+    const { pageEmulateMediaSpies, pages } = createExtensionFallbackBrowserHarness({
+      urls: ["https://alpha.example"],
+      emulateMediaImplementations: [() => deferredNeutralization.promise],
+    });
+    const [page] = pages;
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("timeout"));
+    try {
+      await listPagesViaPlaywright({
+        cdpUrl: "http://127.0.0.1:20000",
+      });
+      extensionRelayMocks.getChromeExtensionRelayAuthHeaders.mockReturnValue({
+        "x-openclaw-relay-token": "test-token",
+      });
+
+      const first = getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:20000",
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const second = getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:20000",
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      let secondSettled = false;
+      void second.finally(() => {
+        secondSettled = true;
+      });
+
+      expect(pageEmulateMediaSpies[0]).toHaveBeenCalledTimes(1);
+      await Promise.resolve();
+      expect(secondSettled).toBe(false);
+
+      deferredNeutralization.resolve();
+
+      await expect(first).resolves.toBe(page);
+      await expect(second).resolves.toBe(page);
+      expect(pageEmulateMediaSpies[0]).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
     }
   });
 
