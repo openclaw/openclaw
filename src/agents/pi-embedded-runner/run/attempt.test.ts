@@ -702,6 +702,26 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("read");
     expect(finalToolCall.id).toBe("call_42");
   });
+
+  it("reassigns duplicate tool call ids within a message to unique fallbacks", async () => {
+    const finalToolCallA = { type: "toolCall", name: " read ", id: "  edit:22  " };
+    const finalToolCallB = { type: "toolCall", name: " write ", id: "edit:22" };
+    const finalMessage = { role: "assistant", content: [finalToolCallA, finalToolCallB] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    expect(finalToolCallA.name).toBe("read");
+    expect(finalToolCallB.name).toBe("write");
+    expect(finalToolCallA.id).toBe("edit:22");
+    expect(finalToolCallB.id).toBe("call_auto_1");
+  });
 });
 
 describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
