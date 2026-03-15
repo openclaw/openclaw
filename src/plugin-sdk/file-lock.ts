@@ -134,10 +134,41 @@ export async function acquireFileLock(
       if (code !== "EEXIST") {
         throw err;
       }
-      if (await isStaleLock(lockPath, options.stale)) {
-        await fs.rm(lockPath, { force: true }).catch(() => undefined);
+
+      // Snapshot the inode of the existing lock file *before* checking
+      // staleness.  We compare it again just before unlinking; if the inode
+      // has changed in the interim, another waiter already reclaimed the
+      // stale file and created a fresh lock — deleting it would silently
+      // break that holder's mutual exclusion guarantee.
+      const staleIno = await fs
+        .stat(lockPath)
+        .then((s) => s.ino)
+        .catch(() => -1);
+
+      // staleIno === -1 means the file vanished between open(EEXIST) and
+      // stat — another process already removed it.  Skip straight to the
+      // next open(O_EXCL) attempt.
+      const isStale = staleIno === -1 || (await isStaleLock(lockPath, options.stale));
+
+      if (isStale) {
+        if (staleIno !== -1) {
+          // Re-verify the path still maps to the same inode we deemed stale.
+          // If it changed, a concurrent waiter beat us to the reclaim and has
+          // already written its own fresh lock; leave that file alone.
+          const currentIno = await fs
+            .stat(lockPath)
+            .then((s) => s.ino)
+            .catch(() => -1);
+          if (currentIno === staleIno) {
+            await fs.rm(lockPath, { force: true }).catch(() => undefined);
+          }
+        }
+        // Retry open(O_EXCL) regardless: either we removed the stale lock or
+        // a concurrent waiter already handled it; either way, the path is now
+        // either free or holds a fresh lock that isStaleLock will reject.
         continue;
       }
+
       if (attempt >= attempts - 1) {
         break;
       }

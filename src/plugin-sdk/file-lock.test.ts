@@ -14,6 +14,18 @@ const LOCK_OPTIONS = {
   stale: 5_000,
 };
 
+// More retries for tests where one waiter must survive while the other holds
+// the lock for a non-trivial duration.
+const RETRY_LOCK_OPTIONS = {
+  retries: {
+    retries: 10,
+    factor: 1,
+    minTimeout: 10,
+    maxTimeout: 30,
+  },
+  stale: 5_000,
+};
+
 describe("withFileLock", () => {
   let tmpDir: string;
   let targetFile: string;
@@ -87,5 +99,39 @@ describe("withFileLock", () => {
       }),
     ).resolves.toBeUndefined();
     expect(ran).toBe(true);
+  });
+
+  it("two concurrent waiters on a stale lock never overlap inside fn()", async () => {
+    // Plant a stale lock (dead PID, old timestamp) so both waiters will
+    // simultaneously enter the stale-reclaim branch.  The inode guard must
+    // prevent the slower waiter's unlink from deleting the faster waiter's
+    // freshly-acquired lock, which would allow both fn() calls to run
+    // concurrently and corrupt each other's read-modify-write sequences.
+    const lockPath = `${targetFile}.lock`;
+    await fs.mkdir(path.dirname(targetFile), { recursive: true });
+    await fs.writeFile(lockPath, JSON.stringify({ pid: 0, createdAt: new Date(0).toISOString() }));
+
+    let inside = 0; // number of concurrent fn() executions
+    let maxInside = 0;
+    const results: number[] = [];
+
+    const run = async (id: number) => {
+      // Use RETRY_LOCK_OPTIONS so the losing waiter has enough budget to
+      // outlast the winning waiter's 20 ms hold without timing out.
+      await withFileLock(targetFile, RETRY_LOCK_OPTIONS, async () => {
+        inside += 1;
+        maxInside = Math.max(maxInside, inside);
+        await new Promise((r) => setTimeout(r, 20)); // hold the lock briefly
+        results.push(id);
+        inside -= 1;
+      });
+    };
+
+    // Launch both concurrently so they race on the stale lock.
+    await Promise.all([run(1), run(2)]);
+
+    // Both callbacks must have run exactly once and never overlapped.
+    expect(results.toSorted((a, b) => a - b)).toEqual([1, 2]);
+    expect(maxInside).toBe(1);
   });
 });
