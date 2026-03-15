@@ -737,6 +737,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-full");
     releaseWsSession("sess-phase");
     releaseWsSession("sess-tools");
+    releaseWsSession("sess-sync-onpayload");
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
     releaseWsSession("sess-max-tokens-zero");
@@ -795,6 +796,43 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.type).toBe("response.create");
     expect(sent.model).toBe("gpt-5.2");
     expect(Array.isArray(sent.input)).toBe(true);
+  });
+
+  it("accepts a synchronous onPayload callback", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-sync-onpayload");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      {
+        onPayload: (payload) => ({
+          ...(payload as Record<string, unknown>),
+          instructions: "patched by sync onPayload",
+        }),
+      } as Parameters<typeof streamFn>[2],
+    );
+
+    const completed = new Promise<void>((res, rej) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          const manager = MockManager.lastInstance!;
+          manager.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp_sync_onpayload", "ok"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            // consume
+          }
+          res();
+        } catch (e) {
+          rej(e);
+        }
+      });
+    });
+    await completed;
+
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.instructions).toBe("patched by sync onPayload");
   });
 
   it("includes store:false by default", async () => {

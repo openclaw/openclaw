@@ -5,6 +5,7 @@ const fs = require("node:fs");
 
 let monolithicSdk = null;
 let jitiLoader = null;
+let jitiOverrideForTest = null;
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -62,6 +63,9 @@ function resolveControlCommandGate(params) {
 }
 
 function getJiti() {
+  if (jitiOverrideForTest) {
+    return jitiOverrideForTest;
+  }
   if (jitiLoader) {
     return jitiLoader;
   }
@@ -74,24 +78,26 @@ function getJiti() {
   return jitiLoader;
 }
 
+function loadWithJiti(modulePath) {
+  return getJiti()(modulePath);
+}
+
 function loadMonolithicSdk() {
   if (monolithicSdk) {
     return monolithicSdk;
   }
 
-  const jiti = getJiti();
-
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "index.js");
   if (fs.existsSync(distCandidate)) {
     try {
-      monolithicSdk = jiti(distCandidate);
+      monolithicSdk = loadWithJiti(distCandidate);
       return monolithicSdk;
     } catch {
       // Fall through to source alias if dist is unavailable or stale.
     }
   }
 
-  monolithicSdk = jiti(path.join(__dirname, "index.ts"));
+  monolithicSdk = loadWithJiti(path.join(__dirname, "index.ts"));
   return monolithicSdk;
 }
 
@@ -106,6 +112,16 @@ function tryLoadMonolithicSdk() {
 const fastExports = {
   emptyPluginConfigSchema,
   resolveControlCommandGate,
+  __unsafeIsMonolithicLoadedForTest: () => monolithicSdk !== null,
+  __unsafeResetMonolithicForTest: () => {
+    monolithicSdk = null;
+    jitiLoader = null;
+    jitiOverrideForTest = null;
+  },
+  __unsafeSetJitiOverrideForTest: (loader) => {
+    jitiOverrideForTest = loader;
+    monolithicSdk = null;
+  },
 };
 
 const target = { ...fastExports };
@@ -146,7 +162,6 @@ function getExportDescriptor(prop) {
     return undefined;
   }
 
-  // Proxy invariants require descriptors returned for dynamic properties to be configurable.
   return {
     ...descriptor,
     configurable: true,

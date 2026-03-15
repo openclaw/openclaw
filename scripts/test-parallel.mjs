@@ -3,6 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { channelTestPrefixes } from "../vitest.channel-paths.mjs";
+import {
+  resolveVitestPoolForWorkerClamp,
+  shouldEnableTopLevelParallel,
+} from "./lib/test-parallel-policy.mjs";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
 // (especially under GitHub Actions + Git Bash). Use `shell: true` and let the shell resolve pnpm.
@@ -482,7 +486,10 @@ const targetedEntries = (() => {
     return createTargetedEntry(owner, mode === "isolated", [...new Set(filters)]);
   });
 })();
-const topLevelParallelEnabled = testProfile !== "low" && testProfile !== "serial";
+const topLevelParallelEnabled = shouldEnableTopLevelParallel({
+  isCI,
+  testProfile,
+});
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
@@ -600,12 +607,14 @@ const maxOldSpaceSizeMb = (() => {
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
     const maxWorkers = maxWorkersForRun(entry.name);
-    // vmForks with a single worker has shown cross-file leakage in extension suites.
-    // Fall back to process forks when we intentionally clamp that lane to one worker.
-    const entryArgs =
-      entry.name === "extensions" && maxWorkers === 1 && entry.args.includes("--pool=vmForks")
-        ? entry.args.map((arg) => (arg === "--pool=vmForks" ? "--pool=forks" : arg))
-        : entry.args;
+    const entryArgs = entry.args.map((arg) => {
+      if (!arg.startsWith("--pool=")) {
+        return arg;
+      }
+      const pool = arg.slice("--pool=".length);
+      const resolvedPool = resolveVitestPoolForWorkerClamp({ pool, maxWorkers });
+      return `--pool=${resolvedPool}`;
+    });
     const args = maxWorkers
       ? [
           ...entryArgs,

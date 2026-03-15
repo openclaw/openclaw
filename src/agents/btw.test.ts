@@ -40,9 +40,13 @@ vi.mock("./pi-model-discovery.js", () => ({
   discoverModels: (...args: unknown[]) => discoverModelsMock(...args),
 }));
 
-vi.mock("./pi-embedded-runner/model.js", () => ({
-  resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
-}));
+vi.mock("./pi-embedded-runner/model.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pi-embedded-runner/model.js")>();
+  return {
+    ...actual,
+    resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
+  };
+});
 
 vi.mock("./model-auth.js", () => ({
   getApiKeyForModel: (...args: unknown[]) => getApiKeyForModelMock(...args),
@@ -86,6 +90,11 @@ function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry
 }
 
 describe("runBtwSideQuestion", () => {
+  it("preserves non-overridden model exports for shared test workers", async () => {
+    const modelModule = await import("./pi-embedded-runner/model.js");
+    expect(typeof modelModule.resolveModelAsync).toBe("function");
+  });
+
   beforeEach(() => {
     streamSimpleMock.mockReset();
     buildSessionContextMock.mockReset();

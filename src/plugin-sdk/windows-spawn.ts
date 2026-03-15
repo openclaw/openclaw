@@ -1,4 +1,5 @@
-import { readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 export type WindowsSpawnResolution =
@@ -99,19 +100,32 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
   try {
     const content = readFileSync(wrapperPath, "utf8");
     const candidates: string[] = [];
-    for (const match of content.matchAll(/"([^"\r\n]*)"/g)) {
-      const token = match[1] ?? "";
-      const relMatch = token.match(/%~?dp0%?\s*[\\/]*(.*)$/i);
-      const relative = relMatch?.[1]?.trim();
-      if (!relative) {
-        continue;
+    const pushCandidate = (relativeRaw: string) => {
+      const relative = relativeRaw.trim();
+      if (!relative || relative.includes("%")) {
+        return;
       }
       const normalizedRelative = relative.replace(/[\\/]+/g, path.sep).replace(/^[\\/]+/, "");
       const candidate = path.resolve(path.dirname(wrapperPath), normalizedRelative);
       if (isFilePath(candidate)) {
         candidates.push(candidate);
       }
+    };
+
+    for (const match of content.matchAll(/"([^"\r\n]*)"/g)) {
+      const token = match[1] ?? "";
+      const relMatch = token.match(/%~?dp0%?\s*[\\/]*(.*)$/i);
+      if (relMatch?.[1]) {
+        pushCandidate(relMatch[1]);
+      }
     }
+
+    for (const match of content.matchAll(/%~?dp0%?\s*[\\/]([^\r\n"%*]+\.(?:exe|c?js|mjs))/gi)) {
+      if (match[1]) {
+        pushCandidate(match[1]);
+      }
+    }
+
     const nonNode = candidates.find((candidate) => {
       const base = path.basename(candidate).toLowerCase();
       return base !== "node.exe" && base !== "node";
@@ -157,6 +171,32 @@ function resolveEntrypointFromPackageJson(
     return null;
   }
 
+  const wrapperBase = path.basename(wrapperPath, path.extname(wrapperPath)).toLowerCase();
+  const packageBase = packageName.split("/").at(-1)?.toLowerCase() ?? packageName.toLowerCase();
+  if (wrapperBase !== packageBase) {
+    return null;
+  }
+
+  const tryResolveFromPackageJson = (packageJsonPath: string): string | null => {
+    if (!isFilePath(packageJsonPath)) {
+      return null;
+    }
+    try {
+      const packageDir = path.dirname(packageJsonPath);
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+        bin?: string | Record<string, string>;
+      };
+      const entryRel = resolveBinEntry(packageName, packageJson.bin);
+      if (!entryRel) {
+        return null;
+      }
+      const entryPath = path.resolve(packageDir, entryRel);
+      return isFilePath(entryPath) ? entryPath : null;
+    } catch {
+      return null;
+    }
+  };
+
   const wrapperDir = path.dirname(wrapperPath);
   const packageDirs = [
     path.resolve(wrapperDir, "..", packageName),
@@ -164,25 +204,42 @@ function resolveEntrypointFromPackageJson(
   ];
 
   for (const packageDir of packageDirs) {
-    const packageJsonPath = path.join(packageDir, "package.json");
-    if (!isFilePath(packageJsonPath)) {
-      continue;
+    const entryPath = tryResolveFromPackageJson(path.join(packageDir, "package.json"));
+    if (entryPath) {
+      return entryPath;
     }
-    try {
-      const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
-        bin?: string | Record<string, string>;
-      };
-      const entryRel = resolveBinEntry(packageName, packageJson.bin);
-      if (!entryRel) {
-        continue;
-      }
-      const entryPath = path.resolve(packageDir, entryRel);
-      if (isFilePath(entryPath)) {
+  }
+
+  try {
+    const requireFromWrapper = createRequire(
+      path.join(wrapperDir, "__openclaw_windows_spawn__.js"),
+    );
+    const resolvedPackageJson = requireFromWrapper.resolve(`${packageName}/package.json`);
+    const entryPath = tryResolveFromPackageJson(resolvedPackageJson);
+    if (entryPath) {
+      return entryPath;
+    }
+  } catch {
+    // ignore package resolution failures
+  }
+
+  const pnpmStoreDir = path.resolve(wrapperDir, "..", ".pnpm");
+  try {
+    for (const entry of readdirSync(pnpmStoreDir)) {
+      const entryPackageJson = path.join(
+        pnpmStoreDir,
+        entry,
+        "node_modules",
+        packageName,
+        "package.json",
+      );
+      const entryPath = tryResolveFromPackageJson(entryPackageJson);
+      if (entryPath) {
         return entryPath;
       }
-    } catch {
-      // Ignore malformed package metadata.
     }
+  } catch {
+    // ignore .pnpm scan failures
   }
 
   return null;

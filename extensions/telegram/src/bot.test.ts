@@ -19,14 +19,14 @@ import {
   setMyCommandsSpy,
   wasSentByBot,
 } from "./bot.create-telegram-bot.test-harness.js";
-
 // Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
 const { listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
   await import("../../../src/auto-reply/commands-registry.js");
 const { loadSessionStore } = await import("../../../src/config/sessions.js");
 const { normalizeTelegramCommandName } =
   await import("../../../src/config/telegram-custom-commands.js");
-const { createTelegramBot } = await import("./bot.js");
+
+let createTelegramBot: typeof import("./bot.js").createTelegramBot;
 
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
@@ -47,7 +47,9 @@ describe("createTelegramBot", () => {
     process.env.TZ = ORIGINAL_TZ;
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createTelegramBot } = await import("./bot.js"));
     setMyCommandsSpy.mockClear();
     loadConfig.mockReturnValue({
       agents: {
@@ -824,7 +826,7 @@ describe("createTelegramBot", () => {
           },
         },
         me: { username: "openclaw_bot" },
-        getFile: async () => ({}),
+        getFile: async () => ({ file_path: "media/file.jpg" }),
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
@@ -835,6 +837,10 @@ describe("createTelegramBot", () => {
       };
       expect(payload.ReplyToBody).toBe("<media:image>");
       expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
+      if (payload.MediaPaths) {
+        expect(payload.MediaPaths).toHaveLength(1);
+        expect(payload.MediaPath).toBe(payload.MediaPaths[0]);
+      }
     } finally {
       fetchSpy.mockRestore();
     }
@@ -929,7 +935,7 @@ describe("createTelegramBot", () => {
           },
         },
         me: { username: "openclaw_bot" },
-        getFile: async () => ({}),
+        getFile: async () => ({ file_path: "media/file.jpg" }),
       });
       await handler({
         message: {
@@ -945,7 +951,7 @@ describe("createTelegramBot", () => {
           },
         },
         me: { username: "openclaw_bot" },
-        getFile: async () => ({}),
+        getFile: async () => ({ file_path: "media/file.jpg" }),
       });
 
       expect(replySpy).not.toHaveBeenCalled();

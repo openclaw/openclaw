@@ -99,6 +99,9 @@ const SecretsFileProviderSchema = z
       .positive()
       .max(20 * 1024 * 1024)
       .optional(),
+    trustedDirs: z.array(z.string().min(1)).optional(),
+    allowInsecurePath: z.boolean().optional(),
+    allowSymlinkPath: z.boolean().optional(),
   })
   .strict();
 

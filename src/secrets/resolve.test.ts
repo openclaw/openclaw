@@ -54,6 +54,9 @@ describe("secret ref resolver", () => {
     path: string;
     mode: "json" | "singleValue";
     timeoutMs?: number;
+    trustedDirs?: string[];
+    allowInsecurePath?: boolean;
+    allowSymlinkPath?: boolean;
   };
 
   function createExecProviderConfig(
@@ -374,6 +377,44 @@ describe("secret ref resolver", () => {
       },
     );
     expect(value).toBe("raw-token-value");
+  });
+
+  it("supports file providers with allowInsecurePath for trusted local paths", async () => {
+    const root = await createCaseDir("file-allow-insecure-path");
+    const filePath = path.join(root, "secrets.json");
+    await writeSecureFile(
+      filePath,
+      JSON.stringify(
+        {
+          providers: {
+            openai: {
+              apiKey: "sk-file-value", // pragma: allowlist secret
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      0o666,
+    );
+
+    const value = await resolveSecretRefString(
+      { source: "file", provider: "filemain", id: "/providers/openai/apiKey" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              filemain: createFileProviderConfig(filePath, {
+                allowInsecurePath: true,
+                trustedDirs: [root],
+              }),
+            },
+          },
+        },
+      },
+    );
+
+    expect(value).toBe("sk-file-value");
   });
 
   itPosix("times out file provider reads when timeoutMs elapses", async () => {

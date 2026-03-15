@@ -20,3 +20,25 @@ declare module "../../scripts/ci-changed-scope.mjs" {
     runAndroid: boolean;
   };
 }
+
+declare module "../../scripts/lib/test-parallel-policy.mjs" {
+  export function shouldEnableTopLevelParallel(params?: {
+    isCI?: boolean;
+    testProfile?: string;
+  }): boolean;
+  export function resolveVitestPoolForWorkerClamp(params: {
+    pool: string;
+    maxWorkers: number;
+  }): string;
+}
+
+declare module "*test-parallel-policy.mjs" {
+  export function shouldEnableTopLevelParallel(params?: {
+    isCI?: boolean;
+    testProfile?: string;
+  }): boolean;
+  export function resolveVitestPoolForWorkerClamp(params: {
+    pool: string;
+    maxWorkers: number;
+  }): string;
+}

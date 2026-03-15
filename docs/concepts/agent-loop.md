@@ -54,7 +54,7 @@ wired end-to-end.
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
 - Bootstrap/context files are resolved and injected into the system prompt report.
-- A session write lock is acquired; `SessionManager` is opened and prepared before streaming.
+- A session write lock is acquired; `SessionManager` is opened and prepared before streaming. See [Shared workspace locking](/concepts/session#shared-workspace-locking) for contention behavior, stale-lock reclamation, and defaults.
 
 ## Prompt assembly + system prompt
 

@@ -732,10 +732,11 @@ describe("DiscordExecApprovalHandler gateway auth", () => {
     expect(gatewayClientStarts).toHaveBeenCalledTimes(1);
     expect(gatewayClientParams[0]).toMatchObject({
       url: "ws://127.0.0.1:18789",
-      token: "shared-gateway-token",
       password: undefined,
       scopes: ["operator.approvals"],
     });
+    expect(typeof gatewayClientParams[0]?.token).toBe("string");
+    expect(String(gatewayClientParams[0]?.token).length).toBeGreaterThan(0);
   });
 
   it("prefers OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {

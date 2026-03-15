@@ -187,6 +187,9 @@ export type FileSecretProviderConfig = {
   mode?: FileSecretProviderMode;
   timeoutMs?: number;
   maxBytes?: number;
+  trustedDirs?: string[];
+  allowInsecurePath?: boolean;
+  allowSymlinkPath?: boolean;
 };
 
 export type ExecSecretProviderConfig = {

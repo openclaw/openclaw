@@ -10,6 +10,7 @@ import {
   readFileWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
+import { withWorkspaceLock } from "../infra/workspace-lock-manager.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -25,6 +26,7 @@ import {
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { parseSandboxBindMount } from "./sandbox/fs-paths.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -351,6 +353,120 @@ async function normalizeReadImageResult(
   return { ...result, content: nextContent };
 }
 
+const workspaceMutationLocks = new Map<string, Promise<void>>();
+const WORKSPACE_MUTATION_LOCK_TIMEOUT_MS = 120_000;
+const WORKSPACE_MUTATION_LOCK_TTL_MS = 60_000;
+
+export function wrapToolMutationLock(
+  tool: AnyAgentTool,
+  root: string,
+  options?: { containerWorkdir?: string; bindMounts?: string[] },
+): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const normalized = normalizeToolParams(params);
+      const record =
+        normalized ??
+        (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+      const filePathRaw = record?.path;
+      if (typeof filePathRaw !== "string" || !filePathRaw.trim()) {
+        return tool.execute(toolCallId, params, signal, onUpdate);
+      }
+
+      const resolvedPath = mapContainerPathToWorkspaceRoot({
+        filePath: filePathRaw,
+        root,
+        containerWorkdir: options?.containerWorkdir,
+        bindMounts: options?.bindMounts,
+      });
+      const lockKey = await canonicalizeMutationLockKey(path.resolve(root, resolvedPath));
+      const previous = workspaceMutationLocks.get(lockKey) ?? Promise.resolve();
+      let release: (() => void) | undefined;
+      const current = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      workspaceMutationLocks.set(lockKey, current);
+
+      try {
+        await waitForQueuedMutation(previous, signal);
+        return await withWorkspaceLock(
+          lockKey,
+          {
+            kind: "file",
+            timeoutMs: WORKSPACE_MUTATION_LOCK_TIMEOUT_MS,
+            ttlMs: WORKSPACE_MUTATION_LOCK_TTL_MS,
+            signal,
+          },
+          async () => {
+            return await tool.execute(toolCallId, params, signal, onUpdate);
+          },
+        );
+      } finally {
+        release?.();
+        if (workspaceMutationLocks.get(lockKey) === current) {
+          workspaceMutationLocks.delete(lockKey);
+        }
+      }
+    },
+  };
+}
+async function waitForQueuedMutation(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await previous;
+    return;
+  }
+
+  if (signal.aborted) {
+    throw createAbortError();
+  }
+
+  let onAbort: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      reject(createAbortError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+
+  try {
+    await Promise.race([previous, abortPromise]);
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+}
+
+function createAbortError(): Error {
+  const error = new Error("Operation aborted.");
+  error.name = "AbortError";
+  return error;
+}
+
+async function canonicalizeMutationLockKey(targetPath: string): Promise<string> {
+  const resolved = path.resolve(targetPath);
+  const suffix: string[] = [];
+  let cursor = resolved;
+
+  while (true) {
+    try {
+      const canonical = await fs.realpath(cursor);
+      if (suffix.length === 0) {
+        return canonical;
+      }
+      return path.join(canonical, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        return resolved;
+      }
+      suffix.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return wrapToolWorkspaceRootGuardWithOptions(tool, root);
 }
@@ -359,6 +475,7 @@ function mapContainerPathToWorkspaceRoot(params: {
   filePath: string;
   root: string;
   containerWorkdir?: string;
+  bindMounts?: string[];
 }): string {
   const containerWorkdir = params.containerWorkdir?.trim();
   if (!containerWorkdir) {
@@ -392,7 +509,25 @@ function mapContainerPathToWorkspaceRoot(params: {
     }
   }
 
-  const normalizedCandidate = candidate.replace(/\\/g, "/");
+  const posixCandidate = path.posix.normalize(candidate.replace(/\\/g, "/"));
+  const normalizedCandidate =
+    posixCandidate === "/" ? "/" : posixCandidate.replace(/\/+$/, "") || ".";
+
+  const bindMatches = (params.bindMounts ?? [])
+    .map((bind) => parseSandboxBindMount(bind))
+    .filter((bind): bind is NonNullable<ReturnType<typeof parseSandboxBindMount>> => !!bind)
+    .toSorted((a, b) => b.containerRoot.length - a.containerRoot.length);
+  for (const bind of bindMatches) {
+    if (normalizedCandidate === bind.containerRoot) {
+      return bind.hostRoot;
+    }
+    const bindPrefix = bind.containerRoot === "/" ? "/" : `${bind.containerRoot}/`;
+    if (normalizedCandidate.startsWith(bindPrefix)) {
+      const relative = normalizedCandidate.slice(bindPrefix.length);
+      return path.resolve(bind.hostRoot, ...relative.split("/").filter(Boolean));
+    }
+  }
+
   if (normalizedCandidate === normalizedWorkdir) {
     return path.resolve(params.root);
   }
@@ -595,6 +730,8 @@ type SandboxToolParams = {
   bridge: SandboxFsBridge;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  mutationLockingEnabled?: boolean;
+  containerWorkdir?: string;
 };
 
 export function createSandboxedReadTool(params: SandboxToolParams) {
@@ -611,29 +748,47 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = createWriteTool(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  return params.mutationLockingEnabled
+    ? wrapToolMutationLock(normalized, params.root, {
+        containerWorkdir: params.containerWorkdir,
+      })
+    : normalized;
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  return params.mutationLockingEnabled
+    ? wrapToolMutationLock(normalized, params.root, {
+        containerWorkdir: params.containerWorkdir,
+      })
+    : normalized;
 }
 
-export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceWriteTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; mutationLockingEnabled?: boolean },
+) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  return options?.mutationLockingEnabled ? wrapToolMutationLock(normalized, root) : normalized;
 }
 
-export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceEditTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; mutationLockingEnabled?: boolean },
+) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
   const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, root);
-  return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
+  const normalized = wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
+  return options?.mutationLockingEnabled ? wrapToolMutationLock(normalized, root) : normalized;
 }
 
 export function createOpenClawReadTool(
