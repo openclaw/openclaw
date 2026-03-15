@@ -439,7 +439,7 @@ async function runAgentAttempt(params: {
                   const authStore = ensureAuthProfileStore();
                   const providerKey = normalizeProviderId(params.primaryProvider);
                   const winningProfileId =
-                    authStore.lastGood?.[providerKey]?.trim() || result.finalAuthProfileId?.trim();
+                    result.finalAuthProfileId?.trim() || authStore.lastGood?.[providerKey]?.trim();
                   if (winningProfileId) {
                     updatedEntry.authProfileOverride = winningProfileId;
                     updatedEntry.authProfileOverrideSource = "auto";
@@ -524,7 +524,6 @@ async function runAgentAttempt(params: {
   });
   if (
     params.providerOverride === params.primaryProvider &&
-    params.sessionEntry &&
     params.sessionStore &&
     params.sessionKey &&
     params.storePath
