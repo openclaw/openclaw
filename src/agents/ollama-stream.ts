@@ -69,6 +69,13 @@ interface OllamaToolCall {
   };
 }
 
+type OllamaUsageFallback = {
+  input?: number;
+  output?: number;
+};
+
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+
 const MAX_SAFE_INTEGER_ABS_STR = String(Number.MAX_SAFE_INTEGER);
 
 function isAsciiDigit(ch: string | undefined): boolean {
@@ -215,6 +222,54 @@ interface OllamaChatResponse {
   eval_duration?: number;
 }
 
+function safeJsonLength(value: unknown): number {
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" ? serialized.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function estimateTokensFromChars(chars: number): number {
+  if (!Number.isFinite(chars) || chars <= 0) {
+    return 0;
+  }
+  return Math.max(1, Math.round(chars / CHARS_PER_TOKEN_ESTIMATE));
+}
+
+function estimateOllamaPromptTokens(params: {
+  messages: OllamaChatMessage[];
+  tools: OllamaTool[];
+}): number {
+  let chars = 0;
+  for (const message of params.messages) {
+    chars += message.content.length;
+    chars += safeJsonLength(message.images);
+    chars += safeJsonLength(message.tool_calls);
+    chars += message.tool_name?.length ?? 0;
+  }
+  chars += safeJsonLength(params.tools);
+  return estimateTokensFromChars(chars);
+}
+
+function estimateOllamaCompletionTokens(response: OllamaChatResponse): number {
+  const text =
+    response.message.content || response.message.thinking || response.message.reasoning || "";
+  const chars = text.length + safeJsonLength(response.message.tool_calls);
+  return estimateTokensFromChars(chars);
+}
+
+function resolveUsageCount(value: number | undefined, fallback: number | undefined): number {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  if (typeof fallback === "number" && Number.isFinite(fallback) && fallback > 0) {
+    return fallback;
+  }
+  return 0;
+}
+
 // ── Message conversion ──────────────────────────────────────────────────────
 
 type InputContentPart =
@@ -337,6 +392,7 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
 export function buildAssistantMessage(
   response: OllamaChatResponse,
   modelInfo: { api: string; provider: string; id: string },
+  usageFallback?: OllamaUsageFallback,
 ): AssistantMessage {
   const content: (TextContent | ToolCall)[] = [];
 
@@ -361,14 +417,16 @@ export function buildAssistantMessage(
 
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
+  const inputTokens = resolveUsageCount(response.prompt_eval_count, usageFallback?.input);
+  const outputTokens = resolveUsageCount(response.eval_count, usageFallback?.output);
 
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
     stopReason,
     usage: buildUsageWithNoCost({
-      input: response.prompt_eval_count ?? 0,
-      output: response.eval_count ?? 0,
+      input: inputTokens,
+      output: outputTokens,
     }),
   });
 }
@@ -525,11 +583,28 @@ export function createOllamaStreamFn(
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }
 
-        const assistantMessage = buildAssistantMessage(finalResponse, {
-          api: model.api,
-          provider: model.provider,
-          id: model.id,
-        });
+        // The usage dashboard reads transcript-level assistant usage. Some
+        // Ollama builds omit prompt/eval counts, so estimate enough usage here
+        // to keep local-model runs visible in the existing dashboard. This
+        // must happen after accumulated output is copied onto the final
+        // response so reasoning-mode output is counted correctly.
+        const usageFallback = {
+          input: estimateOllamaPromptTokens({
+            messages: ollamaMessages,
+            tools: ollamaTools,
+          }),
+          output: estimateOllamaCompletionTokens(finalResponse),
+        };
+
+        const assistantMessage = buildAssistantMessage(
+          finalResponse,
+          {
+            api: model.api,
+            provider: model.provider,
+            id: model.id,
+          },
+          usageFallback,
+        );
 
         const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
           assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop";
