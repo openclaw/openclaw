@@ -1,7 +1,22 @@
+import { discordOnboardingAdapter } from "../../../extensions/discord/src/onboarding.js";
+import { imessageOnboardingAdapter } from "../../../extensions/imessage/src/onboarding.js";
+import { signalOnboardingAdapter } from "../../../extensions/signal/src/onboarding.js";
+import { slackOnboardingAdapter } from "../../../extensions/slack/src/onboarding.js";
+import { telegramOnboardingAdapter } from "../../../extensions/telegram/src/setup-surface.js";
+import { whatsappOnboardingAdapter } from "../../../extensions/whatsapp/src/onboarding.js";
 import { listChannelSetupPlugins } from "../../channels/plugins/setup-registry.js";
 import { buildChannelOnboardingAdapterFromSetupWizard } from "../../channels/plugins/setup-wizard.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import type { ChannelOnboardingAdapter } from "./types.js";
+
+const BUILTIN_ONBOARDING_ADAPTERS: ChannelOnboardingAdapter[] = [
+  telegramOnboardingAdapter,
+  whatsappOnboardingAdapter,
+  discordOnboardingAdapter,
+  slackOnboardingAdapter,
+  signalOnboardingAdapter,
+  imessageOnboardingAdapter,
+];
 
 const setupWizardAdapters = new WeakMap<object, ChannelOnboardingAdapter>();
 
@@ -27,7 +42,9 @@ function resolveChannelOnboardingAdapter(
 }
 
 const CHANNEL_ONBOARDING_ADAPTERS = () => {
-  const adapters = new Map<ChannelChoice, ChannelOnboardingAdapter>();
+  const adapters = new Map<ChannelChoice, ChannelOnboardingAdapter>(
+    BUILTIN_ONBOARDING_ADAPTERS.map((adapter) => [adapter.channel, adapter] as const),
+  );
   for (const plugin of listChannelSetupPlugins()) {
     const adapter = resolveChannelOnboardingAdapter(plugin);
     if (!adapter) {

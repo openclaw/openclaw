@@ -3,7 +3,7 @@ import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
-import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.js";
+import type { ChannelId, ChannelPlugin, ChannelSetupInput } from "../../channels/plugins/types.js";
 import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -55,6 +55,7 @@ export async function channelsAddCommand(
     const prompter = createClackPrompter();
     let selection: ChannelChoice[] = [];
     const accountIds: Partial<Record<ChannelChoice, string>> = {};
+    const resolvedPlugins = new Map<ChannelChoice, ChannelPlugin>();
     await prompter.intro("Channel setup");
     let nextConfig = await setupChannels(cfg, runtime, prompter, {
       allowDisable: false,
@@ -65,6 +66,9 @@ export async function channelsAddCommand(
       },
       onAccountId: (channel, accountId) => {
         accountIds[channel] = accountId;
+      },
+      onResolvedPlugin: (channel, plugin) => {
+        resolvedPlugins.set(channel, plugin);
       },
     });
     if (selection.length === 0) {
@@ -79,7 +83,7 @@ export async function channelsAddCommand(
     if (wantsNames) {
       for (const channel of selection) {
         const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
-        const plugin = getChannelPlugin(channel);
+        const plugin = resolvedPlugins.get(channel) ?? getChannelPlugin(channel);
         const account = plugin?.config.resolveAccount(nextConfig, accountId) as
           | { name?: string }
           | undefined;
@@ -95,6 +99,7 @@ export async function channelsAddCommand(
             channel,
             accountId,
             name,
+            plugin,
           });
         }
       }
@@ -170,12 +175,33 @@ export async function channelsAddCommand(
   const rawChannel = String(opts.channel ?? "");
   let channel = normalizeChannelId(rawChannel);
   let catalogEntry = channel ? undefined : resolveCatalogChannelEntry(rawChannel, nextConfig);
+  const resolveWorkspaceDir = () =>
+    resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
+  // May trigger loadOpenClawPlugins on cache miss (disk scan + jiti import)
+  const loadScopedPlugin = async (
+    channelId: ChannelId,
+    pluginId?: string,
+  ): Promise<ChannelPlugin | undefined> => {
+    const existing = getChannelPlugin(channelId);
+    if (existing) {
+      return existing;
+    }
+    const { loadOnboardingPluginRegistrySnapshotForChannel } =
+      await import("../onboarding/plugin-install.js");
+    const snapshot = loadOnboardingPluginRegistrySnapshotForChannel({
+      cfg: nextConfig,
+      runtime,
+      channel: channelId,
+      ...(pluginId ? { pluginId } : {}),
+      workspaceDir: resolveWorkspaceDir(),
+    });
+    return snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin;
+  };
 
   if (!channel && catalogEntry) {
-    const { ensureOnboardingPluginInstalled, reloadOnboardingPluginRegistry } =
-      await import("../onboarding/plugin-install.js");
+    const { ensureOnboardingPluginInstalled } = await import("../onboarding/plugin-install.js");
     const prompter = createClackPrompter();
-    const workspaceDir = resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
+    const workspaceDir = resolveWorkspaceDir();
     const result = await ensureOnboardingPluginInstalled({
       cfg: nextConfig,
       entry: catalogEntry,
@@ -187,7 +213,10 @@ export async function channelsAddCommand(
     if (!result.installed) {
       return;
     }
-    reloadOnboardingPluginRegistry({ cfg: nextConfig, runtime, workspaceDir });
+    catalogEntry = {
+      ...catalogEntry,
+      ...(result.pluginId ? { pluginId: result.pluginId } : {}),
+    };
     channel = normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
   }
 
@@ -200,7 +229,7 @@ export async function channelsAddCommand(
     return;
   }
 
-  const plugin = getChannelPlugin(channel);
+  const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
   if (!plugin?.setup?.applyAccountConfig) {
     runtime.error(`Channel ${channel} does not support add.`);
     runtime.exit(1);
@@ -294,6 +323,7 @@ export async function channelsAddCommand(
     channel,
     accountId,
     input,
+    plugin,
   });
 
   if (channel === "telegram" && resolveTelegramAccount) {
