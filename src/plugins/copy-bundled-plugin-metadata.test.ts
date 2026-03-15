@@ -116,4 +116,29 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(copiedSkillDir, "SKILL.md"))).toBe(true);
     expect(fs.lstatSync(copiedSkillDir).isSymbolicLink()).toBe(false);
   });
+
+  it("omits missing declared skill paths from the bundled manifest", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-missing-skill-");
+    const pluginDir = path.join(repoRoot, "extensions", "tlon");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "tlon",
+      configSchema: { type: "object" },
+      skills: ["node_modules/@tloncorp/tlon-skill"],
+    });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/tlon",
+      openclaw: { extensions: ["./index.ts"] },
+    });
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    const bundledManifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "dist", "extensions", "tlon", "openclaw.plugin.json"),
+        "utf8",
+      ),
+    ) as { skills?: string[] };
+    expect(bundledManifest.skills).toEqual([]);
+  });
 });
