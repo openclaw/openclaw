@@ -500,7 +500,7 @@ export function buildModelStudioProvider(): ProviderConfig {
       // Without this, pi-agent-core skips usage extraction for non-native
       // OpenAI endpoints, leaving token stats null in session data.
       // See: https://github.com/openclaw/openclaw/issues/46616
-      compat: { supportsUsageInStreaming: true },
+      compat: { ...model.compat, supportsUsageInStreaming: true },
     })),
   };
 }

@@ -550,7 +550,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     : undefined;
 
   const contextLine = [
-    `Context: ${formatTokens(actualContextTokens ?? totalTokens, contextTokens ?? null)}`,
+    `Context: ${formatTokens(actualContextTokens ?? entry?.inputTokens ?? totalTokens, contextTokens ?? null)}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
     .filter(Boolean)
