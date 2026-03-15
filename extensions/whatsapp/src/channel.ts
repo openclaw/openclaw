@@ -1,11 +1,9 @@
 import {
+  applyAccountNameToChannelSection,
+  buildChannelConfigSchema,
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
-} from "openclaw/plugin-sdk/compat";
-import {
-  applyAccountNameToChannelSection,
-  buildChannelConfigSchema,
   createActionGate,
   createWhatsAppOutboundBase,
   DEFAULT_ACCOUNT_ID,
@@ -24,7 +22,7 @@ import {
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppGroupToolPolicy,
   resolveWhatsAppHeartbeatRecipients,
-  resolveWhatsAppMentionStripPatterns,
+  resolveWhatsAppMentionStripRegexes,
   WhatsAppConfigSchema,
   type ChannelMessageActionName,
   type ChannelPlugin,
@@ -214,7 +212,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
   },
   mentions: {
-    stripPatterns: ({ ctx }) => resolveWhatsAppMentionStripPatterns(ctx),
+    stripRegexes: ({ ctx }) => resolveWhatsAppMentionStripRegexes(ctx),
   },
   commands: {
     enforceOwnerForCommands: true,

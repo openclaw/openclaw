@@ -25,6 +25,11 @@ export {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
 } from "../channels/plugins/directory-config.js";
+export {
+  collectAllowlistProviderGroupPolicyWarnings,
+  collectOpenGroupPolicyRouteAllowlistWarnings,
+} from "../channels/plugins/group-policy-warnings.js";
+export { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 export { resolveWhatsAppOutboundTarget } from "../whatsapp/resolve-outbound-target.js";
 
 export {
@@ -38,11 +43,12 @@ export {
 export {
   createWhatsAppOutboundBase,
   resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppMentionStripPatterns,
+  resolveWhatsAppMentionStripRegexes,
 } from "../channels/plugins/whatsapp-shared.js";
 export { resolveWhatsAppHeartbeatRecipients } from "../channels/plugins/whatsapp-heartbeat.js";
 export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js";
 
 export { createActionGate, readStringParam } from "../agents/tools/common.js";
+export { createPluginRuntimeStore } from "./runtime-store.js";
 
 export { normalizeE164 } from "../utils.js";

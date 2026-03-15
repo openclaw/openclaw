@@ -1,5 +1,3 @@
-import { resolveTelegramAccount } from "../../../extensions/telegram/src/accounts.js";
-import { deleteTelegramUpdateOffset } from "../../../extensions/telegram/src/update-offset-store.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
@@ -11,13 +9,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
-import { buildAgentSummaries } from "../agents.config.js";
-import { setupChannels } from "../onboard-channels.js";
 import type { ChannelChoice } from "../onboard-types.js";
-import {
-  ensureOnboardingPluginInstalled,
-  reloadOnboardingPluginRegistry,
-} from "../onboarding/plugin-install.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
 import { channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
 
@@ -56,6 +48,10 @@ export async function channelsAddCommand(
 
   const useWizard = shouldUseWizard(params);
   if (useWizard) {
+    const [{ buildAgentSummaries }, { setupChannels }] = await Promise.all([
+      import("../agents.config.js"),
+      import("../onboard-channels.js"),
+    ]);
     const prompter = createClackPrompter();
     let selection: ChannelChoice[] = [];
     const accountIds: Partial<Record<ChannelChoice, string>> = {};
@@ -176,6 +172,8 @@ export async function channelsAddCommand(
   let catalogEntry = channel ? undefined : resolveCatalogChannelEntry(rawChannel, nextConfig);
 
   if (!channel && catalogEntry) {
+    const { ensureOnboardingPluginInstalled, reloadOnboardingPluginRegistry } =
+      await import("../onboarding/plugin-install.js");
     const prompter = createClackPrompter();
     const workspaceDir = resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
     const result = await ensureOnboardingPluginInstalled({
@@ -269,10 +267,20 @@ export async function channelsAddCommand(
     return;
   }
 
-  const previousTelegramToken =
-    channel === "telegram"
-      ? resolveTelegramAccount({ cfg: nextConfig, accountId }).token.trim()
-      : "";
+  let previousTelegramToken = "";
+  let resolveTelegramAccount:
+    | ((
+        params: Parameters<
+          typeof import("../../../extensions/telegram/src/accounts.js").resolveTelegramAccount
+        >[0],
+      ) => ReturnType<
+        typeof import("../../../extensions/telegram/src/accounts.js").resolveTelegramAccount
+      >)
+    | undefined;
+  if (channel === "telegram") {
+    ({ resolveTelegramAccount } = await import("../../../extensions/telegram/src/accounts.js"));
+    previousTelegramToken = resolveTelegramAccount({ cfg: nextConfig, accountId }).token.trim();
+  }
 
   if (accountId !== DEFAULT_ACCOUNT_ID) {
     nextConfig = moveSingleAccountChannelSectionToDefaultAccount({
@@ -288,7 +296,9 @@ export async function channelsAddCommand(
     input,
   });
 
-  if (channel === "telegram") {
+  if (channel === "telegram" && resolveTelegramAccount) {
+    const { deleteTelegramUpdateOffset } =
+      await import("../../../extensions/telegram/src/update-offset-store.js");
     const nextTelegramToken = resolveTelegramAccount({ cfg: nextConfig, accountId }).token.trim();
     if (previousTelegramToken !== nextTelegramToken) {
       // Clear stale polling offsets after Telegram token rotation.

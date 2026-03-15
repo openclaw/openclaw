@@ -1,6 +1,4 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveProviderPluginChoice } from "../plugins/provider-wizard.js";
-import { resolvePluginProviders } from "../plugins/providers.js";
 import type { AuthChoice } from "./onboard-types.js";
 
 const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
@@ -53,17 +51,21 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   vllm: "vllm",
 };
 
-export function resolvePreferredProviderForAuthChoice(params: {
+export async function resolvePreferredProviderForAuthChoice(params: {
   choice: AuthChoice;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): string | undefined {
+}): Promise<string | undefined> {
   const preferred = PREFERRED_PROVIDER_BY_AUTH_CHOICE[params.choice];
   if (preferred) {
     return preferred;
   }
 
+  const [{ resolveProviderPluginChoice }, { resolvePluginProviders }] = await Promise.all([
+    import("../plugins/provider-wizard.js"),
+    import("../plugins/providers.js"),
+  ]);
   const providers = resolvePluginProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
