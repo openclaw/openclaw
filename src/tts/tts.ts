@@ -72,6 +72,9 @@ const TELEGRAM_OUTPUT = {
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
   // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
+  // Edge-TTS: use OGG/Opus so Telegram renders a native voice bubble
+  // instead of a generic audio file attachment (sendVoice requires Opus for waveform UI).
+  edge: "ogg-24khz-16bit-mono-opus",
   extension: ".opus",
   voiceCompatible: true,
 };
@@ -514,7 +517,14 @@ function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
 }
 
-function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {
+function resolveEdgeOutputFormat(config: ResolvedTtsConfig, channelId?: string | null): string {
+  // When the user hasn't explicitly configured an edge output format and the
+  // target channel is a voice-bubble channel (Telegram, Feishu, WhatsApp),
+  // produce OGG/Opus so that the audio renders as a native voice memo with
+  // waveform UI instead of a generic audio file attachment.
+  if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId) && !config.edge.outputFormatConfigured) {
+    return TELEGRAM_OUTPUT.edge;
+  }
   return config.edge.outputFormat;
 }
 
@@ -623,7 +633,7 @@ export async function textToSpeech(params: {
         const tempRoot = resolvePreferredOpenClawTmpDir();
         mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
         const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-        let edgeOutputFormat = resolveEdgeOutputFormat(config);
+        let edgeOutputFormat = resolveEdgeOutputFormat(config, channelId);
         const fallbackEdgeOutputFormat =
           edgeOutputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
 
