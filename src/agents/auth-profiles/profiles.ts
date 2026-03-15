@@ -91,14 +91,15 @@ export async function markAuthProfileGood(params: {
   agentDir?: string;
 }): Promise<void> {
   const { store, provider, profileId, agentDir } = params;
+  const providerKey = normalizeProviderId(provider);
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       const profile = freshStore.profiles[profileId];
-      if (!profile || profile.provider !== provider) {
+      if (!profile || normalizeProviderId(profile.provider) !== providerKey) {
         return false;
       }
-      freshStore.lastGood = { ...freshStore.lastGood, [provider]: profileId };
+      freshStore.lastGood = { ...freshStore.lastGood, [providerKey]: profileId };
       return true;
     },
   });
@@ -107,9 +108,9 @@ export async function markAuthProfileGood(params: {
     return;
   }
   const profile = store.profiles[profileId];
-  if (!profile || profile.provider !== provider) {
+  if (!profile || normalizeProviderId(profile.provider) !== providerKey) {
     return;
   }
-  store.lastGood = { ...store.lastGood, [provider]: profileId };
+  store.lastGood = { ...store.lastGood, [providerKey]: profileId };
   saveAuthProfileStore(store, agentDir);
 }
