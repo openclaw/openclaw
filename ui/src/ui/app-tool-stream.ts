@@ -414,8 +414,14 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     payload.sessionKey === host.sessionKey &&
     (!host.chatRunId || host.chatRunId === payload.runId)
   ) {
+    // Respect the user's "show thinking" setting
+    const settings = (host as unknown as { settings?: { chatShowThinking?: boolean } }).settings;
+    if (payload.stream === "thinking" && settings?.chatShowThinking === false) {
+      return;
+    }
     const text = typeof payload.data?.text === "string" ? payload.data.text : null;
-    if (text) {
+    // Filter NO_REPLY sentinel — matches isSilentReplyStream in controllers/chat.ts
+    if (text && !/^\s*NO_REPLY\s*$/.test(text)) {
       // Detect new paragraph: if accumulated text is shorter than current
       // chatStream, the agent started a new thinking/reply segment. Commit
       // the previous segment so it renders above the new streaming text.
