@@ -1,13 +1,13 @@
 import {
-  buildHuggingfaceModelDefinition,
-  HUGGINGFACE_BASE_URL,
-  HUGGINGFACE_MODEL_CATALOG,
-} from "../agents/huggingface-models.js";
-import {
   AVIAN_BASE_URL,
   AVIAN_MODEL_CATALOG,
   buildAvianModelDefinition,
 } from "../agents/avian-models.js";
+import {
+  buildHuggingfaceModelDefinition,
+  HUGGINGFACE_BASE_URL,
+  HUGGINGFACE_MODEL_CATALOG,
+} from "../agents/huggingface-models.js";
 import {
   buildKilocodeProvider,
   buildKimiCodingProvider,
