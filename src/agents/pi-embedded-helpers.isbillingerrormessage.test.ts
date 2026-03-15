@@ -760,6 +760,16 @@ describe("classifyFailoverReason", () => {
     );
     expect(classifyFailoverReason("Missing scopes: model.request")).toBe("auth");
     expect(
+      classifyFailoverReason(
+        'OAuth token refresh failed for openai-codex: 401 {"error":{"message":"Your refresh token has already been used to generate a new access token. Please try signing in again.","type":"invalid_request_error","code":"refresh_token_reused"}}',
+      ),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        "OAuth token refresh failed for openai-codex: request timed out while contacting auth endpoint",
+      ),
+    ).toBe("timeout");
+    expect(
       classifyFailoverReason("model_cooldown: All credentials for model gpt-5 are cooling down"),
     ).toBe("rate_limit");
     expect(classifyFailoverReason("all credentials for model x are cooling down")).toBeNull();

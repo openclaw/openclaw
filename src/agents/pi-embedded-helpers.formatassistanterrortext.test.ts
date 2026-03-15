@@ -113,6 +113,37 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
   });
 
+  it("surfaces OAuth refresh-token reuse as re-auth required", () => {
+    const msg = makeAssistantError(
+      'OAuth token refresh failed for openai-codex: 401 {"error":{"message":"Your refresh token has already been used to generate a new access token. Please try signing in again.","type":"invalid_request_error","code":"refresh_token_reused"}}',
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toContain(
+      "Please re-authenticate",
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).not.toContain("rate limit");
+  });
+
+  it("surfaces OAuth refresh-token reuse when invalid_request_error fields are type-first", () => {
+    const msg = makeAssistantError(
+      'OAuth token refresh failed for openai-codex: 401 {"error":{"type":"invalid_request_error","message":"Your refresh token has already been used to generate a new access token. Please try signing in again.","code":"refresh_token_reused"}}',
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toContain(
+      "Please re-authenticate",
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).not.toContain(
+      "LLM request rejected",
+    );
+  });
+
+  it("does not rewrite generic OAuth refresh failures without token-reuse signal", () => {
+    const msg = makeAssistantError(
+      "OAuth token refresh failed for openai-codex: request timed out while contacting auth endpoint",
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toBe(
+      "LLM request timed out.",
+    );
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");

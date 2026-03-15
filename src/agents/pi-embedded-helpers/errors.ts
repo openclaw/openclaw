@@ -43,6 +43,29 @@ const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 
+function isOauthRefreshReauthRequiredMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  const hasRefreshFailureContext =
+    lower.includes("oauth token refresh failed") ||
+    lower.includes("token refresh failed") ||
+    lower.includes("refresh token");
+  const hasTokenReuseSignal =
+    lower.includes("refresh_token_reused") || lower.includes("refresh token has already been used");
+
+  return hasRefreshFailureContext && hasTokenReuseSignal;
+}
+
+function formatOauthRefreshReauthCopy(provider?: string): string {
+  const providerLabel = provider?.trim();
+  if (providerLabel) {
+    return `🔐 ${providerLabel} authentication expired. Please re-authenticate and try again.`;
+  }
+  return "🔐 Provider authentication expired. Please re-authenticate and try again.";
+}
+
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
     return RATE_LIMIT_ERROR_USER_MESSAGE;
@@ -732,6 +755,10 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isOauthRefreshReauthRequiredMessage(raw)) {
+    return formatOauthRefreshReauthCopy(opts?.provider);
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
@@ -791,6 +818,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    if (isOauthRefreshReauthRequiredMessage(trimmed)) {
+      return formatOauthRefreshReauthCopy();
     }
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
@@ -987,6 +1018,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return reasonFrom402Text;
+  }
+  if (isOauthRefreshReauthRequiredMessage(raw)) {
+    return "auth";
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return isBillingErrorMessage(raw) ? "billing" : "rate_limit";
