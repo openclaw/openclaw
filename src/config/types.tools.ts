@@ -280,6 +280,12 @@ export type FsToolsConfig = {
    * Default: false (unrestricted, matches legacy behavior).
    */
   workspaceOnly?: boolean;
+  /**
+   * Additional allowed directory paths for filesystem tools when workspaceOnly is true.
+   * Supports tilde expansion (e.g., `~/projects`).
+   * Default: [] (no additional roots).
+   */
+  allowedRoots?: string[];
 };
 
 export type AgentToolsConfig = {

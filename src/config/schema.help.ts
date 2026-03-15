@@ -648,6 +648,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional thread/topic target for channels that support threaded delivery of forwarded approvals. Use this to keep approval traffic contained in operational threads instead of main channels.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
+  "tools.fs.allowedRoots":
+    "Additional allowed directory paths for filesystem tools when workspaceOnly is true. Supports tilde expansion (e.g., ~/projects). Default: [].",
   "tools.sessions.visibility":
     'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
   "tools.message.allowCrossContextSend":
