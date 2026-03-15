@@ -256,6 +256,10 @@ if (command === "prompt") {
     process.exit(5);
   }
 
+  if (stdinText.includes("silent-exit")) {
+    process.exit(1);
+  }
+
   if (stdinText.includes("split-spacing")) {
     emitUpdate(sessionFromOption, {
       sessionUpdate: "agent_message_chunk",

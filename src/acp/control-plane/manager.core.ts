@@ -69,6 +69,17 @@ import {
 } from "./runtime-options.js";
 import { SessionActorQueue } from "./session-actor-queue.js";
 
+const ACPX_EXIT_ERROR_RE = /\bacpx exited with code\s+\d+\b/i;
+
+function resolveTurnFailureFallbackCode(error: unknown): AcpRuntimeError["code"] {
+  if (error instanceof Error && !(error instanceof AcpRuntimeError)) {
+    if (ACPX_EXIT_ERROR_RE.test(error.message)) {
+      return "ACP_BACKEND_UNAVAILABLE";
+    }
+  }
+  return "ACP_TURN_FAILED";
+}
+
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
   private readonly actorTailBySession = this.actorQueue.getTailMapForTesting();
@@ -692,7 +703,7 @@ export class AcpSessionManager {
       } catch (error) {
         const acpError = toAcpRuntimeError({
           error,
-          fallbackCode: "ACP_TURN_FAILED",
+          fallbackCode: resolveTurnFailureFallbackCode(error),
           fallbackMessage: "ACP turn failed before completion.",
         });
         this.recordTurnCompletion({
