@@ -223,13 +223,20 @@ function clampResultsByInjectedChars(
 
 function buildMemorySearchUnavailableResult(error: string | undefined) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
-  const isQuotaError = /insufficient_quota|quota|429/.test(reason.toLowerCase());
+  const reasonLower = reason.toLowerCase();
+  const isQuotaError = /insufficient_quota|quota|429/.test(reasonLower);
+  const isModelNotFound =
+    /model.*not found|not found.*model|model.*\b404\b|\b404\b.*model|pull.*model/.test(reasonLower);
   const warning = isQuotaError
     ? "Memory search is unavailable because the embedding provider quota is exhausted."
-    : "Memory search is unavailable due to an embedding/provider error.";
+    : isModelNotFound
+      ? "Memory search is unavailable because the embedding model was not found (404). The model may need to be pulled or the model name may be incorrect."
+      : "Memory search is unavailable due to an embedding/provider error.";
   const action = isQuotaError
     ? "Top up or switch embedding provider, then retry memory_search."
-    : "Check embedding provider configuration and retry memory_search.";
+    : isModelNotFound
+      ? "Pull the model (e.g. `ollama pull <model>`) or update `agents.defaults.memorySearch.model` in config, then retry memory_search."
+      : "Check embedding provider configuration and retry memory_search.";
   return {
     results: [],
     disabled: true,
