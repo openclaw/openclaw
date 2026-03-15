@@ -158,7 +158,7 @@ async function approvePairingWithFallback(
       defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
     }
     const approved = await approveDevicePairing(requestId);
-    if (!approved) {
+    if (!approved || approved.status !== "approved") {
       return null;
     }
     return {
