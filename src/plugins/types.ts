@@ -663,6 +663,8 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  sessionKey?: string;
+  agentId?: string;
 };
 
 // message_received hook

@@ -18,7 +18,8 @@ const mocks = vi.hoisted(() => ({
 }));
 const hookMocks = vi.hoisted(() => ({
   runner: {
-    hasHooks: vi.fn(() => false),
+    hasHooks: vi.fn<(name: string) => boolean>((_name) => false),
+    runMessageSending: vi.fn(async () => undefined),
     runMessageSent: vi.fn(async () => {}),
   },
 }));
@@ -201,6 +202,8 @@ describe("deliverOutboundPayloads", () => {
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
+    hookMocks.runner.runMessageSending.mockClear();
+    hookMocks.runner.runMessageSending.mockResolvedValue(undefined);
     hookMocks.runner.runMessageSent.mockClear();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockClear();
@@ -938,7 +941,81 @@ describe("deliverOutboundPayloads", () => {
 
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
       expect.objectContaining({ to: "+1555", content: "hello", success: true }),
-      expect.objectContaining({ channelId: "whatsapp" }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        conversationId: "+1555",
+        sessionKey: undefined,
+        agentId: undefined,
+      }),
+    );
+  });
+
+  it("passes resolved session context to message_sending hooks", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+      session: {
+        key: "agent:sender:whatsapp:+1555",
+        agentId: "sender-agent",
+      },
+      mirror: {
+        sessionKey: "agent:mirror:whatsapp:+1555",
+        agentId: "mirror-agent",
+      },
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+1555",
+        content: "hello",
+      }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        conversationId: "+1555",
+        sessionKey: "agent:mirror:whatsapp:+1555",
+        agentId: "mirror-agent",
+      }),
+    );
+  });
+
+  it("passes resolved session context to message_sent hooks", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+      session: {
+        key: "agent:sender:whatsapp:+1555",
+        agentId: "sender-agent",
+      },
+      mirror: {
+        sessionKey: "agent:mirror:whatsapp:+1555",
+        agentId: "mirror-agent",
+      },
+    });
+
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+1555",
+        content: "hello",
+        success: true,
+      }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        conversationId: "+1555",
+        sessionKey: "agent:mirror:whatsapp:+1555",
+        agentId: "mirror-agent",
+      }),
     );
   });
 
@@ -969,7 +1046,12 @@ describe("deliverOutboundPayloads", () => {
 
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
       expect.objectContaining({ to: "!room:1", content: "payload text", success: true }),
-      expect.objectContaining({ channelId: "matrix" }),
+      expect.objectContaining({
+        channelId: "matrix",
+        conversationId: "!room:1",
+        sessionKey: undefined,
+        agentId: undefined,
+      }),
     );
   });
 
@@ -1130,7 +1212,12 @@ describe("deliverOutboundPayloads", () => {
         error:
           "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
       }),
-      expect.objectContaining({ channelId: "matrix" }),
+      expect.objectContaining({
+        channelId: "matrix",
+        conversationId: "!room:1",
+        sessionKey: undefined,
+        agentId: undefined,
+      }),
     );
   });
 
@@ -1155,7 +1242,12 @@ describe("deliverOutboundPayloads", () => {
         success: false,
         error: "downstream failed",
       }),
-      expect.objectContaining({ channelId: "whatsapp" }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        conversationId: "+1555",
+        sessionKey: undefined,
+        agentId: undefined,
+      }),
     );
   });
 });
