@@ -719,6 +719,12 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
     expect(classifyFailoverReasonFromHttpStatus(402, transientMessage)).toBe("rate_limit");
   });
 
+  it("classifies bare leading 402 quota-refresh payloads as rate_limit", () => {
+    const zenMuxMessage =
+      "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.";
+    expect(classifyFailoverReason(zenMuxMessage)).toBe("rate_limit");
+  });
+
   it("keeps plan-upgrade 402 limit messages in billing", () => {
     const billingMessage = "Your usage limit has been reached. Please upgrade your plan.";
     expect(classifyFailoverReason(`HTTP 402 Payment Required: ${billingMessage}`)).toBe("billing");
