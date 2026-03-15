@@ -49,6 +49,16 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("123456…cdef");
   });
 
+  it("masks Telegram Bot API URL tokens", () => {
+    const input =
+      "GET https://api.telegram.org/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef/getMe HTTP/1.1";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("GET https://api.telegram.org/bot123456…cdef/getMe HTTP/1.1");
+  });
+
   it("redacts short tokens fully", () => {
     const input = "TOKEN=shortvalue";
     const output = redactSensitiveText(input, {
@@ -81,6 +91,24 @@ describe("redactSensitiveText", () => {
       patterns: ["/token=([A-Za-z0-9]+)/i"],
     });
     expect(output).toBe("token=abcdef…ghij");
+  });
+
+  it("ignores unsafe nested-repetition custom patterns", () => {
+    const input = `${"a".repeat(28)}!`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: ["(a+)+$"],
+    });
+    expect(output).toBe(input);
+  });
+
+  it("redacts large payloads with bounded regex passes", () => {
+    const input = `${"x".repeat(40_000)} OPENAI_API_KEY=sk-1234567890abcdef ${"y".repeat(40_000)}`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toContain("OPENAI_API_KEY=sk-123…cdef");
   });
 
   it("skips redaction when mode is off", () => {

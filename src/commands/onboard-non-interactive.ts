@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { OnboardOptions } from "./onboard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { runNonInteractiveOnboardingLocal } from "./onboard-non-interactive/local.js";
 import { runNonInteractiveOnboardingRemote } from "./onboard-non-interactive/remote.js";
+import type { OnboardOptions } from "./onboard-types.js";
 
 export async function runNonInteractiveOnboarding(
   opts: OnboardOptions,
@@ -20,7 +20,7 @@ export async function runNonInteractiveOnboarding(
     return;
   }
 
-  const baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+  const baseConfig: OpenClawConfig = snapshot.valid ? (snapshot.exists ? snapshot.config : {}) : {};
   const mode = opts.mode ?? "local";
   if (mode !== "local" && mode !== "remote") {
     runtime.error(`Invalid --mode "${String(mode)}" (use local|remote).`);

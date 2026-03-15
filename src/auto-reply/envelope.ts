@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveTimezone,
   formatUtcTimestamp,
@@ -197,12 +197,18 @@ export function formatInboundEnvelope(params: {
   sender?: SenderLabelParams;
   previousTimestamp?: number | Date;
   envelope?: EnvelopeFormatOptions;
+  fromMe?: boolean;
 }): string {
   const chatType = normalizeChatType(params.chatType);
   const isDirect = !chatType || chatType === "direct";
   const resolvedSenderRaw = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
-  const body = !isDirect && resolvedSender ? `${resolvedSender}: ${params.body}` : params.body;
+  const body =
+    isDirect && params.fromMe
+      ? `(self): ${params.body}`
+      : !isDirect && resolvedSender
+        ? `${resolvedSender}: ${params.body}`
+        : params.body;
   return formatAgentEnvelope({
     channel: params.channel,
     from: params.from,

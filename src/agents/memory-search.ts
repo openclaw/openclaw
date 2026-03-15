@@ -2,6 +2,13 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { SecretInput } from "../config/types.secrets.js";
+import {
+  isMemoryMultimodalEnabled,
+  normalizeMemoryMultimodalSettings,
+  supportsMemoryMultimodalEmbeddings,
+  type MemoryMultimodalSettings,
+} from "../memory/multimodal.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
@@ -9,10 +16,11 @@ export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
-  provider: "openai" | "local" | "gemini" | "voyage" | "auto";
+  multimodal: MemoryMultimodalSettings;
+  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto";
   remote?: {
     baseUrl?: string;
-    apiKey?: string;
+    apiKey?: SecretInput;
     headers?: Record<string, string>;
     batch?: {
       enabled: boolean;
@@ -25,8 +33,9 @@ export type ResolvedMemorySearchConfig = {
   experimental: {
     sessionMemory: boolean;
   };
-  fallback: "openai" | "gemini" | "local" | "voyage" | "none";
+  fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
   model: string;
+  outputDimensionality?: number;
   local: {
     modelPath?: string;
     modelCacheDir?: string;
@@ -52,6 +61,7 @@ export type ResolvedMemorySearchConfig = {
     sessions: {
       deltaBytes: number;
       deltaMessages: number;
+      postCompactionForce: boolean;
     };
   };
   query: {
@@ -62,6 +72,14 @@ export type ResolvedMemorySearchConfig = {
       vectorWeight: number;
       textWeight: number;
       candidateMultiplier: number;
+      mmr: {
+        enabled: boolean;
+        lambda: number;
+      };
+      temporalDecay: {
+        enabled: boolean;
+        halfLifeDays: number;
+      };
     };
   };
   cache: {
@@ -73,6 +91,8 @@ export type ResolvedMemorySearchConfig = {
 const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
 const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 const DEFAULT_VOYAGE_MODEL = "voyage-4-large";
+const DEFAULT_MISTRAL_MODEL = "mistral-embed";
+const DEFAULT_OLLAMA_MODEL = "nomic-embed-text";
 const DEFAULT_CHUNK_TOKENS = 400;
 const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
@@ -84,6 +104,10 @@ const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
 const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
+const DEFAULT_MMR_ENABLED = false;
+const DEFAULT_MMR_LAMBDA = 0.7;
+const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
+const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 
@@ -141,6 +165,8 @@ function mergeConfig(
     provider === "openai" ||
     provider === "gemini" ||
     provider === "voyage" ||
+    provider === "mistral" ||
+    provider === "ollama" ||
     provider === "auto";
   const batch = {
     enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
@@ -170,8 +196,13 @@ function mergeConfig(
         ? DEFAULT_OPENAI_MODEL
         : provider === "voyage"
           ? DEFAULT_VOYAGE_MODEL
-          : undefined;
+          : provider === "mistral"
+            ? DEFAULT_MISTRAL_MODEL
+            : provider === "ollama"
+              ? DEFAULT_OLLAMA_MODEL
+              : undefined;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
+  const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
@@ -181,6 +212,11 @@ function mergeConfig(
     .map((value) => value.trim())
     .filter(Boolean);
   const extraPaths = Array.from(new Set(rawPaths));
+  const multimodal = normalizeMemoryMultimodalSettings({
+    enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
+    modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
+    maxFileBytes: overrides?.multimodal?.maxFileBytes ?? defaults?.multimodal?.maxFileBytes,
+  });
   const vector = {
     enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
     extensionPath:
@@ -213,6 +249,10 @@ function mergeConfig(
         overrides?.sync?.sessions?.deltaMessages ??
         defaults?.sync?.sessions?.deltaMessages ??
         DEFAULT_SESSION_DELTA_MESSAGES,
+      postCompactionForce:
+        overrides?.sync?.sessions?.postCompactionForce ??
+        defaults?.sync?.sessions?.postCompactionForce ??
+        true,
     },
   };
   const query = {
@@ -236,6 +276,26 @@ function mergeConfig(
       overrides?.query?.hybrid?.candidateMultiplier ??
       defaults?.query?.hybrid?.candidateMultiplier ??
       DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
+    mmr: {
+      enabled:
+        overrides?.query?.hybrid?.mmr?.enabled ??
+        defaults?.query?.hybrid?.mmr?.enabled ??
+        DEFAULT_MMR_ENABLED,
+      lambda:
+        overrides?.query?.hybrid?.mmr?.lambda ??
+        defaults?.query?.hybrid?.mmr?.lambda ??
+        DEFAULT_MMR_LAMBDA,
+    },
+    temporalDecay: {
+      enabled:
+        overrides?.query?.hybrid?.temporalDecay?.enabled ??
+        defaults?.query?.hybrid?.temporalDecay?.enabled ??
+        DEFAULT_TEMPORAL_DECAY_ENABLED,
+      halfLifeDays:
+        overrides?.query?.hybrid?.temporalDecay?.halfLifeDays ??
+        defaults?.query?.hybrid?.temporalDecay?.halfLifeDays ??
+        DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
+    },
   };
   const cache = {
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
@@ -250,12 +310,22 @@ function mergeConfig(
   const normalizedVectorWeight = sum > 0 ? vectorWeight / sum : DEFAULT_HYBRID_VECTOR_WEIGHT;
   const normalizedTextWeight = sum > 0 ? textWeight / sum : DEFAULT_HYBRID_TEXT_WEIGHT;
   const candidateMultiplier = clampInt(hybrid.candidateMultiplier, 1, 20);
+  const temporalDecayHalfLifeDays = Math.max(
+    1,
+    Math.floor(
+      Number.isFinite(hybrid.temporalDecay.halfLifeDays)
+        ? hybrid.temporalDecay.halfLifeDays
+        : DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
+    ),
+  );
   const deltaBytes = clampInt(sync.sessions.deltaBytes, 0, Number.MAX_SAFE_INTEGER);
   const deltaMessages = clampInt(sync.sessions.deltaMessages, 0, Number.MAX_SAFE_INTEGER);
+  const postCompactionForce = sync.sessions.postCompactionForce;
   return {
     enabled,
     sources,
     extraPaths,
+    multimodal,
     provider,
     remote,
     experimental: {
@@ -263,6 +333,7 @@ function mergeConfig(
     },
     fallback,
     model,
+    outputDimensionality,
     local,
     store,
     chunking: { tokens: Math.max(1, chunking.tokens), overlap },
@@ -271,6 +342,7 @@ function mergeConfig(
       sessions: {
         deltaBytes,
         deltaMessages,
+        postCompactionForce,
       },
     },
     query: {
@@ -281,6 +353,16 @@ function mergeConfig(
         vectorWeight: normalizedVectorWeight,
         textWeight: normalizedTextWeight,
         candidateMultiplier,
+        mmr: {
+          enabled: Boolean(hybrid.mmr.enabled),
+          lambda: Number.isFinite(hybrid.mmr.lambda)
+            ? Math.max(0, Math.min(1, hybrid.mmr.lambda))
+            : DEFAULT_MMR_LAMBDA,
+        },
+        temporalDecay: {
+          enabled: Boolean(hybrid.temporalDecay.enabled),
+          halfLifeDays: temporalDecayHalfLifeDays,
+        },
       },
     },
     cache: {
@@ -302,6 +384,23 @@ export function resolveMemorySearchConfig(
   const resolved = mergeConfig(defaults, overrides, agentId);
   if (!resolved.enabled) {
     return null;
+  }
+  const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
+  if (
+    multimodalActive &&
+    !supportsMemoryMultimodalEmbeddings({
+      provider: resolved.provider,
+      model: resolved.model,
+    })
+  ) {
+    throw new Error(
+      'agents.*.memorySearch.multimodal requires memorySearch.provider = "gemini" and model = "gemini-embedding-2-preview".',
+    );
+  }
+  if (multimodalActive && resolved.fallback !== "none") {
+    throw new Error(
+      'agents.*.memorySearch.multimodal does not support memorySearch.fallback. Set fallback to "none".',
+    );
   }
   return resolved;
 }

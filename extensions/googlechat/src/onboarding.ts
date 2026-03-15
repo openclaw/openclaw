@@ -1,15 +1,17 @@
-import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk/googlechat";
 import {
+  DEFAULT_ACCOUNT_ID,
+  applySetupAccountConfigPatch,
   addWildcardAllowFrom,
   formatDocsLink,
-  promptAccountId,
+  mergeAllowFromEntries,
+  resolveAccountIdForConfigure,
+  splitOnboardingEntries,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
   migrateBaseNameToDefaultAccount,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/googlechat";
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
@@ -42,26 +44,19 @@ function setGoogleChatDmPolicy(cfg: OpenClawConfig, policy: DmPolicy) {
   };
 }
 
-function parseAllowFromInput(raw: string): string[] {
-  return raw
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 async function promptAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
 }): Promise<OpenClawConfig> {
   const current = params.cfg.channels?.["googlechat"]?.dm?.allowFrom ?? [];
   const entry = await params.prompter.text({
-    message: "Google Chat allowFrom (user id or email)",
+    message: "Google Chat allowFrom (users/<id> or raw email; avoid users/<email>)",
     placeholder: "users/123456789, name@example.com",
     initialValue: current[0] ? String(current[0]) : undefined,
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
-  const parts = parseAllowFromInput(String(entry));
-  const unique = [...new Set(parts)];
+  const parts = splitOnboardingEntries(String(entry));
+  const unique = mergeAllowFromEntries(undefined, parts);
   return {
     ...params.cfg,
     channels: {
@@ -89,45 +84,6 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   promptAllowFrom,
 };
 
-function applyAccountConfig(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  patch: Record<string, unknown>;
-}): OpenClawConfig {
-  const { cfg, accountId, patch } = params;
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        googlechat: {
-          ...cfg.channels?.["googlechat"],
-          enabled: true,
-          ...patch,
-        },
-      },
-    };
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      googlechat: {
-        ...cfg.channels?.["googlechat"],
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.["googlechat"]?.accounts,
-          [accountId]: {
-            ...cfg.channels?.["googlechat"]?.accounts?.[accountId],
-            enabled: true,
-            ...patch,
-          },
-        },
-      },
-    },
-  };
-}
-
 async function promptCredentials(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
@@ -143,7 +99,7 @@ async function promptCredentials(params: {
       initialValue: true,
     });
     if (useEnv) {
-      return applyAccountConfig({ cfg, accountId, patch: {} });
+      return applySetupAccountConfigPatch({ cfg, channelKey: channel, accountId, patch: {} });
     }
   }
 
@@ -162,8 +118,9 @@ async function promptCredentials(params: {
       placeholder: "/path/to/service-account.json",
       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
     });
-    return applyAccountConfig({
+    return applySetupAccountConfigPatch({
       cfg,
+      channelKey: channel,
       accountId,
       patch: { serviceAccountFile: String(path).trim() },
     });
@@ -174,8 +131,9 @@ async function promptCredentials(params: {
     placeholder: '{"type":"service_account", ... }',
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
-  return applyAccountConfig({
+  return applySetupAccountConfigPatch({
     cfg,
+    channelKey: channel,
     accountId,
     patch: { serviceAccount: String(json).trim() },
   });
@@ -206,8 +164,9 @@ async function promptAudience(params: {
     initialValue: currentAudience || undefined,
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
-  return applyAccountConfig({
+  return applySetupAccountConfigPatch({
     cfg: params.cfg,
+    channelKey: channel,
     accountId: params.accountId,
     patch: { audienceType, audience: String(audience).trim() },
   });
@@ -240,19 +199,16 @@ export const googlechatOnboardingAdapter: ChannelOnboardingAdapter = {
     };
   },
   configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
-    const override = accountOverrides["googlechat"]?.trim();
     const defaultAccountId = resolveDefaultGoogleChatAccountId(cfg);
-    let accountId = override ? normalizeAccountId(override) : defaultAccountId;
-    if (shouldPromptAccountIds && !override) {
-      accountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "Google Chat",
-        currentId: accountId,
-        listAccountIds: listGoogleChatAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Google Chat",
+      accountOverride: accountOverrides["googlechat"],
+      shouldPromptAccountIds,
+      listAccountIds: listGoogleChatAccountIds,
+      defaultAccountId,
+    });
 
     let next = cfg;
     await noteGoogleChatSetup(prompter);

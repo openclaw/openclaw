@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,72 +13,152 @@ async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
+function createExitedProcess(code: number | null, signal: string | null = null) {
+  return {
+    on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
+      if (event === "exit") {
+        queueMicrotask(() => cb(code, signal));
+      }
+      return undefined;
+    },
+  };
+}
+
 describe("run-node script", () => {
   it.runIf(process.platform !== "win32")(
     "preserves control-ui assets by building with tsdown --no-clean",
     async () => {
       await withTempDir(async (tmp) => {
-        const runNodeScript = path.join(process.cwd(), "scripts", "run-node.mjs");
-        const fakeBinDir = path.join(tmp, ".fake-bin");
-        const fakePnpmPath = path.join(fakeBinDir, "pnpm");
         const argsPath = path.join(tmp, ".pnpm-args.txt");
         const indexPath = path.join(tmp, "dist", "control-ui", "index.html");
 
-        await fs.mkdir(fakeBinDir, { recursive: true });
-        await fs.mkdir(path.join(tmp, "src"), { recursive: true });
         await fs.mkdir(path.dirname(indexPath), { recursive: true });
-        await fs.writeFile(path.join(tmp, "src", "index.ts"), "export {};\n", "utf-8");
-        await fs.writeFile(
-          path.join(tmp, "package.json"),
-          JSON.stringify({ name: "openclaw" }),
-          "utf-8",
-        );
-        await fs.writeFile(
-          path.join(tmp, "tsconfig.json"),
-          JSON.stringify({ compilerOptions: {} }),
-          "utf-8",
-        );
         await fs.writeFile(indexPath, "<html>sentinel</html>\n", "utf-8");
 
-        await fs.writeFile(
-          path.join(tmp, "openclaw.mjs"),
-          "#!/usr/bin/env node\nif (process.argv.includes('--version')) console.log('9.9.9-test');\n",
-          "utf-8",
-        );
-        await fs.chmod(path.join(tmp, "openclaw.mjs"), 0o755);
-
-        const fakePnpm = `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
-const args = process.argv.slice(2);
-const cwd = process.cwd();
-fs.writeFileSync(path.join(cwd, ".pnpm-args.txt"), args.join(" "), "utf-8");
-if (!args.includes("--no-clean")) {
-  fs.rmSync(path.join(cwd, "dist", "control-ui"), { recursive: true, force: true });
-}
-fs.mkdirSync(path.join(cwd, "dist"), { recursive: true });
-fs.writeFileSync(path.join(cwd, "dist", "entry.js"), "export {}\\n", "utf-8");
-`;
-        await fs.writeFile(fakePnpmPath, fakePnpm, "utf-8");
-        await fs.chmod(fakePnpmPath, 0o755);
-
-        const env = {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-          OPENCLAW_FORCE_BUILD: "1",
-          OPENCLAW_RUNNER_LOG: "0",
+        const nodeCalls: string[][] = [];
+        const spawn = (cmd: string, args: string[]) => {
+          if (cmd === "pnpm") {
+            fsSync.writeFileSync(argsPath, args.join(" "), "utf-8");
+            if (!args.includes("--no-clean")) {
+              fsSync.rmSync(path.join(tmp, "dist", "control-ui"), { recursive: true, force: true });
+            }
+          }
+          if (cmd === process.execPath) {
+            nodeCalls.push([cmd, ...args]);
+          }
+          return {
+            on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
+              if (event === "exit") {
+                queueMicrotask(() => cb(0, null));
+              }
+              return undefined;
+            },
+          };
         };
-        const result = spawnSync(process.execPath, [runNodeScript, "--version"], {
+
+        const { runNodeMain } = await import("../../scripts/run-node.mjs");
+        const exitCode = await runNodeMain({
           cwd: tmp,
-          env,
-          encoding: "utf-8",
+          args: ["--version"],
+          env: {
+            ...process.env,
+            OPENCLAW_FORCE_BUILD: "1",
+            OPENCLAW_RUNNER_LOG: "0",
+          },
+          spawn,
+          execPath: process.execPath,
+          platform: process.platform,
         });
 
-        expect(result.status).toBe(0);
-        expect(result.stdout).toContain("9.9.9-test");
+        expect(exitCode).toBe(0);
         await expect(fs.readFile(argsPath, "utf-8")).resolves.toContain("exec tsdown --no-clean");
         await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
+        expect(nodeCalls).toEqual([[process.execPath, "openclaw.mjs", "--version"]]);
       });
     },
   );
+
+  it("skips rebuilding when dist is current and the source tree is clean", async () => {
+    await withTempDir(async (tmp) => {
+      const srcPath = path.join(tmp, "src", "index.ts");
+      const distEntryPath = path.join(tmp, "dist", "entry.js");
+      const buildStampPath = path.join(tmp, "dist", ".buildstamp");
+      const tsconfigPath = path.join(tmp, "tsconfig.json");
+      const packageJsonPath = path.join(tmp, "package.json");
+      await fs.mkdir(path.dirname(srcPath), { recursive: true });
+      await fs.mkdir(path.dirname(distEntryPath), { recursive: true });
+      await fs.writeFile(srcPath, "export const value = 1;\n", "utf-8");
+      await fs.writeFile(tsconfigPath, "{}\n", "utf-8");
+      await fs.writeFile(packageJsonPath, '{"name":"openclaw-test"}\n', "utf-8");
+      await fs.writeFile(distEntryPath, "console.log('built');\n", "utf-8");
+      await fs.writeFile(buildStampPath, '{"head":"abc123"}\n', "utf-8");
+
+      const oldTime = new Date("2026-03-13T10:00:00.000Z");
+      const stampTime = new Date("2026-03-13T12:00:00.000Z");
+      await fs.utimes(srcPath, oldTime, oldTime);
+      await fs.utimes(tsconfigPath, oldTime, oldTime);
+      await fs.utimes(packageJsonPath, oldTime, oldTime);
+      await fs.utimes(distEntryPath, stampTime, stampTime);
+      await fs.utimes(buildStampPath, stampTime, stampTime);
+
+      const spawnCalls: string[][] = [];
+      const spawn = (cmd: string, args: string[]) => {
+        spawnCalls.push([cmd, ...args]);
+        return createExitedProcess(0);
+      };
+      const spawnSync = (cmd: string, args: string[]) => {
+        if (cmd === "git" && args[0] === "rev-parse") {
+          return { status: 0, stdout: "abc123\n" };
+        }
+        if (cmd === "git" && args[0] === "status") {
+          return { status: 0, stdout: "" };
+        }
+        return { status: 1, stdout: "" };
+      };
+
+      const { runNodeMain } = await import("../../scripts/run-node.mjs");
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
+    });
+  });
+
+  it("returns the build exit code when the compiler step fails", async () => {
+    await withTempDir(async (tmp) => {
+      const spawn = (cmd: string, args: string[] = []) => {
+        if (cmd === "pnpm" || (cmd === "cmd.exe" && args.includes("pnpm"))) {
+          return createExitedProcess(23);
+        }
+        return createExitedProcess(0);
+      };
+
+      const { runNodeMain } = await import("../../scripts/run-node.mjs");
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(23);
+    });
+  });
 });

@@ -1,0 +1,128 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { registerContextEngine } from "./registry.js";
+import type {
+  ContextEngine,
+  ContextEngineInfo,
+  AssembleResult,
+  CompactResult,
+  ContextEngineRuntimeContext,
+  IngestResult,
+} from "./types.js";
+
+/**
+ * LegacyContextEngine wraps the existing compaction behavior behind the
+ * ContextEngine interface, preserving 100% backward compatibility.
+ *
+ * - ingest: no-op (SessionManager handles message persistence)
+ * - assemble: pass-through (existing sanitize/validate/limit pipeline in attempt.ts handles this)
+ * - compact: delegates to compactEmbeddedPiSessionDirect
+ */
+export class LegacyContextEngine implements ContextEngine {
+  readonly info: ContextEngineInfo = {
+    id: "legacy",
+    name: "Legacy Context Engine",
+    version: "1.0.0",
+  };
+
+  async ingest(_params: {
+    sessionId: string;
+    sessionKey?: string;
+    message: AgentMessage;
+    isHeartbeat?: boolean;
+  }): Promise<IngestResult> {
+    // No-op: SessionManager handles message persistence in the legacy flow
+    return { ingested: false };
+  }
+
+  async assemble(params: {
+    sessionId: string;
+    sessionKey?: string;
+    messages: AgentMessage[];
+    tokenBudget?: number;
+  }): Promise<AssembleResult> {
+    // Pass-through: the existing sanitize -> validate -> limit -> repair pipeline
+    // in attempt.ts handles context assembly for the legacy engine.
+    // We just return the messages as-is with a rough token estimate.
+    return {
+      messages: params.messages,
+      estimatedTokens: 0, // Caller handles estimation
+    };
+  }
+
+  async afterTurn(_params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+    messages: AgentMessage[];
+    prePromptMessageCount: number;
+    autoCompactionSummary?: string;
+    isHeartbeat?: boolean;
+    tokenBudget?: number;
+    runtimeContext?: ContextEngineRuntimeContext;
+  }): Promise<void> {
+    // No-op: legacy flow persists context directly in SessionManager.
+  }
+
+  async compact(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+    tokenBudget?: number;
+    force?: boolean;
+    currentTokenCount?: number;
+    compactionTarget?: "budget" | "threshold";
+    customInstructions?: string;
+    runtimeContext?: ContextEngineRuntimeContext;
+  }): Promise<CompactResult> {
+    // Import through a dedicated runtime boundary so the lazy edge remains effective.
+    const { compactEmbeddedPiSessionDirect } =
+      await import("../agents/pi-embedded-runner/compact.runtime.js");
+
+    // runtimeContext carries the full CompactEmbeddedPiSessionParams fields
+    // set by the caller in run.ts. We spread them and override the fields
+    // that come from the ContextEngine compact() signature directly.
+    const runtimeContext = params.runtimeContext ?? {};
+    const currentTokenCount =
+      params.currentTokenCount ??
+      (typeof runtimeContext.currentTokenCount === "number" &&
+      Number.isFinite(runtimeContext.currentTokenCount) &&
+      runtimeContext.currentTokenCount > 0
+        ? Math.floor(runtimeContext.currentTokenCount)
+        : undefined);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bridge runtimeContext matches CompactEmbeddedPiSessionParams
+    const result = await compactEmbeddedPiSessionDirect({
+      ...runtimeContext,
+      sessionId: params.sessionId,
+      sessionFile: params.sessionFile,
+      tokenBudget: params.tokenBudget,
+      ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
+      force: params.force,
+      customInstructions: params.customInstructions,
+      workspaceDir: (runtimeContext.workspaceDir as string) ?? process.cwd(),
+    } as Parameters<typeof compactEmbeddedPiSessionDirect>[0]);
+
+    return {
+      ok: result.ok,
+      compacted: result.compacted,
+      reason: result.reason,
+      result: result.result
+        ? {
+            summary: result.result.summary,
+            firstKeptEntryId: result.result.firstKeptEntryId,
+            tokensBefore: result.result.tokensBefore,
+            tokensAfter: result.result.tokensAfter,
+            details: result.result.details,
+          }
+        : undefined,
+    };
+  }
+
+  async dispose(): Promise<void> {
+    // Nothing to clean up for legacy engine
+  }
+}
+
+export function registerLegacyContextEngine(): void {
+  registerContextEngine("legacy", () => new LegacyContextEngine());
+}

@@ -1,3 +1,7 @@
+import { markPwAiLoaded } from "./pw-ai-state.js";
+
+markPwAiLoaded();
+
 export {
   type BrowserConsoleMessage,
   closePageByTargetIdViaPlaywright,
@@ -15,6 +19,7 @@ export {
 export {
   armDialogViaPlaywright,
   armFileUploadViaPlaywright,
+  batchViaPlaywright,
   clickViaPlaywright,
   closePageViaPlaywright,
   cookiesClearViaPlaywright,

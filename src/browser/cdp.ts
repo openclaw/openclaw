@@ -1,11 +1,29 @@
-import { appendCdpPath, fetchJson, isLoopbackHost, withCdpSocket } from "./cdp.helpers.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import {
+  appendCdpPath,
+  fetchJson,
+  isLoopbackHost,
+  isWebSocketUrl,
+  withCdpSocket,
+} from "./cdp.helpers.js";
+import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
 
-export { appendCdpPath, fetchJson, fetchOk, getHeadersWithAuth } from "./cdp.helpers.js";
+export {
+  appendCdpPath,
+  fetchJson,
+  fetchOk,
+  getHeadersWithAuth,
+  isWebSocketUrl,
+} from "./cdp.helpers.js";
 
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   const ws = new URL(wsUrl);
   const cdp = new URL(cdpUrl);
-  if (isLoopbackHost(ws.hostname) && !isLoopbackHost(cdp.hostname)) {
+  // Treat 0.0.0.0 and :: as wildcard bind addresses that need rewriting.
+  // Containerized browsers (e.g. browserless) report ws://0.0.0.0:<internal-port>
+  // in /json/version — these must be rewritten to the external cdpUrl host:port.
+  const isWildcardBind = ws.hostname === "0.0.0.0" || ws.hostname === "[::]";
+  if ((isLoopbackHost(ws.hostname) || isWildcardBind) && !isLoopbackHost(cdp.hostname)) {
     ws.hostname = cdp.hostname;
     const cdpPort = cdp.port || (cdp.protocol === "https:" ? "443" : "80");
     if (cdpPort) {
@@ -85,15 +103,28 @@ export async function captureScreenshot(opts: {
 export async function createTargetViaCdp(opts: {
   cdpUrl: string;
   url: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ targetId: string }> {
-  const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
-    appendCdpPath(opts.cdpUrl, "/json/version"),
-    1500,
-  );
-  const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
-  const wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
-  if (!wsUrl) {
-    throw new Error("CDP /json/version missing webSocketDebuggerUrl");
+  await assertBrowserNavigationAllowed({
+    url: opts.url,
+    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+  });
+
+  let wsUrl: string;
+  if (isWebSocketUrl(opts.cdpUrl)) {
+    // Direct WebSocket URL — skip /json/version discovery.
+    wsUrl = opts.cdpUrl;
+  } else {
+    // Standard HTTP(S) CDP endpoint — discover WebSocket URL via /json/version.
+    const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
+      appendCdpPath(opts.cdpUrl, "/json/version"),
+      1500,
+    );
+    const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
+    wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
+    if (!wsUrl) {
+      throw new Error("CDP /json/version missing webSocketDebuggerUrl");
+    }
   }
 
   return await withCdpSocket(wsUrl, async (send) => {

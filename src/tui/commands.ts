@@ -1,9 +1,10 @@
 import type { SlashCommand } from "@mariozechner/pi-tui";
-import type { OpenClawConfig } from "../config/types.js";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/types.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
+const FAST_LEVELS = ["status", "on", "off"];
 const REASONING_LEVELS = ["on", "off"];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
@@ -24,6 +25,18 @@ const COMMAND_ALIASES: Record<string, string> = {
   elev: "elevated",
 };
 
+function createLevelCompletion(
+  levels: string[],
+): NonNullable<SlashCommand["getArgumentCompletions"]> {
+  return (prefix) =>
+    levels
+      .filter((value) => value.startsWith(prefix.toLowerCase()))
+      .map((value) => ({
+        value,
+        label: value,
+      }));
+}
+
 export function parseCommand(input: string): ParsedCommand {
   const trimmed = input.replace(/^\//, "").trim();
   if (!trimmed) {
@@ -39,6 +52,12 @@ export function parseCommand(input: string): ParsedCommand {
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
   const thinkLevels = listThinkingLevelLabels(options.provider, options.model);
+  const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
+  const fastCompletions = createLevelCompletion(FAST_LEVELS);
+  const reasoningCompletions = createLevelCompletion(REASONING_LEVELS);
+  const usageCompletions = createLevelCompletion(USAGE_FOOTER_LEVELS);
+  const elevatedCompletions = createLevelCompletion(ELEVATED_LEVELS);
+  const activationCompletions = createLevelCompletion(ACTIVATION_LEVELS);
   const commands: SlashCommand[] = [
     { name: "help", description: "Show slash command help" },
     { name: "status", description: "Show gateway status summary" },
@@ -60,58 +79,39 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
           .map((value) => ({ value, label: value })),
     },
     {
+      name: "fast",
+      description: "Set fast mode on/off",
+      getArgumentCompletions: fastCompletions,
+    },
+    {
       name: "verbose",
       description: "Set verbose on/off",
-      getArgumentCompletions: (prefix) =>
-        VERBOSE_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: verboseCompletions,
     },
     {
       name: "reasoning",
       description: "Set reasoning on/off",
-      getArgumentCompletions: (prefix) =>
-        REASONING_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: reasoningCompletions,
     },
     {
       name: "usage",
       description: "Toggle per-response usage line",
-      getArgumentCompletions: (prefix) =>
-        USAGE_FOOTER_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: usageCompletions,
     },
     {
       name: "elevated",
       description: "Set elevated on/off/ask/full",
-      getArgumentCompletions: (prefix) =>
-        ELEVATED_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: elevatedCompletions,
     },
     {
       name: "elev",
       description: "Alias for /elevated",
-      getArgumentCompletions: (prefix) =>
-        ELEVATED_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: elevatedCompletions,
     },
     {
       name: "activation",
       description: "Set group activation",
-      getArgumentCompletions: (prefix) =>
-        ACTIVATION_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: activationCompletions,
     },
     { name: "abort", description: "Abort active run" },
     { name: "new", description: "Reset the session" },
@@ -149,6 +149,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,
+    "/fast <status|on|off>",
     "/verbose <on|off>",
     "/reasoning <on|off>",
     "/usage <off|tokens|full>",

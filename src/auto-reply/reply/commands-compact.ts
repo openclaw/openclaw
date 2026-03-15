@@ -1,15 +1,19 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { CommandHandler } from "./commands-types.js";
 import {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
   isEmbeddedPiRunActive,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveFreshSessionTotalTokens,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { formatContextUsageShort, formatTokenCount } from "../status.js";
+import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
@@ -79,8 +83,16 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     groupChannel: params.sessionEntry.groupChannel,
     groupSpace: params.sessionEntry.space,
     spawnedBy: params.sessionEntry.spawnedBy,
-    sessionFile: resolveSessionFilePath(sessionId, params.sessionEntry),
+    sessionFile: resolveSessionFilePath(
+      sessionId,
+      params.sessionEntry,
+      resolveSessionFilePathOptions({
+        agentId: params.agentId,
+        storePath: params.storePath,
+      }),
+    ),
     workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
     config: params.cfg,
     skillsSnapshot: params.sessionEntry.skillsSnapshot,
     provider: params.provider,
@@ -92,6 +104,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       defaultLevel: "off",
     },
     customInstructions,
+    trigger: "manual",
     senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
@@ -117,12 +130,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
-  const totalTokens =
-    tokensAfterCompaction ??
-    params.sessionEntry.totalTokens ??
-    (params.sessionEntry.inputTokens ?? 0) + (params.sessionEntry.outputTokens ?? 0);
+  const totalTokens = tokensAfterCompaction ?? resolveFreshSessionTotalTokens(params.sessionEntry);
   const contextSummary = formatContextUsageShort(
-    totalTokens > 0 ? totalTokens : null,
+    typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
     params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
   );
   const reason = result.reason?.trim();

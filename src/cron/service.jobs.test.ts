@@ -1,13 +1,26 @@
 import { describe, expect, it } from "vitest";
+import { applyJobPatch, createJob } from "./service/jobs.js";
+import type { CronServiceState } from "./service/state.js";
+import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob, CronJobPatch } from "./types.js";
-import { applyJobPatch } from "./service/jobs.js";
+
+function expectCronStaggerMs(job: CronJob, expected: number): void {
+  expect(job.schedule.kind).toBe("cron");
+  if (job.schedule.kind === "cron") {
+    expect(job.schedule.staggerMs).toBe(expected);
+  }
+}
 
 describe("applyJobPatch", () => {
-  it("clears delivery when switching to main session", () => {
+  const createIsolatedAgentTurnJob = (
+    id: string,
+    delivery: CronJob["delivery"],
+    overrides?: Partial<CronJob>,
+  ): CronJob => {
     const now = Date.now();
-    const job: CronJob = {
-      id: "job-1",
-      name: "job-1",
+    return {
+      id,
+      name: id,
       enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
@@ -15,36 +28,54 @@ describe("applyJobPatch", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "announce", channel: "telegram", to: "123" },
+      delivery,
       state: {},
+      ...overrides,
     };
+  };
 
-    const patch: CronJobPatch = {
+  const switchToMainPatch = (): CronJobPatch => ({
+    sessionTarget: "main",
+    payload: { kind: "systemEvent", text: "ping" },
+  });
+
+  const createMainSystemEventJob = (id: string, delivery: CronJob["delivery"]): CronJob => {
+    return createIsolatedAgentTurnJob(id, delivery, {
       sessionTarget: "main",
       payload: { kind: "systemEvent", text: "ping" },
-    };
+    });
+  };
 
-    expect(() => applyJobPatch(job, patch)).not.toThrow();
+  it("clears delivery when switching to main session", () => {
+    const job = createIsolatedAgentTurnJob("job-1", {
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+
+    expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
     expect(job.sessionTarget).toBe("main");
     expect(job.payload.kind).toBe("systemEvent");
     expect(job.delivery).toBeUndefined();
   });
 
+  it("keeps webhook delivery when switching to main session", () => {
+    const job = createIsolatedAgentTurnJob("job-webhook", {
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+    });
+
+    expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
+    expect(job.sessionTarget).toBe("main");
+    expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
+  });
+
   it("maps legacy payload delivery updates onto delivery", () => {
-    const now = Date.now();
-    const job: CronJob = {
-      id: "job-2",
-      name: "job-2",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "announce", channel: "telegram", to: "123" },
-      state: {},
-    };
+    const job = createIsolatedAgentTurnJob("job-2", {
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
 
     const patch: CronJobPatch = {
       payload: {
@@ -72,21 +103,34 @@ describe("applyJobPatch", () => {
     });
   });
 
+  it("maps legacy payload delivery updates for custom session targets", () => {
+    const job = createIsolatedAgentTurnJob(
+      "job-custom-session",
+      {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+      },
+      { sessionTarget: "session:project-alpha" },
+    );
+
+    applyJobPatch(job, {
+      payload: { kind: "agentTurn", to: "555" },
+    });
+
+    expect(job.delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "555",
+      bestEffort: undefined,
+    });
+  });
+
   it("treats legacy payload targets as announce requests", () => {
-    const now = Date.now();
-    const job: CronJob = {
-      id: "job-3",
-      name: "job-3",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "none", channel: "telegram" },
-      state: {},
-    };
+    const job = createIsolatedAgentTurnJob("job-3", {
+      mode: "none",
+      channel: "telegram",
+    });
 
     const patch: CronJobPatch = {
       payload: { kind: "agentTurn", to: " 999 " },
@@ -99,5 +143,485 @@ describe("applyJobPatch", () => {
       to: "999",
       bestEffort: undefined,
     });
+  });
+
+  it("merges delivery.accountId from patch and preserves existing", () => {
+    const job = createIsolatedAgentTurnJob("job-acct", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-100123",
+    });
+
+    applyJobPatch(job, { delivery: { mode: "announce", accountId: " coordinator " } });
+    expect(job.delivery?.accountId).toBe("coordinator");
+    expect(job.delivery?.mode).toBe("announce");
+    expect(job.delivery?.to).toBe("-100123");
+
+    // Updating other fields preserves accountId
+    applyJobPatch(job, { delivery: { mode: "announce", to: "-100999" } });
+    expect(job.delivery?.accountId).toBe("coordinator");
+    expect(job.delivery?.to).toBe("-100999");
+
+    // Clearing accountId with empty string
+    applyJobPatch(job, { delivery: { mode: "announce", accountId: "" } });
+    expect(job.delivery?.accountId).toBeUndefined();
+  });
+
+  it("persists agentTurn payload.lightContext updates when editing existing jobs", () => {
+    const job = createIsolatedAgentTurnJob("job-light-context", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      lightContext: true,
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        lightContext: false,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.lightContext).toBe(false);
+    }
+  });
+
+  it("applies payload.lightContext when replacing payload kind via patch", () => {
+    const job = createIsolatedAgentTurnJob("job-light-context-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "ping" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        lightContext: true,
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.lightContext).toBe(true);
+    }
+  });
+
+  it("rejects webhook delivery without a valid http(s) target URL", () => {
+    const expectedError = "cron webhook delivery requires delivery.to to be a valid http(s) URL";
+    const cases = [
+      { name: "no delivery update", patch: { enabled: true } satisfies CronJobPatch },
+      {
+        name: "blank webhook target",
+        patch: { delivery: { mode: "webhook", to: "" } } satisfies CronJobPatch,
+      },
+      {
+        name: "non-http protocol",
+        patch: {
+          delivery: { mode: "webhook", to: "ftp://example.invalid" },
+        } satisfies CronJobPatch,
+      },
+      {
+        name: "invalid URL",
+        patch: { delivery: { mode: "webhook", to: "not-a-url" } } satisfies CronJobPatch,
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const job = createMainSystemEventJob("job-webhook-invalid", { mode: "webhook" });
+      expect(() => applyJobPatch(job, testCase.patch), testCase.name).toThrow(expectedError);
+    }
+  });
+
+  it("trims webhook delivery target URLs", () => {
+    const job = createMainSystemEventJob("job-webhook-trim", {
+      mode: "webhook",
+      to: "https://example.invalid/original",
+    });
+
+    expect(() =>
+      applyJobPatch(job, { delivery: { mode: "webhook", to: "  https://example.invalid/trim  " } }),
+    ).not.toThrow();
+    expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/trim" });
+  });
+
+  it("rejects failureDestination on main jobs without webhook delivery mode", () => {
+    const job = createMainSystemEventJob("job-main-failure-dest", {
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+      failureDestination: {
+        mode: "announce",
+        channel: "telegram",
+        to: "999",
+      },
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
+      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
+    );
+  });
+
+  it("validates and trims webhook failureDestination target URLs", () => {
+    const expectedError =
+      "cron failure destination webhook requires delivery.failureDestination.to to be a valid http(s) URL";
+    const job = createIsolatedAgentTurnJob("job-failure-webhook-target", {
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+      failureDestination: {
+        mode: "webhook",
+        to: "not-a-url",
+      },
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).toThrow(expectedError);
+
+    job.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+      failureDestination: {
+        mode: "webhook",
+        to: "  https://example.invalid/failure  ",
+      },
+    };
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+    expect(job.delivery?.failureDestination?.to).toBe("https://example.invalid/failure");
+  });
+
+  it("rejects Telegram delivery with invalid target (chatId/topicId format)", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-invalid", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-10012345/6789",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
+      'Invalid Telegram delivery target "-10012345/6789". Use colon (:) as delimiter for topics, not slash. Valid formats: -1001234567890, -1001234567890:123, -1001234567890:topic:123, @username, https://t.me/username',
+    );
+  });
+
+  it("accepts Telegram delivery with t.me URL", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-tme", {
+      mode: "announce",
+      channel: "telegram",
+      to: "https://t.me/mychannel",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Telegram delivery with t.me URL (no https)", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-tme-no-https", {
+      mode: "announce",
+      channel: "telegram",
+      to: "t.me/mychannel",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Telegram delivery with valid target (plain chat id)", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-valid", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Telegram delivery with valid target (colon delimiter)", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-valid-colon", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890:123",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Telegram delivery with valid target (topic marker)", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-valid-topic", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890:topic:456",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Telegram delivery without target", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-no-target", {
+      mode: "announce",
+      channel: "telegram",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Telegram delivery with @username", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-username", {
+      mode: "announce",
+      channel: "telegram",
+      to: "@mybot",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+});
+
+function createMockState(now: number, opts?: { defaultAgentId?: string }): CronServiceState {
+  return {
+    deps: {
+      nowMs: () => now,
+      defaultAgentId: opts?.defaultAgentId,
+    },
+  } as unknown as CronServiceState;
+}
+
+describe("createJob rejects sessionTarget main for non-default agents", () => {
+  const now = Date.parse("2026-02-28T12:00:00.000Z");
+
+  const mainJobInput = (agentId?: string) => ({
+    name: "my-main-job",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget: "main" as const,
+    wakeMode: "now" as const,
+    payload: { kind: "systemEvent" as const, text: "tick" },
+    ...(agentId !== undefined ? { agentId } : {}),
+  });
+
+  it("allows creating a main-session job for the default agent", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() => createJob(state, mainJobInput())).not.toThrow();
+    expect(() => createJob(state, mainJobInput("main"))).not.toThrow();
+  });
+
+  it("allows creating a main-session job when defaultAgentId matches (case-insensitive)", () => {
+    const state = createMockState(now, { defaultAgentId: "Main" });
+    expect(() => createJob(state, mainJobInput("MAIN"))).not.toThrow();
+  });
+
+  it("rejects creating a main-session job for a non-default agentId", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() => createJob(state, mainJobInput("custom-agent"))).toThrow(
+      'cron: sessionTarget "main" is only valid for the default agent',
+    );
+  });
+
+  it("rejects main-session job for non-default agent even without explicit defaultAgentId", () => {
+    const state = createMockState(now);
+    expect(() => createJob(state, mainJobInput("custom-agent"))).toThrow(
+      'cron: sessionTarget "main" is only valid for the default agent',
+    );
+  });
+
+  it("allows isolated session job for non-default agents", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(state, {
+        name: "isolated-job",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "do it" },
+        agentId: "custom-agent",
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects failureDestination on main jobs without webhook delivery mode", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(state, {
+        ...mainJobInput("main"),
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          failureDestination: {
+            mode: "announce",
+            channel: "signal",
+            to: "+15550001111",
+          },
+        },
+      }),
+    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+  });
+});
+
+describe("applyJobPatch rejects sessionTarget main for non-default agents", () => {
+  const now = Date.now();
+
+  const createMainJob = (agentId?: string): CronJob => ({
+    id: "job-main-agent-check",
+    name: "main-agent-check",
+    enabled: true,
+    createdAtMs: now,
+    updatedAtMs: now,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "main",
+    wakeMode: "now",
+    payload: { kind: "systemEvent", text: "tick" },
+    state: {},
+    agentId,
+  });
+
+  it("rejects patching agentId to non-default on a main-session job", () => {
+    const job = createMainJob();
+    expect(() =>
+      applyJobPatch(job, { agentId: "custom-agent" } as CronJobPatch, {
+        defaultAgentId: "main",
+      }),
+    ).toThrow('cron: sessionTarget "main" is only valid for the default agent');
+  });
+
+  it("allows patching agentId to the default agent on a main-session job", () => {
+    const job = createMainJob();
+    expect(() =>
+      applyJobPatch(job, { agentId: "main" } as CronJobPatch, {
+        defaultAgentId: "main",
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe("cron stagger defaults", () => {
+  it("defaults top-of-hour cron jobs to 5m stagger", () => {
+    const now = Date.parse("2026-02-08T10:00:00.000Z");
+    const state = createMockState(now);
+
+    const job = createJob(state, {
+      name: "hourly",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    expectCronStaggerMs(job, DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+  });
+
+  it("keeps exact schedules when staggerMs is explicitly 0", () => {
+    const now = Date.parse("2026-02-08T10:00:00.000Z");
+    const state = createMockState(now);
+
+    const job = createJob(state, {
+      name: "exact-hourly",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    expectCronStaggerMs(job, 0);
+  });
+
+  it("preserves existing stagger when editing cron expression without stagger", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-keep-stagger",
+      name: "job-keep-stagger",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    applyJobPatch(job, {
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
+    });
+
+    expect(job.schedule.kind).toBe("cron");
+    if (job.schedule.kind === "cron") {
+      expect(job.schedule.expr).toBe("0 */2 * * *");
+      expect(job.schedule.staggerMs).toBe(120_000);
+    }
+  });
+
+  it("applies default stagger when switching from every to top-of-hour cron", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-switch-cron",
+      name: "job-switch-cron",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    applyJobPatch(job, {
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+    });
+
+    expect(job.schedule.kind).toBe("cron");
+    if (job.schedule.kind === "cron") {
+      expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+    }
+  });
+});
+
+describe("createJob delivery defaults", () => {
+  const now = Date.parse("2026-02-28T12:00:00.000Z");
+
+  it('defaults delivery to { mode: "announce" } for isolated agentTurn jobs without explicit delivery', () => {
+    const state = createMockState(now);
+    const job = createJob(state, {
+      name: "isolated-no-delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+    expect(job.delivery).toEqual({ mode: "announce" });
+  });
+
+  it("preserves explicit delivery for isolated agentTurn jobs", () => {
+    const state = createMockState(now);
+    const job = createJob(state, {
+      name: "isolated-explicit-delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { mode: "none" },
+    });
+    expect(job.delivery).toEqual({ mode: "none" });
+  });
+
+  it("does not set delivery for main systemEvent jobs without explicit delivery", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    const job = createJob(state, {
+      name: "main-no-delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "ping" },
+    });
+    expect(job.delivery).toBeUndefined();
   });
 });

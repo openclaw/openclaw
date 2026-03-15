@@ -13,7 +13,7 @@ Already followed [Getting Started](/start/getting-started)? You're all set — t
 
 ## System requirements
 
-- **[Node 22+](/install/node)** (the [installer script](#install-methods) will install it if missing)
+- **[Node 24 (recommended)](/install/node)** (Node 22 LTS, currently `22.16+`, is still supported for compatibility; the [installer script](#install-methods) will install Node 24 if missing)
 - macOS, Linux, or Windows
 - `pnpm` only if you build from source
 
@@ -26,6 +26,10 @@ On Windows, we strongly recommend running OpenClaw under [WSL2](https://learn.mi
 <Tip>
 The **installer script** is the recommended way to install OpenClaw. It handles Node detection, installation, and onboarding in one step.
 </Tip>
+
+<Warning>
+For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possible. Prefer a clean base OS image (for example Ubuntu LTS), then install OpenClaw yourself with the installer script.
+</Warning>
 
 <AccordionGroup>
   <Accordion title="Installer script" icon="rocket" defaultOpen>
@@ -66,7 +70,7 @@ The **installer script** is the recommended way to install OpenClaw. It handles 
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
-    If you already have Node 22+ and prefer to manage the install yourself:
+    If you already manage Node yourself, we recommend Node 24. OpenClaw still supports Node 22 LTS, currently `22.16+`, for compatibility:
 
     <Tabs>
       <Tab title="npm">
@@ -141,6 +145,9 @@ The **installer script** is the recommended way to install OpenClaw. It handles 
 <CardGroup cols={2}>
   <Card title="Docker" href="/install/docker" icon="container">
     Containerized or headless deployments.
+  </Card>
+  <Card title="Podman" href="/install/podman" icon="container">
+    Rootless container: run `setup-podman.sh` once, then the launch script.
   </Card>
   <Card title="Nix" href="/install/nix" icon="snowflake">
     Declarative install via Nix.

@@ -61,7 +61,7 @@ See the [full reference](/gateway/configuration-reference) for every available f
 ## Strict validation
 
 <Warning>
-OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**.
+OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
 </Warning>
 
 When validation fails:
@@ -126,6 +126,7 @@ When validation fails:
 
     - `agents.defaults.models` defines the model catalog and acts as the allowlist for `/model`.
     - Model refs use `provider/model` format (e.g. `anthropic/claude-opus-4-6`).
+    - `agents.defaults.imageMaxDimensionPx` controls transcript/tool image downscaling (default `1200`); lower values usually reduce vision-token usage on screenshot-heavy runs.
     - See [Models CLI](/concepts/models) for switching models in chat and [Model Failover](/concepts/model-failover) for auth rotation and fallback behavior.
     - For custom/self-hosted providers, see [Custom providers](/gateway/configuration-reference#custom-providers-and-base-urls) in the reference.
 
@@ -181,6 +182,11 @@ When validation fails:
     {
       session: {
         dmScope: "per-channel-peer",  // recommended for multi-user
+        threadBindings: {
+          enabled: true,
+          idleHours: 24,
+          maxAgeHours: 0,
+        },
         reset: {
           mode: "daily",
           atHour: 4,
@@ -191,6 +197,7 @@ When validation fails:
     ```
 
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
+    - `threadBindings`: global defaults for thread-bound session routing (Discord supports `/focus`, `/unfocus`, `/agents`, `/session idle`, and `/session max-age`).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
     - See [full reference](/gateway/configuration-reference#session) for all fields.
 
@@ -218,6 +225,63 @@ When validation fails:
 
   </Accordion>
 
+  <Accordion title="Enable relay-backed push for official iOS builds">
+    Relay-backed push is configured in `openclaw.json`.
+
+    Set this in gateway config:
+
+    ```json5
+    {
+      gateway: {
+        push: {
+          apns: {
+            relay: {
+              baseUrl: "https://relay.example.com",
+              // Optional. Default: 10000
+              timeoutMs: 10000,
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    CLI equivalent:
+
+    ```bash
+    openclaw config set gateway.push.apns.relay.baseUrl https://relay.example.com
+    ```
+
+    What this does:
+
+    - Lets the gateway send `push.test`, wake nudges, and reconnect wakes through the external relay.
+    - Uses a registration-scoped send grant forwarded by the paired iOS app. The gateway does not need a deployment-wide relay token.
+    - Binds each relay-backed registration to the gateway identity that the iOS app paired with, so another gateway cannot reuse the stored registration.
+    - Keeps local/manual iOS builds on direct APNs. Relay-backed sends apply only to official distributed builds that registered through the relay.
+    - Must match the relay base URL baked into the official/TestFlight iOS build, so registration and send traffic reach the same relay deployment.
+
+    End-to-end flow:
+
+    1. Install an official/TestFlight iOS build that was compiled with the same relay base URL.
+    2. Configure `gateway.push.apns.relay.baseUrl` on the gateway.
+    3. Pair the iOS app to the gateway and let both node and operator sessions connect.
+    4. The iOS app fetches the gateway identity, registers with the relay using App Attest plus the app receipt, and then publishes the relay-backed `push.apns.register` payload to the paired gateway.
+    5. The gateway stores the relay handle and send grant, then uses them for `push.test`, wake nudges, and reconnect wakes.
+
+    Operational notes:
+
+    - If you switch the iOS app to a different gateway, reconnect the app so it can publish a new relay registration bound to that gateway.
+    - If you ship a new iOS build that points at a different relay deployment, the app refreshes its cached relay registration instead of reusing the old relay origin.
+
+    Compatibility note:
+
+    - `OPENCLAW_APNS_RELAY_BASE_URL` and `OPENCLAW_APNS_RELAY_TIMEOUT_MS` still work as temporary env overrides.
+    - `OPENCLAW_APNS_RELAY_ALLOW_HTTP=true` remains a loopback-only development escape hatch; do not persist HTTP relay URLs in config.
+
+    See [iOS App](/platforms/ios#relay-backed-push-for-official-builds) for the end-to-end flow and [Authentication and trust flow](/platforms/ios#authentication-and-trust-flow) for the relay security model.
+
+  </Accordion>
+
   <Accordion title="Set up heartbeat (periodic check-ins)">
     ```json5
     {
@@ -234,6 +298,7 @@ When validation fails:
 
     - `every`: duration string (`30m`, `2h`). Set `0m` to disable.
     - `target`: `last` | `whatsapp` | `telegram` | `discord` | `none`
+    - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
     - See [Heartbeat](/gateway/heartbeat) for the full guide.
 
   </Accordion>
@@ -245,11 +310,17 @@ When validation fails:
         enabled: true,
         maxConcurrentRuns: 2,
         sessionRetention: "24h",
+        runLog: {
+          maxBytes: "2mb",
+          keepLines: 2000,
+        },
       },
     }
     ```
 
-    See [Cron jobs](/automation/cron-jobs) for the feature overview and CLI examples.
+    - `sessionRetention`: prune completed isolated run sessions from `sessions.json` (default `24h`; set `false` to disable).
+    - `runLog`: prune `cron/runs/<jobId>.jsonl` by size and retained lines.
+    - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
   </Accordion>
 
@@ -262,6 +333,9 @@ When validation fails:
         enabled: true,
         token: "shared-secret",
         path: "/hooks",
+        defaultSessionKey: "hook:ingress",
+        allowRequestSessionKey: false,
+        allowedSessionKeyPrefixes: ["hook:"],
         mappings: [
           {
             match: { path: "gmail" },
@@ -273,6 +347,11 @@ When validation fails:
       },
     }
     ```
+
+    Security note:
+    - Treat all hook/webhook payload content as untrusted input.
+    - Keep unsafe-content bypass flags disabled (`hooks.gmail.allowUnsafeExternalContent`, `hooks.mappings[].allowUnsafeExternalContent`) unless doing tightly scoped debugging.
+    - For hook-driven agents, prefer strong modern model tiers and strict tool policy (for example messaging-only plus sandboxing where possible).
 
     See [full reference](/gateway/configuration-reference#hooks) for all mapping options and Gmail integration.
 
@@ -366,6 +445,10 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 
 ## Config RPC (programmatic updates)
 
+<Note>
+Control-plane write RPCs (`config.apply`, `config.patch`, `update.run`) are rate-limited to **3 requests per 60 seconds** per `deviceId+clientIp`. When limited, the RPC returns `UNAVAILABLE` with `retryAfterMs`.
+</Note>
+
 <AccordionGroup>
   <Accordion title="config.apply (full replace)">
     Validates + writes the full config and restarts the Gateway in one step.
@@ -382,12 +465,14 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
     - `note` (optional) — note for the restart sentinel
     - `restartDelayMs` (optional) — delay before restart (default 2000)
 
+    Restart requests are coalesced while one is already pending/in-flight, and a 30-second cooldown applies between restart cycles.
+
     ```bash
     openclaw gateway call config.get --params '{}'  # capture payload.hash
     openclaw gateway call config.apply --params '{
       "raw": "{ agents: { defaults: { workspace: \"~/.openclaw/workspace\" } } }",
       "baseHash": "<hash>",
-      "sessionKey": "agent:main:whatsapp:dm:+15555550123"
+      "sessionKey": "agent:main:whatsapp:direct:+15555550123"
     }'
     ```
 
@@ -405,6 +490,8 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
     - `raw` (string) — JSON5 with just the keys to change
     - `baseHash` (required) — config hash from `config.get`
     - `sessionKey`, `note`, `restartDelayMs` — same as `config.apply`
+
+    Restart behavior matches `config.apply`: coalesced pending restarts plus a 30-second cooldown between restart cycles.
 
     ```bash
     openclaw gateway call config.patch --params '{
@@ -466,6 +553,43 @@ Rules:
 - Works inside `$include` files
 - Inline substitution: `"${BASE}/v1"` → `"https://api.example.com/v1"`
 
+</Accordion>
+
+<Accordion title="Secret refs (env, file, exec)">
+  For fields that support SecretRef objects, you can use:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: { apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" } },
+    },
+  },
+  skills: {
+    entries: {
+      "nano-banana-pro": {
+        apiKey: {
+          source: "file",
+          provider: "filemain",
+          id: "/skills/entries/nano-banana-pro/apiKey",
+        },
+      },
+    },
+  },
+  channels: {
+    googlechat: {
+      serviceAccountRef: {
+        source: "exec",
+        provider: "vault",
+        id: "channels/googlechat/serviceAccount",
+      },
+    },
+  },
+}
+```
+
+SecretRef details (including `secrets.providers` for `env`/`file`/`exec`) are in [Secrets Management](/gateway/secrets).
+Supported credential paths are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 </Accordion>
 
 See [Environment](/help/environment) for full precedence and sources.

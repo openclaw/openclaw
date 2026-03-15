@@ -8,19 +8,87 @@ const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const ciWorkers = isWindows ? 2 : 3;
+const pluginSdkSubpaths = [
+  "account-id",
+  "core",
+  "compat",
+  "telegram",
+  "discord",
+  "slack",
+  "signal",
+  "imessage",
+  "whatsapp",
+  "line",
+  "msteams",
+  "acpx",
+  "bluebubbles",
+  "copilot-proxy",
+  "device-pair",
+  "diagnostics-otel",
+  "diffs",
+  "feishu",
+  "google-gemini-cli-auth",
+  "googlechat",
+  "irc",
+  "llm-task",
+  "lobster",
+  "matrix",
+  "mattermost",
+  "memory-core",
+  "memory-lancedb",
+  "minimax-portal-auth",
+  "nextcloud-talk",
+  "nostr",
+  "open-prose",
+  "phone-control",
+  "qwen-portal-auth",
+  "synology-chat",
+  "talk-voice",
+  "test-utils",
+  "thread-ownership",
+  "tlon",
+  "twitch",
+  "voice-call",
+  "zalo",
+  "zalouser",
+  "keyed-async-queue",
+] as const;
 
 export default defineConfig({
   resolve: {
-    alias: {
-      "openclaw/plugin-sdk": path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
-    },
+    // Keep this ordered: the base `openclaw/plugin-sdk` alias is a prefix match.
+    alias: [
+      ...pluginSdkSubpaths.map((subpath) => ({
+        find: `openclaw/plugin-sdk/${subpath}`,
+        replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
+      })),
+      {
+        find: "openclaw/plugin-sdk",
+        replacement: path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
+      },
+    ],
   },
   test: {
     testTimeout: 120_000,
     hookTimeout: isWindows ? 180_000 : 120_000,
+    // Many suites rely on `vi.stubEnv(...)` and expect it to be scoped to the test.
+    // This is especially important under `pool=vmForks` where env leaks cross-file.
+    unstubEnvs: true,
+    // Same rationale as unstubEnvs: avoid cross-test pollution under vmForks.
+    unstubGlobals: true,
     pool: "forks",
     maxWorkers: isCI ? ciWorkers : localWorkers,
-    include: ["src/**/*.test.ts", "extensions/**/*.test.ts", "test/format-error.test.ts"],
+    include: [
+      "src/**/*.test.ts",
+      "extensions/**/*.test.ts",
+      "test/**/*.test.ts",
+      "ui/src/ui/app-chat.test.ts",
+      "ui/src/ui/views/agents-utils.test.ts",
+      "ui/src/ui/views/chat.test.ts",
+      "ui/src/ui/views/usage-render-details.test.ts",
+      "ui/src/ui/controllers/agents.test.ts",
+      "ui/src/ui/controllers/chat.test.ts",
+    ],
     setupFiles: ["test/setup.ts"],
     exclude: [
       "dist/**",
@@ -35,24 +103,48 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
+      // Keep coverage stable without an ever-growing exclude list:
+      // only count files actually exercised by the test suite.
+      all: false,
       thresholds: {
         lines: 70,
         functions: 70,
         branches: 55,
         statements: 70,
       },
-      include: ["src/**/*.ts"],
+      // Anchor to repo-root `src/` only. Without this, coverage globs can
+      // unintentionally match nested `*/src/**` folders (extensions, apps, etc).
+      include: ["./src/**/*.ts"],
       exclude: [
+        // Never count workspace packages/apps toward core coverage thresholds.
+        "extensions/**",
+        "apps/**",
+        "ui/**",
+        "test/**",
         "src/**/*.test.ts",
         // Entrypoints and wiring (covered by CI smoke + manual/e2e flows).
         "src/entry.ts",
         "src/index.ts",
         "src/runtime.ts",
+        "src/channel-web.ts",
+        "src/extensionAPI.ts",
+        "src/logging.ts",
         "src/cli/**",
         "src/commands/**",
         "src/daemon/**",
         "src/hooks/**",
         "src/macos/**",
+
+        // Large integration surfaces; validated via e2e/manual/contract tests.
+        "src/acp/**",
+        "src/agents/**",
+        "src/channels/**",
+        "src/gateway/**",
+        "src/line/**",
+        "src/media-understanding/**",
+        "src/node-host/**",
+        "src/plugins/**",
+        "src/providers/**",
 
         // Some agent integrations are intentionally validated via manual/e2e runs.
         "src/agents/model-scan.ts",
@@ -63,6 +155,14 @@ export default defineConfig({
         "src/agents/pi-tool-definition-adapter.ts",
         "src/agents/tools/discord-actions*.ts",
         "src/agents/tools/slack-actions.ts",
+
+        // Hard-to-unit-test modules; exercised indirectly by integration tests.
+        "src/infra/state-migrations.ts",
+        "src/infra/skills-remote.ts",
+        "src/infra/update-check.ts",
+        "src/infra/ports-inspect.ts",
+        "src/infra/outbound/outbound-session.ts",
+        "src/memory/batch-gemini.ts",
 
         // Gateway server integration surfaces are intentionally validated via manual/e2e runs.
         "src/gateway/control-ui.ts",
@@ -83,16 +183,8 @@ export default defineConfig({
         "src/tui/**",
         "src/wizard/**",
         // Channel surfaces are largely integration-tested (or manually validated).
-        "src/discord/**",
-        "src/imessage/**",
-        "src/signal/**",
-        "src/slack/**",
         "src/browser/**",
         "src/channels/web/**",
-        "src/telegram/index.ts",
-        "src/telegram/proxy.ts",
-        "src/telegram/webhook-set.ts",
-        "src/telegram/**",
         "src/webchat/**",
         "src/gateway/server.ts",
         "src/gateway/client.ts",

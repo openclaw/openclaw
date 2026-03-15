@@ -1,32 +1,56 @@
-import type { GatewayRequestHandlers } from "./types.js";
 import {
   approveDevicePairing,
+  getPairedDevice,
   listDevicePairing,
+  removePairedDevice,
   type DeviceAuthToken,
   rejectDevicePairing,
   revokeDeviceToken,
   rotateDeviceToken,
   summarizeDeviceTokens,
 } from "../../infra/device-pairing.js";
+import { normalizeDeviceAuthScopes } from "../../shared/device-auth.js";
+import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateDevicePairApproveParams,
   validateDevicePairListParams,
+  validateDevicePairRemoveParams,
   validateDevicePairRejectParams,
   validateDeviceTokenRevokeParams,
   validateDeviceTokenRotateParams,
 } from "../protocol/index.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 function redactPairedDevice(
   device: { tokens?: Record<string, DeviceAuthToken> } & Record<string, unknown>,
 ) {
-  const { tokens, ...rest } = device;
+  const { tokens, approvedScopes: _approvedScopes, ...rest } = device;
   return {
     ...rest,
     tokens: summarizeDeviceTokens(tokens),
   };
+}
+
+function resolveMissingRequestedScope(params: {
+  role: string;
+  requestedScopes: readonly string[];
+  callerScopes: readonly string[];
+}): string | null {
+  for (const scope of params.requestedScopes) {
+    if (
+      !roleScopesAllow({
+        role: params.role,
+        requestedScopes: [scope],
+        allowedScopes: params.callerScopes,
+      })
+    ) {
+      return scope;
+    }
+  }
+  return null;
 }
 
 export const deviceHandlers: GatewayRequestHandlers = {
@@ -121,7 +145,30 @@ export const deviceHandlers: GatewayRequestHandlers = {
     );
     respond(true, rejected, undefined);
   },
-  "device.token.rotate": async ({ params, respond, context }) => {
+  "device.pair.remove": async ({ params, respond, context }) => {
+    if (!validateDevicePairRemoveParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid device.pair.remove params: ${formatValidationErrors(
+            validateDevicePairRemoveParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+    const { deviceId } = params as { deviceId: string };
+    const removed = await removePairedDevice(deviceId);
+    if (!removed) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId"));
+      return;
+    }
+    context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
+    respond(true, removed, undefined);
+  },
+  "device.token.rotate": async ({ params, respond, context, client }) => {
     if (!validateDeviceTokenRotateParams(params)) {
       respond(
         false,
@@ -140,6 +187,28 @@ export const deviceHandlers: GatewayRequestHandlers = {
       role: string;
       scopes?: string[];
     };
+    const pairedDevice = await getPairedDevice(deviceId);
+    if (!pairedDevice) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId/role"));
+      return;
+    }
+    const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const requestedScopes = normalizeDeviceAuthScopes(
+      scopes ?? pairedDevice.tokens?.[role.trim()]?.scopes ?? pairedDevice.scopes,
+    );
+    const missingScope = resolveMissingRequestedScope({
+      role,
+      requestedScopes,
+      callerScopes,
+    });
+    if (missingScope) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${missingScope}`),
+      );
+      return;
+    }
     const entry = await rotateDeviceToken({ deviceId, role, scopes });
     if (!entry) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId/role"));

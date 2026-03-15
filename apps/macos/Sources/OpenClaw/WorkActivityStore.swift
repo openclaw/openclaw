@@ -1,7 +1,7 @@
-import OpenClawKit
-import OpenClawProtocol
 import Foundation
 import Observation
+import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 
 @MainActor
@@ -31,7 +31,9 @@ final class WorkActivityStore {
     private var mainSessionKeyStorage = "main"
     private let toolResultGrace: TimeInterval = 2.0
 
-    var mainSessionKey: String { self.mainSessionKeyStorage }
+    var mainSessionKey: String {
+        self.mainSessionKeyStorage
+    }
 
     func handleJob(sessionKey: String, state: String) {
         let isStart = state.lowercased() == "started" || state.lowercased() == "streaming"
@@ -111,17 +113,15 @@ final class WorkActivityStore {
 
     private func setJobActive(_ activity: Activity) {
         self.jobs[activity.sessionKey] = activity
-        // Main session preempts immediately.
-        if activity.role == .main {
-            self.currentSessionKey = activity.sessionKey
-        } else if self.currentSessionKey == nil || !self.isActive(sessionKey: self.currentSessionKey!) {
-            self.currentSessionKey = activity.sessionKey
-        }
-        self.refreshDerivedState()
+        self.updateCurrentSession(with: activity)
     }
 
     private func setToolActive(_ activity: Activity) {
         self.tools[activity.sessionKey] = activity
+        self.updateCurrentSession(with: activity)
+    }
+
+    private func updateCurrentSession(with activity: Activity) {
         // Main session preempts immediately.
         if activity.role == .main {
             self.currentSessionKey = activity.sessionKey

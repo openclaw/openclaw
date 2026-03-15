@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry, SessionMaintenanceWarning } from "../config/sessions.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 import { enqueueSystemEvent } from "./system-events.js";
 
@@ -12,6 +14,13 @@ type WarningParams = {
 };
 
 const warnedContexts = new Map<string, string>();
+const log = createSubsystemLogger("session-maintenance-warning");
+let deliverRuntimePromise: Promise<typeof import("./outbound/deliver-runtime.js")> | null = null;
+
+function loadDeliverRuntime() {
+  deliverRuntimePromise ??= import("./outbound/deliver-runtime.js");
+  return deliverRuntimePromise;
+}
 
 function shouldSendWarning(): boolean {
   return !process.env.VITEST && process.env.NODE_ENV !== "test";
@@ -92,7 +101,11 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   }
 
   try {
-    const { deliverOutboundPayloads } = await import("./outbound/deliver.js");
+    const { deliverOutboundPayloads } = await loadDeliverRuntime();
+    const outboundSession = buildOutboundSessionContext({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    });
     await deliverOutboundPayloads({
       cfg: params.cfg,
       channel,
@@ -100,9 +113,10 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
       accountId: target.accountId,
       threadId: target.threadId,
       payloads: [{ text }],
+      session: outboundSession,
     });
   } catch (err) {
-    console.warn(`Failed to deliver session maintenance warning: ${String(err)}`);
+    log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);
     enqueueSystemEvent(text, { sessionKey: params.sessionKey });
   }
 }

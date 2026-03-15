@@ -1,97 +1,82 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { installModelsConfigTestHooks, withModelsTempHome } from "./models-config.e2e-harness.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
+import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-models-" });
-}
-
-const _MODELS_CONFIG: OpenClawConfig = {
-  models: {
-    providers: {
-      "custom-proxy": {
-        baseUrl: "http://localhost:4000/v1",
-        apiKey: "TEST_KEY",
-        api: "openai-completions",
-        models: [
-          {
-            id: "llama-3.1-8b",
-            name: "Llama 3.1 8B (Proxy)",
-            api: "openai-completions",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128000,
-            maxTokens: 32000,
-          },
-        ],
+function createGoogleModelsConfig(models: ModelDefinitionConfig[]): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        google: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          apiKey: "GEMINI_KEY", // pragma: allowlist secret
+          api: "google-generative-ai",
+          models,
+        },
       },
     },
-  },
-};
+  };
+}
+
+async function expectGeneratedGoogleModelIds(ids: string[]) {
+  const parsed = await readGeneratedModelsJson<{
+    providers: Record<string, { models: Array<{ id: string }> }>;
+  }>();
+  expect(parsed.providers.google?.models?.map((model) => model.id)).toEqual(ids);
+}
 
 describe("models-config", () => {
-  let previousHome: string | undefined;
-
-  beforeEach(() => {
-    previousHome = process.env.HOME;
-  });
-
-  afterEach(() => {
-    process.env.HOME = previousHome;
-  });
+  installModelsConfigTestHooks();
 
   it("normalizes gemini 3 ids to preview for google providers", async () => {
-    await withTempHome(async () => {
-      vi.resetModules();
-      const { ensureOpenClawModelsJson } = await import("./models-config.js");
-      const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
-
-      const cfg: OpenClawConfig = {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              apiKey: "GEMINI_KEY",
-              api: "google-generative-ai",
-              models: [
-                {
-                  id: "gemini-3-pro",
-                  name: "Gemini 3 Pro",
-                  api: "google-generative-ai",
-                  reasoning: true,
-                  input: ["text", "image"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1048576,
-                  maxTokens: 65536,
-                },
-                {
-                  id: "gemini-3-flash",
-                  name: "Gemini 3 Flash",
-                  api: "google-generative-ai",
-                  reasoning: false,
-                  input: ["text", "image"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1048576,
-                  maxTokens: 65536,
-                },
-              ],
-            },
-          },
+    await withModelsTempHome(async () => {
+      const cfg = createGoogleModelsConfig([
+        {
+          id: "gemini-3-pro",
+          name: "Gemini 3 Pro",
+          api: "google-generative-ai",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1048576,
+          maxTokens: 65536,
         },
-      };
+        {
+          id: "gemini-3-flash",
+          name: "Gemini 3 Flash",
+          api: "google-generative-ai",
+          reasoning: false,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1048576,
+          maxTokens: 65536,
+        },
+      ]);
 
       await ensureOpenClawModelsJson(cfg);
+      await expectGeneratedGoogleModelIds(["gemini-3-pro-preview", "gemini-3-flash-preview"]);
+    });
+  });
 
-      const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
-      const raw = await fs.readFile(modelPath, "utf8");
-      const parsed = JSON.parse(raw) as {
-        providers: Record<string, { models: Array<{ id: string }> }>;
-      };
-      const ids = parsed.providers.google?.models?.map((model) => model.id);
-      expect(ids).toEqual(["gemini-3-pro-preview", "gemini-3-flash-preview"]);
+  it("normalizes the deprecated google flash preview id to the working preview id", async () => {
+    await withModelsTempHome(async () => {
+      const cfg = createGoogleModelsConfig([
+        {
+          id: "gemini-3.1-flash-preview",
+          name: "Gemini 3.1 Flash Preview",
+          api: "google-generative-ai",
+          reasoning: false,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1048576,
+          maxTokens: 65536,
+        },
+      ]);
+
+      await ensureOpenClawModelsJson(cfg);
+      await expectGeneratedGoogleModelIds(["gemini-3-flash-preview"]);
     });
   });
 });
