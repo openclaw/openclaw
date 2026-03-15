@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { loadConfig } from "../config/config.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { setSharedPluginRuntimeOptions } from "../plugins/runtime/shared-runtime-options.js";
+import {
+  clearSharedPluginRuntimeOptions,
+  getSharedPluginRuntimeOptions,
+  setSharedPluginRuntimeOptions,
+} from "../plugins/runtime/shared-runtime-options.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
@@ -217,23 +221,34 @@ export function loadGatewayPlugins(params: {
   baseMethods: string[];
 }) {
   const gatewaySubagentRuntime = createGatewaySubagentRuntime();
+  const previousSharedRuntimeOptions = getSharedPluginRuntimeOptions();
   setSharedPluginRuntimeOptions({
     subagent: gatewaySubagentRuntime,
   });
-  const pluginRegistry = loadOpenClawPlugins({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    logger: {
-      info: (msg) => params.log.info(msg),
-      warn: (msg) => params.log.warn(msg),
-      error: (msg) => params.log.error(msg),
-      debug: (msg) => params.log.debug(msg),
-    },
-    coreGatewayHandlers: params.coreGatewayHandlers,
-    runtimeOptions: {
-      subagent: gatewaySubagentRuntime,
-    },
-  });
+  let pluginRegistry;
+  try {
+    pluginRegistry = loadOpenClawPlugins({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      logger: {
+        info: (msg) => params.log.info(msg),
+        warn: (msg) => params.log.warn(msg),
+        error: (msg) => params.log.error(msg),
+        debug: (msg) => params.log.debug(msg),
+      },
+      coreGatewayHandlers: params.coreGatewayHandlers,
+      runtimeOptions: {
+        subagent: gatewaySubagentRuntime,
+      },
+    });
+  } catch (error) {
+    if (previousSharedRuntimeOptions) {
+      setSharedPluginRuntimeOptions(previousSharedRuntimeOptions);
+    } else {
+      clearSharedPluginRuntimeOptions();
+    }
+    throw error;
+  }
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
   if (pluginRegistry.diagnostics.length > 0) {

@@ -3,6 +3,7 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import {
   clearSharedPluginRuntimeOptions,
   getSharedPluginRuntimeOptions,
+  setSharedPluginRuntimeOptions,
 } from "../plugins/runtime/shared-runtime-options.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginDiagnostic } from "../plugins/types.js";
@@ -202,6 +203,60 @@ describe("loadGatewayPlugins", () => {
     });
 
     expect(typeof getSharedPluginRuntimeOptions()?.subagent?.run).toBe("function");
+  });
+
+  test("rolls back shared runtime options when plugin loading fails", async () => {
+    const { loadGatewayPlugins } = await importServerPluginsModule();
+    loadOpenClawPlugins.mockImplementation(() => {
+      throw new Error("plugin load failed");
+    });
+
+    expect(() =>
+      loadGatewayPlugins({
+        cfg: {},
+        workspaceDir: "/tmp",
+        log: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        coreGatewayHandlers: {},
+        baseMethods: [],
+      }),
+    ).toThrow("plugin load failed");
+
+    expect(getSharedPluginRuntimeOptions()).toBeUndefined();
+  });
+
+  test("restores previous shared runtime options when plugin loading fails", async () => {
+    const { loadGatewayPlugins } = await importServerPluginsModule();
+    const previousRuntime = {
+      subagent: {
+        run: vi.fn(),
+      },
+    } as unknown as NonNullable<ReturnType<typeof getSharedPluginRuntimeOptions>>;
+    setSharedPluginRuntimeOptions(previousRuntime);
+    loadOpenClawPlugins.mockImplementation(() => {
+      throw new Error("plugin load failed");
+    });
+
+    expect(() =>
+      loadGatewayPlugins({
+        cfg: {},
+        workspaceDir: "/tmp",
+        log: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        coreGatewayHandlers: {},
+        baseMethods: [],
+      }),
+    ).toThrow("plugin load failed");
+
+    expect(getSharedPluginRuntimeOptions()).toBe(previousRuntime);
   });
 
   test("shares fallback context across module reloads for existing runtimes", async () => {
