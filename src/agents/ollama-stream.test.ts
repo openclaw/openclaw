@@ -620,6 +620,36 @@ describe("createOllamaStreamFn", () => {
       },
     );
   });
+
+  it("emits start and text_delta for mixed content + tool_call responses", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Let me check."},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":3}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        // start → text_delta → done
+        expect(events).toHaveLength(3);
+
+        expect(events[0]?.type).toBe("start");
+        expect((events[0] as { partial: { content: unknown[] } }).partial.content).toEqual([]);
+
+        expect(events[1]).toMatchObject({
+          type: "text_delta",
+          delta: "Let me check.",
+          contentIndex: 0,
+        });
+
+        const doneEvent = events[2] as { type: string; message: { stopReason: string } };
+        expect(doneEvent.type).toBe("done");
+        expect(doneEvent.message.stopReason).toBe("toolUse");
+      },
+    );
+  });
 });
 
 describe("resolveOllamaBaseUrlForRun", () => {
