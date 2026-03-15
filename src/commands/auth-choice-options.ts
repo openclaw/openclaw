@@ -34,7 +34,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "anthropic",
     label: "Anthropic",
-    hint: "setup-token + API key",
+    hint: "setup-token + API key + Azure",
     choices: ["token", "apiKey", "anthropic-azure-api-key"],
   },
   {
