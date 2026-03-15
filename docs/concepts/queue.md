@@ -83,7 +83,18 @@ Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 - Per-session lanes guarantee that only one agent run touches a given session at a time.
 - No external dependencies or background worker threads; pure TypeScript + promises.
 
+## Steer and partial streaming
+
+When `channels.<provider>.streaming` is set to `partial` or `block`, steer can produce visible intermediate replies that may look like sequential turns rather than a single redirected response:
+
+- With `streaming: partial`, the agent continuously updates a single preview message in place. A steer injection causes that preview to be committed early and a new preview started for the injected turn, so you see several short finalized replies in sequence rather than one final response.
+- With `streaming: block`, the agent emits multiple draft-sized chunks directly, producing the same sequential appearance by a different mechanism.
+- Without streaming, steer falls back to `followup`: the active run completes first, then the steered message is processed as a separate turn.
+
+`steer` is not a hard abort. It injects the incoming message at the next tool boundary, but any tool call already in flight (e.g. a subprocess or network request) will run to completion before the injected message takes effect. If you need to stop an in-flight tool immediately, use `interrupt` mode instead (legacy, aborts the active run).
+
 ## Troubleshooting
 
 - If commands seem stuck, enable verbose logs and look for “queued for …ms” lines to confirm the queue is draining.
 - If you need queue depth, enable verbose logs and watch for queue timing lines.
+- If `steer` appears to do nothing: check that the session queue mode is actually `steer` (run `/queue` to confirm — a per-session override silently trumps the config value). Also confirm that `channels.<provider>.streaming` is not `off`; steer falls back to `followup` when the run is not streaming.
