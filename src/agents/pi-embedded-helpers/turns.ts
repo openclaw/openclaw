@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 type AnthropicContentBlock = {
-  type: "text" | "toolUse" | "toolResult";
+  type: "text" | "toolCall" | "toolResult";
   text?: string;
   id?: string;
   name?: string;
@@ -65,7 +65,7 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       if (!block) {
         return false;
       }
-      if (block.type !== "toolUse") {
+      if (block.type !== "toolCall") {
         return true;
       }
       // Keep tool_use if its id is in the valid set
