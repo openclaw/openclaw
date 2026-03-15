@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const ExecApprovalForwardTargetSchema = z
+const ApprovalForwardTargetSchema = z
   .object({
     channel: z.string().min(1),
     to: z.string().min(1),
@@ -15,7 +15,44 @@ const ExecApprovalForwardingSchema = z
     mode: z.union([z.literal("session"), z.literal("targets"), z.literal("both")]).optional(),
     agentFilter: z.array(z.string()).optional(),
     sessionFilter: z.array(z.string()).optional(),
-    targets: z.array(ExecApprovalForwardTargetSchema).optional(),
+    targets: z.array(ApprovalForwardTargetSchema).optional(),
+  })
+  .strict()
+  .optional();
+
+const HttpApprovalForwardingSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: z.union([z.literal("session"), z.literal("targets"), z.literal("both")]).optional(),
+    agentFilter: z.array(z.string()).optional(),
+    sessionFilter: z.array(z.string()).optional(),
+    targets: z.array(ApprovalForwardTargetSchema).optional(),
+  })
+  .strict()
+  .optional();
+
+const HttpAllowlistEntrySchema = z
+  .object({
+    pattern: z.string().min(1),
+  })
+  .strict();
+
+const HttpApprovalsAgentSchema = z
+  .object({
+    security: z.string().optional(),
+    ask: z.string().optional(),
+    askFallback: z.string().optional(),
+    allowlist: z.array(HttpAllowlistEntrySchema).optional(),
+  })
+  .strict();
+
+const HttpApprovalsToolConfigSchema = z
+  .object({
+    security: z.string().optional(),
+    ask: z.string().optional(),
+    askFallback: z.string().optional(),
+    agents: z.record(z.string(), HttpApprovalsAgentSchema).optional(),
+    allowlist: z.array(HttpAllowlistEntrySchema).optional(),
   })
   .strict()
   .optional();
@@ -23,6 +60,8 @@ const ExecApprovalForwardingSchema = z
 export const ApprovalsSchema = z
   .object({
     exec: ExecApprovalForwardingSchema,
+    http: HttpApprovalForwardingSchema,
+    httpPolicy: HttpApprovalsToolConfigSchema,
   })
   .strict()
   .optional();

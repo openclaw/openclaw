@@ -85,6 +85,7 @@ import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
+import { createHttpApprovalHandlers } from "./server-methods/http-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
@@ -793,6 +794,10 @@ export async function startGatewayServer(
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,
   });
+  // HTTP approvals share the same manager type but use a separate instance
+  // so pending IDs do not collide between exec and HTTP approval namespaces.
+  const httpApprovalManager = new ExecApprovalManager();
+  const httpApprovalHandlers = createHttpApprovalHandlers(httpApprovalManager);
   const secretsHandlers = createSecretsHandlers({
     reloadSecrets: async () => {
       const active = getActiveSecretsRuntimeSnapshot();
@@ -895,6 +900,7 @@ export async function startGatewayServer(
     extraHandlers: {
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
+      ...httpApprovalHandlers,
       ...secretsHandlers,
     },
     broadcast,

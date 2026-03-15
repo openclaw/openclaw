@@ -625,7 +625,7 @@ export const FIELD_HELP: Record<string, string> = {
   "skills.load.watchDebounceMs":
     "Debounce window in milliseconds for coalescing rapid skill file changes before reload logic runs. Increase to reduce reload churn on frequent writes, or lower for faster edit feedback.",
   approvals:
-    "Approval routing controls for forwarding exec approval requests to chat destinations outside the originating session. Keep this disabled unless operators need explicit out-of-band approval visibility.",
+    "Approval routing controls for forwarding exec and HTTP approval requests to chat destinations outside the originating session, plus HTTP/fetch tool approval policy. Keep this disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":
     "Groups exec-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Configure here when approval prompts must reach operational channels instead of only the origin thread.",
   "approvals.exec.enabled":
@@ -646,6 +646,37 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional account selector for multi-account channel setups when approvals must route through a specific account context. Use this only when the target channel has multiple configured identities.",
   "approvals.exec.targets[].threadId":
     "Optional thread/topic target for channels that support threaded delivery of forwarded approvals. Use this to keep approval traffic contained in operational threads instead of main channels.",
+  "approvals.http":
+    "Groups HTTP/fetch approval forwarding behavior. Same structure as approvals.exec but for HTTP/fetch tool calls. Configure when fetch approval prompts must reach operational channels.",
+  "approvals.http.enabled":
+    "Enables forwarding of HTTP approval requests to configured delivery destinations (default: false).",
+  "approvals.http.mode":
+    'Controls where HTTP approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths.',
+  "approvals.http.agentFilter":
+    "Optional allowlist of agent IDs eligible for forwarded HTTP approvals.",
+  "approvals.http.sessionFilter":
+    "Optional session-key filters matched as substring or regex-style patterns for HTTP approvals.",
+  "approvals.http.targets":
+    "Explicit delivery targets used when HTTP approval forwarding mode includes targets.",
+  "approvals.http.targets[].channel":
+    "Channel/provider ID used for forwarded HTTP approval delivery.",
+  "approvals.http.targets[].to":
+    "Destination identifier inside the target channel for HTTP approval delivery.",
+  "approvals.http.targets[].accountId":
+    "Optional account selector for multi-account channels for HTTP approval routing.",
+  "approvals.http.targets[].threadId": "Optional thread/topic target for HTTP approval delivery.",
+  "approvals.httpPolicy":
+    "Policy controls for HTTP/fetch tool approval. Determines whether fetch requests require approval based on URL allowlists. Default: security=full (allow all URLs without approval).",
+  "approvals.httpPolicy.security":
+    'Security mode for HTTP/fetch tool calls. "deny" blocks all fetches, "allowlist" allows only allowlisted URLs, "full" allows all URLs. Default: "full".',
+  "approvals.httpPolicy.ask":
+    'Ask mode for HTTP/fetch tool calls. "off" never prompts, "on-miss" prompts on allowlist miss, "always" prompts on every fetch. Default: "off".',
+  "approvals.httpPolicy.askFallback":
+    'Fallback when an HTTP ask prompt cannot reach an operator. "deny" blocks, "allowlist" allows if allowlisted, "full" allows. Default: "full".',
+  "approvals.httpPolicy.agents":
+    "Per-agent overrides for HTTP approval policy. Each key is an agent ID with security/ask/askFallback/allowlist fields.",
+  "approvals.httpPolicy.allowlist":
+    "Default URL allowlist entries that apply to all agents unless overridden. Each entry has a glob pattern matched against the fetch URL.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
