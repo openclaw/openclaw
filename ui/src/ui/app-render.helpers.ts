@@ -529,16 +529,24 @@ function resolveModelOverrideValue(state: AppViewState): string {
     return "";
   }
   // No local override recorded yet — fall back to server data.
+  // Include provider prefix so the value matches option keys (provider/model).
   const activeRow = resolveActiveSessionRow(state);
-  if (activeRow) {
-    return typeof activeRow.model === "string" ? activeRow.model.trim() : "";
+  if (activeRow && typeof activeRow.model === "string" && activeRow.model.trim()) {
+    const provider = activeRow.modelProvider?.trim();
+    const model = activeRow.model.trim();
+    return provider ? `${provider}/${model}` : model;
   }
   return "";
 }
 
 function resolveDefaultModelValue(state: AppViewState): string {
-  const model = state.sessionsResult?.defaults?.model;
-  return typeof model === "string" ? model.trim() : "";
+  const defaults = state.sessionsResult?.defaults;
+  const model = defaults?.model;
+  if (typeof model !== "string" || !model.trim()) {
+    return "";
+  }
+  const provider = defaults?.modelProvider?.trim();
+  return provider ? `${provider}/${model.trim()}` : model.trim();
 }
 
 function buildChatModelOptions(
@@ -563,7 +571,8 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    const value = provider ? `${provider}/${entry.id}` : entry.id;
+    addOption(value, provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
   if (currentOverride) {
