@@ -5,10 +5,10 @@
  * These commands are processed before built-in commands and before agent invocation.
  */
 
+import { parseDiscordTarget } from "../../extensions/discord/src/targets.js";
+import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { parseDiscordTarget } from "../discord/targets.js";
 import { logVerbose } from "../globals.js";
-import { parseTelegramTarget } from "../telegram/targets.js";
 import {
   detachPluginConversationBinding,
   getCurrentPluginConversationBinding,
