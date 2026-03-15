@@ -37,7 +37,7 @@ const pending = new Map()
 
 // Per-tab operation locks prevent double-attach races.
 /** @type {Set<number>} */
-const tabOperationLocks = new Set()
+const tabOperationLocks = new Map()
 
 // Tabs currently in a detach/re-attach cycle after navigation.
 /** @type {Set<number>} */
@@ -239,6 +239,7 @@ function onRelayClosed(reason) {
   }
 
   reattachPending.clear()
+  tabOperationLocks.clear()
 
   for (const [tabId, tab] of tabs.entries()) {
     if (tab.state === 'connected') {
@@ -611,7 +612,8 @@ async function connectOrToggleForActiveTab() {
 
   // Prevent concurrent operations on the same tab.
   if (tabOperationLocks.has(tabId)) return
-  tabOperationLocks.add(tabId)
+  const opToken = Symbol('op')
+  tabOperationLocks.set(tabId, opToken)
 
   try {
     if (reattachPending.has(tabId)) {
@@ -655,7 +657,11 @@ async function connectOrToggleForActiveTab() {
       console.warn('attach failed', message, nowStack())
     }
   } finally {
-    tabOperationLocks.delete(tabId)
+    // Only release if this operation still owns the lock (avoid clobbering
+    // a lock re-acquired after onRelayClosed cleared the map).
+    if (tabOperationLocks.get(tabId) === opToken) {
+      tabOperationLocks.delete(tabId)
+    }
   }
 }
 
