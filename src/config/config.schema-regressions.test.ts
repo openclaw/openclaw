@@ -75,6 +75,18 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts legacy diagnostics.otel.captureContent", () => {
+    const res = validateConfigObject({
+      diagnostics: {
+        otel: {
+          captureContent: false,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects unsafe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {

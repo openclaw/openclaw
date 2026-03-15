@@ -74,6 +74,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let logProvider: LoggerProvider | null = null;
   let stopLogTransport: (() => void) | null = null;
   let unsubscribe: (() => void) | null = null;
+  let warnedLegacyCaptureContent = false;
 
   return {
     id: "diagnostics-otel",
@@ -82,6 +83,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const otel = cfg?.otel;
       if (!cfg?.enabled || !otel?.enabled) {
         return;
+      }
+      if (
+        !warnedLegacyCaptureContent &&
+        Object.prototype.hasOwnProperty.call(otel, "captureContent")
+      ) {
+        warnedLegacyCaptureContent = true;
+        ctx.logger.warn(
+          "diagnostics-otel: diagnostics.otel.captureContent is deprecated, ignored, and will be removed in a future release",
+        );
       }
 
       const protocol = otel.protocol ?? process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
