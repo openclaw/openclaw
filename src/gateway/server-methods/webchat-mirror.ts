@@ -219,11 +219,15 @@ export function resolveWebchatMirrorTarget(params: {
     typeof route.to === "string" &&
     route.to.startsWith("user:");
   if (shouldPreferDiscordRouteTarget) {
+    const routeTo = route?.to;
+    if (!routeTo) {
+      return undefined;
+    }
     return {
-      channel: route.channel,
-      to: route.to,
-      accountId: route.accountId ?? params.entry?.lastAccountId,
-      threadId: route.threadId ?? params.entry?.lastThreadId,
+      channel: "discord",
+      to: routeTo,
+      accountId: route?.accountId ?? params.entry?.lastAccountId,
+      threadId: route?.threadId ?? params.entry?.lastThreadId,
     };
   }
   const legacyDiscordDmTarget =

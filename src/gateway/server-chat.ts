@@ -6,6 +6,7 @@ import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-event
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { mirrorWebchatTextToTarget } from "./server-methods/webchat-mirror.js";
+import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 function resolveHeartbeatAckMaxChars(): number {
