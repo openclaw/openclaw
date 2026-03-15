@@ -1575,6 +1575,36 @@ export async function runEmbeddedAttempt(
         }
       }
     }
+    // Slack: promote object-form interactiveReplies to a string capability so
+    // the system prompt builder can detect it (see #46647).
+    if (runtimeChannel === "slack" && params.config) {
+      const slackCfg = params.config.channels?.slack;
+      // Resolve account-scoped capabilities first, then fall back to global.
+      const accountId = params.agentAccountId;
+      const accounts = slackCfg?.accounts;
+      const accountCaps =
+        accountId && accounts && typeof accounts === "object"
+          ? (accounts as Record<string, { capabilities?: unknown }>)[accountId]?.capabilities
+          : undefined;
+      const slackCaps = accountCaps ?? slackCfg?.capabilities;
+      if (
+        slackCaps &&
+        !Array.isArray(slackCaps) &&
+        typeof slackCaps === "object" &&
+        (slackCaps as { interactiveReplies?: unknown }).interactiveReplies === true
+      ) {
+        if (!runtimeCapabilities) {
+          runtimeCapabilities = [];
+        }
+        if (
+          !runtimeCapabilities.some(
+            (cap) => String(cap).trim().toLowerCase() === "interactivereplies",
+          )
+        ) {
+          runtimeCapabilities.push("interactiveReplies");
+        }
+      }
+    }
     const reactionGuidance =
       runtimeChannel && params.config
         ? (() => {
