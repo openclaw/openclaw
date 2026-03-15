@@ -1,0 +1,714 @@
+2026-03-02T17:59:25Z fail= pending=
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T17:59:40Z fail= pending=
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T17:59:54Z fail= pending=
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:00:20Z required_checks=not_ready exit=1
+no required checks reported on the 'fix/developer-role-unsupported-hint' branch
+----
+2026-03-02T18:00:34Z required_checks=not_ready exit=1
+no required checks reported on the 'fix/developer-role-unsupported-hint' branch
+----
+2026-03-02T18:00:48Z required_checks=not_ready exit=1
+no required checks reported on the 'fix/developer-role-unsupported-hint' branch
+----
+2026-03-02T18:00:51Z fail=1 pending=3
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:01:08Z fail=1 pending=3
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:01:24Z fail=1 pending=3
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:01:41Z fail=1 pending=3
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:01:58Z fail=1 pending=3
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:02:15Z fail=1 pending=2
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:02:32Z fail=1 pending=2
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:02:48Z fail=1 pending=2
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:03:05Z fail=1 pending=2
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:03:22Z fail=1 pending=1
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:03:39Z fail=1 pending=1
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:03:56Z fail=1 pending=1
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:04:13Z fail=1 pending=1
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:04:30Z fail=1 pending=1
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:04:47Z fail=1 pending=1
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:05:04Z fail=1 pending=1
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:05:21Z fail=1 pending=1
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:05:38Z fail=1 pending=1
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:05:55Z fail=1 pending=1
+checks (bun, test, pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts)	fail	2m20s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672146	
+android	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672746	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500306	
+dead-code report	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584676	
+checks-windows (node, test, 1, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774939	
+checks (node, protocol, pnpm protocol:check)	pass	24s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672131	
+checks-windows (node, lint, 0, 1, pnpm lint)	pending	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774942	
+checks (node, test, pnpm canvas:a2ui:bundle && pnpm test)	pass	2m19s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672134	
+build-artifacts	pass	44s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672118	
+release-check	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440775300	
+macos	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440672797	
+ios	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503521	
+checks-windows (node, protocol, 0, 1, pnpm protocol:check)	pass	2m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774965	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503132	
+check-docs	pass	30s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540267	
+check	pass	1m0s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540247	
+changed-scope	pass	18s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440540195	
+checks-windows (node, test, 2, 2, pnpm canvas:a2ui:bundle && pnpm test)	pass	5m57s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440774962	
+docs-scope	pass	16s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440503223	
+docs-scope	pass	14s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503324	
+install-smoke	pass	2m9s	https://github.com/openclaw/openclaw/actions/runs/22588672008/job/65440541823	
+label	pass	13s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500089	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22588671029/job/65440500086	
+no-tabs	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22588672025/job/65440503134	
+secrets	pass	1m17s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440503326	
+skills-python	pass	11s	https://github.com/openclaw/openclaw/actions/runs/22588672046/job/65440584226	
+----
+2026-03-02T18:06:12Z fail=0 pending=5
+actionlint	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054620	
+docs-scope	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442055058	
+label	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051133	
+label-issues	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051213	
+no-tabs	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054645	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051630	
+----
+2026-03-02T18:06:29Z fail=0 pending=1
+docs-scope	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442055058	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054620	
+label	pass	12s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051133	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051213	
+no-tabs	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054645	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051630	
+----
+2026-03-02T18:06:45Z fail=0 pending=1
+install-smoke	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442108605	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054620	
+docs-scope	pass	22s	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442055058	
+label	pass	12s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051133	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051213	
+no-tabs	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054645	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051630	
+----
+2026-03-02T18:07:02Z fail=0 pending=1
+install-smoke	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442108605	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054620	
+docs-scope	pass	22s	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442055058	
+label	pass	12s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051133	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051213	
+no-tabs	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054645	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051630	
+----
+2026-03-02T18:07:20Z fail=0 pending=1
+install-smoke	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442108605	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054620	
+docs-scope	pass	22s	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442055058	
+label	pass	12s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051133	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051213	
+no-tabs	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054645	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051630	
+----
+2026-03-02T18:07:36Z fail=0 pending=1
+install-smoke	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442108605	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054620	
+docs-scope	pass	22s	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442055058	
+label	pass	12s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051133	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051213	
+no-tabs	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054645	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051630	
+----
+2026-03-02T18:07:53Z fail=0 pending=1
+install-smoke	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442108605	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054620	
+docs-scope	pass	22s	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442055058	
+label	pass	12s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051133	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051213	
+no-tabs	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054645	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051630	
+----
+2026-03-02T18:08:10Z fail=0 pending=1
+install-smoke	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442108605	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054620	
+docs-scope	pass	22s	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442055058	
+label	pass	12s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051133	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051213	
+no-tabs	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054645	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051630	
+----
+2026-03-02T18:08:27Z fail=0 pending=1
+install-smoke	pending	0	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442108605	
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054620	
+docs-scope	pass	22s	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442055058	
+label	pass	12s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051133	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051213	
+no-tabs	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054645	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051630	
+----
+2026-03-02T18:08:44Z fail=0 pending=0
+actionlint	pass	9s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054620	
+docs-scope	pass	22s	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442055058	
+install-smoke	pass	2m0s	https://github.com/openclaw/openclaw/actions/runs/22589127851/job/65442108605	
+label	pass	12s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051133	
+label-issues	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051213	
+no-tabs	pass	8s	https://github.com/openclaw/openclaw/actions/runs/22589127868/job/65442054645	
+backfill-pr-labels	skipping	0	https://github.com/openclaw/openclaw/actions/runs/22589126816/job/65442051630	
+----
+2026-03-02T18:08:44Z ALL_GREEN
