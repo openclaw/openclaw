@@ -653,7 +653,10 @@ function restoreRedactedValuesWithLookup(
     for (const candidate of [path, wildcardPath]) {
       if (lookup.has(candidate)) {
         matched = true;
-        if (value === REDACTED_SENTINEL) {
+        if (
+          value === REDACTED_SENTINEL &&
+          (hints[candidate]?.sensitive === true || isUserInfoUrlPath(path))
+        ) {
           result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
         } else if (typeof value === "object" && value !== null) {
           result[key] = restoreRedactedValuesWithLookup(value, orig[key], lookup, candidate, hints);
@@ -663,7 +666,11 @@ function restoreRedactedValuesWithLookup(
     }
     if (!matched) {
       const markedNonSensitive = isExplicitlyNonSensitivePath(hints, [path, wildcardPath]);
-      if (!markedNonSensitive && isSensitivePath(path) && value === REDACTED_SENTINEL) {
+      if (
+        !markedNonSensitive &&
+        value === REDACTED_SENTINEL &&
+        (isSensitivePath(path) || isUserInfoUrlPath(path))
+      ) {
         result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
       } else if (typeof value === "object" && value !== null) {
         result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
@@ -703,8 +710,8 @@ function restoreRedactedValuesGuessing(
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     if (
       !isExplicitlyNonSensitivePath(hints, [path, wildcardPath]) &&
-      isSensitivePath(path) &&
-      value === REDACTED_SENTINEL
+      value === REDACTED_SENTINEL &&
+      (isSensitivePath(path) || isUserInfoUrlPath(path))
     ) {
       result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
     } else if (typeof value === "object" && value !== null) {

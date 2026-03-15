@@ -920,6 +920,25 @@ describe("redactConfigSnapshot", () => {
 });
 
 describe("restoreRedactedValues", () => {
+  it("restores redacted URL endpoint fields on round-trip", () => {
+    const incoming = {
+      models: {
+        providers: {
+          openai: { baseUrl: REDACTED_SENTINEL },
+        },
+      },
+    };
+    const original = {
+      models: {
+        providers: {
+          openai: { baseUrl: "https://alice:secret@example.test/v1" },
+        },
+      },
+    };
+    const result = restoreRedactedValues(incoming, original, mainSchemaHints);
+    expect(result.models.providers.openai.baseUrl).toBe("https://alice:secret@example.test/v1");
+  });
+
   it("restores sentinel values from original config", () => {
     const incoming = {
       gateway: { auth: { token: REDACTED_SENTINEL } },
