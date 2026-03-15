@@ -47,7 +47,8 @@ What has been implemented:
 - loader mutable activation state now routes through `src/extension-host/loader-session.ts`
 - loader activation policy outcomes now route through `src/extension-host/loader-activation-policy.ts`
 - loader record-state transitions now route through `src/extension-host/loader-state.ts`, which now enforces an explicit loader lifecycle state machine while preserving compatibility `PluginRecord.status` values
-- loader final cache, warning, and activation finalization now routes through `src/extension-host/loader-finalize.ts`
+- loader finalization policy results now route through `src/extension-host/loader-finalization-policy.ts`
+- loader final cache, readiness promotion, and activation finalization now routes through `src/extension-host/loader-finalize.ts`
 - channel, provider, gateway-method, tool, CLI, service, command, context-engine, and hook registration normalization now has a host-owned helper boundary for future catalog migration
 
 How it has been implemented:
@@ -61,6 +62,7 @@ How it has been implemented:
 - by converting the compatibility record-state layer into an enforced loader lifecycle state machine before catalog publication work
 - by moving mutable activation state into a host-owned loader session before catalog publication work
 - by moving duplicate precedence, config enablement, and early memory-slot gating into explicit host-owned activation-policy outcomes before catalog publication work
+- by turning provenance-based untracked-extension warnings and final memory-slot warnings into explicit host-owned finalization-policy results before catalog publication work
 
 What remains pending:
 

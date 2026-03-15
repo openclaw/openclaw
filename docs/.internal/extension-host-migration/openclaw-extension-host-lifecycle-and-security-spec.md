@@ -49,7 +49,8 @@ What has been implemented:
 - loader mutable activation state now routes through `src/extension-host/loader-session.ts`
 - loader activation policy outcomes now route through `src/extension-host/loader-activation-policy.ts`
 - loader record-state transitions now route through `src/extension-host/loader-state.ts`, which now enforces an explicit loader lifecycle state machine while preserving compatibility `PluginRecord.status` values
-- loader final cache, warning, and activation finalization now routes through `src/extension-host/loader-finalize.ts`, including readiness promotion for successfully registered plugins
+- loader finalization policy results now route through `src/extension-host/loader-finalization-policy.ts`
+- loader final cache, readiness promotion, and activation finalization now routes through `src/extension-host/loader-finalize.ts`
 
 How it has been implemented:
 
@@ -75,10 +76,11 @@ How it has been implemented:
 - by promoting successfully registered plugins to `ready` during host-owned finalization while leaving broader activation-state semantics for later phases
 - by moving mutable activation state such as seen-id tracking, memory-slot selection, and finalization inputs into a host-owned loader session before broader activation-state semantics move
 - by moving duplicate precedence, config enablement, and early memory-slot gating into explicit host-owned activation-policy outcomes before broader policy semantics move
+- by turning provenance-based untracked-extension warnings and final memory-slot warnings into explicit host-owned finalization-policy results before the finalizer applies them
 
 What is still pending from this spec:
 
-- broader extension-host lifecycle ownership beyond the loader state machine, session-owned activation state, and explicit activation-policy outcomes
+- broader extension-host lifecycle ownership beyond the loader state machine, session-owned activation state, and explicit activation-policy and finalization-policy outcomes
 - activation pipeline ownership
 - host-owned registries for setup, CLI, routes, services, slots, and backends
 - permission-mode enforcement

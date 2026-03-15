@@ -72,7 +72,8 @@ What has been implemented so far:
 - loader mutable activation state now routes through `src/extension-host/loader-session.ts`
 - loader activation policy outcomes now route through `src/extension-host/loader-activation-policy.ts`
 - loader record-state transitions now route through `src/extension-host/loader-state.ts`, which now enforces an explicit loader lifecycle state machine while preserving compatibility `PluginRecord.status` values
-- loader final cache, warning, and activation finalization now routes through `src/extension-host/loader-finalize.ts`
+- loader finalization policy results now route through `src/extension-host/loader-finalization-policy.ts`
+- loader final cache, readiness promotion, and activation finalization now routes through `src/extension-host/loader-finalize.ts`
 - runtime registration normalization has started in `src/extension-host/runtime-registrations.ts` for channel, provider, HTTP-route, gateway-method, tool, CLI, service, command, context-engine, and hook registrations
 - several static and lookup consumers now read through the host boundary or resolved-extension model:
   - channel registry and dock lookups
@@ -108,6 +109,7 @@ How it has been done:
 - by moving the remaining top-level loader orchestration into a host-owned module so `src/plugins/loader.ts` becomes a compatibility facade instead of the real owner
 - by moving mutable activation state such as seen-id tracking, memory-slot selection, and finalization inputs into a host-owned loader session instead of leaving them in top-level loader variables
 - by moving duplicate precedence, config enablement, and early memory-slot gating into explicit host-owned activation-policy outcomes instead of leaving them inline in the loader flow
+- by turning provenance-based untracked-extension warnings and final memory-slot warnings into explicit host-owned finalization-policy results before the finalizer applies them
 - by moving central readers first, so later lifecycle and compatibility work can land on one boundary instead of many ad hoc call sites
 - by adding focused tests for each extracted seam before widening the boundary further
 
@@ -126,13 +128,14 @@ Committed implementation slices so far:
 - `d32f65eb5e` `Plugins: add loader lifecycle state machine`
 - `da9aad0c0f` `Plugins: add loader activation session`
 - `fc51ce2867` `Plugins: add loader activation policy`
+- `fd7488e10a` `Plugins: add loader finalization policy`
 - `89414ed857` `Docs: track extension host migration internally`
 - `d8af1eceaf` `Docs: refresh extension host migration status`
 
 What is still missing for these phases:
 
 - keeping the cutover inventory current as more surfaces move
-- broader lifecycle ownership beyond the loader state machine, session-owned activation state, and explicit activation-policy outcomes, remaining policy gate ownership, and broad host-owned registries described for Phase 2
+- broader lifecycle ownership beyond the loader state machine, session-owned activation state, and explicit activation-policy and finalization-policy outcomes, remaining policy gate ownership, and broad host-owned registries described for Phase 2
 - minimal SDK compatibility work beyond preserving current behavior indirectly through existing loading
 - any pilot migration, event pipeline, canonical catalog, or arbitration implementation
 
@@ -322,7 +325,7 @@ Current implementation status:
 - the host owns the active registry state
 - the host exposes a resolved-extension registry view for static consumers
 - plugin skills, plugin auto-enable, and config validation indexing now consume host-owned resolved-extension data
-- activation, loader cache control, loader policy, loader activation-policy outcomes, loader candidate planning, loader import flow, loader runtime decisions, loader post-import register flow, loader candidate orchestration, loader top-level load orchestration, loader session state, loader record-state helpers, and loader finalization now route through `src/extension-host/*`
+- activation, loader cache control, loader policy, loader activation-policy outcomes, loader finalization-policy outcomes, loader candidate planning, loader import flow, loader runtime decisions, loader post-import register flow, loader candidate orchestration, loader top-level load orchestration, loader session state, loader record-state helpers, and loader finalization now route through `src/extension-host/*`
 - broader lifecycle state ownership beyond the loader state machine, activation states, policy evaluation, and broad host-owned registries are still not implemented
 
 ### Phase 3: Build compatibility bridges

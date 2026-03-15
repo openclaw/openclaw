@@ -47,12 +47,13 @@ Relevant prerequisite work that has landed:
 - loader mutable activation state now has a host-owned helper boundary
 - loader activation policy outcomes now have a host-owned helper boundary
 - loader record-state transitions now have a host-owned helper boundary and enforced loader lifecycle state machine, while still preserving compatibility `PluginRecord.status` values
-- loader final cache, warning, and activation finalization now has a host-owned helper boundary
+- loader finalization policy outcomes now have a host-owned helper boundary
+- loader final cache, readiness promotion, and activation finalization now has a host-owned helper boundary
 
 Why this matters for this spec:
 
 - event work should land on top of a host-owned boundary and normalized contribution model rather than on top of more plugin-era runtime seams
-- the current implementation has deliberately not started bridge or stage work before those earlier boundaries were in place, including the first loader-runtime, record-state, and finalization seams
+- the current implementation has deliberately not started bridge or stage work before those earlier boundaries were in place, including the first loader-runtime, record-state, activation-policy, and finalization-policy seams
 
 ## Design Goals
 
