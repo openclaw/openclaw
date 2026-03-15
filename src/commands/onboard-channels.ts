@@ -24,7 +24,6 @@ import type { ChannelChoice } from "./onboard-types.js";
 import {
   ensureOnboardingPluginInstalled,
   loadOnboardingPluginRegistrySnapshotForChannel,
-  reloadOnboardingPluginRegistry,
 } from "./onboarding/plugin-install.js";
 import {
   getChannelOnboardingAdapter,
@@ -306,13 +305,6 @@ export async function setupChannels(
   options?: SetupChannelsOptions,
 ): Promise<OpenClawConfig> {
   let next = cfg;
-  if (listChannelOnboardingAdapters().length === 0) {
-    reloadOnboardingPluginRegistry({
-      cfg: next,
-      runtime,
-      workspaceDir: resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next)),
-    });
-  }
   const forceAllowFromChannels = new Set(options?.forceAllowFromChannels ?? []);
   const accountOverrides: Partial<Record<ChannelChoice, string>> = {
     ...options?.accountIds,
