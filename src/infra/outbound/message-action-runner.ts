@@ -396,7 +396,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   } = ctx;
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "send";
-  const to = readStringParam(params, "to", { required: true });
+  // Support both 'to' (set by normalization from 'target') and 'target' directly
+  // for resilience if normalization is bypassed or fails.
+  const to = readStringParam(params, "to") ?? readStringParam(params, "target", { required: true });
   // Support media, path, and filePath parameters for attachments
   const mediaHint =
     readStringParam(params, "media", { trim: false }) ??
@@ -571,7 +573,8 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   const { cfg, params, channel, accountId, dryRun, gateway, input, abortSignal } = ctx;
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "poll";
-  const to = readStringParam(params, "to", { required: true });
+  // Support both 'to' (set by normalization from 'target') and 'target' directly.
+  const to = readStringParam(params, "to") ?? readStringParam(params, "target", { required: true });
   const question = readStringParam(params, "pollQuestion", {
     required: true,
   });
