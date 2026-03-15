@@ -99,7 +99,8 @@ function rewriteSnapshotPromptForSandbox(
     result = result.replaceAll(skill.filePath, sandboxPath);
     // Replace compacted ~/... version (produced by compactSkillPaths)
     if (home && skill.filePath.startsWith(home)) {
-      const compacted = "~" + skill.filePath.slice(home.length);
+      const prefix = home.endsWith(path.sep) ? home : home + path.sep;
+      const compacted = "~/" + skill.filePath.slice(prefix.length);
       result = result.replaceAll(compacted, sandboxPath);
     }
   }
