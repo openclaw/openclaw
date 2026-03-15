@@ -13,6 +13,19 @@ import {
 
 const getCore = () => getMatrixRuntime();
 
+export function extractMatrixMentions(body: string): string[] {
+  // Strip fenced code blocks and inline code so IDs inside code are not treated
+  // as real mentions (avoids false highlight notifications).
+  const stripped = body
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/~~~[\s\S]*?~~~/g, "")
+    .replace(/`[^`]+`/g, "");
+  const mentionPattern =
+    /@[a-zA-Z0-9._=/\-]+:(?:\[[0-9a-fA-F:]+\]|[a-zA-Z0-9.\-]+[a-zA-Z0-9])(?::\d+)?/g;
+  const matches = stripped.match(mentionPattern);
+  return matches ? [...new Set(matches)] : [];
+}
+
 export function buildTextContent(body: string, relation?: MatrixRelation): MatrixTextContent {
   const content: MatrixTextContent = relation
     ? {
@@ -24,6 +37,10 @@ export function buildTextContent(body: string, relation?: MatrixRelation): Matri
         msgtype: MsgType.Text,
         body,
       };
+  const mentions = extractMatrixMentions(body);
+  if (mentions.length > 0) {
+    content["m.mentions"] = { user_ids: mentions };
+  }
   applyMatrixFormatting(content, body);
   return content;
 }
