@@ -30,12 +30,14 @@ import {
 } from "../../../shared/subagents-format.js";
 import {
   isDiscordSurface,
+  isFeishuSurface,
   isTelegramSurface,
   resolveCommandSurfaceChannel,
   resolveDiscordAccountId,
   resolveChannelAccountId,
 } from "../channel-context.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
+import { resolveFeishuConversationId } from "../feishu-context.js";
 import {
   formatRunLabel,
   formatRunStatus,
@@ -47,10 +49,12 @@ import { resolveTelegramConversationId } from "../telegram-context.js";
 export { extractAssistantText, stripToolMessages };
 export {
   isDiscordSurface,
+  isFeishuSurface,
   isTelegramSurface,
   resolveCommandSurfaceChannel,
   resolveDiscordAccountId,
   resolveChannelAccountId,
+  resolveFeishuConversationId,
   resolveTelegramConversationId,
 };
 
