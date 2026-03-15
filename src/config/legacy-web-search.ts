@@ -213,9 +213,9 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
     if (LEGACY_WEB_SEARCH_PROVIDER_ID_SET.has(key) && isRecord(value)) {
       continue;
     }
-    if (GENERIC_WEB_SEARCH_KEYS.has(key) || !isRecord(value)) {
-      nextSearch[key] = value;
-    }
+    // Preserve modern non-legacy search config blocks so the active schema can
+    // validate them instead of silently dropping nested objects during migration.
+    nextSearch[key] = value;
   }
   web.search = nextSearch;
 
