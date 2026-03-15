@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EMOJIS } from "../../../../src/channels/status-reactions.js";
+import { buildAgentSessionKey } from "../../../../src/routing/resolve-route.js";
 import {
   createBaseDiscordMessageContext,
   createDiscordDirectMessageContextOverrides,
@@ -185,11 +186,23 @@ function getLastRouteUpdate():
 }
 
 function getLastDispatchCtx():
-  | { SessionKey?: string; MessageThreadId?: string | number }
+  | {
+      SessionKey?: string;
+      MessageThreadId?: string | number;
+      ParentSessionKey?: string;
+      InheritParentSession?: boolean;
+    }
   | undefined {
   const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
   const params = callArgs?.[0] as
-    | { ctx?: { SessionKey?: string; MessageThreadId?: string | number } }
+    | {
+        ctx?: {
+          SessionKey?: string;
+          MessageThreadId?: string | number;
+          ParentSessionKey?: string;
+          InheritParentSession?: boolean;
+        };
+      }
     | undefined;
   return params?.ctx;
 }
@@ -668,5 +681,71 @@ describe("processDiscordMessage draft streaming", () => {
     await runInPartialStreamMode();
 
     expect(draftStream.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("processDiscordMessage thread inheritParent guard", () => {
+  const THREAD_ROUTE = {
+    agentId: "main",
+    channel: "discord",
+    accountId: "default",
+    sessionKey: "agent:main:discord:channel:c1",
+    mainSessionKey: "agent:main:main",
+  } as const;
+
+  const expectedParentSessionKey = buildAgentSessionKey({
+    agentId: "main",
+    channel: "discord",
+    peer: { kind: "channel", id: "parent-channel" },
+  });
+
+  it("populates ParentSessionKey even when inheritParent is false", async () => {
+    const ctx = await createBaseContext({
+      messageChannelId: "thread-1",
+      threadChannel: { id: "thread-1", name: "my-thread" },
+      threadParentId: "parent-channel",
+      threadParentName: "general",
+      discordConfig: {},
+      route: THREAD_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const dispatched = getLastDispatchCtx();
+    expect(dispatched?.ParentSessionKey).toBe(expectedParentSessionKey);
+    expect(dispatched?.InheritParentSession).toBe(false);
+  });
+
+  it("populates ParentSessionKey and enables inherit when inheritParent is true", async () => {
+    const ctx = await createBaseContext({
+      messageChannelId: "thread-1",
+      threadChannel: { id: "thread-1", name: "my-thread" },
+      threadParentId: "parent-channel",
+      threadParentName: "general",
+      discordConfig: { thread: { inheritParent: true } },
+      route: THREAD_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const dispatched = getLastDispatchCtx();
+    expect(dispatched?.ParentSessionKey).toBe(expectedParentSessionKey);
+    expect(dispatched?.InheritParentSession).toBe(true);
+  });
+
+  it("leaves ParentSessionKey undefined when not in a thread", async () => {
+    const ctx = await createBaseContext({
+      messageChannelId: "c1",
+      threadChannel: null,
+      threadParentId: undefined,
+      discordConfig: {},
+      route: THREAD_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const dispatched = getLastDispatchCtx();
+    expect(dispatched?.ParentSessionKey).toBeUndefined();
+    expect(dispatched?.InheritParentSession).toBe(false);
   });
 });

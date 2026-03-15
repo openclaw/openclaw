@@ -462,7 +462,8 @@ export async function initSessionState(params: {
     parentSessionKey &&
     parentSessionKey !== sessionKey &&
     sessionStore[parentSessionKey] &&
-    !alreadyForked
+    !alreadyForked &&
+    ctx.InheritParentSession !== false
   ) {
     const parentTokens = sessionStore[parentSessionKey].totalTokens ?? 0;
     if (parentForkMaxTokens > 0 && parentTokens > parentForkMaxTokens) {

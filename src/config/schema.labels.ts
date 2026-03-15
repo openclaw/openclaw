@@ -782,6 +782,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.threadBindings.maxAgeHours": "Discord Thread Binding Max Age (hours)",
   "channels.discord.threadBindings.spawnSubagentSessions": "Discord Thread-Bound Subagent Spawn",
   "channels.discord.threadBindings.spawnAcpSessions": "Discord Thread-Bound ACP Spawn",
+  "channels.discord.thread.inheritParent": "Discord Thread Inherit Parent Session",
   "channels.discord.ui.components.accentColor": "Discord Component Accent Color",
   "channels.discord.intents.presence": "Discord Presence Intent",
   "channels.discord.intents.guildMembers": "Discord Guild Members Intent",

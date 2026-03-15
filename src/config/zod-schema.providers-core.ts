@@ -550,6 +550,12 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    thread: z
+      .object({
+        inheritParent: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     intents: z
       .object({
         presence: z.boolean().optional(),

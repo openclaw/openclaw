@@ -380,6 +380,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ReplyToBody: replyContext?.body,
     ReplyToSender: replyContext?.sender,
     ParentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,
+    InheritParentSession: !!discordConfig?.thread?.inheritParent,
     MessageThreadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,
