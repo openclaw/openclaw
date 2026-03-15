@@ -2,6 +2,11 @@ import { Type } from "@sinclair/typebox";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
+import {
+  normalizeThinkLevel,
+  supportsXHighThinking,
+  type ThinkLevel,
+} from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -34,6 +39,7 @@ import {
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "../model-selection.js";
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
@@ -50,6 +56,8 @@ const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
 });
+
+type ModelCatalog = Awaited<ReturnType<typeof loadModelCatalog>>;
 
 function resolveSessionEntry(params: {
   store: Record<string, SessionEntry>;
@@ -114,6 +122,7 @@ async function resolveModelOverride(params: {
   raw: string;
   sessionEntry?: SessionEntry;
   agentId: string;
+  catalog?: ModelCatalog;
 }): Promise<
   | { kind: "reset" }
   | {
@@ -142,7 +151,7 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     defaultProvider: currentProvider,
   });
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const catalog = params.catalog ?? (await loadModelCatalog({ config: params.cfg }));
   const allowed = buildAllowedModelSet({
     cfg: params.cfg,
     catalog,
@@ -283,6 +292,13 @@ export function createSessionStatusTool(opts?: {
         : requesterAgentId;
       let storePath = resolveStorePath(cfg.session?.store, { agentId });
       let store = loadSessionStore(storePath);
+      let modelCatalog: ModelCatalog | undefined;
+      const getModelCatalog = async () => {
+        if (!modelCatalog) {
+          modelCatalog = await loadModelCatalog({ config: cfg });
+        }
+        return modelCatalog;
+      };
 
       // Resolve against the requester-scoped store first to avoid leaking default agent data.
       let resolved = resolveSessionEntry({
@@ -337,6 +353,7 @@ export function createSessionStatusTool(opts?: {
           raw: modelRaw,
           sessionEntry: resolved.entry,
           agentId,
+          catalog: await getModelCatalog(),
         });
         const nextEntry: SessionEntry = { ...resolved.entry };
         const applied = applyModelOverrideToSessionEntry({
@@ -366,6 +383,24 @@ export function createSessionStatusTool(opts?: {
 
       const agentDir = resolveAgentDir(cfg, agentId);
       const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
+      const modelForCard = resolved.entry.modelOverride?.trim() || configured.model;
+      let resolvedThinkForCard: ThinkLevel | undefined = normalizeThinkLevel(
+        resolved.entry.thinkingLevel,
+      );
+      if (!resolvedThinkForCard) {
+        resolvedThinkForCard = resolveThinkingDefault({
+          cfg,
+          provider: providerForCard,
+          model: modelForCard,
+          catalog: await getModelCatalog(),
+        });
+      }
+      if (
+        resolvedThinkForCard === "xhigh" &&
+        !supportsXHighThinking(providerForCard, modelForCard)
+      ) {
+        resolvedThinkForCard = "high";
+      }
       const usageProvider = resolveUsageProviderId(providerForCard);
       let usageLine: string | undefined;
       if (usageProvider) {
@@ -435,6 +470,7 @@ export function createSessionStatusTool(opts?: {
         sessionKey: resolved.key,
         sessionStorePath: storePath,
         groupActivation,
+        resolvedThink: resolvedThinkForCard,
         modelAuth: resolveModelAuthLabel({
           provider: providerForCard,
           cfg,
