@@ -320,12 +320,12 @@ describe("noteMemorySearchHealth", () => {
     const message = String(note.mock.calls[0]?.[0] ?? "");
     expect(message).toContain("ollama");
     expect(message).toContain("does not require an API key");
-    expect(message).toContain("connection refused");
+    expect(message).toContain("Gateway probe: connection refused");
     expect(message).not.toContain("API key was not found");
     expect(note.mock.calls[0]?.[1]).toBe("Memory search");
   });
 
-  it("shows informational note when ollama provider is set and no gateway probe", async () => {
+  it("does not warn when ollama provider is set and no gateway probe is available", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "ollama",
       local: {},
@@ -334,12 +334,7 @@ describe("noteMemorySearchHealth", () => {
 
     await noteMemorySearchHealth(cfg);
 
-    expect(note).toHaveBeenCalledTimes(1);
-    const message = String(note.mock.calls[0]?.[0] ?? "");
-    expect(message).toContain("ollama");
-    expect(message).toContain("does not require an API key");
-    expect(message).not.toContain("API key was not found");
-    expect(note.mock.calls[0]?.[1]).toBe("Memory search");
+    expect(note).not.toHaveBeenCalled();
   });
 });
 
