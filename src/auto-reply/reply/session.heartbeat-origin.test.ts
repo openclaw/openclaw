@@ -37,60 +37,137 @@ async function writeSessionStore(
   await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 }
 
-describe("initSessionState heartbeat origin preservation", () => {
-  it("preserves existing origin for heartbeat runs in an existing session", async () => {
-    const storePath = await makeStorePath("heartbeat-origin-");
-    const sessionKey = "agent:main:main";
-    const originalOrigin = {
-      label: "My App — Project: Dashboard",
-      provider: "webchat",
-      surface: "webchat",
-      chatType: "direct",
-      from: "webchat:user-1",
-      to: "webchat:user-1",
-    } as const;
+const SESSION_KEY = "agent:main:main";
+const ORIGINAL_ORIGIN = {
+  label: "My App — Project: Dashboard",
+  provider: "webchat",
+  surface: "webchat",
+  chatType: "direct",
+  from: "webchat:user-1",
+  to: "webchat:user-1",
+} as const;
 
-    await writeSessionStore(storePath, {
-      [sessionKey]: {
-        sessionId: "sess-1",
-        updatedAt: Date.now(),
-        origin: originalOrigin,
-        deliveryContext: {
-          channel: "webchat",
-          to: "webchat:user-1",
-        },
-        lastChannel: "webchat",
-        lastTo: "webchat:user-1",
+function buildConfig(storePath: string): OpenClawConfig {
+  return {
+    session: { store: storePath },
+  } as OpenClawConfig;
+}
+
+function buildSyntheticCtx(provider: "heartbeat" | "cron-event" | "exec-event") {
+  return {
+    Body: "Read HEARTBEAT.md and check in.",
+    SessionKey: SESSION_KEY,
+    Provider: provider,
+    Surface: "webchat",
+    ChatType: "direct",
+    From: provider,
+    To: provider,
+    OriginatingChannel: "webchat",
+    OriginatingTo: "webchat:user-1",
+  } as const;
+}
+
+async function readPersistedOrigin(storePath: string) {
+  const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    SessionEntry
+  >;
+  return persisted[SESSION_KEY]?.origin;
+}
+
+async function seedExistingSession(storePath: string) {
+  await writeSessionStore(storePath, {
+    [SESSION_KEY]: {
+      sessionId: "sess-1",
+      updatedAt: Date.now(),
+      origin: ORIGINAL_ORIGIN,
+      deliveryContext: {
+        channel: "webchat",
+        to: "webchat:user-1",
       },
-    });
+      lastChannel: "webchat",
+      lastTo: "webchat:user-1",
+    },
+  });
+}
 
-    const cfg = {
-      session: { store: storePath },
-    } as OpenClawConfig;
+describe("initSessionState origin preservation", () => {
+  for (const provider of ["heartbeat", "cron-event", "exec-event"] as const) {
+    it(`preserves existing origin for ${provider} turns in an existing session`, async () => {
+      const storePath = await makeStorePath(`${provider}-origin-`);
+      await seedExistingSession(storePath);
+
+      const result = await initSessionState({
+        ctx: buildSyntheticCtx(provider),
+        cfg: buildConfig(storePath),
+        commandAuthorized: true,
+      });
+
+      expect(result.sessionKey).toBe(SESSION_KEY);
+      expect(result.sessionEntry.origin).toEqual(ORIGINAL_ORIGIN);
+      expect(await readPersistedOrigin(storePath)).toEqual(ORIGINAL_ORIGIN);
+    });
+  }
+
+  it("still updates origin for normal non-system providers", async () => {
+    const storePath = await makeStorePath("webchat-origin-");
+    await seedExistingSession(storePath);
 
     const result = await initSessionState({
       ctx: {
-        Body: "Read HEARTBEAT.md and check in.",
-        SessionKey: sessionKey,
-        Provider: "heartbeat",
+        Body: "hello",
+        SessionKey: SESSION_KEY,
+        Provider: "webchat",
         Surface: "webchat",
         ChatType: "direct",
-        From: "heartbeat",
-        To: "heartbeat",
+        From: "webchat:user-2",
+        To: "webchat:user-2",
         OriginatingChannel: "webchat",
-        OriginatingTo: "webchat:user-1",
+        OriginatingTo: "webchat:user-2",
+        SenderName: "Renamed User",
       },
-      cfg,
+      cfg: buildConfig(storePath),
       commandAuthorized: true,
     });
 
-    expect(result.sessionKey).toBe(sessionKey);
-    expect(result.sessionEntry.origin).toEqual(originalOrigin);
+    expect(result.sessionEntry.origin).toEqual({
+      ...ORIGINAL_ORIGIN,
+      label: "Renamed User",
+      from: "webchat:user-2",
+      to: "webchat:user-2",
+    });
+    expect(await readPersistedOrigin(storePath)).toEqual({
+      ...ORIGINAL_ORIGIN,
+      label: "Renamed User",
+      from: "webchat:user-2",
+      to: "webchat:user-2",
+    });
+  });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
-    expect(persisted[sessionKey]?.origin).toEqual(originalOrigin);
+  it("still creates origin metadata for brand-new heartbeat sessions", async () => {
+    const storePath = await makeStorePath("new-heartbeat-origin-");
+
+    const result = await initSessionState({
+      ctx: buildSyntheticCtx("heartbeat"),
+      cfg: buildConfig(storePath),
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.origin).toEqual({
+      label: "heartbeat",
+      provider: "webchat",
+      surface: "webchat",
+      chatType: "direct",
+      from: "heartbeat",
+      to: "webchat:user-1",
+    });
+    expect(await readPersistedOrigin(storePath)).toEqual({
+      label: "heartbeat",
+      provider: "webchat",
+      surface: "webchat",
+      chatType: "direct",
+      from: "heartbeat",
+      to: "webchat:user-1",
+    });
   });
 });
