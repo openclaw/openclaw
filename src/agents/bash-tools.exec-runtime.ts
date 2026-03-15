@@ -222,7 +222,10 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   enqueueSystemEvent(summary, { sessionKey });
   requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: `exec:${session.id}:exit` }),
+    scopedHeartbeatWakeOptions(sessionKey, {
+      reason: `exec:${session.id}:exit`,
+      coalesceMs: 50,
+    }),
   );
 }
 
