@@ -27,16 +27,21 @@ function normalizeContextWindowForCustomModel(value: unknown): number {
 }
 
 /**
- * Detects if a URL is from Azure AI Foundry or Azure OpenAI.
- * Matches both:
+ * Detects if a URL is from Azure AI Foundry, Azure OpenAI, or Azure Cognitive Services.
+ * Matches:
  * - https://*.services.ai.azure.com (Azure AI Foundry)
  * - https://*.openai.azure.com (classic Azure OpenAI)
+ * - https://*.cognitiveservices.azure.com (Azure Cognitive Services)
  */
 function isAzureUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
     const host = url.hostname.toLowerCase();
-    return host.endsWith(".services.ai.azure.com") || host.endsWith(".openai.azure.com");
+    return (
+      host.endsWith(".services.ai.azure.com") ||
+      host.endsWith(".openai.azure.com") ||
+      host.endsWith(".cognitiveservices.azure.com")
+    );
   } catch {
     return false;
   }
