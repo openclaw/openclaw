@@ -31,16 +31,26 @@ import {
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   type AcpSpawnParentRelayHandle,
   resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import {
+  extractRequesterOrigin,
+  resolveSpawnMode,
+  summarizeError,
+  type SpawnBaseContext,
+  type SpawnBaseResult,
+  type SpawnMode,
+  SPAWN_MODES,
+} from "./spawn-utils.js";
 
-export const ACP_SPAWN_MODES = ["run", "session"] as const;
-export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
+// Re-export spawn mode types for backward compatibility
+export { SPAWN_MODES, type SpawnMode };
+export const ACP_SPAWN_MODES = SPAWN_MODES;
+export type SpawnAcpMode = SpawnMode;
 export const ACP_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 export type SpawnAcpSandboxMode = (typeof ACP_SPAWN_SANDBOX_MODES)[number];
 export const ACP_SPAWN_STREAM_TARGETS = ["parent"] as const;
@@ -57,23 +67,10 @@ export type SpawnAcpParams = {
   streamTo?: SpawnAcpStreamTarget;
 };
 
-export type SpawnAcpContext = {
-  agentSessionKey?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  sandboxed?: boolean;
-};
+export type SpawnAcpContext = SpawnBaseContext;
 
-export type SpawnAcpResult = {
-  status: "accepted" | "forbidden" | "error";
-  childSessionKey?: string;
-  runId?: string;
-  mode?: SpawnAcpMode;
+export type SpawnAcpResult = SpawnBaseResult & {
   streamLogPath?: string;
-  note?: string;
-  error?: string;
 };
 
 export const ACP_SPAWN_ACCEPTED_NOTE =
@@ -108,17 +105,6 @@ type PreparedAcpThreadBinding = {
   conversationId: string;
 };
 
-function resolveSpawnMode(params: {
-  requestedMode?: SpawnAcpMode;
-  threadRequested: boolean;
-}): SpawnAcpMode {
-  if (params.requestedMode === "run" || params.requestedMode === "session") {
-    return params.requestedMode;
-  }
-  // Thread-bound spawns should default to persistent sessions.
-  return params.threadRequested ? "session" : "run";
-}
-
 function resolveAcpSessionMode(mode: SpawnAcpMode): AcpRuntimeSessionMode {
   return mode === "session" ? "persistent" : "oneshot";
 }
@@ -150,16 +136,6 @@ function normalizeOptionalAgentId(value: string | undefined | null): string | un
     return undefined;
   }
   return normalizeAgentId(trimmed);
-}
-
-function summarizeError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  return "error";
 }
 
 function resolveConversationIdForThreadBinding(params: {
@@ -423,12 +399,7 @@ export async function spawnAcpDirect(
     };
   }
 
-  const requesterOrigin = normalizeDeliveryContext({
-    channel: ctx.agentChannel,
-    accountId: ctx.agentAccountId,
-    to: ctx.agentTo,
-    threadId: ctx.agentThreadId,
-  });
+  const requesterOrigin = extractRequesterOrigin(ctx);
   // For thread-bound ACP spawns, force bootstrap delivery to the new child thread.
   const boundThreadIdRaw = binding?.conversation.conversationId;
   const boundThreadId = boundThreadIdRaw ? String(boundThreadIdRaw).trim() || undefined : undefined;

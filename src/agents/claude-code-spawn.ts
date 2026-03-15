@@ -2,16 +2,25 @@ import crypto from "node:crypto";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { registerClaudeCodeRun, spawnClaudeCodeProcess } from "./claude-code-registry.js";
 import { resolveClaudeCodeSession, getClaudeSessionId } from "./claude-code-sessions.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import {
+  extractRequesterOrigin,
+  resolveSpawnMode,
+  type SpawnBaseContext,
+  type SpawnBaseResult,
+  type SpawnMode,
+  SPAWN_MODES,
+} from "./spawn-utils.js";
 
 const log = createSubsystemLogger("claude-code-spawn");
 
-export const CLAUDE_CODE_SPAWN_MODES = ["run", "session"] as const;
-export type SpawnClaudeCodeMode = (typeof CLAUDE_CODE_SPAWN_MODES)[number];
+// Re-export spawn mode types for backward compatibility
+export { SPAWN_MODES, type SpawnMode };
+export const CLAUDE_CODE_SPAWN_MODES = SPAWN_MODES;
+export type SpawnClaudeCodeMode = SpawnMode;
 
 export type SpawnClaudeCodeParams = {
   task: string;
@@ -22,23 +31,9 @@ export type SpawnClaudeCodeParams = {
   timeoutSeconds?: number;
 };
 
-export type SpawnClaudeCodeContext = {
-  agentSessionKey?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  sandboxed?: boolean;
-};
+export type SpawnClaudeCodeContext = SpawnBaseContext;
 
-export type SpawnClaudeCodeResult = {
-  status: "accepted" | "forbidden" | "error";
-  childSessionKey?: string;
-  runId?: string;
-  mode?: SpawnClaudeCodeMode;
-  note?: string;
-  error?: string;
-};
+export type SpawnClaudeCodeResult = SpawnBaseResult;
 
 export const CLAUDE_CODE_SPAWN_ACCEPTED_NOTE =
   "Claude Code task queued in isolated workspace session; results will be announced when complete.";
@@ -57,17 +52,6 @@ export function resolveClaudeCodeSpawnPolicyError(params: {
     return 'Sandboxed sessions cannot spawn Claude Code sessions because runtime="claude-code" runs on the host. Use runtime="subagent" from sandboxed sessions.';
   }
   return undefined;
-}
-
-function resolveSpawnMode(params: {
-  requestedMode?: SpawnClaudeCodeMode;
-  resumeRequested: boolean;
-}): SpawnClaudeCodeMode {
-  if (params.requestedMode === "run" || params.requestedMode === "session") {
-    return params.requestedMode;
-  }
-  // Resume should default to session mode
-  return params.resumeRequested ? "session" : "run";
 }
 
 export async function spawnClaudeCodeDirect(
@@ -114,12 +98,7 @@ export async function spawnClaudeCodeDirect(
     };
   }
 
-  const requesterOrigin = normalizeDeliveryContext({
-    channel: ctx.agentChannel,
-    accountId: ctx.agentAccountId,
-    to: ctx.agentTo,
-    threadId: ctx.agentThreadId,
-  });
+  const requesterOrigin = extractRequesterOrigin(ctx);
 
   // Generate run ID
   const runId = crypto.randomUUID();

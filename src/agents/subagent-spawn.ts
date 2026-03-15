@@ -11,11 +11,19 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import {
+  extractRequesterOrigin,
+  resolveSpawnMode,
+  summarizeError,
+  type SpawnBaseContext,
+  type SpawnBaseResult,
+  type SpawnMode,
+  SPAWN_MODES,
+} from "./spawn-utils.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
@@ -36,8 +44,10 @@ import {
   resolveMainSessionAlias,
 } from "./tools/sessions-helpers.js";
 
-export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
-export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
+// Re-export spawn mode types for backward compatibility
+export { SPAWN_MODES, type SpawnMode };
+export const SUBAGENT_SPAWN_MODES = SPAWN_MODES;
+export type SpawnSubagentMode = SpawnMode;
 export const SUBAGENT_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
 
@@ -64,12 +74,7 @@ export type SpawnSubagentParams = {
   attachMountPath?: string;
 };
 
-export type SpawnSubagentContext = {
-  agentSessionKey?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
+export type SpawnSubagentContext = SpawnBaseContext & {
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
@@ -83,14 +88,8 @@ export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
 export const SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound session stays active after this task; continue in-thread for follow-ups.";
 
-export type SpawnSubagentResult = {
-  status: "accepted" | "forbidden" | "error";
-  childSessionKey?: string;
-  runId?: string;
-  mode?: SpawnSubagentMode;
-  note?: string;
+export type SpawnSubagentResult = SpawnBaseResult & {
   modelApplied?: boolean;
-  error?: string;
   attachments?: {
     count: number;
     totalBytes: number;
@@ -150,27 +149,6 @@ async function cleanupProvisionalSession(
   } catch {
     // Best-effort cleanup only.
   }
-}
-
-function resolveSpawnMode(params: {
-  requestedMode?: SpawnSubagentMode;
-  threadRequested: boolean;
-}): SpawnSubagentMode {
-  if (params.requestedMode === "run" || params.requestedMode === "session") {
-    return params.requestedMode;
-  }
-  // Thread-bound spawns should default to persistent sessions.
-  return params.threadRequested ? "session" : "run";
-}
-
-function summarizeError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  return "error";
 }
 
 async function ensureThreadBindingForSubagentSpawn(params: {
@@ -273,12 +251,7 @@ export async function spawnSubagentDirect(
         ? params.cleanup
         : "keep";
   const expectsCompletionMessage = params.expectsCompletionMessage !== false;
-  const requesterOrigin = normalizeDeliveryContext({
-    channel: ctx.agentChannel,
-    accountId: ctx.agentAccountId,
-    to: ctx.agentTo,
-    threadId: ctx.agentThreadId,
-  });
+  const requesterOrigin = extractRequesterOrigin(ctx);
   const hookRunner = getGlobalHookRunner();
   const cfg = loadConfig();
 

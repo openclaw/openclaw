@@ -37,29 +37,41 @@ const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
 const CLAUDE_BYPASS_PERMISSIONS_MODE = "bypassPermissions";
 
-const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
+// Shared base args for Claude CLI backends
+const CLAUDE_BASE_ARGS = [
+  "-p",
+  "--output-format",
+  "json",
+  "--permission-mode",
+  "bypassPermissions",
+] as const;
+const CLAUDE_SESSION_ID_FIELDS = [
+  "session_id",
+  "sessionId",
+  "conversation_id",
+  "conversationId",
+] as const;
+
+// Shared base config for Claude CLI backends (used by claude-cli and claude-code)
+const CLAUDE_BASE_BACKEND: Omit<CliBackendConfig, "reliability" | "serialize" | "resumeArgs"> = {
   command: "claude",
-  args: ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions"],
-  resumeArgs: [
-    "-p",
-    "--output-format",
-    "json",
-    "--permission-mode",
-    "bypassPermissions",
-    "--resume",
-    "{sessionId}",
-  ],
+  args: [...CLAUDE_BASE_ARGS],
   output: "json",
   input: "arg",
   modelArg: "--model",
   modelAliases: CLAUDE_MODEL_ALIASES,
   sessionArg: "--session-id",
   sessionMode: "always",
-  sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
+  sessionIdFields: [...CLAUDE_SESSION_ID_FIELDS],
   systemPromptArg: "--append-system-prompt",
   systemPromptMode: "append",
   systemPromptWhen: "first",
   clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"],
+};
+
+const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
+  ...CLAUDE_BASE_BACKEND,
+  resumeArgs: [...CLAUDE_BASE_ARGS, "--resume", "{sessionId}"],
   reliability: {
     watchdog: {
       fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
@@ -107,26 +119,10 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   serialize: true,
 };
 
+// Claude Code backend: shares base config with claude-cli but allows concurrent runs
 const DEFAULT_CLAUDE_CODE_BACKEND: CliBackendConfig = {
-  command: "claude",
-  args: ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions"],
-  resumeArgs: [
-    "-p",
-    "--output-format",
-    "json",
-    "--permission-mode",
-    "bypassPermissions",
-    "--resume",
-    "{sessionId}",
-  ],
-  output: "json",
-  input: "arg",
-  modelArg: "--model",
-  modelAliases: CLAUDE_MODEL_ALIASES,
-  sessionArg: "--session-id",
-  sessionMode: "always",
-  sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
-  clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"],
+  ...CLAUDE_BASE_BACKEND,
+  resumeArgs: [...CLAUDE_BASE_ARGS, "--resume", "{sessionId}"],
   serialize: false, // Allow concurrent runs
 };
 
