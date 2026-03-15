@@ -1,0 +1,1 @@
+- reply runtime now emits session context pressure warnings at 85% and 95% utilization (with cooldown + hysteresis to avoid noisy repeats).

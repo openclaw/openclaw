@@ -4,7 +4,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
-import { hasNonzeroUsage } from "../../agents/usage.js";
+import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
@@ -47,6 +47,11 @@ import {
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
+import {
+  buildContextAlertMessage,
+  evaluateContextAlert,
+  type ContextAlertLevel,
+} from "./context-alerts.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
@@ -253,6 +258,7 @@ export async function runReplyAgent(params: {
   });
 
   let responseUsageLine: string | undefined;
+  let contextAlertNotice: ReplyPayload | undefined;
   type SessionResetOptions = {
     failureLabel: string;
     buildLogMessage: (nextSessionId: string) => string;
@@ -478,6 +484,87 @@ export async function runReplyAgent(params: {
       cliSessionId,
     });
 
+    const contextTokensSnapshot = deriveSessionTotalTokens({
+      usage: runResult.meta?.agentMeta?.lastCallUsage ?? usage,
+      contextTokens: contextTokensUsed,
+      promptTokens,
+    });
+    const parseAlertLevel = (value: unknown): ContextAlertLevel =>
+      value === 95 || value === 85 ? value : 0;
+    const previousAlertLevel = parseAlertLevel(activeSessionEntry?.contextAlertLevel);
+    const previousAlertAt =
+      typeof activeSessionEntry?.contextAlertAt === "number"
+        ? activeSessionEntry.contextAlertAt
+        : undefined;
+    const contextAlertDecision = evaluateContextAlert({
+      usedTokens: contextTokensSnapshot,
+      contextTokens: contextTokensUsed,
+      previousLevel: previousAlertLevel,
+      previousAt: previousAlertAt,
+    });
+
+    if (
+      contextAlertDecision.shouldAlert &&
+      contextAlertDecision.alertLevel &&
+      contextTokensSnapshot
+    ) {
+      contextAlertNotice = {
+        text: buildContextAlertMessage({
+          level: contextAlertDecision.alertLevel,
+          usedTokens: contextTokensSnapshot,
+          contextTokens: contextTokensUsed,
+        }),
+      };
+    }
+
+    const nextPersistedAlertLevel: SessionEntry["contextAlertLevel"] =
+      contextAlertDecision.nextLevel === 95 || contextAlertDecision.nextLevel === 85
+        ? contextAlertDecision.nextLevel
+        : undefined;
+    const persistContextAlertState = async (update: {
+      includeLevel?: boolean;
+      contextAlertLevel?: SessionEntry["contextAlertLevel"];
+      includeAlertAt?: boolean;
+      contextAlertAt?: number;
+    }): Promise<void> => {
+      if (activeSessionEntry) {
+        if (update.includeLevel) {
+          activeSessionEntry.contextAlertLevel = update.contextAlertLevel;
+        }
+        if (update.includeAlertAt) {
+          activeSessionEntry.contextAlertAt = update.contextAlertAt;
+        }
+      }
+      if (sessionKey && activeSessionStore && activeSessionEntry) {
+        activeSessionStore[sessionKey] = activeSessionEntry;
+      }
+      if (sessionKey && storePath) {
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => {
+            const patch: Partial<SessionEntry> = {};
+            if (update.includeLevel) {
+              patch.contextAlertLevel = update.contextAlertLevel;
+            }
+            if (update.includeAlertAt) {
+              patch.contextAlertAt = update.contextAlertAt;
+            }
+            return patch;
+          },
+        });
+      }
+    };
+
+    if (contextAlertDecision.nextLevel < previousAlertLevel) {
+      await persistContextAlertState({
+        includeLevel: true,
+        contextAlertLevel: nextPersistedAlertLevel,
+        includeAlertAt: true,
+        contextAlertAt: undefined,
+      });
+    }
+
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
@@ -512,6 +599,15 @@ export async function runReplyAgent(params: {
 
     if (replyPayloads.length === 0) {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
+
+    if (contextAlertDecision.shouldAlert) {
+      await persistContextAlertState({
+        includeLevel: contextAlertDecision.nextLevel !== previousAlertLevel,
+        contextAlertLevel: nextPersistedAlertLevel,
+        includeAlertAt: true,
+        contextAlertAt: Date.now(),
+      });
     }
 
     const successfulCronAdds = runResult.successfulCronAdds ?? 0;
@@ -604,6 +700,9 @@ export async function runReplyAgent(params: {
 
     // If verbose is enabled, prepend operational run notices.
     let finalPayloads = guardedReplyPayloads;
+    if (contextAlertNotice) {
+      finalPayloads = [contextAlertNotice, ...finalPayloads];
+    }
     const verboseNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {
