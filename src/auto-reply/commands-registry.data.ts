@@ -383,6 +383,21 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "management",
     }),
     defineChatCommand({
+      key: "set_topic_name",
+      nativeName: "set_topic_name",
+      description: "Set the display label for the current Telegram topic.",
+      textAlias: "/set_topic_name",
+      category: "management",
+      args: [
+        {
+          name: "name",
+          description: "Topic label",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "agents",
       nativeName: "agents",
       description: "List thread-bound agents for this session.",
