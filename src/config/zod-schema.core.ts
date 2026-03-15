@@ -444,7 +444,7 @@ const CliBackendWatchdogModeSchema = z
     noOutputTimeoutMs: z.number().int().min(1000).optional(),
     noOutputTimeoutRatio: z.number().min(0.05).max(0.95).optional(),
     minMs: z.number().int().min(1000).optional(),
-    maxMs: z.number().int().min(1000).optional(),
+    maxMs: z.number().int().nonnegative().optional(),
   })
   .strict()
   .optional();
