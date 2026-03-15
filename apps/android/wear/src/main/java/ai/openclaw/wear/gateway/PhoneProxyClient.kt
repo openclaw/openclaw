@@ -225,11 +225,23 @@ class PhoneProxyClient internal constructor(
   }
 
   private fun onMessageReceived(event: ProxyMessageEvent) {
+    if (!shouldAcceptMessage(event.sourceNodeId, event.path)) {
+      return
+    }
     val data = String(event.data, Charsets.UTF_8)
     when (event.path) {
       RPC_RESPONSE_PATH -> handleRpcResponse(data)
       EVENT_PATH -> handleGatewayEvent(data)
       PONG_PATH -> handlePong(event.sourceNodeId, data)
+    }
+  }
+
+  private fun shouldAcceptMessage(sourceNodeId: String, path: String): Boolean {
+    val activeNodeId = phoneNodeId
+    return when (path) {
+      PONG_PATH -> activeNodeId == null || activeNodeId == sourceNodeId
+      RPC_RESPONSE_PATH, EVENT_PATH -> activeNodeId != null && activeNodeId == sourceNodeId
+      else -> false
     }
   }
 

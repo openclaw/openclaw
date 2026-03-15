@@ -38,6 +38,15 @@ import java.util.concurrent.TimeUnit
 
 private const val TAG = "WearGateway"
 
+internal fun isCurrentSocketFrame(
+  frameEpoch: Long,
+  currentEpoch: Long,
+  activeSocket: WebSocket?,
+  sourceSocket: WebSocket,
+): Boolean {
+  return frameEpoch == currentEpoch && activeSocket === sourceSocket
+}
+
 /**
  * Gateway event from the server, forwarded to the chat controller.
  */
@@ -72,7 +81,6 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
   private var config: WearGatewayConfig = WearGatewayConfig()
   private var reconnectJob: Job? = null
   private var deviceId: String = UUID.randomUUID().toString()
-  private var connectNonceDeferred: CompletableDeferred<String>? = null
   private var connectionEpoch = 0L
 
   private val _connected = MutableStateFlow(false)
@@ -151,9 +159,9 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
         _statusText.value = context.getString(R.string.wear_status_failed, "invalid gateway URL")
         return
       }
-    connectNonceDeferred = CompletableDeferred()
     val epoch = connectionEpoch + 1
     connectionEpoch = epoch
+    val nonceDeferred = CompletableDeferred<String>()
 
     ws = httpClient.newWebSocket(request, object : WebSocketListener() {
       override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -161,7 +169,7 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
         // Wait for the connect.challenge nonce, then send connect
         scope.launch {
           try {
-            val nonce = withTimeoutOrNull(5_000) { connectNonceDeferred?.await() } ?: ""
+            val nonce = withTimeoutOrNull(5_000) { nonceDeferred.await() } ?: ""
             sendConnect(webSocket, nonce, epoch)
           } catch (e: Throwable) {
             Log.w(TAG, "Connect handshake failed: ${e.message}")
@@ -171,7 +179,10 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
       }
 
       override fun onMessage(webSocket: WebSocket, text: String) {
-        handleMessage(text)
+        if (!isCurrentSocketFrame(epoch, connectionEpoch, ws, webSocket)) {
+          return
+        }
+        handleMessage(text, nonceDeferred)
       }
 
       override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -243,14 +254,14 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
     }
   }
 
-  private fun handleMessage(text: String) {
+  private fun handleMessage(text: String, nonceDeferred: CompletableDeferred<String>) {
     try {
       val root = json.parseToJsonElement(text)
       if (root !is JsonObject) return
 
       when ((root["type"] as? JsonPrimitive)?.content) {
         "res" -> handleResponse(root)
-        "event" -> handleEvent(root)
+        "event" -> handleEvent(root, nonceDeferred)
       }
     } catch (e: Throwable) {
       Log.w(TAG, "Failed to parse message: ${e.message}")
@@ -271,7 +282,7 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
     }
   }
 
-  private fun handleEvent(frame: JsonObject) {
+  private fun handleEvent(frame: JsonObject, nonceDeferred: CompletableDeferred<String>) {
     val event = (frame["event"] as? JsonPrimitive)?.content ?: return
     val payloadJson = frame["payload"]?.let { if (it is JsonNull) null else it.toString() }
       ?: (frame["payloadJSON"] as? JsonPrimitive)?.content
@@ -281,7 +292,7 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
       val payloadObj = payloadJson?.let { try { json.parseToJsonElement(it) as? JsonObject } catch (_: Throwable) { null } }
       val nonce = (payloadObj?.get("nonce") as? JsonPrimitive)?.content
       if (nonce != null) {
-        connectNonceDeferred?.complete(nonce)
+        nonceDeferred.complete(nonce)
       }
       return
     }

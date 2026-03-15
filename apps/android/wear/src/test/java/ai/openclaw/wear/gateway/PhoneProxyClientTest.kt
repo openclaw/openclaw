@@ -2,10 +2,14 @@ package ai.openclaw.wear.gateway
 
 import ai.openclaw.wear.R
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -67,6 +71,109 @@ class PhoneProxyClientTest {
     scope.cancel()
   }
 
+  @Test
+  fun `proxy ignores rpc responses from a different node`() = runTest {
+    val scope = TestScope(StandardTestDispatcher(testScheduler))
+    val messageTransport = FakeProxyMessageTransport()
+    val client = connectedProxyClient(scope, messageTransport)
+
+    val requestDeferred = async { client.request("sessions.list", "{}", timeoutMs = 1_000) }
+    runCurrent()
+
+    val rpcMessage = messageTransport.sentMessages().last()
+    val requestId = kotlinx.serialization.json.Json.parseToJsonElement(String(rpcMessage.third)).jsonObject["id"]!!.jsonPrimitive.content
+
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/rpc-response",
+        sourceNodeId = "other-phone",
+        data = """{"id":"$requestId","ok":true,"payload":{"ignored":true}}""".toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+    assertFalse(requestDeferred.isCompleted)
+
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/rpc-response",
+        sourceNodeId = "phone-node",
+        data = """{"id":"$requestId","ok":true,"payload":{"ok":true}}""".toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
+    assertEquals("""{"ok":true}""", requestDeferred.await())
+    scope.cancel()
+  }
+
+  @Test
+  fun `proxy ignores events from a different node`() = runTest {
+    val scope = TestScope(StandardTestDispatcher(testScheduler))
+    val messageTransport = FakeProxyMessageTransport()
+    val client = connectedProxyClient(scope, messageTransport)
+    val events = mutableListOf<GatewayEvent>()
+    val collectJob = launch { repeat(2) { events += client.events.first() } }
+
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/event",
+        sourceNodeId = "other-phone",
+        data = """{"event":"chat","payload":{"state":"ignored"}}""".toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+    assertTrue(events.isEmpty())
+
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/event",
+        sourceNodeId = "phone-node",
+        data = """{"event":"chat","payload":{"state":"accepted"}}""".toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
+    assertEquals(listOf(GatewayEvent("chat", """{"state":"accepted"}""")), events)
+    collectJob.cancel()
+    scope.cancel()
+  }
+
+  private fun connectedProxyClient(
+    scope: TestScope,
+    messageTransport: FakeProxyMessageTransport,
+  ): PhoneProxyClient {
+    val nodeFinder =
+      FakeProxyNodeFinder(
+        listOf(
+          ProxyNode(
+            id = "phone-node",
+            displayName = "Pixel",
+            isNearby = true,
+          ),
+        ),
+      )
+    val client =
+      PhoneProxyClient(
+        stringResolver = ::testString,
+        formattedStringResolver = ::testFormattedString,
+        scope = scope,
+        messageTransport = messageTransport,
+        nodeFinder = nodeFinder,
+      )
+    client.connect()
+    runCurrent()
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/pong",
+        sourceNodeId = "phone-node",
+        data = """{"ready":true}""".toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+    advanceUntilIdle()
+    return client
+  }
+
   private fun testString(resId: Int): String {
     return when (resId) {
       R.string.wear_status_phone_proxy_offline -> "Phone proxy offline"
@@ -117,4 +224,6 @@ private class FakeProxyMessageTransport : ProxyMessageTransport {
   }
 
   fun sentPaths(): List<String> = sent.map { it.second }
+
+  fun sentMessages(): List<Triple<String, String, ByteArray>> = sent.toList()
 }
