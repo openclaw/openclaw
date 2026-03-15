@@ -85,6 +85,11 @@ export type ApproveDevicePairingResult =
   | { status: "forbidden"; missingScope: string }
   | null;
 
+type ApprovedDevicePairingResult = Extract<
+  NonNullable<ApproveDevicePairingResult>,
+  { status: "approved" }
+>;
+
 type DevicePairingStateFile = {
   pendingById: Record<string, DevicePairingPendingRequest>;
   pairedByDeviceId: Record<string, PairedDevice>;
@@ -343,6 +348,15 @@ export async function requestDevicePairing(
   });
 }
 
+export async function approveDevicePairing(
+  requestId: string,
+  baseDir?: string,
+): Promise<ApprovedDevicePairingResult | null>;
+export async function approveDevicePairing(
+  requestId: string,
+  options: { callerScopes?: readonly string[] },
+  baseDir?: string,
+): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
   optionsOrBaseDir?: { callerScopes?: readonly string[] } | string,
