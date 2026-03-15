@@ -1,5 +1,5 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
-import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
+import { DisconnectReason, isJidGroup, jidNormalizedUser } from "@whiskeysockets/baileys";
 import { createInboundDebouncer } from "../../../../src/auto-reply/inbound-debounce.js";
 import { formatLocationText } from "../../../../src/channels/location.js";
 import { logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
@@ -463,7 +463,10 @@ export async function monitorWebInbox(options: {
       // Derive isFromMe from reactor identity, not key.fromMe.
       // key.fromMe on a reaction refers to whether the *reacted-to message* was from us,
       // not whether the reactor is us. Compare JIDs directly instead.
-      const isFromMe = reactorJid != null && selfJid != null && reactorJid === selfJid;
+      const isFromMe =
+        reactorJid != null &&
+        selfJid != null &&
+        jidNormalizedUser(reactorJid) === jidNormalizedUser(selfJid);
 
       const access = await checkInboundAccessControl({
         accountId: options.accountId,
