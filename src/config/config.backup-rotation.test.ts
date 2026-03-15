@@ -5,6 +5,7 @@ import {
   rotateConfigBackups,
   hardenBackupPermissions,
   cleanOrphanBackups,
+  TIMESTAMPED_BACKUP_PATTERN,
 } from "./backup-rotation.js";
 import {
   expectPosixMode,
@@ -15,6 +16,37 @@ import { withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("config backup rotation", () => {
+  describe("TIMESTAMPED_BACKUP_PATTERN", () => {
+    it("matches timestamped backups without label", () => {
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("2024-01-15_10-30-45")).toBe(true);
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("2026-03-15_23-59-59")).toBe(true);
+    });
+
+    it("matches timestamped backups with label", () => {
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("2024-01-15_10-30-45-migration")).toBe(true);
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("2026-03-15_23-59-59-before-upgrade")).toBe(true);
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("2024-12-31_00-00-00-config_v2")).toBe(true);
+    });
+
+    it("does not match numbered backups", () => {
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("1")).toBe(false);
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("2")).toBe(false);
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("99")).toBe(false);
+    });
+
+    it("does not match PID-stamped or orphan files", () => {
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("1772352289")).toBe(false);
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("before-marketing")).toBe(false);
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("random")).toBe(false);
+    });
+
+    it("does not match malformed timestamps", () => {
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("2024-01-15")).toBe(false); // missing time
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("10-30-45")).toBe(false); // missing date
+      expect(TIMESTAMPED_BACKUP_PATTERN.test("2024/01/15_10-30-45")).toBe(false); // wrong separator
+    });
+  });
+
   it("keeps a 5-deep backup ring for config writes", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
@@ -106,12 +138,53 @@ describe("config backup rotation", () => {
     });
   });
 
+  it("cleanOrphanBackups preserves timestamped backups", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+
+      // Create valid backups
+      await fs.writeFile(configPath, "current");
+      await fs.writeFile(`${configPath}.bak`, "backup-0");
+      await fs.writeFile(`${configPath}.bak.1`, "backup-1");
+
+      // Create timestamped backups (should be preserved)
+      await fs.writeFile(`${configPath}.bak.2024-01-15_10-30-45`, "ts-backup-1");
+      await fs.writeFile(`${configPath}.bak.2024-01-15_10-30-45-migration`, "ts-backup-2");
+      await fs.writeFile(`${configPath}.bak.2026-03-15_23-59-59-before-upgrade`, "ts-backup-3");
+
+      // Create orphans (should be removed)
+      await fs.writeFile(`${configPath}.bak.1772352289`, "orphan-pid");
+      await fs.writeFile(`${configPath}.bak.random`, "orphan-random");
+
+      await cleanOrphanBackups(configPath, fs);
+
+      // Valid numbered backups preserved
+      await expect(fs.stat(`${configPath}.bak`)).resolves.toBeDefined();
+      await expect(fs.stat(`${configPath}.bak.1`)).resolves.toBeDefined();
+
+      // Timestamped backups preserved
+      await expect(fs.stat(`${configPath}.bak.2024-01-15_10-30-45`)).resolves.toBeDefined();
+      await expect(
+        fs.stat(`${configPath}.bak.2024-01-15_10-30-45-migration`),
+      ).resolves.toBeDefined();
+      await expect(
+        fs.stat(`${configPath}.bak.2026-03-15_23-59-59-before-upgrade`),
+      ).resolves.toBeDefined();
+
+      // Orphans removed
+      await expect(fs.stat(`${configPath}.bak.1772352289`)).rejects.toThrow();
+      await expect(fs.stat(`${configPath}.bak.random`)).rejects.toThrow();
+    });
+  });
+
   it("maintainConfigBackups composes rotate/copy/harden/prune flow", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
       await fs.writeFile(configPath, JSON.stringify({ token: "secret" }), { mode: 0o600 });
       await fs.writeFile(`${configPath}.bak`, "previous", { mode: 0o644 });
       await fs.writeFile(`${configPath}.bak.orphan`, "old");
+      // Add a timestamped backup - should be preserved
+      await fs.writeFile(`${configPath}.bak.2024-01-15_10-30-45-migration`, "ts-backup");
 
       await maintainConfigBackups(configPath, fs);
 
@@ -129,6 +202,10 @@ describe("config backup rotation", () => {
       }
       // Out-of-ring orphan gets pruned.
       await expect(fs.stat(`${configPath}.bak.orphan`)).rejects.toThrow();
+      // Timestamped backup is preserved.
+      await expect(
+        fs.stat(`${configPath}.bak.2024-01-15_10-30-45-migration`),
+      ).resolves.toBeDefined();
     });
   });
 });
