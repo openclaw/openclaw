@@ -52,6 +52,24 @@ type RespondCall = [
   }?,
 ];
 
+function expectNodeNotConnected(respond: ReturnType<typeof vi.fn>) {
+  const call = respond.mock.calls[0] as RespondCall | undefined;
+  expect(call?.[0]).toBe(false);
+  expect(call?.[2]?.message).toBe("node not connected");
+}
+
+async function invokeDisconnectedNode(nodeId: string, idempotencyKey: string) {
+  const nodeRegistry = {
+    get: vi.fn(() => undefined),
+    invoke: vi.fn().mockResolvedValue({ ok: true }),
+  };
+
+  return await invokeNode({
+    nodeRegistry,
+    requestParams: { nodeId, idempotencyKey },
+  });
+}
+
 type TestNodeSession = {
   nodeId: string;
   commands: string[];
@@ -195,24 +213,28 @@ async function invokeNode(params: {
   return respond;
 }
 
+function createNodeClient(nodeId: string) {
+  return {
+    connect: {
+      role: "node" as const,
+      client: {
+        id: nodeId,
+        mode: "node" as const,
+        name: "ios-test",
+        platform: "iOS 26.4.0",
+        version: "test",
+      },
+    },
+  };
+}
+
 async function pullPending(nodeId: string) {
   const respond = vi.fn();
   await nodeHandlers["node.pending.pull"]({
     params: {},
     respond: respond as never,
     context: {} as never,
-    client: {
-      connect: {
-        role: "node",
-        client: {
-          id: nodeId,
-          mode: "node",
-          name: "ios-test",
-          platform: "iOS 26.4.0",
-          version: "test",
-        },
-      },
-    } as never,
+    client: createNodeClient(nodeId) as never,
     req: { type: "req", id: "req-node-pending", method: "node.pending.pull" },
     isWebchatConnect: () => false,
   });
@@ -225,18 +247,7 @@ async function ackPending(nodeId: string, ids: string[]) {
     params: { ids },
     respond: respond as never,
     context: {} as never,
-    client: {
-      connect: {
-        role: "node",
-        client: {
-          id: nodeId,
-          mode: "node",
-          name: "ios-test",
-          platform: "iOS 26.4.0",
-          version: "test",
-        },
-      },
-    } as never,
+    client: createNodeClient(nodeId) as never,
     req: { type: "req", id: "req-node-pending-ack", method: "node.pending.ack" },
     isWebchatConnect: () => false,
   });
@@ -364,20 +375,9 @@ describe("node.invoke APNs wake path", () => {
       reason: "BadDeviceToken",
     });
     mocks.shouldClearStoredApnsRegistration.mockReturnValue(true);
+    const respond = await invokeDisconnectedNode("ios-node-stale", "idem-stale");
 
-    const nodeRegistry = {
-      get: vi.fn(() => undefined),
-      invoke: vi.fn().mockResolvedValue({ ok: true }),
-    };
-
-    const respond = await invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId: "ios-node-stale", idempotencyKey: "idem-stale" },
-    });
-
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(false);
-    expect(call?.[2]?.message).toBe("node not connected");
+    expectNodeNotConnected(respond);
     expect(mocks.clearApnsRegistrationIfCurrent).toHaveBeenCalledWith({
       nodeId: "ios-node-stale",
       registration,
@@ -392,20 +392,9 @@ describe("node.invoke APNs wake path", () => {
       reason: "Unregistered",
     });
     mocks.shouldClearStoredApnsRegistration.mockReturnValue(false);
+    const respond = await invokeDisconnectedNode("ios-node-relay", "idem-relay");
 
-    const nodeRegistry = {
-      get: vi.fn(() => undefined),
-      invoke: vi.fn().mockResolvedValue({ ok: true }),
-    };
-
-    const respond = await invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId: "ios-node-relay", idempotencyKey: "idem-relay" },
-    });
-
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(false);
-    expect(call?.[2]?.message).toBe("node not connected");
+    expectNodeNotConnected(respond);
     expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(process.env, {
       push: {
         apns: {

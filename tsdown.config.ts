@@ -109,19 +109,19 @@ export default defineConfig([
       "channels/plugins/actions/discord": "src/channels/plugins/actions/discord.ts",
       "channels/plugins/actions/signal": "src/channels/plugins/actions/signal.ts",
       "channels/plugins/actions/telegram": "src/channels/plugins/actions/telegram.ts",
-      "telegram/audit": "src/telegram/audit.ts",
-      "telegram/token": "src/telegram/token.ts",
+      "telegram/audit": "extensions/telegram/src/audit.ts",
+      "telegram/token": "extensions/telegram/src/token.ts",
       "line/accounts": "src/line/accounts.ts",
       "line/send": "src/line/send.ts",
       "line/template-messages": "src/line/template-messages.ts",
     },
   }),
-  ...pluginSdkEntrypoints.map((entry) =>
-    nodeBuildConfig({
-      entry: `src/plugin-sdk/${entry}.ts`,
-      outDir: "dist/plugin-sdk",
-    }),
-  ),
+  nodeBuildConfig({
+    // Bundle all plugin-sdk entries in a single build so the bundler can share
+    // common chunks instead of duplicating them per entry (~712MB heap saved).
+    entry: Object.fromEntries(pluginSdkEntrypoints.map((e) => [e, `src/plugin-sdk/${e}.ts`])),
+    outDir: "dist/plugin-sdk",
+  }),
   nodeBuildConfig({
     entry: "src/extensionAPI.ts",
   }),

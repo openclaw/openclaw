@@ -1,9 +1,9 @@
 process.env.NO_COLOR = "1";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fetchSlackScopes } from "../../../extensions/slack/src/scopes.js";
 import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
-import { fetchSlackScopes } from "../../slack/scopes.js";
 import { channelsCapabilitiesCommand } from "./capabilities.js";
 
 const logs: string[] = [];
@@ -21,7 +21,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: vi.fn(),
 }));
 
-vi.mock("../../slack/scopes.js", () => ({
+vi.mock("../../../extensions/slack/src/scopes.js", () => ({
   fetchSlackScopes: vi.fn(),
 }));
 

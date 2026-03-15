@@ -29,6 +29,11 @@ describe("chat", () => {
     });
   }
 
+  function mockTwoOkTextResponses() {
+    mockOkTextResponse();
+    mockOkTextResponse();
+  }
+
   async function expectCalledUrlIncludesPassword(params: {
     password: string;
     invoke: () => Promise<void>;
@@ -198,15 +203,7 @@ describe("chat", () => {
     });
 
     it("uses POST for start and DELETE for stop", async () => {
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          text: () => Promise.resolve(""),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          text: () => Promise.resolve(""),
-        });
+      mockTwoOkTextResponses();
 
       await sendBlueBubblesTyping("iMessage;-;+15551234567", true, {
         serverUrl: "http://localhost:1234",
@@ -442,15 +439,7 @@ describe("chat", () => {
     });
 
     it("adds and removes participant using matching endpoint", async () => {
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          text: () => Promise.resolve(""),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          text: () => Promise.resolve(""),
-        });
+      mockTwoOkTextResponses();
 
       await addBlueBubblesParticipant("chat-guid", "+15551234567", {
         serverUrl: "http://localhost:1234",
