@@ -90,7 +90,7 @@ export async function statusCommand(
         sourceConfig: scan.sourceConfig,
         deep: false,
         includeFilesystem: true,
-        includeChannelSecurity: true,
+        includeChannelSecurity: false,
       })
     : await withProgress(
         {
