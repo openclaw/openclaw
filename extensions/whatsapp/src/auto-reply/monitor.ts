@@ -8,6 +8,11 @@ import { loadConfig } from "../../../../src/config/config.js";
 import { createConnectedChannelStatusPatch } from "../../../../src/gateway/channel-status-patches.js";
 import { logVerbose } from "../../../../src/globals.js";
 import { formatDurationPrecise } from "../../../../src/infra/format-time/format-duration.ts";
+import {
+  hasGatewaySigusr1RestartAuthorization,
+  isGatewaySigusr1RestartHandling,
+  isGatewaySigusr1RestartExternallyAllowed,
+} from "../../../../src/infra/restart.js";
 import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
 import { registerUnhandledRejectionHandler } from "../../../../src/infra/unhandled-rejections.js";
 import { getChildLogger } from "../../../../src/logging.js";
@@ -118,6 +123,7 @@ export async function monitorWebChannel(
   const sleep =
     tuning.sleep ??
     ((ms: number, signal?: AbortSignal) => sleepWithAbort(ms, signal ?? abortSignal));
+  const lateStartupCloseTimeoutMs = 3000;
   const stopRequested = () => abortSignal?.aborted === true;
   const abortPromise =
     abortSignal &&
@@ -126,6 +132,10 @@ export async function monitorWebChannel(
         once: true,
       }),
     );
+  let resolveRestartSignal: (() => void) | null = null;
+  const restartPromise = new Promise<"restart">((resolve) => {
+    resolveRestartSignal = () => resolve("restart");
+  });
 
   // Avoid noisy MaxListenersExceeded warnings in test environments where
   // multiple gateway instances may be constructed.
@@ -135,14 +145,54 @@ export async function monitorWebChannel(
   }
 
   let sigintStop = false;
+  let restartRequested = false;
+  let currentListener: Awaited<ReturnType<typeof monitorWebInbox>> | null = null;
+  let restartCloseStarted = false;
+  let restartClosePromise: Promise<void> | null = null;
+  let reconnectSleepController: AbortController | null = null;
   const handleSigint = () => {
     sigintStop = true;
   };
+  const startRestartClose = (
+    active: Awaited<ReturnType<typeof monitorWebInbox>> | null,
+  ): Promise<void> | null => {
+    if (!active || restartCloseStarted) {
+      return restartClosePromise;
+    }
+    restartCloseStarted = true;
+    restartClosePromise = (async () => {
+      try {
+        await active.close?.();
+      } catch (err) {
+        logVerbose(`SIGUSR1 close failed: ${formatError(err)}`);
+      }
+      active.signalClose?.({
+        status: 499,
+        isLoggedOut: false,
+        error: "restart",
+      });
+    })();
+    return restartClosePromise;
+  };
+  const handleSigusr1 = () => {
+    if (
+      !hasGatewaySigusr1RestartAuthorization() &&
+      !isGatewaySigusr1RestartExternallyAllowed() &&
+      !isGatewaySigusr1RestartHandling()
+    ) {
+      return;
+    }
+    restartRequested = true;
+    resolveRestartSignal?.();
+    reconnectSleepController?.abort();
+    void startRestartClose(currentListener);
+  };
   process.once("SIGINT", handleSigint);
+  process.on("SIGUSR1", handleSigusr1);
 
   let reconnectAttempts = 0;
-
-  while (true) {
+  try {
+    while (true) {
     if (stopRequested()) {
       break;
     }
@@ -192,7 +242,7 @@ export async function monitorWebChannel(
       return !hasControlCommand(msg.body, cfg);
     };
 
-    const listener = await (listenerFactory ?? monitorWebInbox)({
+    const listenerPromise = (listenerFactory ?? monitorWebInbox)({
       verbose,
       accountId: account.accountId,
       authDir: account.authDir,
@@ -210,22 +260,37 @@ export async function monitorWebChannel(
         await onMessage(msg);
       },
     });
-
-    Object.assign(status, createConnectedChannelStatusPatch());
-    status.lastError = null;
-    emitStatus();
-
-    // Surface a concise connection event for the next main-session turn/heartbeat.
-    const { e164: selfE164 } = readWebSelfId(account.authDir);
-    const connectRoute = resolveAgentRoute({
-      cfg,
-      channel: "whatsapp",
-      accountId: account.accountId,
-    });
-    enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
-      sessionKey: connectRoute.sessionKey,
-    });
-
+    const listenerResult = await Promise.race([
+      listenerPromise.then((listener) => ({ kind: "listener" as const, listener })),
+      restartPromise.then(() => ({ kind: "restart" as const })),
+    ]);
+    if (listenerResult.kind === "restart") {
+      const lateStartupShutdown = listenerPromise
+        .then(async (listener) => {
+          try {
+            await listener.close?.();
+          } catch (err) {
+            logVerbose(`Late startup close failed: ${formatError(err)}`);
+          }
+          listener.signalClose?.({
+            status: 499,
+            isLoggedOut: false,
+            error: "restart",
+          });
+        })
+        .catch((err) => {
+          logVerbose(`Late startup listener failed after restart: ${formatError(err)}`);
+        });
+      await Promise.race([
+        lateStartupShutdown,
+        new Promise<void>((resolve) => setTimeout(resolve, lateStartupCloseTimeoutMs)),
+      ]);
+      break;
+    }
+    const listener = listenerResult.listener;
+    currentListener = listener;
+    restartCloseStarted = false;
+    restartClosePromise = null;
     setActiveWebListener(account.accountId, listener);
     unregisterUnhandled = registerUnhandledRejectionHandler((reason) => {
       if (!isLikelyWhatsAppCryptoError(reason)) {
@@ -244,7 +309,8 @@ export async function monitorWebChannel(
       return true;
     });
 
-    const closeListener = async () => {
+    const closeListener = async (opts?: { skipSocketClose?: boolean }) => {
+      currentListener = null;
       setActiveWebListener(account.accountId, null);
       if (unregisterUnhandled) {
         unregisterUnhandled();
@@ -260,12 +326,38 @@ export async function monitorWebChannel(
         await Promise.allSettled(backgroundTasks);
         backgroundTasks.clear();
       }
-      try {
-        await listener.close();
-      } catch (err) {
-        logVerbose(`Socket close failed: ${formatError(err)}`);
+      if (!opts?.skipSocketClose) {
+        try {
+          await listener.close();
+        } catch (err) {
+          logVerbose(`Socket close failed: ${formatError(err)}`);
+        }
       }
     };
+
+    if (restartRequested) {
+      const pendingRestartClose = startRestartClose(listener);
+      if (pendingRestartClose) {
+        await Promise.resolve(pendingRestartClose);
+      }
+      await closeListener({ skipSocketClose: Boolean(pendingRestartClose) });
+      break;
+    }
+
+    Object.assign(status, createConnectedChannelStatusPatch());
+    status.lastError = null;
+    emitStatus();
+
+    // Surface a concise connection event for the next main-session turn/heartbeat.
+    const { e164: selfE164 } = readWebSelfId(account.authDir);
+    const connectRoute = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: account.accountId,
+    });
+    enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
+      sessionKey: connectRoute.sessionKey,
+    });
 
     if (keepAlive) {
       heartbeat = setInterval(() => {
@@ -332,7 +424,6 @@ export async function monitorWebChannel(
 
     if (!keepAlive) {
       await closeListener();
-      process.removeListener("SIGINT", handleSigint);
       return;
     }
 
@@ -342,6 +433,7 @@ export async function monitorWebChannel(
         return { status: 500, isLoggedOut: false, error: err };
       }) ?? waitForever(),
       abortPromise ?? waitForever(),
+      restartPromise,
     ]);
 
     const uptimeMs = Date.now() - startedAt;
@@ -350,6 +442,15 @@ export async function monitorWebChannel(
     }
     status.reconnectAttempts = reconnectAttempts;
     emitStatus();
+
+    if (restartRequested || reason === "restart") {
+      const pendingRestartClose = restartClosePromise;
+      if (pendingRestartClose) {
+        await Promise.resolve(pendingRestartClose);
+      }
+      await closeListener({ skipSocketClose: restartCloseStarted });
+      break;
+    }
 
     if (stopRequested() || sigintStop || reason === "aborted") {
       await closeListener();
@@ -453,17 +554,30 @@ export async function monitorWebChannel(
       `WhatsApp Web connection closed (status ${statusCode}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(delay)}… (${errorStr})`,
     );
     await closeListener();
+    reconnectSleepController = new AbortController();
     try {
-      await sleep(delay, abortSignal);
+      const sleepSignal = abortSignal
+        ? AbortSignal.any([abortSignal, reconnectSleepController.signal])
+        : reconnectSleepController.signal;
+      const nextStep = await Promise.race([
+        sleep(delay, sleepSignal).then(() => "slept" as const),
+        restartPromise,
+      ]);
+      reconnectSleepController = null;
+      if (nextStep === "restart") {
+        break;
+      }
     } catch {
+      reconnectSleepController = null;
       break;
     }
+    }
+  } finally {
+    status.running = false;
+    status.connected = false;
+    status.lastEventAt = Date.now();
+    emitStatus();
+    process.removeListener("SIGINT", handleSigint);
+    process.removeListener("SIGUSR1", handleSigusr1);
   }
-
-  status.running = false;
-  status.connected = false;
-  status.lastEventAt = Date.now();
-  emitStatus();
-
-  process.removeListener("SIGINT", handleSigint);
 }
