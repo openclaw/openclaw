@@ -265,14 +265,23 @@ describe("legacy config detection", () => {
       expectRoutingAllowFromLegacySnapshot(ctx, ["+15555550123"]);
     });
   });
-  it("flags top-level memorySearch as legacy in snapshot", async () => {
-    await withSnapshotForConfig(
-      { memorySearch: { provider: "local", fallback: "none" } },
-      async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
-        expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
-      },
-    );
+  it("accepts top-level memorySearch as legacy alias in snapshot", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ memorySearch: { provider: "local", fallback: "none" } }),
+        "utf-8",
+      );
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(false);
+      expect(snap.config?.agents?.defaults?.memorySearch?.provider).toBe("local");
+      expect(snap.config?.agents?.defaults?.memorySearch?.fallback).toBe("none");
+    });
   });
   it("flags top-level heartbeat as legacy in snapshot", async () => {
     await withSnapshotForConfig(

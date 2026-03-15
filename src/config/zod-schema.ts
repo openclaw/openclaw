@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { ToolsSchema } from "./zod-schema.agent-runtime.js";
+import { MemorySearchSchema, ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import {
@@ -852,6 +852,7 @@ export const OpenClawSchema = z
       })
       .optional(),
     memory: MemorySchema,
+    memorySearch: MemorySearchSchema,
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
