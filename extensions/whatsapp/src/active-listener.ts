@@ -28,11 +28,6 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-// Use globalThis to ensure a single shared instance across bundled chunks.
-// The bundler may duplicate this module into multiple output files, and each
-// copy would get its own module-scoped Map — causing setActiveWebListener
-// (in chunk A) to register a listener that requireActiveWebListener (in chunk B)
-// cannot find. Storing on globalThis avoids this.
 const GLOBAL_KEY = "__openclaw_whatsapp_listeners__" as const;
 
 type ListenerGlobals = {
