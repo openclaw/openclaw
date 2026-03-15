@@ -28,9 +28,14 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-let _currentListener: ActiveWebListener | null = null;
+const GLOBAL_KEY = "__openclaw_whatsapp_listeners__" as const;
 
-const listeners = new Map<string, ActiveWebListener>();
+type ListenerGlobals = {
+  [GLOBAL_KEY]?: Map<string, ActiveWebListener>;
+};
+
+const g = globalThis as unknown as ListenerGlobals;
+const listeners = (g[GLOBAL_KEY] ??= new Map<string, ActiveWebListener>());
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -72,9 +77,6 @@ export function setActiveWebListener(
     listeners.delete(id);
   } else {
     listeners.set(id, listener);
-  }
-  if (id === DEFAULT_ACCOUNT_ID) {
-    _currentListener = listener;
   }
 }
 
