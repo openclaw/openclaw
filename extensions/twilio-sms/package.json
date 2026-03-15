@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/twilio-sms",
+  "version": "2026.3.13",
+  "description": "OpenClaw Twilio SMS channel plugin",
+  "type": "module",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "twilio-sms",
+      "label": "Twilio SMS",
+      "selectionLabel": "Twilio SMS",
+      "detailLabel": "Twilio SMS",
+      "docsPath": "/channels/twilio-sms",
+      "docsLabel": "twilio-sms",
+      "blurb": "SMS/MMS messaging via Twilio Programmable Messaging.",
+      "systemImage": "message.fill",
+      "order": 85
+    },
+    "install": {
+      "npmSpec": "@openclaw/twilio-sms",
+      "localPath": "extensions/twilio-sms",
+      "defaultChoice": "npm"
+    }
+  }
+}

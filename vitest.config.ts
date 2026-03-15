@@ -47,6 +47,8 @@ const pluginSdkSubpaths = [
   "test-utils",
   "thread-ownership",
   "tlon",
+  "twilio-shared",
+  "twilio-sms",
   "twitch",
   "voice-call",
   "zalo",

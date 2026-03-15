@@ -51,6 +51,8 @@
     "src/plugin-sdk/test-utils.ts",
     "src/plugin-sdk/thread-ownership.ts",
     "src/plugin-sdk/tlon.ts",
+    "src/plugin-sdk/twilio-shared.ts",
+    "src/plugin-sdk/twilio-sms.ts",
     "src/plugin-sdk/twitch.ts",
     "src/plugin-sdk/voice-call.ts",
     "src/plugin-sdk/zalo.ts",
