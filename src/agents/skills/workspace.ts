@@ -61,6 +61,10 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
  * `{sandboxWorkspace}/skills/{dirName}/`, but the {@link Skill.filePath}
  * values in the prompt still reference the host.  This function remaps
  * them so the sandboxed agent can actually read the files.
+ *
+ * NOTE: Does not replicate the `-2` suffix deduplication from
+ * {@link resolveUniqueSyncedSkillDirName}. Same-basename skill collisions
+ * are rare in practice — this covers the common case.
  */
 export function rewriteSkillPathsForSandbox(skills: Skill[], sandboxSkillsDir: string): Skill[] {
   return skills.map((s) => {
@@ -68,8 +72,8 @@ export function rewriteSkillPathsForSandbox(skills: Skill[], sandboxSkillsDir: s
     const fileName = path.basename(s.filePath);
     return {
       ...s,
-      filePath: path.join(sandboxSkillsDir, dirName, fileName),
-      baseDir: path.join(sandboxSkillsDir, dirName),
+      filePath: path.posix.join(sandboxSkillsDir, dirName, fileName),
+      baseDir: path.posix.join(sandboxSkillsDir, dirName),
     };
   });
 }
@@ -673,6 +677,16 @@ export function resolveSkillsPromptForRun(params: {
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
+    if (params.sandboxSkillsDir && params.skillsSnapshot?.resolvedSkills?.length) {
+      const rewritten = rewriteSkillPathsForSandbox(
+        params.skillsSnapshot.resolvedSkills,
+        params.sandboxSkillsDir,
+      );
+      const rebuilt = formatSkillsForPrompt(rewritten);
+      if (rebuilt.trim()) {
+        return rebuilt;
+      }
+    }
     return snapshotPrompt;
   }
   if (params.entries && params.entries.length > 0) {

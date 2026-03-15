@@ -1,6 +1,6 @@
+import type { Skill } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { resolveSkillsPromptForRun } from "./skills.js";
-import type { Skill } from "./skills/types.js";
 import type { SkillEntry } from "./skills/types.js";
 import { rewriteSkillPathsForSandbox } from "./skills/workspace.js";
 
@@ -30,6 +30,43 @@ describe("resolveSkillsPromptForRun", () => {
     });
     expect(prompt).toContain("<available_skills>");
     expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
+  });
+
+  it("rewrites snapshot skill paths for sandbox when resolvedSkills available", () => {
+    const resolvedSkills: Skill[] = [
+      {
+        name: "github",
+        description: "GitHub integration",
+        filePath: "/home/user/.npm-global/lib/node_modules/openclaw/skills/github/SKILL.md",
+        baseDir: "/home/user/.npm-global/lib/node_modules/openclaw/skills/github",
+        source: "openclaw-bundled",
+        disableModelInvocation: false,
+      },
+    ];
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: {
+        prompt:
+          "<available_skills><location>~/.npm-global/lib/node_modules/openclaw/skills/github/SKILL.md</location></available_skills>",
+        skills: [{ name: "github" }],
+        resolvedSkills,
+      },
+      workspaceDir: "/tmp/openclaw",
+      sandboxSkillsDir: "/workspace/skills",
+    });
+    expect(prompt).toContain("/workspace/skills/github/SKILL.md");
+    expect(prompt).not.toContain(".npm-global");
+  });
+
+  it("falls back to snapshot prompt when no resolvedSkills for sandbox", () => {
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: {
+        prompt: "SNAPSHOT_HOST_PATHS",
+        skills: [{ name: "github" }],
+      },
+      workspaceDir: "/tmp/openclaw",
+      sandboxSkillsDir: "/workspace/skills",
+    });
+    expect(prompt).toBe("SNAPSHOT_HOST_PATHS");
   });
 
   it("rewrites skill paths for sandbox when sandboxSkillsDir is provided", () => {
