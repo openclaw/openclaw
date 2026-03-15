@@ -240,7 +240,7 @@
     overflow: hidden;
   }
 
-  openclaw-app {
+  openclaw-app[data-ios-mobile] {
     height: var(--mobile-layout-height, var(--mobile-viewport-height, 100svh));
     min-height: var(--mobile-layout-height, var(--mobile-viewport-height, 100svh));
   }
@@ -263,10 +263,10 @@
     scroll-padding-bottom: calc(var(--mobile-chat-input-height, 112px) + 16px);
   }
 
-  .shell,
-  .shell--chat,
-  .shell--nav-collapsed,
-  .shell--chat-focus {
+  openclaw-app[data-ios-mobile] .shell,
+  openclaw-app[data-ios-mobile] .shell--chat,
+  openclaw-app[data-ios-mobile] .shell--nav-collapsed,
+  openclaw-app[data-ios-mobile] .shell--chat-focus {
     height: var(--mobile-layout-height, var(--mobile-viewport-height, 100svh));
     min-height: var(--mobile-layout-height, var(--mobile-viewport-height, 100svh));
   }

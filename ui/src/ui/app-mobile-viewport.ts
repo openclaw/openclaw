@@ -7,6 +7,10 @@ type MobileViewportController = {
   setShellLocked: (locked: boolean) => void;
 };
 
+type ViewportUpdateOptions = {
+  resetBaseline?: boolean;
+};
+
 function isIosDevice(): boolean {
   const { userAgent, platform, maxTouchPoints } = navigator;
   return /iPad|iPhone|iPod/.test(userAgent) || (platform === "MacIntel" && maxTouchPoints > 1);
@@ -22,7 +26,7 @@ function isTextEntryElement(target: EventTarget | null): boolean {
   if (target instanceof HTMLInputElement) {
     return target.type !== "checkbox" && target.type !== "radio" && target.type !== "button";
   }
-  return target.isContentEditable;
+  return Boolean(target.isContentEditable);
 }
 
 export function attachMobileViewportFixes(
@@ -59,7 +63,7 @@ export function attachMobileViewportFixes(
   let focusTimer: number | null = null;
   let inputObserver: ResizeObserver | null = null;
   let observedInput: HTMLElement | null = null;
-  let maxViewportHeight = Math.round(viewport.height);
+  let baselineViewportHeight = Math.round(viewport.height);
 
   const setShellLocked = (locked: boolean) => {
     root.toggleAttribute("data-ios-shell-lock", locked);
@@ -73,16 +77,25 @@ export function attachMobileViewportFixes(
     host.toggleAttribute("data-ios-keyboard-open", open);
   };
 
-  const updateViewportHeight = () => {
+  const updateViewportHeight = ({ resetBaseline = false }: ViewportUpdateOptions = {}) => {
     const height = Math.round(viewport.height);
-    maxViewportHeight = Math.max(maxViewportHeight, height);
+    const textEntryFocused = isTextEntryElement(document.activeElement);
+    if (resetBaseline) {
+      baselineViewportHeight = height;
+    }
+    // Freeze the pre-keyboard height only while a text control is focused and
+    // the visual viewport has actually shrunk enough to indicate the keyboard.
+    const keyboardOpen = textEntryFocused && baselineViewportHeight - height > 120;
+    if (!keyboardOpen) {
+      baselineViewportHeight = height;
+    }
     root.style.setProperty("--mobile-viewport-height", `${height}px`);
-    root.style.setProperty("--mobile-layout-height", `${maxViewportHeight}px`);
-    setKeyboardOpen(maxViewportHeight - height > 120);
+    root.style.setProperty("--mobile-layout-height", `${baselineViewportHeight}px`);
+    setKeyboardOpen(keyboardOpen);
   };
 
   const syncChatInputMetrics = () => {
-    const input = host.querySelector(".content--chat .agent-chat__input");
+    const input = host.querySelector<HTMLElement>(".content--chat .agent-chat__input");
     if (!input) {
       inputObserver?.disconnect();
       inputObserver = null;
@@ -136,6 +149,11 @@ export function attachMobileViewportFixes(
     restoreDocumentScroll();
   };
 
+  const handleOrientationChange = () => {
+    updateViewportHeight({ resetBaseline: true });
+    restoreDocumentScroll();
+  };
+
   const handleFocusIn = (event: FocusEvent) => {
     if (!isTextEntryElement(event.target)) {
       return;
@@ -159,7 +177,7 @@ export function attachMobileViewportFixes(
   void host.updateComplete.then(() => syncChatInputMetrics());
   viewport.addEventListener("resize", handleViewportChange);
   viewport.addEventListener("scroll", handleViewportChange);
-  window.addEventListener("orientationchange", handleViewportChange);
+  window.addEventListener("orientationchange", handleOrientationChange);
   document.addEventListener("focusin", handleFocusIn, true);
   document.addEventListener("focusout", handleFocusOut, true);
 
@@ -177,7 +195,7 @@ export function attachMobileViewportFixes(
       observedInput = null;
       viewport.removeEventListener("resize", handleViewportChange);
       viewport.removeEventListener("scroll", handleViewportChange);
-      window.removeEventListener("orientationchange", handleViewportChange);
+      window.removeEventListener("orientationchange", handleOrientationChange);
       document.removeEventListener("focusin", handleFocusIn, true);
       document.removeEventListener("focusout", handleFocusOut, true);
       setShellLocked(false);

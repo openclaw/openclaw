@@ -117,6 +117,32 @@ describe("control UI routing", () => {
     }
   });
 
+  it("keeps the mobile shell height override scoped to the iOS viewport fix", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
+
+    const shell = app.querySelector<HTMLElement>(".shell");
+    expect(shell).not.toBeNull();
+    if (!shell) {
+      return;
+    }
+
+    document.documentElement.style.setProperty("--mobile-layout-height", "321px");
+    await nextFrame();
+    expect(getComputedStyle(shell).height).not.toBe("321px");
+
+    document.documentElement.setAttribute("data-ios-mobile", "");
+    app.setAttribute("data-ios-mobile", "");
+    await nextFrame();
+    expect(getComputedStyle(shell).height).toBe("321px");
+
+    app.removeAttribute("data-ios-mobile");
+    document.documentElement.removeAttribute("data-ios-mobile");
+    document.documentElement.style.removeProperty("--mobile-layout-height");
+  });
+
   it("does not render a desktop sidebar resizer or inject a custom nav width", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
