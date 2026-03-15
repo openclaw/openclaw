@@ -497,6 +497,103 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("routes /btw replies through side-result events without transcript injection", async () => {
+    await withMainSessionStore(async () => {
+      const replyMock = vi.mocked(getReplyFromConfig);
+      replyMock.mockResolvedValueOnce({
+        text: "323",
+        btw: { question: "what is 17 * 19?" },
+      });
+      const sideResultPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat.side_result" &&
+          o.payload?.kind === "btw" &&
+          o.payload?.runId === "idem-btw-1",
+        8000,
+      );
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-btw-1",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/btw what is 17 * 19?",
+        idempotencyKey: "idem-btw-1",
+      });
+
+      expect(res.ok).toBe(true);
+      const sideResult = await sideResultPromise;
+      const finalEvent = await finalPromise;
+      expect(sideResult.payload).toMatchObject({
+        kind: "btw",
+        runId: "idem-btw-1",
+        sessionKey: "main",
+        question: "what is 17 * 19?",
+        text: "323",
+      });
+      expect(finalEvent.payload).toMatchObject({
+        runId: "idem-btw-1",
+        sessionKey: "main",
+        state: "final",
+      });
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      expect(historyRes.payload?.messages ?? []).toEqual([]);
+    });
+  });
+
+  test("routes block-streamed /btw replies through side-result events", async () => {
+    await withMainSessionStore(async () => {
+      const replyMock = vi.mocked(getReplyFromConfig);
+      replyMock.mockImplementationOnce(async (_ctx, opts) => {
+        await opts?.onBlockReply?.({
+          text: "first chunk",
+          btw: { question: "what changed?" },
+        });
+        await opts?.onBlockReply?.({
+          text: "second chunk",
+          btw: { question: "what changed?" },
+        });
+        return undefined;
+      });
+      const sideResultPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat.side_result" &&
+          o.payload?.kind === "btw" &&
+          o.payload?.runId === "idem-btw-block-1",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/btw what changed?",
+        idempotencyKey: "idem-btw-block-1",
+      });
+
+      expect(res.ok).toBe(true);
+      const sideResult = await sideResultPromise;
+      expect(sideResult.payload).toMatchObject({
+        kind: "btw",
+        runId: "idem-btw-block-1",
+        question: "what changed?",
+        text: "first chunk\n\nsecond chunk",
+      });
+    });
+  });
+
   test("chat.history hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture(true));
     const roleAndText = historyMessages
