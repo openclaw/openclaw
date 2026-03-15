@@ -19,6 +19,7 @@ import {
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
+import { clearPluginInteractiveHandlers } from "./interactive.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
@@ -31,6 +32,8 @@ import type {
   OpenClawPluginDefinition,
   OpenClawPluginModule,
   PluginDiagnostic,
+  PluginBundleFormat,
+  PluginFormat,
   PluginLogger,
 } from "./types.js";
 
@@ -124,6 +127,36 @@ const resolvePluginSdkAliasFile = (params: {
 const resolvePluginSdkAlias = (): string | null =>
   resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
 
+const resolveExtensionApiAlias = (params: { modulePath?: string } = {}): string | null => {
+  try {
+    const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+    const packageRoot = resolveOpenClawPackageRootSync({
+      cwd: path.dirname(modulePath),
+    });
+    if (!packageRoot) {
+      return null;
+    }
+
+    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+      modulePath,
+      isProduction: process.env.NODE_ENV === "production",
+    });
+    const candidateMap = {
+      src: path.join(packageRoot, "src", "extensionAPI.ts"),
+      dist: path.join(packageRoot, "dist", "extensionAPI.js"),
+    } as const;
+    for (const kind of orderedKinds) {
+      const candidate = candidateMap[kind];
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+};
+
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 
 function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): string[] {
@@ -172,6 +205,7 @@ const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
 export const __testing = {
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
+  resolveExtensionApiAlias,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
   maxPluginRegistryCacheEntries: MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
@@ -285,7 +319,11 @@ function createPluginRecord(params: {
   name?: string;
   description?: string;
   version?: string;
+  format?: PluginFormat;
+  bundleFormat?: PluginBundleFormat;
+  bundleCapabilities?: string[];
   source: string;
+  rootDir?: string;
   origin: PluginRecord["origin"];
   workspaceDir?: string;
   enabled: boolean;
@@ -296,7 +334,11 @@ function createPluginRecord(params: {
     name: params.name ?? params.id,
     description: params.description,
     version: params.version,
+    format: params.format ?? "openclaw",
+    bundleFormat: params.bundleFormat,
+    bundleCapabilities: params.bundleCapabilities,
     source: params.source,
+    rootDir: params.rootDir,
     origin: params.origin,
     workspaceDir: params.workspaceDir,
     enabled: params.enabled,
@@ -485,16 +527,20 @@ function resolveCandidateDuplicateRank(params: {
       env: params.env,
     });
 
-  switch (params.candidate.origin) {
-    case "config":
-      return 0;
-    case "workspace":
-      return 1;
-    case "global":
-      return isExplicitInstall ? 2 : 4;
-    case "bundled":
-      return 3;
+  if (params.candidate.origin === "config") {
+    return 0;
   }
+  if (params.candidate.origin === "global" && isExplicitInstall) {
+    return 1;
+  }
+  if (params.candidate.origin === "bundled") {
+    // Bundled plugin ids stay reserved unless the operator configured an override.
+    return 2;
+  }
+  if (params.candidate.origin === "workspace") {
+    return 3;
+  }
+  return 4;
 }
 
 function compareDuplicateCandidateOrder(params: {
@@ -618,6 +664,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
   // Clear previously registered plugin commands before reloading
   clearPluginCommands();
+  clearPluginInteractiveHandlers();
 
   // Lazily initialize the runtime so startup paths that discover/skip plugins do
   // not eagerly load every channel runtime dependency.
@@ -697,7 +744,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return jitiLoader;
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
+    const extensionApiAlias = resolveExtensionApiAlias();
     const aliasMap = {
+      ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
       ...resolvePluginSdkScopedAliasMap(),
     };
@@ -744,7 +793,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         name: manifestRecord.name ?? pluginId,
         description: manifestRecord.description,
         version: manifestRecord.version,
+        format: manifestRecord.format,
+        bundleFormat: manifestRecord.bundleFormat,
+        bundleCapabilities: manifestRecord.bundleCapabilities,
         source: candidate.source,
+        rootDir: candidate.rootDir,
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
         enabled: false,
@@ -768,7 +821,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       name: manifestRecord.name ?? pluginId,
       description: manifestRecord.description,
       version: manifestRecord.version,
+      format: manifestRecord.format,
+      bundleFormat: manifestRecord.bundleFormat,
+      bundleCapabilities: manifestRecord.bundleCapabilities,
       source: candidate.source,
+      rootDir: candidate.rootDir,
       origin: candidate.origin,
       workspaceDir: candidate.workspaceDir,
       enabled: enableState.enabled,
@@ -790,17 +847,54 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
     };
 
-    if (!enableState.enabled) {
+    const registrationMode = enableState.enabled
+      ? "full"
+      : !validateOnly && manifestRecord.channels.length > 0
+        ? "setup-only"
+        : null;
+
+    if (!registrationMode) {
       record.status = "disabled";
       record.error = enableState.reason;
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       continue;
     }
+    if (!enableState.enabled) {
+      record.status = "disabled";
+      record.error = enableState.reason;
+    }
 
+    if (record.format === "bundle") {
+      const unsupportedCapabilities = (record.bundleCapabilities ?? []).filter(
+        (capability) =>
+          capability !== "skills" &&
+          capability !== "settings" &&
+          !(
+            capability === "commands" &&
+            (record.bundleFormat === "claude" || record.bundleFormat === "cursor")
+          ) &&
+          !(capability === "hooks" && record.bundleFormat === "codex"),
+      );
+      for (const capability of unsupportedCapabilities) {
+        registry.diagnostics.push({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `bundle capability detected but not wired into OpenClaw yet: ${capability}`,
+        });
+      }
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      continue;
+    }
     // Fast-path bundled memory plugins that are guaranteed disabled by slot policy.
     // This avoids opening/importing heavy memory plugin modules that will never register.
-    if (candidate.origin === "bundled" && manifestRecord.kind === "memory") {
+    if (
+      registrationMode === "full" &&
+      candidate.origin === "bundled" &&
+      manifestRecord.kind === "memory"
+    ) {
       const earlyMemoryDecision = resolveMemorySlotDecision({
         id: record.id,
         kind: "memory",
@@ -885,24 +979,26 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       memorySlotMatched = true;
     }
 
-    const memoryDecision = resolveMemorySlotDecision({
-      id: record.id,
-      kind: record.kind,
-      slot: memorySlot,
-      selectedId: selectedMemoryPluginId,
-    });
+    if (registrationMode === "full") {
+      const memoryDecision = resolveMemorySlotDecision({
+        id: record.id,
+        kind: record.kind,
+        slot: memorySlot,
+        selectedId: selectedMemoryPluginId,
+      });
 
-    if (!memoryDecision.enabled) {
-      record.enabled = false;
-      record.status = "disabled";
-      record.error = memoryDecision.reason;
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      continue;
-    }
+      if (!memoryDecision.enabled) {
+        record.enabled = false;
+        record.status = "disabled";
+        record.error = memoryDecision.reason;
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        continue;
+      }
 
-    if (memoryDecision.selected && record.kind === "memory") {
-      selectedMemoryPluginId = record.id;
+      if (memoryDecision.selected && record.kind === "memory") {
+        selectedMemoryPluginId = record.id;
+      }
     }
 
     const validatedConfig = validatePluginConfig({
@@ -933,6 +1029,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       config: cfg,
       pluginConfig: validatedConfig.value,
       hookPolicy: entry?.hooks,
+      registrationMode,
     });
 
     try {

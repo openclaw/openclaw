@@ -307,12 +307,9 @@ describe("setupChannels", () => {
 
   it("adds disabled hint to channel selection when a channel is disabled", async () => {
     let selectionCount = 0;
-    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
+    const select = vi.fn(async ({ message }: { message: string; options: unknown[] }) => {
       if (message === "Select a channel") {
         selectionCount += 1;
-        const opts = options as Array<{ value: string; hint?: string }>;
-        const telegram = opts.find((opt) => opt.value === "telegram");
-        expect(telegram?.hint).toContain("disabled");
         return selectionCount === 1 ? "telegram" : "__done__";
       }
       if (message.includes("already configured")) {
@@ -332,6 +329,13 @@ describe("setupChannels", () => {
     await runSetupChannels(createTelegramCfg("token", false), prompter);
 
     expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
+    const channelSelectCall = select.mock.calls.find(
+      ([params]) => (params as { message?: string }).message === "Select a channel",
+    );
+    const telegramOption = (
+      channelSelectCall?.[0] as { options?: Array<{ value: string; hint?: string }> } | undefined
+    )?.options?.find((opt) => opt.value === "telegram");
+    expect(telegramOption?.hint).toContain("disabled");
     expect(multiselect).not.toHaveBeenCalled();
   });
 
