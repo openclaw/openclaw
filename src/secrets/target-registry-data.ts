@@ -734,6 +734,17 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
+    id: "tools.web.search.exa.apiKey",
+    targetType: "tools.web.search.exa.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "tools.web.search.exa.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
     id: "tools.web.search.gemini.apiKey",
     targetType: "tools.web.search.gemini.apiKey",
     configFile: "openclaw.json",

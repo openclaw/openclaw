@@ -76,6 +76,75 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts exa provider with full config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "exa",
+            exa: {
+              apiKey: "exa-test-key",
+              type: "neural",
+              contents: "highlights",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts exa provider with minimal config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "exa",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts exa contents=text option", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "exa",
+            exa: {
+              contents: "text",
+              type: "keyword",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid exa type value", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "exa",
+            exa: {
+              type: "invalid-type" as unknown as "auto",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
 });
 
 describe("web search provider auto-detection", () => {
@@ -83,6 +152,7 @@ describe("web search provider auto-detection", () => {
 
   beforeEach(() => {
     delete process.env.BRAVE_API_KEY;
+    delete process.env.EXA_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
@@ -105,6 +175,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects brave when only BRAVE_API_KEY is set", () => {
     process.env.BRAVE_API_KEY = "test-brave-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("brave");
+  });
+
+  it("auto-detects exa when only EXA_API_KEY is set", () => {
+    process.env.EXA_API_KEY = "test-exa-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("exa");
   });
 
   it("auto-detects gemini when only GEMINI_API_KEY is set", () => {
@@ -142,15 +217,24 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("kimi");
   });
 
-  it("follows alphabetical order — brave wins when multiple keys available", () => {
+  it("follows auto-detection precedence — exa wins when multiple keys available", () => {
     process.env.BRAVE_API_KEY = "test-brave-key"; // pragma: allowlist secret
+    process.env.EXA_API_KEY = "test-exa-key"; // pragma: allowlist secret
     process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
-    expect(resolveSearchProvider({})).toBe("brave");
+    expect(resolveSearchProvider({})).toBe("exa");
   });
 
-  it("gemini wins over grok, kimi, and perplexity when brave unavailable", () => {
+  it("exa wins over gemini, grok, kimi, and perplexity when brave unavailable", () => {
+    process.env.EXA_API_KEY = "test-exa-key"; // pragma: allowlist secret
+    process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
+    process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
+    process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("exa");
+  });
+
+  it("gemini wins over grok, kimi, and perplexity when brave and exa unavailable", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret

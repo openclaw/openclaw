@@ -24,6 +24,9 @@ const {
   extractKimiCitations,
   resolveBraveMode,
   mapBraveLlmContextResults,
+  freshnessToExaStartDate,
+  freshnessToExaDates,
+  resolveExaApiKey,
 } = __testing;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
@@ -466,5 +469,107 @@ describe("mapBraveLlmContextResults", () => {
       },
     });
     expect(results[0].siteName).toBeUndefined();
+  });
+});
+
+describe("exa freshnessToExaStartDate", () => {
+  it("returns a date string for 'pd' (yesterday)", () => {
+    const result = freshnessToExaStartDate("pd");
+    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const yesterday = new Date();
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    expect(result).toBe(yesterday.toISOString().slice(0, 10));
+  });
+
+  it("returns a date string for 'pw' (7 days ago)", () => {
+    const result = freshnessToExaStartDate("pw");
+    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const expected = new Date();
+    expected.setUTCDate(expected.getUTCDate() - 7);
+    expect(result).toBe(expected.toISOString().slice(0, 10));
+  });
+
+  it("returns a date string for 'pm' (30 days ago)", () => {
+    const result = freshnessToExaStartDate("pm");
+    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const expected = new Date();
+    expected.setUTCDate(expected.getUTCDate() - 30);
+    expect(result).toBe(expected.toISOString().slice(0, 10));
+  });
+
+  it("returns a date string for 'py' (365 days ago)", () => {
+    const result = freshnessToExaStartDate("py");
+    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const expected = new Date();
+    expected.setUTCDate(expected.getUTCDate() - 365);
+    expect(result).toBe(expected.toISOString().slice(0, 10));
+  });
+
+  it("extracts start date from a date range (deprecated compat)", () => {
+    expect(freshnessToExaStartDate("2024-03-01to2024-03-31")).toBe("2024-03-01");
+  });
+
+  it("returns undefined for unknown freshness values", () => {
+    expect(freshnessToExaStartDate("invalid")).toBeUndefined();
+  });
+
+  it("is case-insensitive for shortcuts", () => {
+    const pd = freshnessToExaStartDate("PD");
+    const pw = freshnessToExaStartDate("PW");
+    expect(pd).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(pw).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe("exa freshnessToExaDates", () => {
+  it("returns only startPublishedDate for shortcut values", () => {
+    const result = freshnessToExaDates("pd");
+    expect(result.startPublishedDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(result.endPublishedDate).toBeUndefined();
+  });
+
+  it("returns both startPublishedDate and endPublishedDate for date ranges", () => {
+    const result = freshnessToExaDates("2024-03-01to2024-03-31");
+    expect(result.startPublishedDate).toBe("2024-03-01");
+    expect(result.endPublishedDate).toBe("2024-03-31");
+  });
+
+  it("is case-insensitive for date range extraction", () => {
+    const result = freshnessToExaDates("2024-03-01TO2024-03-31");
+    expect(result.startPublishedDate).toBe("2024-03-01");
+    expect(result.endPublishedDate).toBe("2024-03-31");
+  });
+
+  it("returns empty object for unknown values", () => {
+    const result = freshnessToExaDates("invalid");
+    expect(result.startPublishedDate).toBeUndefined();
+    expect(result.endPublishedDate).toBeUndefined();
+  });
+});
+
+describe("exa resolveExaApiKey", () => {
+  it("returns undefined when no config or env key", () => {
+    const original = process.env.EXA_API_KEY;
+    delete process.env.EXA_API_KEY;
+    expect(resolveExaApiKey({})).toBeUndefined();
+    process.env.EXA_API_KEY = original;
+  });
+
+  it("prefers config apiKey over env var", () => {
+    const original = process.env.EXA_API_KEY;
+    process.env.EXA_API_KEY = "env-key";
+    expect(resolveExaApiKey({ apiKey: "config-key" })).toBe("config-key");
+    process.env.EXA_API_KEY = original;
+  });
+
+  it("falls back to EXA_API_KEY env var", () => {
+    const original = process.env.EXA_API_KEY;
+    process.env.EXA_API_KEY = "env-exa-key";
+    expect(resolveExaApiKey({})).toBe("env-exa-key");
+    process.env.EXA_API_KEY = original;
+  });
+
+  it("trims whitespace from config apiKey", () => {
+    expect(resolveExaApiKey({ apiKey: "  trimmed-key  " })).toBe("trimmed-key");
   });
 });
