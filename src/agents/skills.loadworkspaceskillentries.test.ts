@@ -175,4 +175,29 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
     },
   );
+
+  it("loads skills when description contains an unquoted colon", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const skillDir = path.join(workspaceDir, "skills", "colon-desc");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      `---
+name: colon-desc
+description: Use anime style IMPORTANT: Must be kawaii
+---
+
+# Colon description
+`,
+      "utf-8",
+    );
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    const skill = entries.find((entry) => entry.skill.name === "colon-desc");
+    expect(skill?.skill.description).toBe("Use anime style IMPORTANT: Must be kawaii");
+  });
 });
