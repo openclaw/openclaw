@@ -47,6 +47,7 @@ What has been implemented:
 - compatibility plugin-registry registration actions now route through `src/extension-host/plugin-registry-registrations.ts`
 - service startup, stop ordering, service-context creation, and failure logging now route through `src/extension-host/service-lifecycle.ts`
 - CLI duplicate detection, registrar invocation, and async failure logging now route through `src/extension-host/cli-lifecycle.ts`
+- gateway method-id aggregation, plugin diagnostic shaping, and extra-handler composition now route through `src/extension-host/gateway-methods.ts`
 - plugin SDK alias resolution now routes through `src/extension-host/loader-compat.ts`
 - loader alias-wired module loader creation now routes through `src/extension-host/loader-module-loader.ts`
 - loader cache key construction and registry cache control now route through `src/extension-host/loader-cache.ts`
@@ -102,6 +103,7 @@ How it has been implemented:
 - by extracting low-risk registry registration actions into a host-owned registry-registrations helper so the compatibility facade composes host-owned actions instead of implementing them inline
 - by extracting service startup, stop ordering, service-context creation, and failure logging into a host-owned service-lifecycle helper while `src/plugins/services.ts` remains the compatibility entry point
 - by extracting CLI duplicate detection, registrar invocation, and async failure logging into a host-owned CLI-lifecycle helper while `src/plugins/cli.ts` remains the compatibility entry point
+- by extracting gateway method-id aggregation, plugin diagnostic shaping, and extra-handler composition into a host-owned gateway-methods helper while request dispatch semantics remain in the gateway server code
 
 What remains pending:
 

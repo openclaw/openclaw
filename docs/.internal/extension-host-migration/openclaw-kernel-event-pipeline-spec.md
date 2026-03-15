@@ -67,11 +67,12 @@ Relevant prerequisite work that has landed:
 - compatibility plugin-registry registration actions now have a host-owned helper boundary in `src/extension-host/plugin-registry-registrations.ts`
 - service startup, stop ordering, service-context creation, and failure logging now have a host-owned helper boundary in `src/extension-host/service-lifecycle.ts`
 - CLI duplicate detection, registrar invocation, and async failure logging now have a host-owned helper boundary in `src/extension-host/cli-lifecycle.ts`
+- gateway method-id aggregation, plugin diagnostic shaping, and extra-handler composition now have a host-owned helper boundary in `src/extension-host/gateway-methods.ts`
 
 Why this matters for this spec:
 
 - event work should land on top of a host-owned boundary and normalized contribution model rather than on top of more plugin-era runtime seams
-- the current implementation has deliberately not started canonical bridge or stage work before those earlier boundaries were in place, including the first loader-runtime, record-state, discovery-policy, activation-policy, finalization-policy, low-risk registry-write, hook-compat, plugin-api, plugin-registry, plugin-registry-compat, plugin-registry-registrations, service-lifecycle, and CLI-lifecycle seams
+- the current implementation has deliberately not started canonical bridge or stage work before those earlier boundaries were in place, including the first loader-runtime, record-state, discovery-policy, activation-policy, finalization-policy, low-risk registry-write, hook-compat, plugin-api, plugin-registry, plugin-registry-compat, plugin-registry-registrations, service-lifecycle, CLI-lifecycle, and gateway-methods seams
 
 ## Design Goals
 
