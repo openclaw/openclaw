@@ -1,18 +1,20 @@
 ---
-summary: "Web search + fetch tools (Brave, Gemini, Grok, Kimi, and Perplexity providers)"
+summary: "Web search + fetch tools (Brave, Gemini, Grok, Kimi, Perplexity providers, and X search)"
 read_when:
-  - You want to enable web_search or web_fetch
+  - You want to enable web_search, web_fetch, or x_search
   - You need provider API key setup
   - You want to use Gemini with Google Search grounding
+  - You want to use xAI Grok for web search or X (formerly Twitter) search
 title: "Web Tools"
 ---
 
 # Web tools
 
-OpenClaw ships two lightweight web tools:
+OpenClaw ships three lightweight web tools:
 
 - `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
+- `x_search` — Search X (formerly Twitter) posts via xAI Grok.
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
 [Browser tool](/tools/browser).
@@ -20,6 +22,12 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 ## How it works
 
 - `web_search` calls your configured provider and returns results.
+  - **Brave** (default): returns structured results (title, URL, snippet).
+  - **Perplexity**: returns AI-synthesized answers with citations from real-time web search.
+  - **Gemini**: returns AI-synthesized answers grounded in Google Search with citations.
+  - **Grok**: returns AI-synthesized answers with citations via xAI's Grok model.
+  - **Kimi**: returns AI-synthesized answers with citations via Moonshot web search.
+- `x_search` queries X (formerly Twitter) posts via xAI Grok and returns AI-synthesized answers with citations.
 - Results are cached by query for 15 minutes (configurable).
 - `web_fetch` does a plain HTTP GET and extracts readable content
   (HTML → markdown/text). It does **not** execute JavaScript.
@@ -225,6 +233,31 @@ For a gateway install, put it in `~/.openclaw/.env`.
 - The default model (`gemini-2.5-flash`) is fast and cost-effective.
   Any Gemini model that supports grounding can be used.
 
+## Using Grok (xAI)
+
+Grok uses xAI's Responses API with the built-in `web_search` tool to return AI-synthesized answers with citations.
+
+### Setting up Grok search
+
+Set `XAI_API_KEY` in your environment, or configure the key directly:
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "grok",
+        grok: {
+          apiKey: "xai-...", // optional if XAI_API_KEY is set
+          model: "grok-4-1-fast", // default
+          inlineCitations: false, // embed citation links inline (default: false)
+        },
+      },
+    },
+  },
+}
+```
+
 ## web_search
 
 Search the web using your configured provider.
@@ -384,5 +417,36 @@ Notes:
 - `web_fetch` is best-effort extraction; some sites will need the browser tool.
 - See [Firecrawl](/tools/firecrawl) for key setup and service details.
 - Responses are cached (default 15 minutes) to reduce repeated fetches.
-- If you use tool profiles/allowlists, add `web_search`/`web_fetch` or `group:web`.
+- If you use tool profiles/allowlists, add `web_search`/`web_fetch`/`x_search` or `group:web`.
 - If the API key is missing, `web_search` returns a short setup hint with a docs link.
+
+## x_search
+
+Search X (formerly Twitter) posts using xAI Grok. Returns AI-synthesized answers with citations from real-time X post search.
+
+### x_search requirements
+
+- `XAI_API_KEY` or `tools.web.x_search.apiKey`
+
+### x_search config
+
+```json5
+{
+  tools: {
+    web: {
+      x_search: {
+        enabled: true,
+        apiKey: "xai-...", // optional if XAI_API_KEY is set
+        model: "grok-4-1-fast", // default
+        inlineCitations: false, // embed citation links inline (default: false)
+        timeoutSeconds: 30,
+        cacheTtlMinutes: 15,
+      },
+    },
+  },
+}
+```
+
+### x_search tool parameters
+
+- `query` (required)

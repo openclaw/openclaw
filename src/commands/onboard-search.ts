@@ -189,6 +189,186 @@ export type SetupSearchOptions = {
   secretInputMode?: SecretInputMode;
 };
 
+const DEFAULT_X_SEARCH_MODEL = "grok-4-1-fast-non-reasoning";
+
+const GROK_MODEL_OPTIONS = [
+  {
+    value: "grok-4-1-fast-non-reasoning",
+    label: "grok-4-1-fast-non-reasoning",
+    hint: "default · fast, no reasoning",
+  },
+  { value: "grok-4-1-fast", label: "grok-4-1-fast", hint: "fast with reasoning" },
+] as const;
+
+function hasXSearchKeyInEnv(): boolean {
+  return Boolean(process.env["XAI_API_KEY"]?.trim());
+}
+
+function resolveExistingXSearchKey(config: OpenClawConfig): string | undefined {
+  return normalizeSecretInputString(config.tools?.web?.x_search?.apiKey);
+}
+
+function hasExistingXSearchKey(config: OpenClawConfig): boolean {
+  return hasConfiguredSecretInput(config.tools?.web?.x_search?.apiKey);
+}
+
+function applyXSearchConfig(
+  config: OpenClawConfig,
+  opts: { enabled: boolean; apiKey?: SecretInput; model?: string },
+): OpenClawConfig {
+  const existing = config.tools?.web?.x_search ?? {};
+  return {
+    ...config,
+    tools: {
+      ...config.tools,
+      web: {
+        ...config.tools?.web,
+        x_search: {
+          ...existing,
+          enabled: opts.enabled,
+          ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
+          ...(opts.model ? { model: opts.model } : {}),
+        },
+      },
+    },
+  };
+}
+
+export async function setupXSearch(
+  config: OpenClawConfig,
+  _runtime: RuntimeEnv,
+  prompter: WizardPrompter,
+  opts?: SetupSearchOptions,
+): Promise<OpenClawConfig> {
+  const existingEnabled = config.tools?.web?.x_search?.enabled;
+  const existingKey = resolveExistingXSearchKey(config);
+  const keyConfigured = hasExistingXSearchKey(config);
+  const envAvailable = hasXSearchKeyInEnv();
+  const existingModel = config.tools?.web?.x_search?.model;
+
+  // If already explicitly disabled, leave it alone
+  if (existingEnabled === false) {
+    return config;
+  }
+
+  await prompter.note(
+    [
+      "x_search lets your agent search X (formerly Twitter) posts via xAI Grok.",
+      "Requires an xAI API key (XAI_API_KEY).",
+      "Docs: https://docs.openclaw.ai/tools/web",
+    ].join("\n"),
+    "X search",
+  );
+
+  type EnableChoice = "yes" | "skip";
+  const alreadyConfigured = keyConfigured || envAvailable;
+  const enableChoice = await prompter.select<EnableChoice>({
+    message: "Enable x_search with Grok?",
+    options: [
+      {
+        value: "yes" as const,
+        label: "Yes, enable x_search",
+        hint: alreadyConfigured ? "xAI key detected" : "requires XAI_API_KEY",
+      },
+      {
+        value: "skip" as const,
+        label: "Skip for now",
+        hint: "configure later with openclaw configure --section web",
+      },
+    ],
+    initialValue: alreadyConfigured ? "yes" : "skip",
+  });
+
+  if (enableChoice === "skip") {
+    return config;
+  }
+
+  // Model selection — always prompt so the user can choose regardless of quickstart/secret-ref mode
+  const defaultModel =
+    existingModel && GROK_MODEL_OPTIONS.some((m) => m.value === existingModel)
+      ? existingModel
+      : DEFAULT_X_SEARCH_MODEL;
+
+  const modelPick = await prompter.select<string>({
+    message: "Grok model for x_search",
+    options: [
+      ...GROK_MODEL_OPTIONS.map((m) => ({ ...m })),
+      { value: "__custom__", label: "Enter custom model name", hint: "" },
+    ],
+    initialValue: defaultModel,
+  });
+
+  let finalModel = modelPick === "__custom__" ? DEFAULT_X_SEARCH_MODEL : modelPick;
+  if (modelPick === "__custom__") {
+    const customModel = await prompter.text({
+      message: "Custom Grok model name",
+      placeholder: DEFAULT_X_SEARCH_MODEL,
+    });
+    finalModel = customModel?.trim() || DEFAULT_X_SEARCH_MODEL;
+  }
+
+  // Quickstart: key already available — skip key prompt
+  if (opts?.quickstartDefaults && alreadyConfigured) {
+    return applyXSearchConfig(config, {
+      enabled: true,
+      ...(existingKey ? { apiKey: existingKey } : {}),
+      model: finalModel,
+    });
+  }
+
+  // Secret-ref mode
+  const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret
+  if (useSecretRefMode) {
+    const ref: SecretRef = {
+      source: "env",
+      provider: DEFAULT_SECRET_PROVIDER_ALIAS,
+      id: "XAI_API_KEY",
+    };
+    if (!keyConfigured) {
+      await prompter.note(
+        [
+          "Secret references enabled — OpenClaw will store a reference instead of the API key.",
+          `Env var: XAI_API_KEY${envAvailable ? " (detected)" : ""}.`,
+          ...(envAvailable ? [] : ["Set XAI_API_KEY in the Gateway environment."]),
+        ].join("\n"),
+        "X search",
+      );
+    }
+    return applyXSearchConfig(config, { enabled: true, apiKey: ref, model: finalModel });
+  }
+
+  // Prompt for API key
+  const keyInput = await prompter.text({
+    message: keyConfigured
+      ? "xAI API key (leave blank to keep current)"
+      : envAvailable
+        ? "xAI API key (leave blank to use XAI_API_KEY env var)"
+        : "xAI API key",
+    placeholder: keyConfigured ? "Leave blank to keep current" : "xai-...",
+  });
+
+  const key = keyInput?.trim() ?? "";
+  const resolvedKey: SecretInput | undefined = key ? key : existingKey ? existingKey : undefined;
+
+  if (!resolvedKey && !envAvailable) {
+    await prompter.note(
+      [
+        "No API key stored — x_search won't work until XAI_API_KEY is available.",
+        "Get your key at: https://console.x.ai/",
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
+      "X search",
+    );
+    return config;
+  }
+
+  return applyXSearchConfig(config, {
+    enabled: true,
+    ...(resolvedKey ? { apiKey: resolvedKey } : {}),
+    model: finalModel,
+  });
+}
+
 export async function setupSearch(
   config: OpenClawConfig,
   _runtime: RuntimeEnv,
