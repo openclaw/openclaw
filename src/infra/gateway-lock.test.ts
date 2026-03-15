@@ -297,4 +297,30 @@ describe("gateway lock", () => {
     await expect(acquireForTest(env)).rejects.toBeInstanceOf(GatewayLockError);
     openSpy.mockRestore();
   });
+
+  it("writes port to lock file when provided", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const lock = await acquireForTest(env, { port: 18790 });
+    expect(lock).not.toBeNull();
+
+    const { lockPath } = resolveLockPath(env);
+    const raw = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    expect(raw.port).toBe(18790);
+
+    await lock?.release();
+  });
+
+  it("omits port from lock file when not provided", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const lock = await acquireForTest(env);
+    expect(lock).not.toBeNull();
+
+    const { lockPath } = resolveLockPath(env);
+    const raw = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    expect(raw.port).toBeUndefined();
+
+    await lock?.release();
+  });
 });

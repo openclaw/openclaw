@@ -17,6 +17,7 @@ type LockPayload = {
   createdAt: string;
   configPath: string;
   startTime?: number;
+  port?: number;
 };
 
 export type GatewayLockHandle = {
@@ -150,11 +151,13 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
       return null;
     }
     const startTime = typeof parsed.startTime === "number" ? parsed.startTime : undefined;
+    const port = typeof parsed.port === "number" ? parsed.port : undefined;
     return {
       pid: parsed.pid,
       createdAt: parsed.createdAt,
       configPath: parsed.configPath,
       startTime,
+      port,
     };
   } catch {
     return null;
@@ -204,6 +207,9 @@ export async function acquireGatewayLock(
       };
       if (typeof startTime === "number" && Number.isFinite(startTime)) {
         payload.startTime = startTime;
+      }
+      if (typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535) {
+        payload.port = port;
       }
       await handle.writeFile(JSON.stringify(payload), "utf8");
       return {
