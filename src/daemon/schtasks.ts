@@ -4,6 +4,7 @@ import path from "node:path";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports.js";
+import { relaunchGatewayScheduledTask } from "../infra/windows-task-restart.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
@@ -710,24 +711,38 @@ export async function restartScheduledTask({
     }
   }
   const taskName = resolveTaskName(effectiveEnv);
-  await execSchtasks(["/End", "/TN", taskName]);
   const restartPort = await resolveScheduledTaskPort(effectiveEnv);
+
+  // Perform all cleanup BEFORE spawning the restart script and stopping the
+  // task.  On Windows, `schtasks /End` terminates the current process
+  // immediately (the agent runs inside the scheduled task), so any code after
+  // that call is unreliable dead code in the common path.
   await terminateScheduledTaskGatewayListeners(effectiveEnv);
   await terminateInstalledStartupRuntime(effectiveEnv);
   if (restartPort) {
     const released = await waitForGatewayPortRelease(restartPort);
     if (!released) {
       await terminateBusyPortListeners(restartPort);
+      // Second check: confirm the port is actually free before the detached
+      // restart script fires `schtasks /Run`.  If it is still busy the script
+      // will start a gateway that cannot bind, and since `/Run` returns 0 the
+      // retry loop will not re-fire.
       const releasedAfterForce = await waitForGatewayPortRelease(restartPort, 2_000);
       if (!releasedAfterForce) {
         throw new Error(`gateway port ${restartPort} is still busy before restart`);
       }
     }
   }
-  const res = await execSchtasks(["/Run", "/TN", taskName]);
-  if (res.code !== 0) {
-    throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
+
+  // Spawn the detached restart script BEFORE calling `schtasks /End`.
+  // The script waits ~1 s then calls `schtasks /Run` with retries, allowing
+  // the task to be fully stopped before the relaunch attempt.
+  const attempt = relaunchGatewayScheduledTask(effectiveEnv);
+  if (!attempt.ok) {
+    throw new Error(`failed to prepare restart script: ${attempt.detail ?? "unknown error"}`);
   }
+
+  await execSchtasks(["/End", "/TN", taskName]);
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
   return { outcome: "completed" };
 }
