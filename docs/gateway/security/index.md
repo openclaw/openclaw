@@ -304,6 +304,7 @@ schema:
 - `channels.googlechat.dangerouslyAllowNameMatching`
 - `channels.googlechat.accounts.<accountId>.dangerouslyAllowNameMatching`
 - `channels.msteams.dangerouslyAllowNameMatching`
+- `channels.zalouser.dangerouslyAllowNameMatching` (extension channel)
 - `channels.irc.dangerouslyAllowNameMatching` (extension channel)
 - `channels.irc.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
 - `channels.mattermost.dangerouslyAllowNameMatching` (extension channel)

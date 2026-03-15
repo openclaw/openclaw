@@ -12,6 +12,7 @@ import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveNestedAgentLane } from "../../agents/lanes.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -617,6 +618,12 @@ export async function runCronIsolatedAgentTurn(params: {
             authProfileId,
             authProfileIdSource,
             thinkLevel,
+            fastMode: resolveFastModeState({
+              cfg: cfgWithAgentDefaults,
+              provider: providerOverride,
+              model: modelOverride,
+              sessionEntry: cronSession.sessionEntry,
+            }).enabled,
             verboseLevel: resolvedVerboseLevel,
             timeoutMs,
             bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,

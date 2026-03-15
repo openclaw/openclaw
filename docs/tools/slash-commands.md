@@ -14,7 +14,7 @@ The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 There are two related systems:
 
 - **Commands**: standalone `/...` messages.
-- **Directives**: `/think`, `/verbose`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue`.
+- **Directives**: `/think`, `/fast`, `/verbose`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue`.
   - Directives are stripped from the message before the model sees it.
   - In normal chat messages (not directive-only), they are treated as “inline hints” and do **not** persist session settings.
   - In directive-only messages (the message contains only directives), they persist to the session and reply with an acknowledgement.
@@ -76,6 +76,7 @@ Text + native (when enabled):
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
+- `/btw <question>` (ask an ephemeral side question about the current session without changing future session context; see [/tools/btw](/tools/btw))
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
 - `/session idle <duration|off>` (manage inactivity auto-unfocus for focused thread bindings)
@@ -102,6 +103,7 @@ Text + native (when enabled):
 - `/send on|off|inherit` (owner-only)
 - `/reset` or `/new [model]` (optional model hint; remainder is passed through)
 - `/think <off|minimal|low|medium|high|xhigh>` (dynamic choices by model/provider; aliases: `/thinking`, `/t`)
+- `/fast status|on|off` (omitting the arg shows the current effective fast-mode state)
 - `/verbose on|full|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; when on, sends a separate message prefixed `Reasoning:`; `stream` = Telegram draft only)
 - `/elevated on|off|ask|full` (alias: `/elev`; `full` skips exec approvals)
@@ -130,6 +132,7 @@ Notes:
 - Discord thread-binding commands (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`) require effective thread bindings to be enabled (`session.threadBindings.enabled` and/or `channels.discord.threadBindings.enabled`).
 - ACP command reference and runtime behavior: [ACP Agents](/tools/acp-agents).
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
+- `/fast on|off` persists a session override. Use the Sessions UI `inherit` option to clear it and fall back to config defaults.
 - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose` is `on` or `full`.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
 - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).
@@ -221,3 +224,27 @@ Notes:
 - **`/stop`** targets the active chat session so it can abort the current run.
 - **Slack:** `channels.slack.slashCommand` is still supported for a single `/openclaw`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`). Command argument menus for Slack are delivered as ephemeral Block Kit buttons.
   - Slack native exception: register `/agentstatus` (not `/status`) because Slack reserves `/status`. Text `/status` still works in Slack messages.
+
+## BTW side questions
+
+`/btw` is a quick **side question** about the current session.
+
+Unlike normal chat:
+
+- it uses the current session as background context,
+- it runs as a separate **tool-less** one-shot call,
+- it does not change future session context,
+- it is not written to transcript history,
+- it is delivered as a live side result instead of a normal assistant message.
+
+That makes `/btw` useful when you want a temporary clarification while the main
+task keeps going.
+
+Example:
+
+```text
+/btw what are we doing right now?
+```
+
+See [BTW Side Questions](/tools/btw) for the full behavior and client UX
+details.
