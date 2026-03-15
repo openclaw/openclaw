@@ -143,7 +143,7 @@ function createProviderSuccessPayload(
 ): Record<string, unknown>;
 function createProviderSuccessPayload(
   provider: "brave" | "duckduckgo" | "perplexity" | "grok" | "gemini" | "kimi",
-) {
+): string | Record<string, unknown> {
   if (provider === "brave") {
     return { web: { results: [] } };
   }
@@ -230,8 +230,8 @@ describe("web tools defaults", () => {
   it("supports duckduckgo without an API key", async () => {
     const mockFetch = installTextFetch(
       `
-        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com">Example</a>
-        <a class="result__snippet">Example snippet</a>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com">Example&apos;s result</a>
+        <a class="result__snippet">Example&apos;s snippet</a>
       `,
     );
     const tool = createProviderSearchTool("duckduckgo");
@@ -248,8 +248,33 @@ describe("web tools defaults", () => {
       result?.details as { results?: Array<Record<string, unknown>> } | undefined
     )?.results?.[0];
     expect(firstResult?.url).toBe("https://example.com");
-    expect(String(firstResult?.title ?? "")).toContain("Example");
-    expect(String(firstResult?.description ?? "")).toContain("Example snippet");
+    expect(String(firstResult?.title ?? "")).toContain("Example's result");
+    expect(String(firstResult?.description ?? "")).toContain("Example's snippet");
+  });
+
+  it("keeps duckduckgo snippets aligned to the matching result", async () => {
+    const mockFetch = installTextFetch(
+      `
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffirst.example">First result</a>
+        <div class="result__extras">No snippet here</div>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fsecond.example">Second result</a>
+        <a class="result__snippet">Second snippet</a>
+      `,
+    );
+    const tool = createProviderSearchTool("duckduckgo");
+
+    const result = await tool?.execute?.("call-duckduckgo-alignment", {
+      query: "duckduckgo test",
+    });
+
+    expect(mockFetch).toHaveBeenCalled();
+    const results = ((result?.details as { results?: Array<Record<string, unknown>> } | undefined)
+      ?.results ?? []) as Array<Record<string, unknown>>;
+    expect(results).toHaveLength(2);
+    expect(results[0]?.url).toBe("https://first.example");
+    expect(String(results[0]?.description ?? "")).toBe("");
+    expect(results[1]?.url).toBe("https://second.example");
+    expect(String(results[1]?.description ?? "")).toContain("Second snippet");
   });
 
   it("reuses the duckduckgo cache entry across unsupported filters", async () => {

@@ -610,7 +610,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   if (raw === "brave") {
     return "brave";
   }
-  if (raw === "duckduckgo" || raw === "ddg") {
+  if (raw === "duckduckgo") {
     return "duckduckgo";
   }
   if (raw === "gemini") {
@@ -1168,6 +1168,7 @@ function decodeHtmlEntities(text: string): string {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
     .replace(/&#039;/g, "'")
     .replace(/&#x27;/g, "'")
     .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
@@ -1195,15 +1196,15 @@ type DuckDuckGoResult = {
 
 function parseDuckDuckGoHtml(html: string): DuckDuckGoResult[] {
   const results: DuckDuckGoResult[] = [];
-  const resultLinkRegex = /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
-  const resultSnippetRegex = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
-  const links = [...html.matchAll(resultLinkRegex)];
-  const snippets = [...html.matchAll(resultSnippetRegex)];
+  const resultRegex =
+    /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>((?:(?!<a[^>]+class="result__a").)*)/gi;
 
-  for (let index = 0; index < links.length; index += 1) {
-    const rawUrl = links[index]?.[1] ?? "";
-    const rawTitle = links[index]?.[2] ?? "";
-    const rawSnippet = snippets[index]?.[1] ?? "";
+  for (const match of html.matchAll(resultRegex)) {
+    const rawUrl = match[1] ?? "";
+    const rawTitle = match[2] ?? "";
+    const trailingHtml = match[3] ?? "";
+    const rawSnippet =
+      /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i.exec(trailingHtml)?.[1] ?? "";
     const url = decodeDuckDuckGoUrl(decodeHtmlEntities(rawUrl));
     const title = decodeHtmlEntities(stripHtml(rawTitle));
     const snippet = decodeHtmlEntities(stripHtml(rawSnippet));
