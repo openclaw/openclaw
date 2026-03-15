@@ -52,6 +52,17 @@ export type HooksUpdateOptions = {
   dryRun?: boolean;
 };
 
+export function resolveHooksUpdateTargets(installs: Record<string, unknown>, id?: string, all?: boolean): {
+  targets: string[];
+  emptyAll: boolean;
+} {
+  if (all) {
+    const targets = Object.keys(installs);
+    return { targets, emptyAll: targets.length === 0 };
+  }
+  return { targets: id ? [id] : [], emptyAll: false };
+}
+
 function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntry[]): HookEntry[] {
   const merged = new Map<string, HookEntry>();
   for (const entry of pluginEntries) {
@@ -705,9 +716,13 @@ export function registerHooksCli(program: Command): void {
     .action(async (id: string | undefined, opts: HooksUpdateOptions) => {
       const cfg = loadConfig();
       const installs = cfg.hooks?.internal?.installs ?? {};
-      const targets = opts.all ? Object.keys(installs) : id ? [id] : [];
+      const { targets, emptyAll } = resolveHooksUpdateTargets(installs, id, opts.all);
 
       if (targets.length === 0) {
+        if (emptyAll) {
+          defaultRuntime.log("No npm-installed hooks to update.");
+          process.exit(0);
+        }
         defaultRuntime.error("Provide a hook id or use --all.");
         process.exit(1);
       }

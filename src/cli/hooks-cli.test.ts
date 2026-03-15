@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
-import { formatHooksCheck, formatHooksList } from "./hooks-cli.js";
+import { formatHooksCheck, formatHooksList, resolveHooksUpdateTargets } from "./hooks-cli.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 
 const report: HookStatusReport = {
@@ -68,5 +68,28 @@ describe("hooks cli formatting", () => {
 
     const output = formatHooksList(pluginReport, {});
     expect(output).toContain("plugin:voice-call");
+  });
+});
+
+describe("resolveHooksUpdateTargets", () => {
+  it("marks empty --all as a no-op instead of a usage error", () => {
+    expect(resolveHooksUpdateTargets({}, undefined, true)).toEqual({
+      targets: [],
+      emptyAll: true,
+    });
+  });
+
+  it("returns tracked installs when --all is set", () => {
+    expect(resolveHooksUpdateTargets({ alpha: {}, beta: {} }, undefined, true)).toEqual({
+      targets: ["alpha", "beta"],
+      emptyAll: false,
+    });
+  });
+
+  it("preserves explicit id behavior when --all is not set", () => {
+    expect(resolveHooksUpdateTargets({}, "hook-pack", false)).toEqual({
+      targets: ["hook-pack"],
+      emptyAll: false,
+    });
   });
 });
