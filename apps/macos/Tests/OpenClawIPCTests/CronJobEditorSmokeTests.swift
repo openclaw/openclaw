@@ -37,7 +37,7 @@ struct CronJobEditorSmokeTests {
             createdAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_000_000,
             schedule: .every(everyMs: 3_600_000, anchorMs: 1_700_000_000_000),
-            sessionTarget: .isolated,
+            sessionTargetRaw: CronSessionTarget.isolated.rawValue,
             wakeMode: .nextHeartbeat,
             payload: .agentTurn(
                 message: "Summarize the last day",
