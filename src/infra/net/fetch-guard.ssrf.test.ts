@@ -292,3 +292,46 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
   });
 });
+
+describe("trusted_env_proxy + policy enforcement", () => {
+  type LookupFn = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
+
+  it("enforces policy blocklist even when trusted proxy mode is active", async () => {
+    const blockedHostname = "internal.corp.example.com";
+    let policyChecked = false;
+
+    const mockLookup: LookupFn = async (hostname) => {
+      if (hostname === blockedHostname) {
+        policyChecked = true;
+      }
+      return [{ address: "10.0.0.1", family: 4 }];
+    };
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://internal.corp.example.com/data",
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+        policy: { hostnameBlocklist: [blockedHostname] },
+        lookupFn: mockLookup,
+      }),
+    ).rejects.toThrow(/blocked|policy/i);
+
+    expect(policyChecked).toBe(true);
+  });
+
+  it("allows fetch when trusted proxy mode is active and policy passes", async () => {
+    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+    const mockLookup: LookupFn = async () => [{ address: "1.2.3.4", family: 4 }];
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://cdn.example.com/file.zip",
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      policy: { hostnameAllowlist: ["cdn.example.com"] },
+      lookupFn: mockLookup,
+      fetchImpl,
+    });
+    await result.release();
+
+    expect(result.response.status).toBe(200);
+  });
+});

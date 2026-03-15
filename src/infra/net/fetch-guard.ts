@@ -193,6 +193,16 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
       if (canUseTrustedEnvProxy) {
         dispatcher = new EnvHttpProxyAgent();
+        // Still enforce policy checks even in trusted proxy mode — callers like
+        // Slack file upload combine trusted_env_proxy with an explicit SSRF
+        // allowlist and expect the allow/block rules to be evaluated.
+        if (params.policy) {
+          await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+            lookupFn: params.lookupFn,
+            policy: params.policy,
+          });
+          // Discard pinned result — routing is handled by the proxy dispatcher.
+        }
       } else if (params.pinDns !== false) {
         const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
