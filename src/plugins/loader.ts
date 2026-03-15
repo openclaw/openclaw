@@ -309,6 +309,7 @@ function createPluginRecord(params: {
     cliCommands: [],
     services: [],
     commands: [],
+    searchProviderIds: [],
     httpRoutes: 0,
     hookCount: 0,
     configSchema: params.configSchema,

@@ -234,6 +234,52 @@ export type ProviderPlugin = {
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
+/**
+ * A plugin-provided web search backend. Registered via `api.registerSearchProvider()`.
+ * The built-in `web_search` tool will delegate to the first matching plugin provider
+ * when `tools.web.search.provider` matches the provider id.
+ */
+export type SearchProviderPlugin = {
+  /** Unique provider id used in config, e.g. "searxng" or "tavily". */
+  id: string;
+  /** Human-readable name shown in logs and tool descriptions. */
+  name: string;
+  /** Tool description override for the LLM (what the search tool does). */
+  description?: string;
+  /**
+   * Execute a search query. Must return normalized results.
+   * Throwing an error will surface it to the agent as a tool error.
+   */
+  search: (params: SearchProviderRequest) => Promise<SearchProviderResult>;
+  /**
+   * Optional auto-detection: return true if this provider is available
+   * (e.g. required env vars or config keys are set). Used when no
+   * explicit provider is configured and the system tries each in turn.
+   */
+  isAvailable?: (config?: OpenClawConfig) => boolean;
+};
+
+export type SearchProviderRequest = {
+  query: string;
+  maxResults?: number;
+  timeoutMs?: number;
+  config?: OpenClawConfig;
+};
+
+export type SearchProviderResult = {
+  /** Web result entries. */
+  results?: Array<{
+    title: string;
+    url: string;
+    description?: string;
+    published?: string;
+  }>;
+  /** AI-synthesized answer (for LLM-backed providers like Perplexity). */
+  content?: string;
+  /** Citation URLs or objects. */
+  citations?: Array<string | { url: string; title?: string }>;
+};
+
 export type OpenClawPluginGatewayMethod = {
   method: string;
   handler: GatewayRequestHandler;
@@ -388,6 +434,8 @@ export type OpenClawPluginApi = {
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
   registerProvider: (provider: ProviderPlugin) => void;
+  /** Register a custom web search backend (SearXNG, Tavily, etc.). */
+  registerSearchProvider: (provider: SearchProviderPlugin) => void;
   /**
    * Register a custom command that bypasses the LLM agent.
    * Plugin commands are processed before built-in commands and before agent invocation.

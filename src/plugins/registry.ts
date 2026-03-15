@@ -42,6 +42,7 @@ import type {
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
+  SearchProviderPlugin,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -100,6 +101,12 @@ export type PluginCommandRegistration = {
   source: string;
 };
 
+export type PluginSearchProviderRegistration = {
+  pluginId: string;
+  provider: SearchProviderPlugin;
+  source: string;
+};
+
 export type PluginRecord = {
   id: string;
   name: string;
@@ -120,6 +127,7 @@ export type PluginRecord = {
   cliCommands: string[];
   services: string[];
   commands: string[];
+  searchProviderIds: string[];
   httpRoutes: number;
   hookCount: number;
   configSchema: boolean;
@@ -139,6 +147,7 @@ export type PluginRegistry = {
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
   commands: PluginCommandRegistration[];
+  searchProviders: PluginSearchProviderRegistration[];
   diagnostics: PluginDiagnostic[];
 };
 
@@ -179,6 +188,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     cliRegistrars: [],
     services: [],
     commands: [],
+    searchProviders: [],
     diagnostics: [],
   };
 }
@@ -527,6 +537,47 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  // Built-in search provider IDs that plugins must not shadow.
+  const BUILTIN_SEARCH_PROVIDER_IDS = new Set(["brave", "gemini", "grok", "kimi", "perplexity"]);
+
+  const registerSearchProvider = (record: PluginRecord, provider: SearchProviderPlugin) => {
+    const id = typeof provider?.id === "string" ? provider.id.trim().toLowerCase() : "";
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "search provider registration missing id",
+      });
+      return;
+    }
+    if (BUILTIN_SEARCH_PROVIDER_IDS.has(id)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `search provider id "${id}" conflicts with a built-in provider`,
+      });
+      return;
+    }
+    const existing = registry.searchProviders.find((entry) => entry.provider.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `search provider already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    record.searchProviderIds.push(id);
+    registry.searchProviders.push({
+      pluginId: record.id,
+      provider: { ...provider, id },
+      source: record.source,
+    });
+  };
+
   const registerTypedHook = <K extends PluginHookName>(
     record: PluginRecord,
     hookName: K,
@@ -607,6 +658,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerHttpRoute: (params) => registerHttpRoute(record, params),
       registerChannel: (registration) => registerChannel(record, registration),
       registerProvider: (provider) => registerProvider(record, provider),
+      registerSearchProvider: (provider) => registerSearchProvider(record, provider),
       registerGatewayMethod: (method, handler) => registerGatewayMethod(record, method, handler),
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       registerService: (service) => registerService(record, service),
@@ -625,6 +677,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool,
     registerChannel,
     registerProvider,
+    registerSearchProvider,
     registerGatewayMethod,
     registerCli,
     registerService,
