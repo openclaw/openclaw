@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **OpenClaw Claude Code** — Control Claude Code from Slack to analyze, plan, and execute coding tasks remotely. Supports read-only planning, full execution, and multi-agent parallel collaboration.
+  npm: `openclaw-claude-code`
+  repo: `https://github.com/Phoenizard/openclaw-claude-code`
+  install: `openclaw plugins install openclaw-claude-code`
