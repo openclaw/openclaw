@@ -228,9 +228,11 @@ export function handleMessageUpdate(
         : cleanedText;
       const previousEventText = ctx.state.lastStreamedAssistantEventText ?? "";
       const transformedDelta =
-        transformedText && previousEventText && transformedText.startsWith(previousEventText)
-          ? transformedText.slice(previousEventText.length)
-          : transformedText;
+        transformedText && !previousEventText
+          ? transformedText
+          : transformedText && previousEventText && transformedText.startsWith(previousEventText)
+            ? transformedText.slice(previousEventText.length)
+            : undefined;
       ctx.state.lastStreamedAssistantEventText = transformedText;
       emitAgentEvent({
         runId: ctx.params.runId,

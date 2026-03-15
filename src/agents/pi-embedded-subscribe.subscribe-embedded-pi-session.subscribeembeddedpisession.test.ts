@@ -313,6 +313,32 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads[1]?.delta).toBe(" answer");
   });
 
+  it("omits delta for non-prefix transformed assistant snapshots", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness({
+      hookRunner: {
+        runOutboundTransforms: (text: string) => `[${text.length}] ${text}`,
+      },
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "a" },
+    });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "b" },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads[0]?.text).toBe("[1] a");
+    expect(payloads[0]?.delta).toBe("[1] a");
+    expect(payloads[1]?.text).toBe("[2] ab");
+    expect(payloads[1]?.delta).toBeUndefined();
+  });
+
   it("emits agent events on message_end for non-streaming assistant text", () => {
     const { session, emit } = createStubSessionHarness();
 
