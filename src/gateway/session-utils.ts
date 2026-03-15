@@ -916,23 +916,36 @@ export function listSessionsFromStore(params: {
       const id = parsed?.id;
       const origin = entry?.origin;
       const originLabel = origin?.label;
-      const displayName =
-        entry?.displayName ??
-        (channel
-          ? buildGroupDisplayName({
-              provider: channel,
-              subject,
-              groupChannel,
-              space,
-              id,
-              key,
-            })
-          : undefined) ??
-        entry?.label ??
-        originLabel;
-      const deliveryFields = normalizeSessionDeliveryFields(entry);
+
+      // Check if this is a main session - main sessions should have a stable display name
+      // to avoid showing transient internal labels like "heartbeat" from the origin.
+      // Use resolveAgentMainSessionKey to handle custom mainKey configurations.
+      // Also handle global scope main session.
       const parsedAgent = parseAgentSessionKey(key);
       const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
+      const agentMainKey = resolveAgentMainSessionKey({ cfg, agentId: sessionAgentId });
+      const globalMainKey = resolveMainSessionKey(cfg);
+      const isMainSession = key === agentMainKey || key === globalMainKey;
+
+      // For main sessions: preserve user-set displayName, otherwise use stable default
+      // This prevents transient originLabel (like "heartbeat") from appearing while
+      // still respecting explicit user renaming.
+      const displayName = isMainSession
+        ? (entry?.displayName ?? "Main Session")
+        : (entry?.displayName ??
+          (channel
+            ? buildGroupDisplayName({
+                provider: channel,
+                subject,
+                groupChannel,
+                space,
+                id,
+                key,
+              })
+            : undefined) ??
+          entry?.label ??
+          originLabel);
+      const deliveryFields = normalizeSessionDeliveryFields(entry);
       const resolvedModel = resolveSessionModelIdentityRef(cfg, entry, sessionAgentId);
       const modelProvider = resolvedModel.provider;
       const model = resolvedModel.model ?? DEFAULT_MODEL;
