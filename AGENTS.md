@@ -50,12 +50,12 @@
 - Access: stable path is `ssh exe.dev` then `ssh vm-name` (assume SSH key already set).
 - SSH flaky: use exe.dev web terminal or Shelley (web agent); keep a tmux session for long ops.
 - Update: `sudo npm i -g openclaw@latest` (global install needs root on `/usr/lib/node_modules`).
-- Config: use `openclaw config set ...`; ensure `gateway.mode=local` is set. Ollama configs live in `config/ollama/`.
+- Config: use `openclaw config set ...`; ensure `gateway.mode=local` is set. vLLM config lives in `config/openclaw_config.json`.
 - Discord: store raw token only (no `DISCORD_BOT_TOKEN=` prefix).
 - Restart: stop old gateway and run:
   `pkill -9 -f openclaw-gateway || true; nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
 - Verify: `openclaw channels status --probe`, `ss -ltnp | rg 18789`, `tail -n 120 /tmp/openclaw-gateway.log`.
-- Setup: scripts for WSL and Ollama are in `scripts/` (e.g., `scripts/setup_ollama.ps1`).
+- Setup: scripts for WSL and vLLM are in `scripts/` (e.g., `scripts/download_models.py`).
 
 ## Build, Test, and Development Commands
 

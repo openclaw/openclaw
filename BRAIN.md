@@ -1,7 +1,13 @@
 # BRAIN (Live Working Memory)
-- Current Context: Post-Restructuring Stabilization & Documentation Sweep
+- Current Context: Post-vLLM Migration — Code Cleanup & Documentation
 - Active Tasks: 
-  - Validating cross-repository paths (`D:\Dmarket_bot`)
-  - Finalizing significance report for core documentation
-  - VRAM optimization monitoring (RTX 5060 Ti)
-- Recent Changes: Completed global file migration, path separation, and manifest updates.
+  - vLLM (WSL2) serving 4 AWQ models via HTTP API
+  - Per-role temperature control active
+  - Background health monitor (30s) with auto-restart
+  - Prefix caching enabled for faster repeated inference
+- Recent Changes: Migrated Ollama → vLLM, upgraded all models to 14B AWQ, cleaned stale references, updated CHANGELOG.
+- Models:
+  - Qwen/Qwen2.5-14B-Instruct-AWQ (General/Planning)
+  - casperhansen/deepseek-r1-distill-qwen-14b-awq (Analytical/Reasoning)
+  - Qwen/Qwen2.5-Coder-7B-Instruct-AWQ (Coding)
+  - pytorch/gemma-3-12b-it-AWQ-INT4 (Archivist/Summary)

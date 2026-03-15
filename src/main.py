@@ -14,6 +14,7 @@ import structlog
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import (
+    BotCommand,
     CallbackQuery,
     ForceReply,
     InlineKeyboardButton,
@@ -27,7 +28,6 @@ from watchdog.observers import Observer
 from src.archivist_telegram import TelegramArchivist
 from src.memory_gc import MemoryGarbageCollector
 from src.pipeline_executor import PipelineExecutor
-from src.risk_manager import RiskManager
 
 # Prometheus metrics
 PROMPT_COUNTER = Counter("openclaw_prompts_total", "Total prompts received")
@@ -110,13 +110,24 @@ class OpenClawGateway:
 
         self.bot_token = self.config["system"]["telegram"]["bot_token"]
         self.admin_id = int(self.config["system"]["telegram"]["admin_chat_id"])
-        self.ollama_url = self.config["system"].get("ollama_url", "http://192.168.0.212:11434")
+        self.vllm_url = self.config["system"].get("vllm_base_url", "http://localhost:8000/v1")
+
+        # Initialize vLLM model manager for dynamic model swapping
+        from src.vllm_manager import VLLMModelManager
+        vllm_cfg = self.config["system"]
+        self.vllm_manager = VLLMModelManager(
+            port=vllm_cfg.get("vllm_port", 8000),
+            gpu_memory_utilization=vllm_cfg.get("vllm_gpu_memory_utilization", 0.90),
+            max_model_len=vllm_cfg.get("vllm_max_model_len", 8192),
+            quantization=vllm_cfg.get("vllm_quantization"),
+            vllm_extra_args=vllm_cfg.get("vllm_extra_args"),
+        )
 
         self.bot = Bot(token=self.bot_token)
         self.dp = Dispatcher()
         self.archivist = TelegramArchivist(self.bot_token, str(self.admin_id))
-        self.pipeline = PipelineExecutor(self.config, self.ollama_url)
-        self.memory_gc = MemoryGarbageCollector(self.ollama_url)
+        self.pipeline = PipelineExecutor(self.config, self.vllm_url, self.vllm_manager)
+        self.memory_gc = MemoryGarbageCollector(self.vllm_url)
         self._intent_cache: dict = {}  # Simple cache for intent classification
         self.processed_task_hashes = set()
 
@@ -129,15 +140,16 @@ class OpenClawGateway:
         )
         self._observer.start()
 
-        # Start Prometheus metrics server on port 8000
+        # Start Prometheus metrics server on port 9090 (8000 is reserved for vLLM)
         try:
-            start_http_server(8000)
-            logger.info("Prometheus metrics server started on port 8000")
+            start_http_server(9090)
+            logger.info("Prometheus metrics server started on port 9090")
         except Exception as e:
             logger.error(f"Failed to start Prometheus server: {e}")
 
         # Register Handlers
         self.dp.message.register(self.cmd_start, Command("start"))
+        self.dp.message.register(self.cmd_help, Command("help"))
         self.dp.message.register(self.cmd_status, Command("status"))
         self.dp.message.register(self.cmd_models, Command("models"))
         self.dp.message.register(self.cmd_test, Command("test"))
@@ -165,7 +177,7 @@ class OpenClawGateway:
                 await asyncio.sleep(86400)
                 logger.info("Triggering scheduled Memory GC compression...")
                 from src.memory_gc import MemoryGarbageCollector
-                gc = MemoryGarbageCollector(self.ollama_url)
+                gc = MemoryGarbageCollector(self.vllm_url)
                 
                 # Logic: Find stale conversation artifacts and zip/summarize them
                 # We can also append the persistent summary to Cold_Memory.md
@@ -265,6 +277,23 @@ class OpenClawGateway:
             return
         await message.reply("⚠️ Неизвестная команда. Если это кнопка из меню, убедитесь, что она реализована.")
 
+    async def cmd_help(self, message: Message):
+        if message.from_user.id != self.admin_id:
+            await message.reply("⛔ Access Denied.")
+            return
+        help_text = (
+            "🦞 *OpenClaw — Список команд:*\n\n"
+            "/start — Главное меню с кнопками\n"
+            "/help — Эта справка\n"
+            "/status — Статус системы (vLLM, GPU, бригады)\n"
+            "/models — Список моделей по бригадам\n"
+            "/test — Запустить VRAM-тест\n"
+            "/test_all_models — Тест всех 20 ролей (10-20 мин)\n\n"
+            "💬 *Текстовый запрос* — автоматически маршрутизируется\n"
+            "в бригаду Dmarket или OpenClaw через Intent Classifier."
+        )
+        await message.reply(help_text, parse_mode="Markdown")
+
     async def cmd_start(self, message: Message):
         if message.from_user.id != self.admin_id:
             await message.reply("⛔ Access Denied. Locked to Admin.")
@@ -279,8 +308,8 @@ class OpenClawGateway:
         await message.reply(
             "🦞 *OpenClaw v2026: Dual-Brigade Online*\n\n"
             f"🛠️ GPU: {self.config['system']['hardware']['target_gpu']}\n"
-            f"🧠 Триада: deepseek-r1:14b / qwen2.5-coder:14b / gemma3:12b\n"
-            f"📡 Ollama: `{self.ollama_url}`\n\n"
+            f"🧠 Модели: Llama-3.1-8B / DeepSeek-R1-8B / Gemma-3-12B / Qwen2.5-Coder-7B\n"
+            f"📡 vLLM: `{self.vllm_url}`\n\n"
             "Выбери нужный раздел меню ниже или отправь задачу текстом для роутинга в бригаду.",
             parse_mode="Markdown",
             reply_markup=keyboard
@@ -290,20 +319,21 @@ class OpenClawGateway:
         if message.from_user.id != self.admin_id:
             return
 
-        # Check Ollama connectivity
+        # Check vLLM connectivity
         import aiohttp
 
-        ollama_status = "❌ Недоступен"
-        model_count = 0
+        vllm_status = "❌ Недоступен"
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{self.ollama_url}/api/tags", timeout=aiohttp.ClientTimeout(total=5)
+                    f"{self.vllm_url}/models", timeout=aiohttp.ClientTimeout(total=5)
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        model_count = len(data.get("models", []))
-                        ollama_status = f"✅ Online ({model_count} моделей)"
+                        model_count = len(data.get("data", []))
+                        vllm_status = f"✅ Online ({model_count} моделей)"
+                    else:
+                        vllm_status = f"⚠️ HTTP {resp.status}"
         except Exception:
             pass
 
@@ -314,8 +344,8 @@ class OpenClawGateway:
             f"🛠️ *System Status:*\n\n"
             f"📦 Framework: `{self.config['system']['framework']}` v{self.config['system']['version']}\n"
             f"🎮 GPU: `{self.config['system']['hardware']['target_gpu']}`\n"
-            f"💾 VRAM: {self.config['system']['hardware']['vram_limit_gb']}GB (max 1 модель)\n"
-            f"📡 Ollama: `{self.ollama_url}` — {ollama_status}\n"
+            f"💾 VRAM: {self.config['system']['hardware']['vram_limit_gb']}GB\n"
+            f"📡 vLLM: `{self.vllm_url}` — {vllm_status}\n"
             f"🏴 Бригады: Dmarket + OpenClaw ({total_roles} ролей)\n"
             f"🧠 Inference: {self.config['system']['hardware']['inference_engine']}"
         )
@@ -341,9 +371,8 @@ class OpenClawGateway:
         except Exception as e:
             logger.error(f"Failed to reload config: {e}")
 
-    def get_ollama_models(self) -> list:
-        # This method was not fully provided in the diff, assuming it's meant to be empty or placeholder.
-        # If it was intended to have content, it needs to be provided.
+    def get_nim_models(self) -> list:
+        # Placeholder: returns empty list (models fetched at runtime via NGC API)
         return []
 
     async def cmd_models(self, message: Message, from_callback: bool = False):
@@ -432,21 +461,21 @@ class OpenClawGateway:
                     {"role": "user", "content": "Привет, проверка связи!"},
                 ],
                 "stream": False,
-                "keep_alive": 0,
+                "max_tokens": 128,
             }
+            headers = {}
             try:
-                # Set a moderate timeout in case a model isn't pulled or is failing
-                timeout = aiohttp.ClientTimeout(total=45)
+                timeout = aiohttp.ClientTimeout(total=30)
                 async with session.post(
-                    f"{self.ollama_url}/api/chat", json=payload, timeout=timeout
+                    f"{self.vllm_url}/chat/completions", json=payload, timeout=timeout
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        return data["message"]["content"].strip().replace("\n", " ")
+                        return data["choices"][0]["message"]["content"].strip().replace("\n", " ")
                     else:
-                        return f"⚠️ Ошибка API ({resp.status})"
+                        return f"⚠️ Ошибка vLLM ({resp.status})"
             except Exception as e:
-                return f"❌ Timeout/Error: Модель не загружена"
+                return f"❌ Error: {e}"
 
         async with aiohttp.ClientSession() as session:
             for brigade_name, brigade_info in self.config["brigades"].items():
@@ -458,7 +487,7 @@ class OpenClawGateway:
                     model_name = data.get("model")
 
                     # Update status slightly
-                    await self.archivist.send_status(role, model_name, "Пингую Ollama API...")
+                    await self.archivist.send_status(role, model_name, "Пингую vLLM...")
 
                     response_text = await fetch_hello(session, role, model_name, sys_prompt)
                     final_report += f"• `{role}`: {response_text}\n"
@@ -472,12 +501,12 @@ class OpenClawGateway:
         )
 
     async def handle_photo(self, message: Message):
-        """Handle image inputs via LLaVA model."""
+        """Handle image inputs via vLLM vision model."""
         if message.from_user.id != self.admin_id:
             return
 
         PROMPT_COUNTER.inc()
-        status_msg = await message.reply("🖼️ Анализирую изображение через LLaVA...")
+        status_msg = await message.reply("🖼️ Анализирую изображение через vLLM Vision...")
 
         try:
             photo = message.photo[-1]
@@ -489,39 +518,58 @@ class OpenClawGateway:
 
             import aiohttp
 
+            vision_model = "meta-llama/Llama-3.2-11B-Vision-Instruct"
+
+            # Ensure vision model is loaded
+            if self.vllm_manager:
+                await self.vllm_manager.ensure_model_loaded(vision_model)
+
             payload = {
-                "model": "llava",
-                "prompt": prompt,
-                "images": [base64_img],
+                "model": vision_model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}},
+                        ],
+                    }
+                ],
                 "stream": False,
-                "keep_alive": 0,
+                "max_tokens": 1024,
             }
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{self.ollama_url}/api/generate", json=payload, timeout=60
+                    f"{self.vllm_url}/chat/completions", json=payload, timeout=60
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
+                        content = data["choices"][0]["message"]["content"].strip()
                         await status_msg.edit_text(
-                            f"🖼️ *Анализ LLaVA:*\n\n{data.get('response', '')}",
+                            f"🖼️ *Анализ Vision:*\n\n{content}",
                             parse_mode="Markdown",
                         )
                     else:
-                        await status_msg.edit_text(f"⚠️ Ошибка LLaVA API ({resp.status})")
+                        await status_msg.edit_text(f"⚠️ Ошибка vLLM Vision ({resp.status})")
         except Exception as e:
             await status_msg.edit_text(f"❌ Ошибка обработки фото: {e}")
 
     async def classify_intent(self, prompt: str) -> str:
         """
         LLM-based intent classification.
-        Uses gemma3:12b for fast and accurate routing.
-        Falls back to keyword matching if Ollama is unavailable.
+        Uses model from config (model_router.risk_analysis) for routing.
+        Falls back to keyword matching if vLLM is unavailable.
         """
-        # Check cache first
+        # Check cache first (capped at 500 entries to prevent memory leak)
         cache_key = prompt.lower().strip()[:100]
         if cache_key in self._intent_cache:
             return self._intent_cache[cache_key]
+        if len(self._intent_cache) >= 500:
+            # evict oldest half
+            keys_to_drop = list(self._intent_cache.keys())[:250]
+            for k in keys_to_drop:
+                del self._intent_cache[k]
 
         # Keyword fallback (always available)
         dmarket_keywords = [
@@ -552,6 +600,19 @@ class OpenClawGateway:
         # Try LLM-based classification
         import aiohttp
 
+        # Use model from config; fall back to first available role model
+        classify_model = (
+            self.config.get("system", {}).get("model_router", {}).get("risk_analysis")
+            or next(
+                (
+                    d["model"]
+                    for brigade in self.config.get("brigades", {}).values()
+                    for d in brigade.get("roles", {}).values()
+                ),
+                "llama3.2",
+            )
+        )
+
         try:
             brigades = list(self.config.get("brigades", {}).keys())
             classify_prompt = (
@@ -562,20 +623,19 @@ class OpenClawGateway:
                 f"Reply with ONLY the brigade name, nothing else."
             )
             payload = {
-                "model": "gemma3:12b",
-                "prompt": classify_prompt,
+                "model": classify_model,
+                "messages": [{"role": "user", "content": classify_prompt}],
                 "stream": False,
-                "keep_alive": 0,
-                "options": {"num_ctx": 1024, "temperature": 0.1},
+                "max_tokens": 16,
             }
             async with aiohttp.ClientSession() as session:
                 timeout = aiohttp.ClientTimeout(total=10)
                 async with session.post(
-                    f"{self.ollama_url}/api/generate", json=payload, timeout=timeout
+                    f"{self.vllm_url}/chat/completions", json=payload, timeout=timeout
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        result = data.get("response", "").strip()
+                        result = data["choices"][0]["message"]["content"].strip()
                         # Validate response is a known brigade
                         for b in brigades:
                             if b.lower() in result.lower():
@@ -598,6 +658,16 @@ class OpenClawGateway:
         PROMPT_COUNTER.inc()
         prompt = message.text
         logger.info("received_prompt", prompt=prompt)
+        try:
+            await self._handle_prompt_inner(message, prompt)
+        except Exception as exc:
+            logger.error("handle_prompt unhandled error", error=str(exc), exc_info=True)
+            try:
+                await message.reply(f"❌ Внутренняя ошибка бота: {exc}")
+            except Exception:
+                pass
+
+    async def _handle_prompt_inner(self, message: Message, prompt: str):
 
         # Check if it's a reply to ask_user
         is_reply = False
@@ -628,8 +698,9 @@ class OpenClawGateway:
         if not is_reply:
             brigade = await self.classify_intent(prompt)
 
+        _b = self.archivist.escape_markdown(brigade)
         status_msg = await message.reply(
-            f"🤖 *Pipeline ({brigade})* запущен\\.\\.\\.\n_Маршрутизация задачи в бригаду\\.\\.\\._",
+            f"🤖 *Pipeline \\({_b}\\)* запущен\\.\\.\\.\n_Маршрутизация задачи в бригаду\\.\\.\\._",
             parse_mode="MarkdownV2",
         )
 
@@ -640,11 +711,12 @@ class OpenClawGateway:
         # 2. Execute Pipeline (Chain-of-Agents)
         async def update_status(role, model, text):
             try:
+                b = self.archivist.escape_markdown(brigade)
                 r = self.archivist.escape_markdown(role)
                 m = self.archivist.escape_markdown(model)
                 t = self.archivist.escape_markdown(text)
                 await status_msg.edit_text(
-                    f"🏴 *{brigade}* | ⚙️ `{r}` (`{m}`)\n_{t}_", parse_mode="MarkdownV2"
+                    f"🏴 *{b}* \\| ⚙️ `{r}` \\(`{m}`\\)\n_{t}_", parse_mode="MarkdownV2"
                 )
             except Exception:
                 pass  # Telegram rate limit on edits
@@ -721,7 +793,7 @@ class OpenClawGateway:
 
     async def run(self):
         logger.info("Starting OpenClaw Gateway...")
-        logger.info("Ollama URL", ollama_url=self.ollama_url)
+        logger.info("vLLM URL", vllm_url=self.vllm_url)
         logger.info("Admin ID", admin_id=self.admin_id)
 
         # Start background tasks
@@ -731,6 +803,23 @@ class OpenClawGateway:
         self._bg_tasks.add(poll_task)
         memory_task.add_done_callback(self._bg_tasks.discard)
         poll_task.add_done_callback(self._bg_tasks.discard)
+
+        # Start vLLM health monitoring
+        self.vllm_manager.start_health_monitor()
+
+        # Start Brigade REST API (FastAPI / uvicorn) so the TypeScript
+        # OpenClaw gateway can call brigade pipelines via HTTP.
+        brigade_port = int(os.environ.get("BRIGADE_API_PORT", "8765"))
+        try:
+            from src.brigade_api import run_brigade_api
+            brigade_task = asyncio.create_task(
+                run_brigade_api(self.config, self.vllm_url, self.vllm_manager, port=brigade_port)
+            )
+            self._bg_tasks.add(brigade_task)
+            brigade_task.add_done_callback(self._bg_tasks.discard)
+            logger.info("Brigade API started", port=brigade_port, url=f"http://127.0.0.1:{brigade_port}/brigade/docs")
+        except Exception as e:
+            logger.error("Brigade API failed to start", error=str(e))
 
         # Support ENV vars from start_wsl.sh
         use_webhook_env = os.environ.get("USE_WEBHOOK")
@@ -766,6 +855,16 @@ class OpenClawGateway:
             else:
                 logger.info("starting_polling")
                 await self.bot.delete_webhook(drop_pending_updates=True)
+                # Register bot commands in Telegram menu ("Меню" button)
+                await self.bot.set_my_commands([
+                    BotCommand(command="start", description="Главное меню"),
+                    BotCommand(command="help", description="Список всех команд"),
+                    BotCommand(command="status", description="Статус системы"),
+                    BotCommand(command="models", description="Список моделей"),
+                    BotCommand(command="test", description="VRAM тест"),
+                    BotCommand(command="test_all_models", description="Тест всех 20 ролей"),
+                ])
+                logger.info("Bot commands registered in Telegram menu")
                 await self.dp.start_polling(self.bot)
         except Exception as e:
             logger.error("startup_failed", error=str(e))

@@ -45,7 +45,8 @@ class TelegramArchivist:
         r = self.escape_markdown(agent_role)
         m = self.escape_markdown(model_name)
         s = self.escape_markdown(status)
-        message = f"🤖 *{r}* (`{m}`) is currently:\n_{s}_\\.\\.\\."
+        # Literal ( ) around a code span must be escaped in MarkdownV2
+        message = f"🤖 *{r}* \\(`{m}`\\) is currently:\n_{s}_\\.\\.\\."
         await self._send_to_telegram(message)
 
     async def send_summary(self, title: str, summary_text: str):

@@ -15,7 +15,7 @@ class OpenClawMCPClient:
     """
     MCP Client integrated into OpenClaw Gateway.
     Responsible for initializing and managing connections to local MCP tools (Filesystem, SQLite)
-    and exposing their tools in a format Ollama / DeepSeek understands.
+    and exposing their tools in OpenAI-compatible format for vLLM.
     """
 
     def __init__(self, db_path: Optional[str], fs_allowed_dirs: List[str]):
@@ -30,8 +30,8 @@ class OpenClawMCPClient:
         self._server_sessions: List[ClientSession] = []
         self._exit_stack = contextlib.AsyncExitStack()
         
-        # Aggregated tools
-        self.available_tools_for_ollama: List[Dict[str, Any]] = []
+        # Aggregated tools (OpenAI-compatible format for vLLM)
+        self.available_tools_openai: List[Dict[str, Any]] = []
         self._tool_route_map: Dict[str, ClientSession] = {}
 
     async def initialize(self):
@@ -138,12 +138,12 @@ class OpenClawMCPClient:
             print(f"[MCP Error] Failed to start Filesystem Server: {e}")
 
     def _register_tool(self, tool_spec: Any, session: ClientSession):
-        """Converts MCP tool specification into Ollama-compatible payload"""
+        """Converts MCP tool specification into OpenAI-compatible payload for vLLM"""
         # MCP tool_spec has attributes like name, description, inputSchema
         tool_name = tool_spec.name
         self._tool_route_map[tool_name] = session
         
-        ollama_tool = {
+        openai_tool = {
             "type": "function",
             "function": {
                 "name": tool_name,
@@ -151,7 +151,7 @@ class OpenClawMCPClient:
                 "parameters": tool_spec.inputSchema
             }
         }
-        self.available_tools_for_ollama.append(ollama_tool)
+        self.available_tools_openai.append(openai_tool)
 
     async def _request_consensus(self, tool_name: str, arguments: dict) -> bool:
         """

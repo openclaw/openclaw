@@ -4,6 +4,20 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.3.2 (Unreleased)
 
+### [2026.03.15] vLLM Migration & Model Upgrade
+- **Ollama → vLLM migration**: Replaced local Ollama inference with remote vLLM HTTP API (`/v1/chat/completions`). Pipeline, MCP client, and Brigade API now use OpenAI-compatible protocol served by vLLM in WSL2.
+- **Model upgrade (AWQ quantization)**: Upgraded all models to 14B-class AWQ variants:
+  - General/Planning roles → `Qwen/Qwen2.5-14B-Instruct-AWQ`
+  - Analytical/Reasoning roles → `casperhansen/deepseek-r1-distill-qwen-14b-awq`
+  - Coding roles → `Qwen/Qwen2.5-Coder-7B-Instruct-AWQ`
+  - Archivist/Summary roles → `pytorch/gemma-3-12b-it-AWQ-INT4`
+- **Per-role temperature**: Added temperature control per brigade role (0.0–0.5 range) in `openclaw_config.json`, injected into vLLM API calls.
+- **Prefix caching**: Enabled `--enable-prefix-caching` via `vllm_extra_args` config for faster repeated prompt inference.
+- **Health monitor**: Added background health monitoring loop in `vllm_manager.py` (30s interval, auto-restart after 3 consecutive failures).
+- **Code cleanup**: Removed all stale Ollama references across `mcp_client.py`, `pipeline_executor.py`, `brigade_api.py`, `main.py`, `llm_engine.py`. Renamed `available_tools_for_ollama` → `available_tools_openai`, `ollama_tool` → `openai_tool`.
+- **Legacy deprecation**: Marked `llm_engine.py` as deprecated (local GGUF inference) — all active inference routed through vLLM HTTP API.
+- **Bug fixes**: Fixed pipe buffer deadlock in `vllm_manager.py` (subprocess stdout); fixed `ContentType` error on health check responses.
+
 ### [2026.03.10] Extensive Restructuring & Factory Pattern
 - **Path Separation**: Formalized isolation between OpenClaw Core (`D:\openclaw_bot\openclaw_bot`) and external Bot Products (`D:\Dmarket_bot`).
 - **Hardware Update**: Standardized hardware baseline to NVIDIA RTX 5060 Ti (16GB VRAM) with sequential model loading policy.

@@ -1,7 +1,7 @@
 """
 Brigade: OpenClaw
 Role: Memory GC (Anchored Iterative Context Compressor v2)
-Model: gemma3:12b
+Model: google/gemma-3-12b-it (vLLM local)
 
 Replaces naive one-shot summarization with anchored iterative compression:
 - Maintains a persistent summary across invocations
@@ -37,9 +37,9 @@ class MemoryGarbageCollector:
     MIN_MESSAGES_TO_COMPRESS = 4  # Don't compress very short histories
     MAX_SUMMARY_TOKENS = 800  # Target size for compressed summary (expanded for gemma3:12b 128K ctx)
 
-    def __init__(self, ollama_url: Optional[str] = None):
-        self.ollama_url = ollama_url or os.environ.get("OLLAMA_URL", "http://localhost:11434")
-        self.model = "gemma3:12b"
+    def __init__(self, vllm_url: str = "http://localhost:8000/v1"):
+        self.vllm_url = vllm_url.rstrip("/")
+        self.model = "google/gemma-3-12b-it"
         self._persistent_summary: str = ""
         self._compression_count: int = 0
 
@@ -134,23 +134,21 @@ class MemoryGarbageCollector:
 
         payload = {
             "model": self.model,
-            "prompt": prompt,
+            "messages": [{"role": "user", "content": prompt}],
             "stream": False,
-            "keep_alive": "30s",
-            "options": {"num_ctx": 4096},
+            "max_tokens": 1024,
         }
-
         async def _run_inference():
             async with aiohttp.ClientSession() as session:
                 try:
                     async with session.post(
-                        f"{self.ollama_url}/api/generate",
+                        f"{self.vllm_url}/chat/completions",
                         json=payload,
                         timeout=aiohttp.ClientTimeout(total=30),
                     ) as response:
                         if response.status == 200:
                             data = await response.json()
-                            return data.get("response", "").strip()
+                            return data["choices"][0]["message"]["content"].strip()
                         else:
                             print(f"[Memory GC] API Error: {response.status}")
                             return "ERROR_SUMMARIZING_CONTEXT"

@@ -1,15 +1,18 @@
 # Troubleshooting
 
-## Ollama Windows to WSL Connection
-Чтобы WSL (Windows Subsystem for Linux) мог успешно подключаться к хостовой системе Ollama в Windows, необходимо задать соответствующие системные переменные окружения на стороне Windows:
+## vLLM (WSL2) Connection
+vLLM запускается в WSL2 Ubuntu и обслуживает модели через OpenAI-compatible HTTP API.
 
-* `OLLAMA_HOST=0.0.0.0`
-* `OLLAMA_ORIGINS="*"`
+**Конфигурация:**
+- vLLM URL: `http://172.27.192.1:8000/v1` (WSL2 IP)
+- Модели: AWQ-квантизированные (хранятся в `/mnt/d/vllm_models`)
+- Запуск: vLLM Manager автоматически стартует и мониторит процесс
 
-**Описание проблемы:**
-Без этих переменных сервер Ollama (в Windows) будет слушать только интерфейс localhost/127.0.0.1 и отклонять входящие подключения от виртуального адаптера WSL, что приведет к ошибкам вроде `Connect call failed`.
+**Возможные проблемы:**
+1. WSL2 IP изменился → обновить `vllm_url` в `config/openclaw_config.json`
+2. CUDA/GPU не видна → проверить `nvidia-smi` в WSL2
+3. vLLM не стартует → проверить лог: `logs/vllm_startup.log`
+4. Порт занят → `ss -ltnp | grep 8000` в WSL2
 
-**Как исправить:**
-1. Откройте "Изменение системных переменных среды" в Windows.
-2. Создайте две переменные пользователя (или системы) как указано выше.
-3. Перезапустите приложение Ollama, чтобы применить изменения.
+## Legacy: Ollama Windows to WSL Connection (deprecated)
+Данная секция сохранена для справки. Ollama больше не используется — миграция на vLLM завершена 2026-03-15.

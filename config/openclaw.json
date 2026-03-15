@@ -1,74 +1,35 @@
 {
-  "channels": {
-    "telegram": {
-      "enabled": true,
-      "botToken": "8461845004:AAE3eAnAyohsRh9XMrkv3pNx56iACKmOuws",
-      "dmPolicy": "allowlist",
-      "allowFrom": [
-        "458765683"
-      ],
-      "streaming": "partial",
-      "groups": {
-        "*": {
-          "requireMention": true
-        }
-      },
-      "customCommands": [
-        {
-          "command": "test",
-          "description": "\u0417\u0430\u043f\u0443\u0441\u043a VRAM-\u0442\u0435\u0441\u0442\u0430 \u043c\u043e\u0434\u0435\u043b\u0435\u0439"
-        },
-        {
-          "command": "models",
-          "description": "\u0421\u043f\u0438\u0441\u043e\u043a \u0430\u043a\u0442\u0438\u0432\u043d\u044b\u0445 \u043c\u043e\u0434\u0435\u043b\u0435\u0439"
-        },
-        {
-          "command": "status",
-          "description": "\u0421\u0442\u0430\u0442\u0443\u0441 \u0431\u0440\u0438\u0433\u0430\u0434"
-        }
-      ]
-    }
-  },
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "ollama/deepseek-r1:8b",
-        "fallbacks": [
-          "ollama/qwen2.5-coder:7b",
-          "ollama/llama3.2"
-        ]
-      },
-      "models": {
-        "ollama/deepseek-r1:8b": {
-          "alias": "Planner/Auditor"
-        },
-        "ollama/qwen2.5-coder:7b": {
-          "alias": "Executor"
-        },
-        "ollama/llama3.2": {
-          "alias": "Archivist/Memory"
-        },
-        "ollama/qwen2.5:0.5b": {
-          "alias": "Router"
-        },
-        "ollama/nomic-embed-text": {
-          "alias": "Embedder"
-        }
-      },
-      "maxConcurrent": 1
-    }
+  "meta": {
+    "lastTouchedVersion": "2026.3.2",
+    "lastTouchedAt": "2026-03-14T16:51:37.696Z"
   },
   "models": {
     "mode": "merge",
     "providers": {
-      "ollama": {
-        "baseUrl": "http://192.168.0.212:11434/v1",
-        "apiKey": "ollama",
+      "vllm": {
+        "baseUrl": "http://172.27.192.1:8000/v1",
+        "apiKey": "vllm",
         "api": "openai-responses",
         "models": [
           {
-            "id": "deepseek-r1:8b",
-            "name": "DeepSeek R1 8B (Planner/Risk)",
+            "id": "Qwen/Qwen2.5-14B-Instruct-AWQ",
+            "name": "Qwen 2.5 14B AWQ (Planner/General)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 8192,
+            "maxTokens": 4096
+          },
+          {
+            "id": "casperhansen/deepseek-r1-distill-qwen-14b-awq",
+            "name": "DeepSeek R1 14B AWQ (Analytical/Reasoning)",
             "reasoning": true,
             "input": [
               "text"
@@ -79,12 +40,12 @@
               "cacheRead": 0,
               "cacheWrite": 0
             },
-            "contextWindow": 4096,
-            "maxTokens": 2048
+            "contextWindow": 8192,
+            "maxTokens": 4096
           },
           {
-            "id": "qwen2.5-coder:7b",
-            "name": "Qwen 2.5 Coder 7B (API/Latency)",
+            "id": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+            "name": "Qwen 2.5 Coder 7B AWQ (Executor/Coding)",
             "reasoning": false,
             "input": [
               "text"
@@ -95,12 +56,12 @@
               "cacheRead": 0,
               "cacheWrite": 0
             },
-            "contextWindow": 4096,
-            "maxTokens": 2048
+            "contextWindow": 8192,
+            "maxTokens": 4096
           },
           {
-            "id": "llama3.2",
-            "name": "Llama 3.2 (HW Optimizer/Archivist)",
+            "id": "pytorch/gemma-3-12b-it-AWQ-INT4",
+            "name": "Gemma 3 12B AWQ (Archivist/Summary)",
             "reasoning": false,
             "input": [
               "text"
@@ -111,43 +72,84 @@
               "cacheRead": 0,
               "cacheWrite": 0
             },
-            "contextWindow": 4096,
-            "maxTokens": 2048
-          },
-          {
-            "id": "qwen2.5:0.5b",
-            "name": "Qwen 2.5 0.5B (Router/Micro)",
-            "reasoning": false,
-            "input": [
-              "text"
-            ],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 4096,
-            "maxTokens": 2048
-          },
-          {
-            "id": "nomic-embed-text",
-            "name": "Nomic Embed Text (RAG)",
-            "reasoning": false,
-            "input": [
-              "text"
-            ],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 4096,
-            "maxTokens": 2048
+            "contextWindow": 8192,
+            "maxTokens": 4096
           }
         ]
       }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "vllm/Qwen/Qwen2.5-14B-Instruct-AWQ",
+        "fallbacks": [
+          "vllm/casperhansen/deepseek-r1-distill-qwen-14b-awq",
+          "vllm/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ"
+        ]
+      },
+      "models": {
+        "vllm/Qwen/Qwen2.5-14B-Instruct-AWQ": {
+          "alias": "Planner/General"
+        },
+        "vllm/casperhansen/deepseek-r1-distill-qwen-14b-awq": {
+          "alias": "Auditor/Reasoning"
+        },
+        "vllm/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ": {
+          "alias": "Executor/Coding"
+        },
+        "vllm/pytorch/gemma-3-12b-it-AWQ-INT4": {
+          "alias": "Archivist/Summary"
+        }
+      },
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 1
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "customCommands": [
+        {
+          "command": "test",
+          "description": "Запуск VRAM-теста моделей"
+        },
+        {
+          "command": "models",
+          "description": "Список активных моделей"
+        },
+        {
+          "command": "status",
+          "description": "Статус бригад"
+        }
+      ],
+      "dmPolicy": "allowlist",
+      "botToken": "8461845004:AAE3eAnAyohsRh9XMrkv3pNx56iACKmOuws",
+      "groups": {
+        "*": {
+          "requireMention": true
+        }
+      },
+      "allowFrom": [
+        "458765683"
+      ],
+      "groupPolicy": "allowlist",
+      "streaming": "partial"
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "13c9a8e9c994134ab546c276bc63cde5afe9f17b3c621c6b"
     }
   }
 }

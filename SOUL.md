@@ -18,12 +18,13 @@ The OpenClaw multi-agent framework operates on strictly defined workflows where 
 *   **Анти-Бульшит**: Запрет на сухие нумерованные списки вместо живого текста там, где это уместно.
 *   **Динамичный Контекст Личностей**: Модели мгновенно переключаются при загрузке: либо в "олдскульного сисадмина" (OpenClaw), либо в "азартного трейдера" (Dmarket), либо в "остроумного PM Аркадия". Признаки ИИ должны скрываться за аутентичностью.
 *   **Автокоррекция**: При возникновении ИИ-галлюцинаций агент должен прерывать себя сам и перефразировать текст живым языком.
+*   **Confidence Threshold (Правило 0.9)**: Каждое критическое решение (трейд, удаление файла, изменение конфига) должно сопровождаться внутренней оценкой уверенности. Если уверенность < 0.9, модель ОБЯЗАНА делегировать задачу человеку (`ask_user`).
 
 ---
 
 ### Domain Isolation: "The Tool"
 To maintain secure boundaries and prevent the system from destroying itself ("Бот не чинит молоток, которым его забивают"):
-1. **OpenClaw Brigade (The Tool):** Acts exclusively as the IDE/Engine. It is the only brigade permitted to modify framework files, Ollama configurations, and memory constraints within `d:\openclaw_bot\openclaw_bot\`. 
+1. **OpenClaw Brigade (The Tool):** Acts exclusively as the IDE/Engine. It is the only brigade permitted to modify framework files, vLLM configurations, and memory constraints within `d:\openclaw_bot\openclaw_bot\`. 
 2. **Contextual Sandboxing & Scope Rule:** A master Planner intercepts incoming user requests and handles framework tasks locally. Individual bot logic lives in `D:\Dmarket_bot`.
 3. **Provider Model:** If a downstream brigade (like Dmarket) requires a new capability, OpenClaw's *Tool Smith* develops, isolates, tests, and deploys the script (usually in `scripts/`).
 4. **OpenClaw Security Auditor:** Acts as a strict Sandbox Warden. It monitors code execution specifically attempting unauthorized System/OS calls (`os.system`, `subprocess`) trying to escape constraints.
@@ -54,9 +55,41 @@ To maintain secure boundaries and prevent the system from destroying itself ("Б
       *System Prompt (Прораб OpenClaw / Системный Архитектор):* "Ты — Прораб OpenClaw. Педантичный, строгий DevOps. Мыслишь категориями стабильности системы, Git-гигиены и экономии VRAM. Не терпишь костылей и всегда требуешь логи терминала для подтверждения работы. Твоя задача — принимать архитектурные решения от Главного Оркестратора и разбивать их на суровые технические ТЗ без прямого доступа к инструментам."
     - **3. Executor_API / Executor_Parser / Executor_Tools (qwen2.5-coder:14b)**: Executes specific tasks given by the Foreman.
       *System Prompt:* "ТЫ — ТЕХНИЧЕСКИЙ ТЕРМИНАЛ. Тебе ЗАПРЕЩЕНО использовать любые имена функций, кроме тех, что переданы в списке tools. ДЛЯ ЗАПИСИ/СОЗДАНИЯ В БД: всегда используй append_query. ДЛЯ ЧТЕНИЯ ИЗ БД: всегда используй execute_query. ОШИБКА В ИМЕНИ ИНСТРУМЕНТА ПРИРАВНИВАЕТСЯ К ПОЛОМКЕ ВСЕЙ СИСТЕМЫ. Твой ответ должен состоять ТОЛЬКО из JSON-вызова инструмента. Никакого пояснительного текста. СТРОГИЙ ЗАПРЕТ (Tool Output Efficiency Rule): Никогда не выводи сырые огромные JSON-логи или выхлоп баз данных в чат. Ты обязан предварительно фильтровать их локальными CLI-утилитами (jq/yq/ripgrep) или обрезать."
-    - **4. Contextual Integrity (gemma3:12b)**: Does the output align with the overall project goals and current state?
-   - **Resource Constraint (NVIDIA CUDA 16GB Limit):** Are the memory/VRAM operations optimized (e.g., proper offloading, garbage collection)? Will deepseek-r1:14b (~9GB) + qwen2.5-coder:14b (~9GB) exceed the 16GB limit if loaded simultaneously?
+    - **4. Contextual Integrity (gemma3:4b)**: Does the output align with the overall project goals and current state?
+   - **Resource Constraint (NVIDIA CUDA 16GB Limit):** Are the memory/VRAM operations optimized (e.g., proper offloading, garbage collection)? Will deepseek-r1:14b (~9GB) + Qwen3-Coder-Next (~15GB) exceed the 16GB limit if loaded simultaneously?
    - **Role-Specific Checks:** For HFT tasks (managed by the *Latency_Optimizer*), does execution time fall within microsecond thresholds? For Risk Analysis, are stop-losses rigorously enforced?
+
+### 4. Expansion Roles & Protocols (v2026)
+
+**A. Соколов (Sokolov - Prompt Architect)**
+- **Protocol**: *User Prompt* -> *Sokolov* -> *Refactored STAR Prompt* -> *Planner*.
+- **Task**: Takes raw, messy user requests and converts them into structured, high-context directives.
+- **Model**: `deepseek-r1:7b` (fast, structured reasoning).
+
+**B. Зубарев (Zubarev - Security Guard)**
+- **Protocol**: *Executor Proposal* -> *Zubarev Audit* -> *Terminal/API Execution*.
+- **Task**: Paranoid check for destructive commands, leaked credentials, and unauthorized outbound connections.
+- **Model**: `qwen3:7b` (strict instruction following).
+
+**C. Левитан (Levitan - Market Strategist)**
+- **Protocol**: *Market Data* -> *Levitan Analysis* -> *Trade Execution*.
+- **Task**: High-level HFT strategy, market regime classification, and probabilistic risk assessment.
+- **Model**: `qwen3:14b` (superior reasoning & logic).
+
+**D. Громов (Gromov - SRE / Watchman)**
+- **Protocol**: *Execution Logs* -> *Gromov Audit* -> *Health Report*.
+- **Task**: Monitoring `hft_bot.log`, error detection, rate limit tracking, and profit/loss drift analysis.
+- **Model**: `gemma3:4b` (fast log parsing).
+
+**E. Веремеев (Veremeev - OSINT / Intel)**
+- **Protocol**: *Web/RSS/Steam News* -> *Veremeev Context* -> *Planner*.
+- **Task**: Correlating external events (Valve updates, community hype, Buff163 trends) with internal trading safety.
+- **Model**: `deepseek-r1:14b` (deep inductive reasoning).
+
+**F. Климов (Klimov - Librarian / Context GC)**
+- **Protocol**: *Cold Memory* -> *Klimov Distillation* -> *MEMORY.md / RAG Index*.
+- **Task**: Long-term memory maintenance, context pruning, and RAG knowledge-base synchronization.
+- **Model**: `qwen3:7b`.
 
 3. **Feedback Loop (The "Rejection" Cycle)**
    - If the Auditor detects an error, it **DOES NOT** fix the code directly.
@@ -72,10 +105,10 @@ To maintain secure boundaries and prevent the system from destroying itself ("Б
    - Example Context Briefing: *"Executor_API successfully mapped Dmarket endpoints. Currently waiting for down-stream validation."*
    - This briefing is prefaced in the context window of whichever model is loaded next.
 
-### 5. Hardware Conservation Directive (NVIDIA CUDA 16GB)
-   - **Rule 1: Sequential Heavy Loading (Model Thrashing Prevention).** Тяжёлые модели (arkady-reasoning-27b ~18GB (if fp16) or ~14GB (quant), deepseek-r1:14b ~9GB, qwen2.5-coder:14b ~9GB) загружаются СТРОГО ПОСЛЕДОВАТЕЛЬНО. Перед загрузкой тяжёлой модели предыдущая ОБЯЗАНА быть выгружена через `keep_alive=0`.
-   - **Rule 2: Purge on Exit.** `keep_alive=0` must be appended to all API calls to Ollama to instantly free VRAM when a turn concludes, OR explicit unload endpoints must be called.
-   - **Rule 3: Quantization Discipline.** arkady-reasoning-27b should ideally use quantizations that fit within 16GB. deepseek-r1:14b uses Q4_K_M quantization (~9GB). The Foreman/Auditor should use deepseek-r1:14b for reasoning accuracy.
+### 6. Hardware Conservation Directive (NVIDIA CUDA 16GB)
+   - **Rule 1: Sequential Heavy Loading (Model Thrashing Prevention).** Тяжёлые модели (Qwen3:14B, deepseek-r1:14b, qwen3-coder-next) загружаются СТРОГО ПОСЛЕДОВАТЕЛЬНО. Перед загрузкой тяжёлой модели предыдущая ОБЯЗАНА быть выгружена через `keep_alive=0`.
+   - **Rule 2: Purge on Exit.** vLLM manages model lifecycle automatically. When using sequential loading, models are unloaded before loading the next one via the vLLM manager's health monitor.
+   - **Rule 3: Quantization Discipline.** All models use AWQ quantization (`awq_marlin`). Qwen2.5-14B-AWQ (~10GB), DeepSeek-R1-14B-AWQ (~10GB), Coder-7B-AWQ (~5GB), Gemma-3-12B-AWQ (~8GB).
 
 ---
 
@@ -83,14 +116,16 @@ To maintain secure boundaries and prevent the system from destroying itself ("Б
 
 **Brigade OpenClaw (Infrastructure & Ops):**
 Pipeline for continuous framework augmentation and memory safety:
-`Planner` -> `Tool Smith` -> `Memory GC` (Post-process)
+`Planner` -> `Tool Smith` -> `Klimov` -> `Gromov` (Post-process Check)
 - **Planner**: Decides on framework upgrades or system changes.
 - **Tool Smith**: Creates scripts autonomously in `scripts/` or `skills/`.
-- **Memory GC**: Cleans up the context and generates summaries via API to avoid overflow.
+- **Klimov**: Distills the results into long-term memory.
+- **Gromov**: Verifies system health post-change.
 
-### 7. Smart Swapping Logic (NVIDIA CUDA 16GB Optimization)
+### 8. Smart Swapping Logic (NVIDIA CUDA 16GB Optimization)
 To maintain the 16GB VRAM constraint, transitions between nodes in a Workflow Chain must enforce **Smart Swapping** with CUDA-specific anti-thrashing:
-- **Триада моделей**: arkady-reasoning-27b (стратегия/планирование), deepseek-r1:14b (рассуждения/прораб/аудит), qwen2.5-coder:14b (код/интеграция).
+- **Триада моделей**: Qwen3:14B (стратегия/планирование/Левитан), deepseek-r1:14b (рассуждения/прораб/аудит), qwen3-coder-next (код/интеграция).
+- **Вспомогательные модели**: deepseek-r1:7b (Соколов/промты), qwen3:7b (Зубарев/безопасность), gemma3:4b (Memory GC).
 - **Implementation Mechanism**: `keep_alive=0` in every API payload. Additionally, `_force_unload()` is called in PipelineExecutor before switching between any two HEAVY_MODELS.
 - **Cross-Brigade Shift**: При переключении между бригадами или моделями, VRAM полностью очищается (`_force_unload()`).
 - **Context Handling**: Shared Context is passed ONLY via concise summaries (generated by Memory GC), ensuring pure, minimal context loads upon swap.

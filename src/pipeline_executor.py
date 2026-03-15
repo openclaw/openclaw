@@ -36,50 +36,75 @@ from src.task_queue import ModelTaskQueue
 logger = structlog.get_logger(__name__)
 
 
-# Models that require full VRAM (cannot coexist)
-HEAVY_MODELS = {"deepseek-r1:14b", "qwen2.5-coder:14b", "gemma3:12b"}
-
-
 class PipelineExecutor:
     """
     Executes a chain of agent roles sequentially, passing compressed
-    context between each step. Respects the 16GB VRAM constraint by
-    loading one model at a time via the ModelTaskQueue.
-    Uses forced VRAM unload (keep_alive=0) when switching between
-    heavy models (e.g. deepseek-r1:14b ~9GB + qwen2.5-coder:14b ~9GB = 18GB > 16GB).
+    context between each step. Uses vLLM (OpenAI-compatible local server)
+    for all inference calls. Model swapping managed by VLLMModelManager.
     """
 
-    def __init__(self, config: Dict[str, Any], ollama_url: str):
+    def __init__(self, config: Dict[str, Any], vllm_url: str, vllm_manager=None):
         self.config = config
-        self.ollama_url = ollama_url
-        self.gc_model = config.get("memory", {}).get("model", "gemma3:12b")
+        self.vllm_url = vllm_url.rstrip("/")
+        self.vllm_manager = vllm_manager  # VLLMModelManager instance
+        self.gc_model = config.get("memory", {}).get("model", "google/gemma-3-12b-it")
 
         # Default chain definitions per brigade (can be overridden in config)
+        # Roles must match actual keys in openclaw_config.json brigades.*.roles
         self.default_chains = {
-            "Dmarket": ["Planner", "Executor", "Security_Auditor"],
-            "OpenClaw": ["Planner"],
+            "Dmarket": ["Planner", "Executor_API", "Archivist"],
+            "OpenClaw": ["Planner", "Executor_Tools", "Archivist"],
         }
         
-        # Initialize Isolated MCP Clients
-        # Using specific paths: OpenClaw root and Dmarket_bot root
-        workspace_root = os.path.abspath(os.path.dirname(__file__))
-        dmarket_root = "D:/Dmarket_bot"
-        db_path = os.path.join(dmarket_root, "data", "dmarket_history.db")
-        
-        self.openclaw_mcp = OpenClawMCPClient(db_path=None, fs_allowed_dirs=[workspace_root])
-        self.dmarket_mcp = OpenClawMCPClient(db_path=db_path, fs_allowed_dirs=[dmarket_root])
+        # Initialize MCP Clients dynamically based on workspace config
+        framework_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        self._framework_root = framework_root
+
+        # Core MCP for framework tasks
+        self.openclaw_mcp = OpenClawMCPClient(db_path=None, fs_allowed_dirs=[framework_root])
+
+        # Dmarket brigade MCP — workspace dir from config (fallback to framework root)
+        dmarket_ws = config.get("brigades", {}).get("Dmarket", {}).get(
+            "workspace_dir", framework_root
+        )
+        dmarket_ws = os.path.abspath(dmarket_ws) if os.path.isdir(os.path.abspath(dmarket_ws)) else framework_root
+        self.dmarket_mcp = OpenClawMCPClient(db_path=None, fs_allowed_dirs=[dmarket_ws])
+
+        # Sub-bot MCP instances will be created lazily if needed per brigade workspace_dir
+        self.brigade_mcp_map: Dict[str, OpenClawMCPClient] = {}
 
         # State tracking for VRAM Guard 2.0
         self.last_loaded_model: Optional[str] = None
 
         # Auto-Rollback safety net
-        self.auto_rollback = AutoRollback(workspace_root)
+        self.auto_rollback = AutoRollback(framework_root)
 
     async def initialize(self):
         """Initializes internal components like MCP"""
         await self.openclaw_mcp.initialize()
         await self.dmarket_mcp.initialize()
-        logger.info("Pipeline MCP clients initialized (Isolated Contexts)")
+        logger.info("Pipeline MCP clients initialized (openclaw + dmarket contexts)")
+        await self._validate_vllm()
+
+    async def _validate_vllm(self):
+        """Checks that the vLLM server is reachable (or manager is configured)."""
+        if self.vllm_manager:
+            logger.info("vLLM model manager configured — models will be loaded on demand")
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.vllm_url}/models",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        models = [m["id"] for m in data.get("data", [])]
+                        logger.info("vLLM server reachable", models=models)
+                    else:
+                        logger.warning("vLLM server responded with", status=resp.status)
+        except Exception as e:
+            logger.warning("vLLM server not reachable (will start on first request)", error=str(e))
 
     def get_chain(self, brigade: str) -> List[str]:
         """
@@ -145,7 +170,7 @@ class PipelineExecutor:
 
         for i, role_name in enumerate(chain):
             if task_type:
-                model = self.config.get("system", {}).get("model_router", {}).get(task_type, "gemma3:12b")
+                model = self.config.get("system", {}).get("model_router", {}).get(task_type, "Qwen/Qwen2.5-14B-Instruct-AWQ")
                 role_config = {"model": model}
                 system_prompt = "Выполняй только ту задачу, которая указана в промпте. Никаких лишних слов."
             else:
@@ -157,25 +182,62 @@ class PipelineExecutor:
                     logger.warning(f"Role '{role_name}' not found in config, skipping")
                     continue
     
-                model = role_config.get("model", "llama3.2")
+                model = role_config.get("model", "Qwen/Qwen2.5-14B-Instruct-AWQ")
                 system_prompt = role_config.get("system_prompt", "You are an AI assistant.")
 
-            # Append memory bank and agentic tooling / planning instructions (STAR-logic)
-            system_prompt += (
-                "\n\n[AGENT PROTOCOL: STAR-STRATEGY]"
-                "\n1. Memory Bank: Use .memory-bank for persistence. Use the 'search_memory' tool for retrieving historical context (Hot/Domain/Cold tiers)."
-                "\n2. Tooling: Use bash utilities (jq, ripgrep, yq) via MCP for research."
-                "\n3. STAR Framework: Your response MUST follow this structure:"
-                "\n   SITUATION: Current state analysis."
-                "\n   TASK: Specific goal for this step."
-                "\n   ACTION: Reasoning (wrapped in <think> tags) and tool execution."
-                "\n   RESULT: Expected/Observed outcome."
-                "\n   ВАЖНО: Весь итоговый ответ (SITUATION, TASK, ACTION, RESULT) должен быть на РУССКОМ ЯЗЫКЕ."
-            )
+            # --- ROLE-AWARE PROMPT INJECTION ---
+            is_planner = "Planner" in role_name or "Orchestrator" in role_name or "Foreman" in role_name
+            is_archivist = "Archivist" in role_name
+            is_final_step = (i == len(chain) - 1)
+
+            if is_archivist:
+                # Archivist: Skeptical Critic + Formatter (MAS verification pattern)
+                system_prompt += (
+                    "\n\n[ARCHIVIST PROTOCOL: CRITIC + FORMATTER]"
+                    "\nТы получаешь технический вывод от предыдущего агента."
+                    "\nТвоя задача — ВЕРИФИЦИРОВАТЬ и ПЕРЕПИСАТЬ его в чистый, человекочитаемый формат."
+                    "\n"
+                    "\nФАЗА 1 — ВЕРИФИКАЦИЯ (Скептический критик):"
+                    "\n- Проверь ответ на ВНУТРЕННИЕ ПРОТИВОРЕЧИЯ (одно утверждение опровергает другое)."
+                    "\n- Проверь на ФАБРИКАЦИИ: конкретные цифры, даты, имена — есть ли основания в контексте?"
+                    "\n- Проверь на TOOL BYPASS: если агент описывает 'я бы выполнил команду...' вместо реального результата — отметь как непроверенное."
+                    "\n- Если факт НЕ подкреплён данными из контекста, УДАЛИ его, а не передавай пользователю."
+                    "\n"
+                    "\nФАЗА 2 — ФОРМАТИРОВАНИЕ:"
+                    "\n- Удали ВСЮ служебную разметку: SITUATION, TASK, ACTION, RESULT, <think> блоки, [MCP...], [Proof of Work...]."
+                    "\n- НЕ добавляй вступлений ('Давайте рассмотрим...', 'Представляет собой...')."
+                    "\n- Каждое предложение = конкретный ВЕРИФИЦИРОВАННЫЙ факт или вывод."
+                    "\n- Пиши на РУССКОМ ЯЗЫКЕ."
+                    "\n- Формат: прямой ответ на вопрос пользователя, без мета-комментариев."
+                )
+            elif is_planner:
+                # Planner: STAR for internal reasoning, but final output must be clean
+                system_prompt += (
+                    "\n\n[AGENT PROTOCOL: STAR-STRATEGY — INTERNAL ONLY]"
+                    "\n1. Memory Bank: Use .memory-bank for persistence."
+                    "\n2. Tooling: Если для ответа нужны данные из файловой системы, НЕМЕДЛЕННО вызывай доступные инструменты (list_directory, read_file). НЕ описывай, что ты хочешь вызвать — ВЫЗЫВАЙ."
+                    "\n3. STAR используй ТОЛЬКО внутри тегов <think>...</think> для структурирования рассуждений."
+                    "\n4. Финальный ответ (вне <think>) должен быть ЧИСТЫМ текстом для пользователя:"
+                    "\n   - БЕЗ меток SITUATION/TASK/ACTION/RESULT"
+                    "\n   - БЕЗ повторения одних и тех же фактов в разных формулировках"
+                    "\n   - Каждое предложение = новый факт или конкретное действие"
+                    "\n   - Если задача требует инструментов и ты сгенерировал JSON — добавь его в ```json``` блок"
+                    "\n5. ЗАПРЕЩЁННЫЕ конструкции: 'Представляет собой...', 'Является эффективной...', 'Для конкретных рекомендаций необходимо...'"
+                    "\n6. SCOPE LIMITATION: Объясняй только четко установленные факты из контекста и доступных данных. Если ты НЕ УВЕРЕН — скажи 'недостаточно данных' вместо домысливания. Пропускай спорные или непроверенные области."
+                    "\n7. ВАЖНО: Весь ответ на РУССКОМ ЯЗЫКЕ."
+                )
+            else:
+                # Executors and other roles: minimal protocol
+                system_prompt += (
+                    "\n\n[EXECUTOR PROTOCOL]"
+                    "\nВыполняй задачу точно по инструкции. Результат — только JSON или код."
+                    "\nНикаких пояснений, вступлений, заключений."
+                    "\nЯзык ответа: РУССКИЙ."
+                )
 
             # Inject BRAIN.md for Planners
             if "Planner" in role_name or "Orchestrator" in role_name or "Foreman" in role_name:
-                brain_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "BRAIN.md")
+                brain_path = os.path.join(self._framework_root, "BRAIN.md")
                 if os.path.exists(brain_path):
                     try:
                         with open(brain_path, "r", encoding="utf-8") as f:
@@ -215,7 +277,7 @@ class PipelineExecutor:
                 # Execute inference. Preserve <think> for Planners and Auditors for transparency.
                 preserve_think = any(role in role_name for role in ["Planner", "Foreman", "Orchestrator", "Auditor"])
                 active_mcp = self.openclaw_mcp if brigade == "OpenClaw" else self.dmarket_mcp
-                response = await self._call_ollama(
+                response = await self._call_vllm(
                     model, system_prompt, step_prompt, role_name, role_config, active_mcp, preserve_think=preserve_think
                 )
                 
@@ -256,14 +318,14 @@ class PipelineExecutor:
                         "model": model,
                         "messages": retry_messages,
                         "stream": False,
-                        "keep_alive": 0,
+                        "max_tokens": 2048,
                     }
                     try:
                         async with aiohttp.ClientSession() as session:
-                            async with session.post(f"{self.ollama_url}/api/chat", json=payload, timeout=60) as retry_resp:
+                            async with session.post(f"{self.vllm_url}/chat/completions", json=payload, timeout=60) as retry_resp:
                                 if retry_resp.status == 200:
                                     r_data = await retry_resp.json()
-                                    new_response = r_data["message"]["content"].strip()
+                                    new_response = r_data["choices"][0]["message"]["content"].strip()
                                     new_response = re.sub(r"<think>.*?</think>", "", new_response, flags=re.DOTALL).strip()
                                     response += "\n\n[Correction]:\n" + new_response
                                     
@@ -317,7 +379,8 @@ class PipelineExecutor:
                         }
                     
                     if "Planner" in role_name or "Foreman" in role_name:
-                        logger.info("JSON instructions detected from Planner, executing Handoff to qwen2.5-coder:14b")
+                        executor_model = self.config.get("system", {}).get("model_router", {}).get("tool_execution", "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ")
+                        logger.info(f"JSON instructions detected from Planner, executing Handoff to {executor_model}")
                         steps_results.append({
                             "role": role_name,
                             "model": model,
@@ -327,7 +390,6 @@ class PipelineExecutor:
                         await self._force_unload(model)
                         
                         executor_role = "Executor_Tools"
-                        executor_model = "qwen2.5-coder:14b"
                         executor_sys = "ТЫ — ТЕХНИЧЕСКИЙ ТЕРМИНАЛ. Тебе ЗАПРЕЩЕНО использовать любые имена функций, кроме read_query, write_query, list_tables, describe_table. ДЛЯ ЗАПИСИ/СОЗДАНИЯ В БД: всегда используй write_query. ДЛЯ ЧТЕНИЯ ИЗ БД: всегда используй read_query или list_tables. ОШИБКА В ИМЕНИ ИНСТРУМЕНТА ПРИРАВНИВАЕТСЯ К ПОЛОМКЕ ВСЕЙ СИСТЕМЫ."
                         executor_prompt = f"Выполни эту инструкцию через MCP инструменты SQLite или Filesystem:\n```json\n{extracted_json_str}\n```"
                         
@@ -343,7 +405,7 @@ class PipelineExecutor:
                             self.last_loaded_model = executor_model
                             max_retries = 3
                             for attempt in range(max_retries):
-                                executor_response = await self._call_ollama(
+                                executor_response = await self._call_vllm(
                                     executor_model, executor_sys, executor_prompt, executor_role, executor_config, active_mcp
                                 )
                                 
@@ -485,7 +547,8 @@ class PipelineExecutor:
             # Prepare context briefing for the next step (compressed)
             context_briefing = self._compress_for_next_step(role_name, response)
 
-        final_response = steps_results[-1]["response"] if steps_results else ""
+        raw_response = steps_results[-1]["response"] if steps_results else ""
+        final_response = self._clean_response_for_user(raw_response)
 
         logger.info(f"Pipeline COMPLETE: brigade={brigade}, steps={len(steps_results)}")
 
@@ -497,126 +560,148 @@ class PipelineExecutor:
             "status": "completed"
         }
 
-    async def _call_ollama(
-        self, 
-        model: str, 
-        system_prompt: str, 
-        user_prompt: str, 
-        role_name: str, 
-        role_config: Dict[str, Any], 
+    async def _call_vllm(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        role_name: str,
+        role_config: Dict[str, Any],
         mcp_client: OpenClawMCPClient,
         preserve_think: bool = False
     ) -> str:
         """
-        Calls Ollama API for a single inference step.
-        Uses keep_alive=0 to immediately free VRAM for the next step.
+        Calls local vLLM server (OpenAI-compatible) for a single inference step.
+        Endpoint: POST {vllm_url}/chat/completions
         """
         system_prompt += (
-            " Отвечай предельно четко, понятно, по делу. Не используй сложное форматирование."
+            " Правила плотности: каждое предложение = новый факт."
+            " Запрещено: повторять суть в разных формулировках, пустые вступления, фразы-заглушки."
+            " Максимум конкретики. Ответ на РУССКОМ ЯЗЫКЕ."
         )
 
-        # Auto-scaling context window based on input length
-        # 4 chars roughly equals 1 token. Add 512 tokens buffer. Max 16384 for NVIDIA CUDA.
-        estimated_content_tokens = len(user_prompt + system_prompt) // 4
-        dynamic_ctx = min(16384, max(2048, estimated_content_tokens + 512))
+        # max_tokens: cap output to prevent verbose over-generation
+        # Short prompts → 2048 tokens max, long prompts → up to 4096
+        estimated_input_tokens = len(user_prompt + system_prompt) // 4
+        dynamic_max_tokens = min(4096, max(1024, min(estimated_input_tokens, 2048) + 512))
 
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
 
-        # For specific roles, inject tools
+        # Inject MCP tools for roles that need them (OpenAI-compatible tool format)
+        # Planners get read-only tools; Executors get full tool access
         model_tools = []
-        if role_name in ("Executor_API", "Executor_Parser", "Executor_Tools", "Latency_Optimizer") and role_config.get("model") == "qwen2.5-coder:14b":
-            model_tools = mcp_client.available_tools_for_ollama
-            if model_tools:
-                logger.debug(f"Injecting {len(model_tools)} tools for role {role_name}")
-                # Ollama tool calling requires tools to be in the payload, not in messages
-                # The messages array will contain tool_calls and tool_results
-        
-        payload = {
+        tool_eligible_roles = ("Executor_API", "Executor_Parser", "Executor_Tools", "Latency_Optimizer", "Planner", "Foreman")
+        if role_name in tool_eligible_roles:
+            all_tools = mcp_client.available_tools_openai
+            if all_tools:
+                if "Planner" in role_name or "Foreman" in role_name:
+                    # Planners: read-only subset (list_directory, read_file, list_tables, read_query, search_memory)
+                    read_only_names = {"list_directory", "read_file", "list_tables", "read_query", "describe_table", "search_memory"}
+                    model_tools = [t for t in all_tools if t.get("function", {}).get("name") in read_only_names]
+                else:
+                    model_tools = all_tools
+                if model_tools:
+                    logger.debug(f"Injecting {len(model_tools)} tools for role {role_name}")
+
+        temperature = role_config.get("temperature", 0.3)
+        payload: Dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": False,
-            "keep_alive": 0,  # Flush VRAM immediately for pipeline chain (critical for 16GB)
-            "options": {"num_ctx": dynamic_ctx},
+            "max_tokens": dynamic_max_tokens,
+            "temperature": temperature,
         }
-
         if model_tools:
             payload["tools"] = model_tools
 
         config_timeout = self.config.get("system", {}).get("timeout_sec", 450)
+
+        # Ensure the required model is loaded via vLLM manager
+        if self.vllm_manager:
+            await self.vllm_manager.ensure_model_loaded(model)
 
         async def _run_inference():
             async with aiohttp.ClientSession() as session:
                 try:
                     timeout = aiohttp.ClientTimeout(total=config_timeout)
                     async with session.post(
-                        f"{self.ollama_url}/api/chat",
+                        f"{self.vllm_url}/chat/completions",
                         json=payload,
                         timeout=timeout,
                     ) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            
-                            # Handle tool calls if present
-                            if data.get("message") and data["message"].get("tool_calls"):
-                                tool_calls = data["message"]["tool_calls"]
+                            choice = data.get("choices", [{}])[0]
+                            msg = choice.get("message", {})
+
+                            # Handle tool calls (OpenAI-compatible format)
+                            if msg.get("tool_calls"):
+                                tool_calls = msg["tool_calls"]
                                 logger.info(f"Model requested tool calls: {tool_calls}")
-                                
+
                                 tool_results = []
                                 for tool_call in tool_calls:
                                     function_name = tool_call["function"]["name"]
                                     function_args = tool_call["function"]["arguments"]
-                                    
-                                    logger.info(f"Executing tool: {function_name} with args: {function_args}")
-                                    
+                                    if isinstance(function_args, str):
+                                        try:
+                                            function_args = json.loads(function_args)
+                                        except json.JSONDecodeError:
+                                            pass
                                     try:
                                         result = await mcp_client.call_tool(function_name, function_args)
                                         tool_results.append({
-                                            "type": "tool_result",
-                                            "tool_code": tool_call["id"],
-                                            "content": json.dumps(result) # Tool results should be stringified JSON
+                                            "role": "tool",
+                                            "tool_call_id": tool_call.get("id", ""),
+                                            "content": json.dumps(result),
                                         })
-                                        logger.info(f"Tool {function_name} executed successfully. Result: {result}")
+                                        logger.info(f"Tool {function_name} executed. Result: {result}")
                                     except Exception as e:
-                                        error_message = f"Error executing tool {function_name}: {e}"
                                         tool_results.append({
-                                            "type": "tool_result",
-                                            "tool_code": tool_call["id"],
-                                            "content": json.dumps({"error": error_message})
+                                            "role": "tool",
+                                            "tool_call_id": tool_call.get("id", ""),
+                                            "content": json.dumps({"error": str(e)}),
                                         })
-                                        logger.error(error_message)
-                                
-                                # Add tool calls and results to messages for the next turn
-                                messages.append(data["message"]) # The model's tool_calls message
-                                messages.extend(tool_results) # The results of the tool calls
-                                
-                                # Re-call Ollama with the updated messages
+                                        logger.error(f"Tool {function_name} failed: {e}")
+
+                                messages.append(msg)
+                                messages.extend(tool_results)
                                 payload["messages"] = messages
+
                                 async with session.post(
-                                    f"{self.ollama_url}/api/chat",
+                                    f"{self.vllm_url}/chat/completions",
                                     json=payload,
                                     timeout=timeout,
-                                ) as resp_tool_response:
-                                    if resp_tool_response.status == 200:
-                                        data_tool_response = await resp_tool_response.json()
-                                        text = data_tool_response["message"]["content"].strip()
+                                ) as resp2:
+                                    if resp2.status == 200:
+                                        data2 = await resp2.json()
+                                        text = data2["choices"][0]["message"]["content"].strip()
                                         if not preserve_think:
                                             text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
                                         return text
-                                    else:
-                                        return f"⚠️ API Error after tool call ({resp_tool_response.status})"
+                                    return f"⚠️ vLLM Error after tool call ({resp2.status})"
                             else:
-                                # No tool calls, just return the content
-                                text = data["message"]["content"].strip()
+                                text = msg.get("content", "").strip()
                                 if not preserve_think:
                                     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
                                 return text
                         else:
-                            return f"⚠️ API Error ({resp.status})"
+                            error_body = ""
+                            try:
+                                error_body = await resp.text()
+                            except Exception:
+                                pass
+                            if resp.status == 404:
+                                return (
+                                    f"⚠️ Model `{model}` not found on vLLM server (HTTP 404).\n"
+                                    f"Check that the model is downloaded and available."
+                                )
+                            return f"⚠️ vLLM Error ({resp.status}): {error_body[:200]}"
                 except asyncio.TimeoutError:
-                    return f"❌ Timeout: модель не ответила за {config_timeout} секунд"
+                    return f"❌ Timeout: model did not respond within {config_timeout}s"
                 except Exception as e:
                     return f"❌ Error: {e}"
 
@@ -625,31 +710,8 @@ class PipelineExecutor:
         return await model_queue.enqueue(model, _run_inference)
 
     async def _force_unload(self, model: str):
-        """
-        Force unload a model from VRAM via Ollama API.
-        Critical for CUDA 16GB when switching between heavy models
-        (deepseek-r1:14b, qwen2.5-coder:14b, gemma3:12b) which cannot coexist in VRAM.
-        """
-        try:
-            async with aiohttp.ClientSession() as session:
-                payload = {
-                    "model": model,
-                    "prompt": "",
-                    "keep_alive": 0,
-                    "stream": False,
-                }
-                timeout = aiohttp.ClientTimeout(total=10)
-                async with session.post(
-                    f"{self.ollama_url}/api/generate",
-                    json=payload,
-                    timeout=timeout,
-                ) as resp:
-                    if resp.status == 200:
-                        logger.info(f"Force unloaded {model} from VRAM")
-                    else:
-                        logger.warning(f"Failed to unload {model}: HTTP {resp.status}")
-        except Exception as e:
-            logger.warning(f"Failed to force unload {model}: {e}")
+        """No-op for vLLM — model lifecycle is managed by VLLMModelManager."""
+        pass
 
     @asynccontextmanager
     async def _vram_protection(self, target_model: str, prev_model: Optional[str]):
@@ -670,6 +732,24 @@ class PipelineExecutor:
         finally:
             # Leave model hot. It will be unloaded when switching to a differently named model.
             pass
+
+    @staticmethod
+    def _clean_response_for_user(text: str) -> str:
+        """Strip internal STAR markup, <think> blocks, and MCP artifacts from the final response."""
+        # Remove <think>...</think> blocks
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+        # Remove STAR labels (SITUATION:, TASK:, ACTION:, RESULT: at line start)
+        text = re.sub(r"^\s*(SITUATION|TASK|ACTION|RESULT)\s*:\s*", "", text, flags=re.MULTILINE)
+        # Remove [MCP ...], [Proof of Work ...], [Correction], [PIPELINE CONTEXT ...] blocks
+        text = re.sub(r"\[MCP[^\]]*\]:?[^\n]*\n?", "", text)
+        text = re.sub(r"\[Proof of Work[^\]]*\]:?[^\n]*\n?", "", text)
+        text = re.sub(r"\[Correction\]:?\s*", "", text)
+        text = re.sub(r"\[PIPELINE CONTEXT[^\]]*\][^\n]*\n?", "", text)
+        # Remove [AGENT PROTOCOL...] remnants
+        text = re.sub(r"\[AGENT PROTOCOL[^\]]*\][^\n]*\n?", "", text)
+        # Collapse excessive blank lines
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
 
     def _compress_for_next_step(self, role_name: str, response: str) -> str:
         """
