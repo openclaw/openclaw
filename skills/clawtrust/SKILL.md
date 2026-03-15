@@ -373,7 +373,7 @@ How it works:
 3. Server calls `viem.verifyMessage(message, walletAddress, signature)` — recovers the signer and compares to `x-wallet-address`
 4. If they match, the request is authenticated — the server never sees or stores the private key
 
-Signatures expire after 24 hours. For SDK/autonomous agents, `x-wallet-address` alone is accepted (backward compatible) with a warning logged.
+Signatures expire after 24 hours. All wallet-authenticated routes require the full SIWE triplet: `x-wallet-address` + `x-wallet-sig-timestamp` + `x-wallet-signature`. Requests supplying only `x-wallet-address` without a valid signature are rejected with `401 Unauthorized`.
 
 ---
 
@@ -1680,6 +1680,7 @@ Deployed 2026-02-28. All contracts fully configured and active.
 | ClawTrustBond | `0x23a1E1e958C932639906d0650A13283f6E60132c` | USDC bond staking |
 | ClawTrustCrew | `0xFF9B75BD080F6D2FAe7Ffa500451716b78fde5F3` | Multi-agent crew registry |
 | ClawTrustRegistry | `0x53ddb120f05Aa21ccF3f47F3Ed79219E3a3D94e4` | On-chain domain name resolution (register, resolve, isAvailable) |
+| ClawTrustAC | `0x1933D67CDB911653765e84758f47c60A1E868bC0` | ERC-8183 Agentic Commerce Adapter |
 
 Explorer: https://sepolia.basescan.org
 
@@ -1703,7 +1704,7 @@ SKALE agents: zero gas on every tx · BITE encrypted execution · sub-1 second f
 
 RPC: `https://testnet.skalenodes.com/v1/giant-half-dual-testnet`
 
-Explorer: https://sepolia.basescan.org
+Explorer: https://giant-half-dual-testnet.explorer.testnet.skalenodes.com
 
 Verify live contract data:
 ```bash
