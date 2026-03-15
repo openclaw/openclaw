@@ -154,6 +154,18 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadText(payloads, "All good");
   });
 
+  it("suppresses gateway config.schema.lookup path-not-found warnings for read-only calls", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "gateway",
+        error: "config schema path not found",
+        mutatingAction: false,
+      },
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
   it("does not add synthetic completion text when tools run without final assistant text", () => {
     const payloads = buildPayloads({
       sessionKey: "agent:main:discord:direct:u123",

@@ -52,6 +52,15 @@ function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
 }
 
+function shouldSuppressGatewayReadOnlyToolError(params: { lastToolError: LastToolError }): boolean {
+  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
+  if (normalizedToolName !== "gateway" || params.lastToolError.mutatingAction !== false) {
+    return false;
+  }
+  const errorLower = (params.lastToolError.error ?? "").trim().toLowerCase();
+  return errorLower === "config schema path not found";
+}
+
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: LastToolError;
   hasUserFacingReply: boolean;
@@ -65,6 +74,9 @@ function resolveToolErrorWarningPolicy(params: {
   }
   const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
   if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !includeDetails) {
+    return { showWarning: false, includeDetails };
+  }
+  if (shouldSuppressGatewayReadOnlyToolError(params)) {
     return { showWarning: false, includeDetails };
   }
   // sessions_send timeouts and errors are transient inter-session communication
