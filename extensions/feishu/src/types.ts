@@ -71,9 +71,9 @@ export type FeishuMessageInfo = {
   senderType?: string;
   content: string;
   contentType: string;
+  imageKey?: string;
+  fileKey?: string;
   createTime?: number;
-  /** Feishu thread ID (omt_xxx) — present when the message belongs to a topic thread. */
-  threadId?: string;
 };
 
 export type FeishuProbeResult = BaseProbeResult<string> & {
