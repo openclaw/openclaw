@@ -2437,7 +2437,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     },
   );
 
-  it("uses message preview transport for all DM lanes when streaming is active", async () => {
+  it("uses native draft answer transport and message reasoning transport for DM lanes", async () => {
     setupDraftStreams({ answerMessageId: 999, reasoningMessageId: 111 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -2453,12 +2453,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createReasoningStreamContext(), streamMode: "partial" });
 
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
+    // Answer lane uses auto (defaults to draft for DMs) for smooth streaming
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
+        previewTransport: "auto",
       }),
     );
+    // Reasoning lane uses message transport to avoid conflicts
     expect(createTelegramDraftStream.mock.calls[1]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
@@ -2467,7 +2469,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("finalizes DM answer preview in place without materializing or sending a duplicate", async () => {
+  it("finalizes DM answer preview using native draft transport", async () => {
     const answerDraftStream = createDraftStream(321);
     const reasoningDraftStream = createDraftStream(111);
     createTelegramDraftStream
@@ -2484,10 +2486,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
+    // Answer lane uses auto (draft transport for DMs)
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
+        previewTransport: "auto",
       }),
     );
     expect(answerDraftStream.materialize).not.toHaveBeenCalled();
