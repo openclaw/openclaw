@@ -26,7 +26,12 @@ const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as co
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
-const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+export const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+
+/** Resolve the Brave Search API endpoint, falling back to the default. */
+export function resolveBraveEndpoint(baseUrl: string | undefined): string {
+  return (baseUrl?.trim() || BRAVE_SEARCH_ENDPOINT).replace(/\/$/, "");
+}
 const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
@@ -1813,8 +1818,7 @@ async function runWebSearch(params: {
     return payload;
   }
 
-  const braveEndpoint = (params.braveBaseUrl?.trim() || BRAVE_SEARCH_ENDPOINT).replace(/\/$/, "");
-  const url = new URL(braveEndpoint);
+  const url = new URL(resolveBraveEndpoint(params.braveBaseUrl));
   url.searchParams.set("q", params.query);
   url.searchParams.set("count", String(params.count));
   if (params.country) {

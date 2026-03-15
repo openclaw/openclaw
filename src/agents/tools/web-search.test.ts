@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
+import { BRAVE_SEARCH_ENDPOINT, resolveBraveEndpoint } from "./web-search.js";
 import { __testing } from "./web-search.js";
 
 const {
@@ -33,6 +34,35 @@ const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
 const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
 const directPerplexityApiKey = ["pplx", "test"].join("-");
 const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
+
+describe("resolveBraveEndpoint", () => {
+  it("returns the default endpoint when baseUrl is undefined", () => {
+    expect(resolveBraveEndpoint(undefined)).toBe(BRAVE_SEARCH_ENDPOINT);
+  });
+
+  it("returns the default endpoint when baseUrl is empty or whitespace", () => {
+    expect(resolveBraveEndpoint("")).toBe(BRAVE_SEARCH_ENDPOINT);
+    expect(resolveBraveEndpoint("   ")).toBe(BRAVE_SEARCH_ENDPOINT);
+  });
+
+  it("uses the custom baseUrl when provided", () => {
+    expect(resolveBraveEndpoint("https://proxy.example.com/brave")).toBe(
+      "https://proxy.example.com/brave",
+    );
+  });
+
+  it("strips trailing slash from custom baseUrl", () => {
+    expect(resolveBraveEndpoint("https://proxy.example.com/brave/")).toBe(
+      "https://proxy.example.com/brave",
+    );
+  });
+
+  it("trims whitespace from custom baseUrl", () => {
+    expect(resolveBraveEndpoint("  https://proxy.example.com/brave  ")).toBe(
+      "https://proxy.example.com/brave",
+    );
+  });
+});
 
 describe("web_search perplexity compatibility routing", () => {
   it("detects API key prefixes", () => {
