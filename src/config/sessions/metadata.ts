@@ -7,6 +7,8 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
+const STABLE_SESSION_ORIGIN_SYSTEM_PROVIDERS = new Set(["heartbeat", "cron-event", "exec-event"]);
+
 const mergeOrigin = (
   existing: SessionOrigin | undefined,
   next: SessionOrigin | undefined,
@@ -86,6 +88,22 @@ export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined 
   return Object.keys(origin).length > 0 ? origin : undefined;
 }
 
+function shouldPreserveExistingOrigin(params: {
+  ctx: MsgContext;
+  existing?: SessionEntry;
+}): boolean {
+  if (!params.existing?.origin) {
+    return false;
+  }
+  const provider = params.ctx.Provider?.trim().toLowerCase();
+  if (!provider) {
+    return false;
+  }
+  // Synthetic heartbeat/cron/exec turns should not rebind an existing session's
+  // stable origin metadata to placeholders like "heartbeat".
+  return STABLE_SESSION_ORIGIN_SYSTEM_PROVIDERS.has(provider);
+}
+
 export function snapshotSessionOrigin(entry?: SessionEntry): SessionOrigin | undefined {
   if (!entry?.origin) {
     return undefined;
@@ -157,7 +175,8 @@ export function deriveSessionMetaPatch(params: {
   groupResolution?: GroupKeyResolution | null;
 }): Partial<SessionEntry> | null {
   const groupPatch = deriveGroupSessionPatch(params);
-  const origin = deriveSessionOrigin(params.ctx);
+  const preserveExistingOrigin = shouldPreserveExistingOrigin(params);
+  const origin = preserveExistingOrigin ? undefined : deriveSessionOrigin(params.ctx);
   if (!groupPatch && !origin) {
     return null;
   }
