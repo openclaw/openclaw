@@ -13,8 +13,6 @@ const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
 type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
 
-const INACTIVE_LOOPBACK_PROBE_BUDGET_MS = 800;
-
 export type GatewayStatusTarget = {
   id: string;
   kind: TargetKind;
@@ -127,7 +125,7 @@ export function resolveProbeBudgetMs(
       // Active loopback probes should honor the caller budget because local shells/containers
       // can legitimately take longer to connect. Inactive loopback probes stay bounded so
       // remote-mode status checks do not stall on an expected local miss.
-      return target.active ? overallMs : Math.min(INACTIVE_LOOPBACK_PROBE_BUDGET_MS, overallMs);
+      return target.active ? overallMs : Math.min(800, overallMs);
     case "sshTunnel":
       return Math.min(2_000, overallMs);
     default:
