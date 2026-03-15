@@ -458,7 +458,7 @@ export type ToolsConfig = {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
       /** Search provider ("brave", "gemini", "grok", "kimi", or "perplexity"). */
-      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "baidu";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */
@@ -487,6 +487,11 @@ export type ToolsConfig = {
         model?: string;
         /** Include inline citations in response text as markdown links (default: false). */
         inlineCitations?: boolean;
+      };
+      /** baidu-specific configuration (used when provider="baidu"). */
+      baidu?: {
+        /** API key for Baidu (defaults to BAIDU_SEARCH_API_KEY env var). */
+        apiKey?: SecretInput;
       };
       /** Kimi-specific configuration (used when provider="kimi"). */
       kimi?: {

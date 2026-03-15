@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
+- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, Perplexity Search API, or Baidu Search API.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -36,6 +36,7 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 | **Grok**                  | AI-synthesized answers + citations | —                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
 | **Kimi**                  | AI-synthesized answers + citations | —                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
 | **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter` | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| **baidu**                 | Fast, structured results           | -                                            | Use Baidu web search                                                           | `BAIDU_SEARCH_API_KEY`                      |
 
 ### Auto-detection
 
@@ -46,6 +47,7 @@ The table above is alphabetical. If no `provider` is explicitly set, runtime aut
 3. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
 4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
 5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
+6. **Baidu** — `BAIDU_SEARCH_API_KEY` env var or `tools.web.search.baidu.apiKey` config
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -182,6 +184,30 @@ In this mode, `country` and `language` / `search_lang` still work, but `ui_lang`
 }
 ```
 
+**Baidu Search:**
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "baidu",
+        baidu: {
+          apiKey: "bce-v3/ALTAK-...",
+        },
+      },
+    },
+  },
+}
+```
+
+## Baidu Search
+
+1. Visit the [Baidu AI Search Console](https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey)
+2. Generate a new API key or select an existing one (format: `bce-v3/ALTAK-...`)
+3. Copy the API key and use it with OpenClaw
+
 ## Using Gemini (Google Search grounding)
 
 Gemini models support built-in [Google Search grounding](https://ai.google.dev/gemini-api/docs/grounding),
@@ -238,6 +264,7 @@ Search the web using your configured provider.
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
   - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **Baidu**: `BAIDU_SEARCH_API_KEY`, or `tools.web.search.baidu.apiKey`
 - All provider key fields above support SecretRef objects.
 
 ### Config

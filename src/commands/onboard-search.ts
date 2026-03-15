@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "baidu";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -61,6 +61,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     envKeys: ["PERPLEXITY_API_KEY"],
     placeholder: "pplx-...",
     signupUrl: "https://www.perplexity.ai/settings/api",
+  },
+  {
+    value: "baidu",
+    label: "Baidu Search",
+    hint: "Baidu web search",
+    envKeys: ["BAIDU_SEARCH_API_KEY"],
+    placeholder: "bce-...",
+    signupUrl: "https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey",
   },
 ] as const;
 
@@ -143,6 +151,9 @@ export function applySearchKey(
       break;
     case "perplexity":
       search.perplexity = { ...search.perplexity, apiKey: key };
+      break;
+    case "baidu":
+      search.baidu = { ...search.baidu, apiKey: key };
       break;
   }
   return {
