@@ -434,5 +434,23 @@ describe("resolveDeliveryTarget", () => {
       expect(result.ok).toBe(true);
       expect(result.to).toBe("explicit-target");
     });
+
+    it("ignores invalid originChannel and falls back to default channel selection", async () => {
+      setMainSessionEntry(undefined);
+      vi.mocked(resolveMessageChannelSelection).mockClear();
+      const cfg = makeCfg();
+
+      const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+        channel: "last",
+        to: "explicit-target",
+        originChannel: "stale-plugin",
+        originTo: "715441687",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.channel).toBe("telegram");
+      expect(result.to).toBe("explicit-target");
+      expect(resolveMessageChannelSelection).toHaveBeenCalledTimes(1);
+    });
   });
 });

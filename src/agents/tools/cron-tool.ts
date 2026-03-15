@@ -426,9 +426,16 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               (mode === "" || mode === "announce") &&
               !hasTarget;
             if (shouldInfer && inferred) {
+              const inferredImplicitDelivery: CronDelivery = { mode: "announce" };
+              if (inferred.channel) {
+                inferredImplicitDelivery.channel = inferred.channel;
+              }
+              if (inferred.to) {
+                inferredImplicitDelivery.to = inferred.to;
+              }
               (job as { delivery?: unknown }).delivery = {
                 ...delivery,
-                ...inferred,
+                ...inferredImplicitDelivery,
               } satisfies CronDelivery;
             }
 
