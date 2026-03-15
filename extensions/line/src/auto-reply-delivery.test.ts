@@ -208,6 +208,24 @@ describe("deliverLineAutoReply", () => {
   });
 
   describe("sticker delivery", () => {
+    it("sends explicit error text when sticker-only payload is invalid", async () => {
+      const { deps, replyMessageLine, pushMessagesLine } = createDeps();
+
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { sticker: { raw: "not-valid" } },
+        lineData: {},
+        deps,
+      });
+
+      expect(replyMessageLine).toHaveBeenCalledWith(
+        "token",
+        [{ type: "text", text: "[Sticker send error: invalid sticker format]" }],
+        { accountId: "acc" },
+      );
+      expect(pushMessagesLine).not.toHaveBeenCalled();
+    });
+
     it("sends sticker only when payload has valid sticker (text is dropped)", async () => {
       const { deps, replyMessageLine, pushMessagesLine } = createDeps();
 
@@ -307,7 +325,7 @@ describe("deliverLineAutoReply", () => {
         [
           expect.objectContaining({
             type: "text",
-            text: expect.stringContaining("スタンプ送信エラー"),
+            text: expect.stringContaining("Sticker send error"),
           }),
         ],
         { accountId: "acc" },

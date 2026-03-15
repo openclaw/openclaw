@@ -3,6 +3,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   filterMessagingToolMediaDuplicates,
+  isRenderablePayload,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 
@@ -33,6 +34,12 @@ vi.mock("../../channels/plugins/bundled.js", () => ({
         }
       : undefined,
 }));
+
+describe("isRenderablePayload", () => {
+  it("returns true for sticker-only payload", () => {
+    expect(isRenderablePayload({ sticker: { raw: "446:1988" } })).toBe(true);
+  });
+});
 
 describe("filterMessagingToolMediaDuplicates", () => {
   it("strips mediaUrl when it matches sentMediaUrls", () => {

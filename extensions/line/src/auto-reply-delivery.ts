@@ -55,6 +55,9 @@ export async function deliverLineAutoReply(params: {
   const { payload, lineData, replyToken, accountId, to, textLimit, deps } = params;
   let replyTokenUsed = params.replyTokenUsed;
 
+  const stickerSendErrorText = "[Sticker send error]";
+  const stickerInvalidFormatText = "[Sticker send error: invalid sticker format]";
+
   const pushLineMessages = async (messages: messagingApi.Message[]): Promise<void> => {
     if (messages.length === 0) {
       return;
@@ -105,16 +108,19 @@ export async function deliverLineAutoReply(params: {
       } catch (err) {
         logVerbose(`line: sticker send failed (${payload.sticker.raw}): ${String(err)}`);
         try {
-          await pushLineMessages([
-            { type: "text", text: `[スタンプ送信エラー: ${payload.sticker.raw}]` },
-          ]);
+          await pushLineMessages([{ type: "text", text: stickerSendErrorText }]);
         } catch (pushErr) {
           logVerbose(`line: sticker error text push also failed: ${String(pushErr)}`);
         }
       }
       return { replyTokenUsed };
     }
-    // Sticker raw is invalid for LINE (e.g. non-numeric) — fall through to normal text delivery.
+    // Invalid sticker-only payload should not disappear silently.
+    if (!payload.text?.trim()) {
+      await sendLineMessages([{ type: "text", text: stickerInvalidFormatText }], true);
+      return { replyTokenUsed };
+    }
+    // If text exists, fall through and deliver text normally.
   }
 
   // lineData.sticker: direct channelData path (packageId/stickerId already parsed).
@@ -125,7 +131,7 @@ export async function deliverLineAutoReply(params: {
     } catch (err) {
       logVerbose(`line: sticker send failed (channelData): ${String(err)}`);
       try {
-        await pushLineMessages([{ type: "text", text: "[スタンプ送信エラー]" }]);
+        await pushLineMessages([{ type: "text", text: stickerSendErrorText }]);
       } catch (pushErr) {
         logVerbose(`line: sticker error text push also failed: ${String(pushErr)}`);
       }

@@ -1,7 +1,7 @@
 ---
 name: line-sticker
 description: Send LINE stickers as replies on LINE channels. Use when the user sends a sticker (detected by StickerInfo in context), or when a sticker would be a natural short reaction (e.g. greeting, thanks, goodbye). Do NOT use for substantive questions, long conversations, or non-LINE channels. If no suitable sticker is found, reply with text instead.
-metadata: { "openclaw": { "emoji": "🎨" } }
+metadata: { "openclaw": { "emoji": "🎨", "requires": { "config": ["channels.line"] } } }
 ---
 
 # LINE Sticker
@@ -76,7 +76,7 @@ Choose the cluster that best matches the conversation mood:
 
 ### Step 2: Read the cluster file
 
-Read `{skillBaseDir}/references/cluster-{name}.json` (e.g. `cluster-thanks.json`).
+Read `references/cluster-{name}.json` (e.g. `references/cluster-thanks.json`).
 
 Each sticker entry has:
 

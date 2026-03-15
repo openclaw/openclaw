@@ -76,6 +76,9 @@ async function sendDirectBlockReply(params: {
   params.directlySentBlockKeys.add(createBlockReplyContentKey(params.trackingPayload));
   await params.onBlockReply(params.payload);
 }
+const hasRenderableMedia = (payload: ReplyPayload): boolean =>
+  Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.sticker);
+
 
 export function createBlockReplyDeliveryHandler(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
