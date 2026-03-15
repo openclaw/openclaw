@@ -92,7 +92,7 @@ describe("trust commands", () => {
 
     expect(untrustResult).toEqual({
       shouldContinue: false,
-      reply: { text: "🔒 Trust revoked for this session." },
+      reply: { text: "🔒 Trust revoked for this session" },
     });
     expect(resolveTrustedExecSecurity(trustParams.sessionKey)).toBeUndefined();
   });

@@ -690,7 +690,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "trust",
       nativeName: "trust",
-      description: "Trust all exec in this session for X minutes (set exec security to full), default 15m, max 480m.",
+      description: "Trust all exec in this session for X minutes (set exec security to full), default 15m, max 480m",
       textAlias: "/trust",
       category: "options",
       args: [
@@ -705,7 +705,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "untrust",
       nativeName: "untrust",
-      description: "End trust window for this session.",
+      description: "End trust window for this session",
       textAlias: "/untrust",
       category: "options",
     }),
