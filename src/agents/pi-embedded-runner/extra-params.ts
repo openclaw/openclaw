@@ -422,6 +422,29 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
   }
 
+  // Azure OpenAI requires api-version as a query parameter, not a header.
+  // Ensure the model's baseUrl includes it so all requests carry the param (#46676).
+  if (provider === "azure-openai" || provider === "azure-openai-responses") {
+    const inner = agent.streamFn;
+    agent.streamFn = (model, context, options) => {
+      const baseUrl = typeof model.baseUrl === "string" ? model.baseUrl : "";
+      if (baseUrl && !baseUrl.includes("api-version")) {
+        try {
+          const url = new URL(baseUrl);
+          url.searchParams.set("api-version", "2024-10-21");
+          return (inner ?? streamSimple)(
+            { ...model, baseUrl: url.toString() } as typeof model,
+            context,
+            options,
+          );
+        } catch {
+          // Malformed URL – fall through to default behavior.
+        }
+      }
+      return (inner ?? streamSimple)(model, context, options);
+    };
+  }
+
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
     log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
     agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
