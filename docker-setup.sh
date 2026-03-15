@@ -12,17 +12,23 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
     [[ -z "$_env_line" || "$_env_line" == '#'* ]] && continue
     _env_key="${_env_line%%=*}"
     _env_val="${_env_line#*=}"
+    # Strip unquoted inline comments BEFORE removing surrounding quotes.
+    # A comment marker outside quotes (KEY=val # note) is removed here.
+    # A marker inside quotes (KEY="val # not-a-comment") is protected.
+    if [[ "$_env_val" != '"'*'"' && "$_env_val" != "'"*"'" ]]; then
+      _env_val="${_env_val%%' #'*}"
+      _env_val="${_env_val%"${_env_val##*[! ]}"}"
+    fi
+    # Strip surrounding quotes and unescape any escaped double-quotes.
     if [[ "$_env_val" == '"'*'"' ]]; then
       _env_val="${_env_val%'"'}"
       _env_val="${_env_val#'"'}"
+      _env_val="${_env_val//\"/"}"
     elif [[ "$_env_val" == "'"*"'" ]]; then
       _env_val="${_env_val%"'"}"
       _env_val="${_env_val#"'"}"
     fi
-    # Skip invalid identifiers (indented comments, "export KEY=val" lines, keys with hyphens, etc.)
-    # Strip inline comments (e.g. KEY=val # note) and trailing whitespace.
-    _env_val="${_env_val%%\ \#*}"
-    _env_val="${_env_val%"${_env_val##*[! ]}"}"
+    # Skip invalid bash identifiers (indented comments, "export KEY=val", hyphens, etc.)
     if [[ "$_env_key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ && -z "${!_env_key+x}" ]]; then
       export "$_env_key=$_env_val"
     fi
