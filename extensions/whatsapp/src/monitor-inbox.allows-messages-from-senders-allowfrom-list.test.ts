@@ -265,7 +265,7 @@ describe("web monitor inbox", () => {
             remoteJid: "999@s.whatsapp.net",
           },
           message: { conversation: "old message" },
-          messageTimestamp: nowSeconds(-90_000),
+          messageTimestamp: nowSeconds(),
           pushName: "History Sender",
         },
       ],
