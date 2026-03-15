@@ -25,6 +25,11 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
+import {
+  createPrivacyFilterContext,
+  wrapStreamFnPrivacyFilter,
+  type PrivacyFilterContext,
+} from "../../../privacy/stream-wrapper.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
@@ -2056,7 +2061,37 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      if (anthropicPayloadLogger) {
+      const useReplacedContentInLogs = params.config?.privacy?.log?.useReplacedContent !== false;
+      if (anthropicPayloadLogger && useReplacedContentInLogs) {
+        // Logger is inner wrapper so outer privacy filter can redact outbound payloads
+        // before they are captured in logs.
+        activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
+          activeSession.agent.streamFn,
+        );
+      }
+
+      // Privacy filter: replace sensitive content before sending to LLM API.
+      const privacyEnabled = params.config?.privacy?.enabled !== false;
+      let privacyCtx: PrivacyFilterContext | undefined;
+      if (privacyEnabled) {
+        try {
+          privacyCtx = createPrivacyFilterContext(params.sessionId, params.config?.privacy);
+          activeSession.agent.streamFn = wrapStreamFnPrivacyFilter(
+            activeSession.agent.streamFn,
+            privacyCtx,
+          );
+        } catch (err) {
+          // Degrade gracefully — filtering is a hardening layer, not a critical path.
+          // A read-only $HOME or unwritable storePath should not abort the entire run.
+          log.warn(
+            `[privacy] Failed to initialize privacy filter, continuing without: ${(err as Error).message}`,
+          );
+        }
+      }
+
+      if (anthropicPayloadLogger && !useReplacedContentInLogs) {
+        // Logger is outer wrapper and captures original outbound payloads when
+        // replacement-in-logs is explicitly disabled.
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
