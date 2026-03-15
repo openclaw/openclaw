@@ -14,7 +14,24 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
+    chatUserNearBottom: true,
+    chatAutoScrollMode: "bottom",
+    chatSuppressedBlockId: null,
+    chatNewMessagesBelow: false,
+    chatToolMessages: [],
+    chatStreamSegments: [],
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
+    toolStreamSyncTimer: null,
+    querySelector: () => null,
+    style: {} as CSSStyleDeclaration,
+    chatScrollFrame: null,
+    chatScrollTimeout: null,
+    chatHasAutoScrolled: false,
     lastError: null,
+    settings: {
+      lastActiveSessionKey: "agent:main",
+    },
     sessionKey: "agent:main",
     basePath: "",
     hello: null,
@@ -117,5 +134,29 @@ describe("handleSendChat", () => {
       model: "gpt-5-mini",
     });
     expect(host.chatModelOverrides.main).toBe("gpt-5-mini");
+  });
+
+  it("re-arms bottom-follow when sending a new message", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "hello",
+      chatUserNearBottom: false,
+      chatAutoScrollMode: "clamp",
+      chatSuppressedBlockId: "stream:1",
+      chatNewMessagesBelow: true,
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatAutoScrollMode).toBe("bottom");
+    expect(host.chatSuppressedBlockId).toBeNull();
+    expect(host.chatNewMessagesBelow).toBe(false);
   });
 });

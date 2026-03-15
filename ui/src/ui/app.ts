@@ -35,6 +35,7 @@ import {
   handleLogsScroll as handleLogsScrollInternal,
   resetChatScroll as resetChatScrollInternal,
   scheduleChatScroll as scheduleChatScrollInternal,
+  type ChatAutoScrollMode,
 } from "./app-scroll.ts";
 import {
   applySettings as applySettingsInternal,
@@ -435,6 +436,10 @@ export class OpenClawApp extends LitElement {
   private chatScrollFrame: number | null = null;
   private chatScrollTimeout: number | null = null;
   private chatHasAutoScrolled = false;
+  private chatLastScrollTop: number | null = null;
+  private chatAutoScrollBlockId: string | null = null;
+  private chatAutoScrollMode: ChatAutoScrollMode = "bottom";
+  private chatSuppressedBlockId: string | null = null;
   private chatUserNearBottom = true;
   @state() chatNewMessagesBelow = false;
   private nodesPollInterval: number | null = null;
