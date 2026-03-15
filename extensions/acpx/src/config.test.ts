@@ -285,6 +285,23 @@ describe("McpServerConfig SecretInput env values", () => {
       ]);
     });
 
+    it("preserves empty-string env values", () => {
+      const mcpServers: Record<string, McpServerConfig> = {
+        "test-server": {
+          command: "/usr/bin/test",
+          env: {
+            EMPTY: "",
+            NONEMPTY: "value",
+          },
+        },
+      };
+      const result = toAcpMcpServers(mcpServers);
+      expect(result[0].env).toEqual([
+        { name: "EMPTY", value: "" },
+        { name: "NONEMPTY", value: "value" },
+      ]);
+    });
+
     it("handles empty env object", () => {
       const mcpServers: Record<string, McpServerConfig> = {
         "test-server": { command: "/usr/bin/test", env: {} },

@@ -323,13 +323,18 @@ export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): Ac
   return Object.entries(mcpServers).map(([name, server]) => {
     const resolvedEnv: Array<{ name: string; value: string }> = [];
     for (const [envName, envValue] of Object.entries(server.env ?? {})) {
-      // Resolve SecretInput to plain string; throws if SecretRef is unresolved
-      const resolved = normalizeResolvedSecretInputString({
-        value: envValue,
-        path: `mcpServers.${name}.env.${envName}`,
-      });
-      if (resolved) {
-        resolvedEnv.push({ name: envName, value: resolved });
+      if (typeof envValue === "string") {
+        // Plain strings pass through as-is, including empty strings
+        resolvedEnv.push({ name: envName, value: envValue });
+      } else {
+        // Resolve SecretRef to plain string; throws if unresolved
+        const resolved = normalizeResolvedSecretInputString({
+          value: envValue,
+          path: `mcpServers.${name}.env.${envName}`,
+        });
+        if (resolved !== undefined) {
+          resolvedEnv.push({ name: envName, value: resolved });
+        }
       }
     }
     return {
