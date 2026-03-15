@@ -15,6 +15,7 @@ import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { defaultSlotIdForKey } from "./slots.js";
 import {
   isPluginHookName,
   isPromptInjectionHookName,
@@ -235,6 +236,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: "hook registration missing name",
+      });
+      return;
+    }
+    const existingHook = registry.hooks.find((entry) => entry.entry.hook.name === name);
+    if (existingHook) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `hook already registered: ${name} (${existingHook.pluginId})`,
       });
       return;
     }
@@ -473,6 +484,28 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     opts?: { commands?: string[] },
   ) => {
     const commands = (opts?.commands ?? []).map((cmd) => cmd.trim()).filter(Boolean);
+    if (commands.length === 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "cli registration missing explicit commands metadata",
+      });
+      return;
+    }
+    const existing = registry.cliRegistrars.find((entry) =>
+      entry.commands.some((command) => commands.includes(command)),
+    );
+    if (existing) {
+      const overlap = commands.find((command) => existing.commands.includes(command));
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `cli command already registered: ${overlap ?? commands[0]} (${existing.pluginId})`,
+      });
+      return;
+    }
     record.cliCommands.push(...commands);
     registry.cliRegistrars.push({
       pluginId: record.id,
@@ -485,6 +518,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
     const id = service.id.trim();
     if (!id) {
+      return;
+    }
+    const existing = registry.services.find((entry) => entry.service.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `service already registered: ${id} (${existing.pluginId})`,
+      });
       return;
     }
     record.services.push(id);
@@ -611,7 +654,26 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       registerService: (service) => registerService(record, service),
       registerCommand: (command) => registerCommand(record, command),
-      registerContextEngine: (id, factory) => registerContextEngine(id, factory),
+      registerContextEngine: (id, factory) => {
+        if (id === defaultSlotIdForKey("contextEngine")) {
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: `context engine id reserved by core: ${id}`,
+          });
+          return;
+        }
+        const result = registerContextEngine(id, factory, { owner: `plugin:${record.id}` });
+        if (!result.ok) {
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: `context engine already registered: ${id} (${result.existingOwner})`,
+          });
+        }
+      },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
         registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
