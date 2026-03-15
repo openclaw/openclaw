@@ -14,6 +14,12 @@ export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode)
   if (!markdown || mode === "off") {
     return markdown;
   }
+  // "block" mode is channel-specific (e.g. Slack Block Kit) and produces
+  // structured data, not inline text.  Fall back to "code" for the generic
+  // text-only converter so table content is never silently dropped.
+  if (mode === "block") {
+    mode = "code";
+  }
   const { ir, hasTables } = markdownToIRWithMeta(markdown, {
     linkify: false,
     autolink: false,
