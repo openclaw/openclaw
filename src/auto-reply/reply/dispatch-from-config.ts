@@ -1,5 +1,6 @@
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "../../../extensions/discord/src/exec-approvals.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveActiveRunIdForChildSession } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -345,11 +346,16 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
+    const acpRunId =
+      (acpDispatchSessionKey
+        ? resolveActiveRunIdForChildSession(acpDispatchSessionKey)
+        : undefined) ?? params.replyOptions?.runId;
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,
       dispatcher,
       sessionKey: acpDispatchSessionKey,
+      runId: acpRunId,
       inboundAudio,
       sessionTtsAuto,
       ttsChannel,
@@ -478,11 +484,16 @@ export async function dispatchReplyFromConfig(params: {
       // Command handling prepared a trailing prompt after ACP in-place reset.
       // Route that tail through ACP now (same turn) instead of embedded dispatch.
       ctx.AcpDispatchTailAfterReset = false;
+      const acpTailRunId =
+        (acpDispatchSessionKey
+          ? resolveActiveRunIdForChildSession(acpDispatchSessionKey)
+          : undefined) ?? params.replyOptions?.runId;
       const acpTailDispatch = await tryDispatchAcpReply({
         ctx,
         cfg,
         dispatcher,
         sessionKey: acpDispatchSessionKey,
+        runId: acpTailRunId,
         inboundAudio,
         sessionTtsAuto,
         ttsChannel,
