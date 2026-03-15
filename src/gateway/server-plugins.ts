@@ -110,8 +110,7 @@ function resolvePluginSubagentIdempotencyKey(params: {
   sessionKey: string;
   method: "agent" | "agent.enqueue";
 }): string {
-  const provided =
-    typeof params.idempotencyKey === "string" ? params.idempotencyKey.trim() : "";
+  const provided = typeof params.idempotencyKey === "string" ? params.idempotencyKey.trim() : "";
   if (provided) {
     return provided;
   }

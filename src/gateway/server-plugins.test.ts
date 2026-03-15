@@ -51,10 +51,21 @@ function getLastDispatchedContext(): GatewayRequestContext | undefined {
 }
 
 function getLastDispatchedRequest():
-  | (GatewayRequestOptions["req"] & { params?: Record<string, unknown> })
+  | { method: string; params?: Record<string, unknown> }
   | undefined {
   const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
-  return call?.req;
+  const req = call?.req;
+  if (!req) {
+    return undefined;
+  }
+  const params =
+    "params" in req && req.params != null && typeof req.params === "object"
+      ? (req.params as Record<string, unknown>)
+      : undefined;
+  return {
+    method: req.method,
+    params,
+  };
 }
 
 async function importServerPluginsModule(): Promise<ServerPluginsModule> {
