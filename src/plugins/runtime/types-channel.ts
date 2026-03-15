@@ -139,7 +139,7 @@ export type PluginRuntimeChannel = {
     monitorTelegramProvider: typeof import("../../../extensions/telegram/src/monitor.js").monitorTelegramProvider;
     messageActions: typeof import("../../channels/plugins/actions/telegram.js").telegramMessageActions;
     typing: {
-      pulse: typeof import("../../telegram/send.js").sendTypingTelegram;
+      pulse: typeof import("../../../extensions/telegram/src/send.js").sendTypingTelegram;
       start: (params: {
         to: string;
         accountId?: string;
@@ -152,8 +152,8 @@ export type PluginRuntimeChannel = {
       }>;
     };
     conversationActions: {
-      editMessage: typeof import("../../telegram/send.js").editMessageTelegram;
-      editReplyMarkup: typeof import("../../telegram/send.js").editMessageReplyMarkupTelegram;
+      editMessage: typeof import("../../../extensions/telegram/src/send.js").editMessageTelegram;
+      editReplyMarkup: typeof import("../../../extensions/telegram/src/send.js").editMessageReplyMarkupTelegram;
       clearReplyMarkup: (
         chatIdInput: string | number,
         messageIdInput: string | number,
@@ -166,10 +166,10 @@ export type PluginRuntimeChannel = {
           cfg?: ReturnType<typeof import("../../config/config.js").loadConfig>;
         },
       ) => Promise<{ ok: true; messageId: string; chatId: string }>;
-      deleteMessage: typeof import("../../telegram/send.js").deleteMessageTelegram;
-      renameTopic: typeof import("../../telegram/send.js").renameForumTopicTelegram;
-      pinMessage: typeof import("../../telegram/send.js").pinMessageTelegram;
-      unpinMessage: typeof import("../../telegram/send.js").unpinMessageTelegram;
+      deleteMessage: typeof import("../../../extensions/telegram/src/send.js").deleteMessageTelegram;
+      renameTopic: typeof import("../../../extensions/telegram/src/send.js").renameForumTopicTelegram;
+      pinMessage: typeof import("../../../extensions/telegram/src/send.js").pinMessageTelegram;
+      unpinMessage: typeof import("../../../extensions/telegram/src/send.js").unpinMessageTelegram;
     };
   };
   signal: {

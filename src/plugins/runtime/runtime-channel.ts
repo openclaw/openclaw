@@ -40,7 +40,17 @@ import {
 } from "../../../extensions/telegram/src/audit.js";
 import { monitorTelegramProvider } from "../../../extensions/telegram/src/monitor.js";
 import { probeTelegram } from "../../../extensions/telegram/src/probe.js";
-import { sendMessageTelegram, sendPollTelegram } from "../../../extensions/telegram/src/send.js";
+import {
+  deleteMessageTelegram,
+  editMessageReplyMarkupTelegram,
+  editMessageTelegram,
+  pinMessageTelegram,
+  renameForumTopicTelegram,
+  sendMessageTelegram,
+  sendPollTelegram,
+  sendTypingTelegram,
+  unpinMessageTelegram,
+} from "../../../extensions/telegram/src/send.js";
 import { resolveTelegramToken } from "../../../extensions/telegram/src/token.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
