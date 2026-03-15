@@ -98,13 +98,12 @@ Add to your `~/.openclaw/config.json`:
 
 ## Usage
 
+> **Note:** Setting `ERNIE_API_KEY` makes the provider available but does not change your default model. Use `--model` to select ERNIE, or run onboarding / update your config to set it as the default.
+
 ### Start a Chat Session
 
 ```bash
-# Using default ERNIE model
-openclaw chat
-
-# Explicitly specify ERNIE model
+# Specify ERNIE model
 openclaw chat --model ernie/ernie-5.0-thinking-preview
 ```
 
