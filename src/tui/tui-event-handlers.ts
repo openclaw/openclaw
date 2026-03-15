@@ -10,6 +10,7 @@ type EventHandlerChatLog = {
     result: unknown,
     options?: { partial?: boolean; isError?: boolean },
   ) => void;
+  addUser: (text: string) => void;
   addSystem: (text: string) => void;
   updateAssistant: (text: string, runId: string) => void;
   finalizeAssistant: (text: string, runId: string) => void;
