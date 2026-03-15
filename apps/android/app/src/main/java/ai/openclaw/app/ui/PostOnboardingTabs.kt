@@ -69,6 +69,14 @@ private enum class StatusVisual {
 fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var activeTab by rememberSaveable { mutableStateOf(HomeTab.Connect) }
 
+  // Navigate to Voice tab when triggered by System Assistant
+  val navigateToVoiceTabEvent by viewModel.navigateToVoiceTabEvent.collectAsState()
+  LaunchedEffect(navigateToVoiceTabEvent) {
+    if (navigateToVoiceTabEvent > 0L) {
+      activeTab = HomeTab.Voice
+    }
+  }
+
   // Stop TTS when user navigates away from voice tab
   LaunchedEffect(activeTab) {
     viewModel.setVoiceScreenActive(activeTab == HomeTab.Voice)
