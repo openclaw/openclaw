@@ -8,6 +8,8 @@ import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
+import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
@@ -803,6 +805,58 @@ describe("agentCommand", () => {
     } finally {
       vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
     }
+  });
+
+  it("refreshes cached skills snapshots when the agent-level skills filter changes without a version bump", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:ops:main";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-ops",
+          updatedAt: Date.now(),
+          skillsSnapshot: {
+            prompt: "<available_skills><skill>meme-factory</skill></available_skills>",
+            skills: [{ name: "meme-factory" }],
+            version: 0,
+          },
+        },
+      });
+
+      configSpy.mockReturnValue({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            models: { "anthropic/claude-opus-4-5": {} },
+            workspace: path.join(home, "openclaw"),
+          },
+          list: [{ id: "ops", default: true, skills: ["weather"] }],
+        },
+        session: { store, mainKey: "main" },
+      } as unknown as OpenClawConfig);
+
+      vi.mocked(getSkillsSnapshotVersion).mockReturnValueOnce(0);
+      vi.mocked(buildWorkspaceSkillSnapshot).mockReturnValueOnce({
+        prompt: "<available_skills><skill>weather</skill></available_skills>",
+        skills: [{ name: "weather" }],
+        skillFilter: ["weather"],
+        version: 0,
+      } as never);
+
+      await agentCommand({ message: "hi", sessionKey }, runtime);
+
+      expect(buildWorkspaceSkillSnapshot).toHaveBeenCalledOnce();
+      expect(vi.mocked(buildWorkspaceSkillSnapshot).mock.calls[0]?.[1]).toMatchObject({
+        skillFilter: ["weather"],
+        snapshotVersion: 0,
+      });
+
+      const saved = readSessionStore<{
+        skillsSnapshot?: { skillFilter?: string[]; skills?: Array<{ name: string }> };
+      }>(store);
+      expect(saved[sessionKey]?.skillsSnapshot?.skillFilter).toEqual(["weather"]);
+      expect(saved[sessionKey]?.skillsSnapshot?.skills).toEqual([{ name: "weather" }]);
+    });
   });
 
   it("rejects unknown agent overrides", async () => {
