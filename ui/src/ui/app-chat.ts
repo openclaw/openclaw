@@ -78,7 +78,6 @@ export async function handleAbortChat(host: ChatHost) {
   if (!host.connected) {
     return;
   }
-  host.chatMessage = "";
   await abortChatRun(host as unknown as OpenClawApp);
 }
 
@@ -205,6 +204,7 @@ export async function handleSendChat(
   }
 
   if (isChatStopCommand(message)) {
+    host.chatMessage = "";
     await handleAbortChat(host);
     return;
   }
