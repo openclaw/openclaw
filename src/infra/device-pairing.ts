@@ -48,6 +48,15 @@ export type DeviceAuthTokenSummary = {
   lastUsedAtMs?: number;
 };
 
+export type RotateDeviceTokenDenyReason =
+  | "unknown-device-or-role"
+  | "missing-approved-scope-baseline"
+  | "scope-outside-approved-baseline";
+
+export type RotateDeviceTokenResult =
+  | { ok: true; entry: DeviceAuthToken }
+  | { ok: false; reason: RotateDeviceTokenDenyReason };
+
 export type PairedDevice = {
   deviceId: string;
   publicKey: string;
@@ -70,6 +79,16 @@ export type DevicePairingList = {
   pending: DevicePairingPendingRequest[];
   paired: PairedDevice[];
 };
+
+export type ApproveDevicePairingResult =
+  | { status: "approved"; requestId: string; device: PairedDevice }
+  | { status: "forbidden"; missingScope: string }
+  | null;
+
+type ApprovedDevicePairingResult = Extract<
+  NonNullable<ApproveDevicePairingResult>,
+  { status: "approved" }
+>;
 
 type DevicePairingStateFile = {
   pendingById: Record<string, DevicePairingPendingRequest>;
@@ -237,6 +256,25 @@ function scopesWithinApprovedDeviceBaseline(params: {
   });
 }
 
+function resolveMissingRequestedScope(params: {
+  role: string;
+  requestedScopes: readonly string[];
+  callerScopes: readonly string[];
+}): string | null {
+  for (const scope of params.requestedScopes) {
+    if (
+      !roleScopesAllow({
+        role: params.role,
+        requestedScopes: [scope],
+        allowedScopes: params.callerScopes,
+      })
+    ) {
+      return scope;
+    }
+  }
+  return null;
+}
+
 export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
   const state = await loadState(baseDir);
   const pending = Object.values(state.pendingById).toSorted((a, b) => b.ts - a.ts);
@@ -252,6 +290,14 @@ export async function getPairedDevice(
 ): Promise<PairedDevice | null> {
   const state = await loadState(baseDir);
   return state.pairedByDeviceId[normalizeDeviceId(deviceId)] ?? null;
+}
+
+export async function getPendingDevicePairing(
+  requestId: string,
+  baseDir?: string,
+): Promise<DevicePairingPendingRequest | null> {
+  const state = await loadState(baseDir);
+  return state.pendingById[requestId] ?? null;
 }
 
 export async function requestDevicePairing(
@@ -305,12 +351,37 @@ export async function requestDevicePairing(
 export async function approveDevicePairing(
   requestId: string,
   baseDir?: string,
-): Promise<{ requestId: string; device: PairedDevice } | null> {
+): Promise<ApprovedDevicePairingResult | null>;
+export async function approveDevicePairing(
+  requestId: string,
+  options: { callerScopes?: readonly string[] },
+  baseDir?: string,
+): Promise<ApproveDevicePairingResult>;
+export async function approveDevicePairing(
+  requestId: string,
+  optionsOrBaseDir?: { callerScopes?: readonly string[] } | string,
+  maybeBaseDir?: string,
+): Promise<ApproveDevicePairingResult> {
+  const options =
+    typeof optionsOrBaseDir === "string" || optionsOrBaseDir === undefined
+      ? undefined
+      : optionsOrBaseDir;
+  const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const pending = state.pendingById[requestId];
     if (!pending) {
       return null;
+    }
+    if (pending.role && options?.callerScopes) {
+      const missingScope = resolveMissingRequestedScope({
+        role: pending.role,
+        requestedScopes: normalizeDeviceAuthScopes(pending.scopes),
+        callerScopes: options.callerScopes,
+      });
+      if (missingScope) {
+        return { status: "forbidden", missingScope };
+      }
     }
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
@@ -364,7 +435,7 @@ export async function approveDevicePairing(
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, baseDir);
-    return { requestId, device };
+    return { status: "approved", requestId, device };
   });
 }
 
@@ -587,7 +658,7 @@ export async function rotateDeviceToken(params: {
   role: string;
   scopes?: string[];
   baseDir?: string;
-}): Promise<DeviceAuthToken | null> {
+}): Promise<RotateDeviceTokenResult> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const context = resolveDeviceTokenUpdateContext({
@@ -596,13 +667,16 @@ export async function rotateDeviceToken(params: {
       role: params.role,
     });
     if (!context) {
-      return null;
+      return { ok: false, reason: "unknown-device-or-role" };
     }
     const { device, role, tokens, existing } = context;
     const requestedScopes = normalizeDeviceAuthScopes(
       params.scopes ?? existing?.scopes ?? device.scopes,
     );
     const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
+    if (!approvedScopes) {
+      return { ok: false, reason: "missing-approved-scope-baseline" };
+    }
     if (
       !scopesWithinApprovedDeviceBaseline({
         role,
@@ -610,7 +684,7 @@ export async function rotateDeviceToken(params: {
         approvedScopes,
       })
     ) {
-      return null;
+      return { ok: false, reason: "scope-outside-approved-baseline" };
     }
     const now = Date.now();
     const next = buildDeviceAuthToken({
@@ -624,7 +698,7 @@ export async function rotateDeviceToken(params: {
     device.tokens = tokens;
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, params.baseDir);
-    return next;
+    return { ok: true, entry: next };
   });
 }
 

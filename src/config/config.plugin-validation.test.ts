@@ -44,7 +44,6 @@ async function writePluginFixture(params: {
 }
 
 describe("config plugin validation", () => {
-  const previousUmask = process.umask(0o022);
   let fixtureRoot = "";
   let suiteHome = "";
   let badPluginDir = "";
@@ -136,7 +135,6 @@ describe("config plugin validation", () => {
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
     clearPluginManifestRegistryCache();
-    process.umask(previousUmask);
   });
 
   it("reports missing plugin refs across load paths, entries, and allowlist surfaces", async () => {
@@ -173,6 +171,24 @@ describe("config plugin validation", () => {
           "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
       });
     }
+  });
+
+  it("does not fail validation for the implicit default memory slot when plugins config is explicit", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          entries: { acpx: { enabled: true } },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(suiteHome, "missing-bundled-plugins"),
+        },
+      },
+    );
+    expect(res.ok).toBe(true);
   });
 
   it("warns for removed legacy plugin ids instead of failing validation", async () => {

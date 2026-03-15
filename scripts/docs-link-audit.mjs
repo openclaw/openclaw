@@ -113,6 +113,41 @@ function resolveRoute(route) {
   return { ok: routes.has(current), terminal: current };
 }
 
+/** @param {unknown} node */
+function collectNavPageEntries(node) {
+  /** @type {string[]} */
+  const entries = [];
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      entries.push(...collectNavPageEntries(item));
+    }
+    return entries;
+  }
+
+  if (!node || typeof node !== "object") {
+    return entries;
+  }
+
+  const record = /** @type {Record<string, unknown>} */ (node);
+  if (Array.isArray(record.pages)) {
+    for (const page of record.pages) {
+      if (typeof page === "string") {
+        entries.push(page);
+      } else {
+        entries.push(...collectNavPageEntries(page));
+      }
+    }
+  }
+
+  for (const value of Object.values(record)) {
+    if (value !== record.pages) {
+      entries.push(...collectNavPageEntries(value));
+    }
+  }
+
+  return entries;
+}
+
 const markdownLinkRegex = /!?\[[^\]]*\]\(([^)]+)\)/g;
 
 /** @type {{file: string; line: number; link: string; reason: string}[]} */
@@ -219,6 +254,22 @@ for (const abs of markdownFiles) {
       }
     }
   }
+}
+
+for (const page of collectNavPageEntries(docsConfig.navigation || [])) {
+  checked++;
+  const route = normalizeRoute(page);
+  const resolvedRoute = resolveRoute(route);
+  if (resolvedRoute.ok) {
+    continue;
+  }
+
+  broken.push({
+    file: "docs.json",
+    line: 0,
+    link: page,
+    reason: `navigation page not published (terminal: ${resolvedRoute.terminal})`,
+  });
 }
 
 console.log(`checked_internal_links=${checked}`);

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
+import { runEmbeddedPiAgent } from "openclaw/extension-api";
 import {
   formatThinkingLevels,
   formatXHighModelHint,
@@ -9,38 +10,7 @@ import {
   resolvePreferredOpenClawTmpDir,
   supportsXHighThinking,
 } from "openclaw/plugin-sdk/llm-task";
-// NOTE: This extension is intended to be bundled with OpenClaw.
-// When running from source (tests/dev), OpenClaw internals live under src/.
-// When running from a built install, internals live under dist/ (no src/ tree).
-// So we resolve internal imports dynamically with src-first, dist-fallback.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/llm-task";
-
-type RunEmbeddedPiAgentFn = (params: Record<string, unknown>) => Promise<unknown>;
-
-async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
-  // Source checkout (tests/dev)
-  try {
-    const mod = await import("../../../src/agents/pi-embedded-runner.js");
-    // oxlint-disable-next-line typescript/no-explicit-any
-    if (typeof (mod as any).runEmbeddedPiAgent === "function") {
-      // oxlint-disable-next-line typescript/no-explicit-any
-      return (mod as any).runEmbeddedPiAgent;
-    }
-  } catch {
-    // ignore
-  }
-
-  // Bundled install (built)
-  // NOTE: there is no src/ tree in a packaged install. Prefer a stable internal entrypoint.
-  const distExtensionApi = "../../../dist/extensionAPI.js";
-  const mod = (await import(distExtensionApi)) as { runEmbeddedPiAgent?: unknown };
-  // oxlint-disable-next-line typescript/no-explicit-any
-  const fn = (mod as any).runEmbeddedPiAgent;
-  if (typeof fn !== "function") {
-    throw new Error("Internal error: runEmbeddedPiAgent not available");
-  }
-  return fn as RunEmbeddedPiAgentFn;
-}
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
@@ -208,8 +178,6 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         );
         const sessionId = `llm-task-${Date.now()}`;
         const sessionFile = path.join(tmpDir, "session.json");
-
-        const runEmbeddedPiAgent = await loadRunEmbeddedPiAgent();
 
         const result = await runEmbeddedPiAgent({
           sessionId,

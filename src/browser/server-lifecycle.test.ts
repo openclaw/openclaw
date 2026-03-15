@@ -43,7 +43,7 @@ describe("ensureExtensionRelayForProfiles", () => {
 
   it("starts relay only for extension profiles", async () => {
     resolveProfileMock.mockImplementation((_resolved: unknown, name: string) => {
-      if (name === "chrome") {
+      if (name === "chrome-relay") {
         return { driver: "extension", cdpUrl: "http://127.0.0.1:18888" };
       }
       return { driver: "openclaw", cdpUrl: "http://127.0.0.1:18889" };
@@ -53,7 +53,7 @@ describe("ensureExtensionRelayForProfiles", () => {
     await ensureExtensionRelayForProfiles({
       resolved: {
         profiles: {
-          chrome: {},
+          "chrome-relay": {},
           openclaw: {},
         },
       } as never,
@@ -72,12 +72,12 @@ describe("ensureExtensionRelayForProfiles", () => {
     const onWarn = vi.fn();
 
     await ensureExtensionRelayForProfiles({
-      resolved: { profiles: { chrome: {} } } as never,
+      resolved: { profiles: { "chrome-relay": {} } } as never,
       onWarn,
     });
 
     expect(onWarn).toHaveBeenCalledWith(
-      'Chrome extension relay init failed for profile "chrome": Error: boom',
+      'Chrome extension relay init failed for profile "chrome-relay": Error: boom',
     );
   });
 });
@@ -91,10 +91,10 @@ describe("stopKnownBrowserProfiles", () => {
   });
 
   it("stops all known profiles and ignores per-profile failures", async () => {
-    listKnownProfileNamesMock.mockReturnValue(["openclaw", "chrome"]);
+    listKnownProfileNamesMock.mockReturnValue(["openclaw", "chrome-relay"]);
     const stopMap: Record<string, ReturnType<typeof vi.fn>> = {
       openclaw: vi.fn(async () => {}),
-      chrome: vi.fn(async () => {
+      "chrome-relay": vi.fn(async () => {
         throw new Error("profile stop failed");
       }),
     };
@@ -112,7 +112,7 @@ describe("stopKnownBrowserProfiles", () => {
     });
 
     expect(stopMap.openclaw).toHaveBeenCalledTimes(1);
-    expect(stopMap.chrome).toHaveBeenCalledTimes(1);
+    expect(stopMap["chrome-relay"]).toHaveBeenCalledTimes(1);
     expect(onWarn).not.toHaveBeenCalled();
   });
 
