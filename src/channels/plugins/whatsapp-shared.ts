@@ -11,17 +11,13 @@ export function resolveWhatsAppGroupIntroHint(): string {
   return WHATSAPP_GROUP_INTRO_HINT;
 }
 
-export function resolveWhatsAppMentionStripPatterns(ctx: { To?: string | null }): string[] {
+export function resolveWhatsAppMentionStripRegexes(ctx: { To?: string | null }): RegExp[] {
   const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/, "");
   if (!selfE164) {
     return [];
   }
   const escaped = escapeRegExp(selfE164);
-  return [escaped, `@${escaped}`];
-}
-
-export function resolveWhatsAppMentionStripRegexes(ctx: { To?: string | null }): RegExp[] {
-  return resolveWhatsAppMentionStripPatterns(ctx).map((pattern) => new RegExp(pattern, "g"));
+  return [new RegExp(escaped, "g"), new RegExp(`@${escaped}`, "g")];
 }
 
 type WhatsAppChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
