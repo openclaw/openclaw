@@ -2607,6 +2607,20 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        // Flush reply pipeline again after compaction wait resolves.
+        // When compaction retries (willRetry=true), the SDK runs a new agent
+        // loop whose agent_end handler fires onBlockReplyFlush as
+        // fire-and-forget (void).  resolveCompactionRetry() then unblocks
+        // waitForCompactionRetryWithAggregateTimeout *synchronously* — before
+        // the async pipeline flush completes.  Without this second flush the
+        // retry's block replies may not reach the channel, and
+        // shouldDropFinalPayloads suppresses the final payloads because
+        // didStream() is already true from the first reply.  The call is
+        // idempotent; flushing twice is harmless.  (#35489 follow-up)
+        if (params.onBlockReplyFlush) {
+          await params.onBlockReplyFlush();
+        }
+
         // Check if ANY compaction occurred during the entire attempt (prompt + retry).
         // Using a cumulative count (> 0) instead of a delta check avoids missing
         // compactions that complete during activeSession.prompt() before the delta
