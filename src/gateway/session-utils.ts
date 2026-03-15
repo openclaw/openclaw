@@ -767,10 +767,30 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
       });
 
-  // Prefer the last runtime model recorded on the session entry.
-  // This is the actual model used by the latest run and must win over defaults.
   let provider = resolved.provider;
   let model = resolved.model;
+
+  // Prefer explicit per-session override (set at spawn/model-patch time)
+  // over the last recorded runtime model identity. This ensures that when
+  // a user (or tool) requests a specific model, that request wins for
+  // subsequent status/list displays even if the last run happened to use
+  // a different model (e.g. before the override was applied or via fallback).
+  const storedModelOverride = entry?.modelOverride?.trim();
+  if (storedModelOverride) {
+    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
+    const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
+    if (parsedOverride) {
+      provider = parsedOverride.provider;
+      model = parsedOverride.model;
+    } else {
+      provider = overrideProvider;
+      model = storedModelOverride;
+    }
+    return { provider, model };
+  }
+
+  // Fall back to the last runtime model recorded on the session entry.
+  // This is the actual model used by the latest run and must win over defaults.
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
   if (runtimeModel) {
@@ -793,20 +813,6 @@ export function resolveSessionModelRef(
     return { provider, model };
   }
 
-  // Fall back to explicit per-session override (set at spawn/model-patch time),
-  // then finally to configured defaults.
-  const storedModelOverride = entry?.modelOverride?.trim();
-  if (storedModelOverride) {
-    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
-    const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
-    if (parsedOverride) {
-      provider = parsedOverride.provider;
-      model = parsedOverride.model;
-    } else {
-      provider = overrideProvider;
-      model = storedModelOverride;
-    }
-  }
   return { provider, model };
 }
 

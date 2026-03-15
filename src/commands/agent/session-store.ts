@@ -55,30 +55,33 @@ export async function updateSessionStoreAfterAgentRun(params: {
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
-  const entry = sessionStore[sessionKey] ?? {
-    sessionId,
-    updatedAt: Date.now(),
-  };
-  const next: SessionEntry = {
-    ...entry,
+  // Build a patch of fields that actually changed during the agent run.
+  // DO NOT spread the potentially stale sessionStore entry into the patch,
+  // as it would revert changes (like model overrides or level changes) made
+  // by tools that ran concurrently or during the run and already wrote to disk.
+  const patch: Partial<SessionEntry> = {
     sessionId,
     updatedAt: Date.now(),
     contextTokens,
+    abortedLastRun: result.meta.aborted ?? false,
   };
-  setSessionRuntimeModel(next, {
+
+  setSessionRuntimeModel(patch as SessionEntry, {
     provider: providerUsed,
     model: modelUsed,
   });
+
   if (isCliProvider(providerUsed, cfg)) {
     const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
     if (cliSessionId) {
-      setCliSessionId(next, providerUsed, cliSessionId);
+      setCliSessionId(patch as SessionEntry, providerUsed, cliSessionId);
     }
   }
-  next.abortedLastRun = result.meta.aborted ?? false;
+
   if (result.meta.systemPromptReport) {
-    next.systemPromptReport = result.meta.systemPromptReport;
+    patch.systemPromptReport = result.meta.systemPromptReport;
   }
+
   if (hasNonzeroUsage(usage)) {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
@@ -87,23 +90,25 @@ export async function updateSessionStoreAfterAgentRun(params: {
       contextTokens,
       promptTokens,
     });
-    next.inputTokens = input;
-    next.outputTokens = output;
+    patch.inputTokens = input;
+    patch.outputTokens = output;
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
-      next.totalTokens = totalTokens;
-      next.totalTokensFresh = true;
+      patch.totalTokens = totalTokens;
+      patch.totalTokensFresh = true;
     } else {
-      next.totalTokens = undefined;
-      next.totalTokensFresh = false;
+      patch.totalTokens = undefined;
+      patch.totalTokensFresh = false;
     }
-    next.cacheRead = usage.cacheRead ?? 0;
-    next.cacheWrite = usage.cacheWrite ?? 0;
+    patch.cacheRead = usage.cacheRead ?? 0;
+    patch.cacheWrite = usage.cacheWrite ?? 0;
   }
-  if (compactionsThisRun > 0) {
-    next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
-  }
+
   const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], next);
+    const existing = store[sessionKey];
+    if (compactionsThisRun > 0) {
+      patch.compactionCount = (existing?.compactionCount ?? 0) + compactionsThisRun;
+    }
+    const merged = mergeSessionEntry(existing, patch);
     store[sessionKey] = merged;
     return merged;
   });
