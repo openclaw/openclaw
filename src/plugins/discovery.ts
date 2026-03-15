@@ -5,9 +5,11 @@ import { resolveUserPath } from "../utils.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
+  loadPluginManifest,
   resolvePackageExtensionEntries,
   type OpenClawPackageManifest,
   type PackageManifest,
+  type PluginManifestLoadResult,
 } from "./manifest.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
@@ -26,6 +28,7 @@ export type PluginCandidate = {
   packageDescription?: string;
   packageDir?: string;
   packageManifest?: OpenClawPackageManifest;
+  pluginManifestResult?: PluginManifestLoadResult;
 };
 
 export type PluginDiscoveryResult = {
@@ -377,8 +380,21 @@ function addCandidate(params: {
   }
   params.seen.add(resolved);
   const manifest = params.manifest ?? null;
+
+  // Load openclaw.plugin.json once and cache on the candidate so
+  // manifest-registry can reuse it without a second file read.
+  // When the manifest declares an explicit id, use it as the hint
+  // (mirrors src/plugins/install.ts which treats the manifest id
+  // as authoritative over the npm package name).
+  const rejectHardlinks = params.origin !== "bundled";
+  const pluginManifestResult = loadPluginManifest(resolvedRoot, rejectHardlinks);
+  const manifestIdHint =
+    pluginManifestResult.ok && pluginManifestResult.manifest.id
+      ? pluginManifestResult.manifest.id
+      : null;
+
   params.candidates.push({
-    idHint: params.idHint,
+    idHint: manifestIdHint ?? params.idHint,
     source: resolved,
     rootDir: resolvedRoot,
     origin: params.origin,
@@ -388,6 +404,7 @@ function addCandidate(params: {
     packageDescription: manifest?.description?.trim() || undefined,
     packageDir: params.packageDir,
     packageManifest: getPackageManifestMetadata(manifest ?? undefined),
+    pluginManifestResult,
   });
 }
 
