@@ -1,10 +1,10 @@
+import { setActiveNamedSession } from "../../gateway/session-utils.js";
 import { logVerbose } from "../../globals.js";
+import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import {
   buildNamedDmSessionKey,
   parseNamedDmSessionKey,
 } from "../../sessions/session-key-utils.js";
-import { setActiveNamedSession } from "../../gateway/session-utils.js";
-import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -63,7 +63,10 @@ export const handleResumeCommand: CommandHandler = async (params, allowTextComma
     };
   }
 
-  const args = normalized === RESUME_COMMAND_PREFIX ? "" : normalized.slice(RESUME_COMMAND_PREFIX.length).trim();
+  const args =
+    normalized === RESUME_COMMAND_PREFIX
+      ? ""
+      : normalized.slice(RESUME_COMMAND_PREFIX.length).trim();
   const sessionName = args.toLowerCase();
 
   // No args → list available named sessions
@@ -83,7 +86,9 @@ export const handleResumeCommand: CommandHandler = async (params, allowTextComma
 /**
  * List all named sessions for this DM peer.
  */
-async function listNamedSessions(params: Parameters<CommandHandler>[0]): Promise<ReturnType<CommandHandler>> {
+async function listNamedSessions(
+  params: Parameters<CommandHandler>[0],
+): Promise<ReturnType<CommandHandler>> {
   const { sessionStore, agentId } = params;
   if (!sessionStore) {
     return {
@@ -136,7 +141,9 @@ async function listNamedSessions(params: Parameters<CommandHandler>[0]): Promise
 /**
  * Clear the active named session, return to main.
  */
-async function clearActiveNamedSession(params: Parameters<CommandHandler>[0]): Promise<ReturnType<CommandHandler>> {
+async function clearActiveNamedSession(
+  params: Parameters<CommandHandler>[0],
+): Promise<ReturnType<CommandHandler>> {
   const { sessionStore } = params;
 
   if (!sessionStore || !params.sessionKey) {
@@ -235,8 +242,7 @@ async function switchToNamedSession(
 
   // Check if we're already on this session
   const currentNamed =
-    parseNamedDmSessionKey(params.sessionKey ?? "")?.name ??
-    mainEntry.activeNamedSession;
+    parseNamedDmSessionKey(params.sessionKey ?? "")?.name ?? mainEntry.activeNamedSession;
   if (currentNamed === sessionName) {
     return {
       shouldContinue: false,

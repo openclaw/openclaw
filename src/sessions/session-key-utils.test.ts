@@ -159,10 +159,10 @@ describe("Named DM Session Keys (ETH-608)", () => {
         peerId: "123456789",
         name: "valorant",
       };
-      
+
       const key = buildNamedDmSessionKey(original);
       const parsed = parseNamedDmSessionKey(key);
-      
+
       expect(parsed).toEqual(original);
     });
 
@@ -172,9 +172,9 @@ describe("Named DM Session Keys (ETH-608)", () => {
         peerId: "USER123",
         name: "MySession",
       });
-      
+
       const parsed = parseNamedDmSessionKey(key);
-      
+
       expect(parsed).toEqual({
         agentId: "main",
         peerId: "user123",

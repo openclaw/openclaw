@@ -24,6 +24,7 @@ import {
 } from "./commands-info.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handlePluginCommand } from "./commands-plugin.js";
+import { handleResumeCommand } from "./commands-session-named.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
@@ -34,7 +35,6 @@ import {
   handleStopCommand,
   handleUsageCommand,
 } from "./commands-session.js";
-import { handleResumeCommand } from "./commands-session-named.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import { handleTtsCommands } from "./commands-tts.js";
 import type {
