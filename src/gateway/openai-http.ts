@@ -393,6 +393,25 @@ function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
   return val as OpenAiChatCompletionRequest;
 }
 
+function resolveUsage(result: unknown): {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+} {
+  const meta = (
+    result as {
+      meta?: { agentMeta?: { usage?: { input?: number; output?: number; total?: number } } };
+    } | null
+  )?.meta?.agentMeta?.usage;
+  const prompt = meta?.input ?? 0;
+  const completion = meta?.output ?? 0;
+  return {
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    total_tokens: meta?.total ?? prompt + completion,
+  };
+}
+
 function resolveAgentResponseText(result: unknown): string {
   const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
   if (!Array.isArray(payloads) || payloads.length === 0) {
@@ -483,6 +502,7 @@ export async function handleOpenAiHttpRequest(
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
 
       const content = resolveAgentResponseText(result);
+      const usage = resolveUsage(result);
 
       sendJson(res, 200, {
         id: runId,
@@ -496,7 +516,7 @@ export async function handleOpenAiHttpRequest(
             finish_reason: "stop",
           },
         ],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        usage,
       });
     } catch (err) {
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
@@ -580,6 +600,18 @@ export async function handleOpenAiHttpRequest(
           model,
           content,
           finishReason: null,
+        });
+      }
+
+      if (!closed) {
+        const usage = resolveUsage(result);
+        writeSse(res, {
+          id: runId,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          usage,
         });
       }
     } catch (err) {
