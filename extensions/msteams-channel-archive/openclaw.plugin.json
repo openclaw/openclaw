@@ -1,6 +1,5 @@
 {
   "id": "msteams-channel-archive",
-  "channels": ["msteams"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
