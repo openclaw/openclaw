@@ -704,9 +704,8 @@ export async function edgeTTS(params: {
 }): Promise<void> {
   const { text, outputPath, config, timeoutMs } = params;
 
-  if (!text || text.trim().length === 0) {
-    return;
-  }
+  const safeText =
+    text && text.trim().length > 0 ? text : " ";
 
   const tts = new EdgeTTS({
     voice: config.voice,
@@ -720,12 +719,12 @@ export async function edgeTTS(params: {
     timeout: config.timeoutMs ?? timeoutMs,
   });
 
-  await tts.ttsPromise(text, outputPath);
+  await tts.ttsPromise(safeText, outputPath);
 
   let { size } = statSync(outputPath);
 
   if (size === 0) {
-    await tts.ttsPromise(text, outputPath);
+    await tts.ttsPromise(safeText, outputPath);
     ({ size } = statSync(outputPath));
 
     if (size === 0) {
