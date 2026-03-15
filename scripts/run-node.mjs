@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 const compiler = "tsdown";
 const compilerArgs = ["exec", compiler, "--no-clean"];
@@ -275,6 +276,19 @@ const runOpenClaw = async (deps) => {
   return res.exitCode ?? 1;
 };
 
+const syncRuntimeArtifacts = (deps) => {
+  try {
+    runRuntimePostBuild({ cwd: deps.cwd });
+  } catch (error) {
+    logRunner(
+      `Failed to write runtime build artifacts: ${error?.message ?? "unknown error"}`,
+      deps,
+    );
+    return false;
+  }
+  return true;
+};
+
 const writeBuildStamp = (deps) => {
   try {
     deps.fs.mkdirSync(deps.distRoot, { recursive: true });
@@ -312,6 +326,9 @@ export async function runNodeMain(params = {}) {
   deps.configFiles = runNodeConfigFiles.map((filePath) => path.join(deps.cwd, filePath));
 
   if (!shouldBuild(deps)) {
+    if (!syncRuntimeArtifacts(deps)) {
+      return 1;
+    }
     return await runOpenClaw(deps);
   }
 
@@ -333,6 +350,9 @@ export async function runNodeMain(params = {}) {
   }
   if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
     return buildRes.exitCode;
+  }
+  if (!syncRuntimeArtifacts(deps)) {
+    return 1;
   }
   writeBuildStamp(deps);
   return await runOpenClaw(deps);
