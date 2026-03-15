@@ -2842,6 +2842,23 @@ export async function runEmbeddedAttempt(
           },
         },
         {
+          // Clear embedded run BEFORE flushing pending tool results so that
+          // waitForEmbeddedPiRunEnd resolves promptly. The flush can take up to 30s
+          // (idle-wait timeout in wait-for-idle-before-flush.ts), but several callers
+          // only wait 15s (session-reset-service.ts, commands-compact.ts). Clearing
+          // first ensures the run is marked ended within the waiter timeout budget.
+          //
+          // This is safe because runCleanupSteps executes each step in an isolated
+          // try/catch — if this step throws (e.g. queueHandle is somehow invalid),
+          // the flush and remaining teardown still proceed.
+          label: "active embedded run clear",
+          run: () => {
+            if (queueHandle) {
+              clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+            }
+          },
+        },
+        {
           label: "pending tool result flush",
           run: () =>
             flushPendingToolResultsAfterIdle({
@@ -2849,19 +2866,6 @@ export async function runEmbeddedAttempt(
               sessionManager,
               clearPendingOnTimeout: true,
             }),
-        },
-        {
-          // Clear embedded run AFTER flushing pending tool results so that all concurrent
-          // tool executions (e.g. sessions_spawn) complete before the run is considered ended.
-          // This prevents premature announce when sessions_yield runs in parallel with
-          // sessions_spawn — the announce flow's waitForEmbeddedPiRunEnd won't resolve
-          // until spawn registrations are committed to the subagent registry.
-          label: "active embedded run clear",
-          run: () => {
-            if (queueHandle) {
-              clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
-            }
-          },
         },
         {
           label: "session dispose",
