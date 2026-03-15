@@ -1270,7 +1270,10 @@ export async function runSubagentAnnounceFlow(params: {
         }
       }
     } catch {
-      // Best-effort only.
+      // If the registry check fails, defer the announce rather than risk a premature
+      // completion message. The deferred cleanup path will retry once descendants settle.
+      shouldDeleteChildSession = false;
+      return false;
     }
 
     const announceId = buildAnnounceIdFromChildRun({

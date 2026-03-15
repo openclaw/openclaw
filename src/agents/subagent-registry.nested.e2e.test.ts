@@ -326,4 +326,63 @@ describe("subagent registry nested agent tracking", () => {
     expect(countPendingDescendantRunsExcludingRun("agent:main:main", "run-self")).toBe(1);
     expect(countPendingDescendantRunsExcludingRun("agent:main:main", "run-sibling")).toBe(1);
   });
+
+  it("yield-aborted parent with active children reports pending descendants correctly", async () => {
+    const { addSubagentRunForTests, countPendingDescendantRuns, countActiveDescendantRuns } =
+      subagentRegistry;
+
+    // Orchestrator yielded (ended) after spawning children — simulates sessions_yield
+    addSubagentRunForTests({
+      runId: "run-orch-yielded",
+      childSessionKey: "agent:main:subagent:orch-yield",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate with yield",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      endedAt: 2,
+      cleanupHandled: false,
+      cleanupCompletedAt: undefined,
+    });
+
+    // Child spawned by orchestrator — still running (no endedAt)
+    addSubagentRunForTests({
+      runId: "run-child-active",
+      childSessionKey: "agent:main:subagent:orch-yield:subagent:worker-1",
+      requesterSessionKey: "agent:main:subagent:orch-yield",
+      requesterDisplayKey: "orch-yield",
+      task: "worker task",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 2,
+      cleanupHandled: false,
+    });
+
+    // The orchestrator has pending descendants (child still running + orchestrator cleanup not done)
+    expect(countPendingDescendantRuns("agent:main:subagent:orch-yield")).toBe(1);
+    // The child is active under the orchestrator
+    expect(countActiveDescendantRuns("agent:main:subagent:orch-yield")).toBe(1);
+    // From main's perspective, the orchestrator itself is pending (cleanup not completed)
+    expect(countPendingDescendantRuns("agent:main:main")).toBe(2);
+
+    // Child completes and finishes cleanup
+    addSubagentRunForTests({
+      runId: "run-child-active",
+      childSessionKey: "agent:main:subagent:orch-yield:subagent:worker-1",
+      requesterSessionKey: "agent:main:subagent:orch-yield",
+      requesterDisplayKey: "orch-yield",
+      task: "worker task",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 2,
+      endedAt: 3,
+      cleanupHandled: true,
+      cleanupCompletedAt: 4,
+    });
+
+    // Now only the orchestrator itself remains pending (no cleanup yet)
+    expect(countPendingDescendantRuns("agent:main:subagent:orch-yield")).toBe(0);
+    expect(countPendingDescendantRuns("agent:main:main")).toBe(1);
+  });
 });
