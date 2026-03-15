@@ -110,15 +110,23 @@ export type {
   ProviderAuthContext,
   ProviderAuthResult,
   ProviderCacheTtlEligibilityContext,
+  ProviderFetchUsageSnapshotContext,
   ProviderPreparedRuntimeAuth,
+  ProviderResolvedUsageAuth,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
   ProviderPrepareRuntimeAuthContext,
+  ProviderResolveUsageAuthContext,
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
   ProviderRuntimeModel,
   ProviderWrapStreamFnContext,
 } from "../plugins/types.js";
+export type {
+  ProviderUsageSnapshot,
+  UsageProviderId,
+  UsageWindow,
+} from "../infra/provider-usage.types.js";
 export type {
   ConversationRef,
   SessionBindingBindInput,
