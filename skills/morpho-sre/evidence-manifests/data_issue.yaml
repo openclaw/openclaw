@@ -15,13 +15,13 @@ optional:
   - pg_statements
   - pg_conflicts
   - db_topology
-single_entity_graphql_critical:
+single_vault_graphql_critical:
   - exact_query_replay
   - minimal_field_check
   - healthy_control_check
   - public_surface_split
   - direct_rpc_check
-single_entity_graphql_optional:
+single_vault_graphql_optional:
   - db_row_provenance
   - job_path_simulation
 rewards_provider_critical:

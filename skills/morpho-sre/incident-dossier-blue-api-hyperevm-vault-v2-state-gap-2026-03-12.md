@@ -5,7 +5,7 @@
 - Service: blue-api / vault-v2 public GraphQL
 - Date: 2026-03-12
 - Env: prod
-- Severity: medium
+- Severity: high
 - What broke: one HyperEVM vault V2 returned null APY fields and state-field GraphQL errors while peers on the same chain still worked.
 - Customer impact: confirmed. The broken vault page and public API response were incomplete.
 - Detection: Slack bug-report thread, exact public GraphQL query, live public API checks, direct HyperEVM RPC checks.

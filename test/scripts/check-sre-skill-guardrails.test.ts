@@ -51,5 +51,8 @@ describe("check-sre-skill-guardrails", () => {
     expect(issues.map((issue) => issue.id)).toContain("blocked-mode");
     expect(issues.map((issue) => issue.id)).toContain("rback-fallback");
     expect(issues.map((issue) => issue.id)).toContain("retrieval-before-repo");
+    expect(issues.map((issue) => issue.id)).toContain("single-vault-helper");
+    expect(issues.map((issue) => issue.id)).toContain("retract-after-contradiction");
+    expect(issues.map((issue) => issue.id)).toContain("single-vault-provenance-gate");
   });
 });

@@ -254,6 +254,35 @@ run_cast_probe() {
     }'
 }
 
+sanitize_graphql_probe() {
+  local name="${1:?name required}"
+  local probe_json="${2:?probe json required}"
+  if jq -e . >/dev/null 2>&1 <<<"$probe_json"; then
+    printf '%s\n' "$probe_json"
+    return 0
+  fi
+  jq -nc \
+    --arg name "$name" \
+    '{name: $name, ok: "probe_output_invalid", error_count: 1, first_error: "probe output was not valid JSON", data: null}'
+}
+
+sanitize_rpc_probe() {
+  local probe_json="${1:?probe json required}"
+  if jq -e . >/dev/null 2>&1 <<<"$probe_json"; then
+    printf '%s\n' "$probe_json"
+    return 0
+  fi
+  jq -nc \
+    '{
+      status: "failed",
+      totalAssets: null,
+      totalSupply: null,
+      totalAssetsError: null,
+      totalSupplyError: null,
+      first_error: "probe output was not valid JSON"
+    }'
+}
+
 if [[ -n "$LIST_QUERY_FILE" ]]; then
   LIST_QUERY_DEFAULT="$(cat "$LIST_QUERY_FILE")"
 fi
@@ -288,6 +317,13 @@ if [[ -n "$RPC_URL" ]] && command -v cast >/dev/null 2>&1; then
       first_error: ($total_assets.error // $total_supply.error)
     }')"
 fi
+
+control_probe="$(sanitize_graphql_probe "same_chain_control" "$control_probe")"
+exact_probe="$(sanitize_graphql_probe "exact_query_replay" "$exact_probe")"
+by_address_probe="$(sanitize_graphql_probe "minimal_by_address" "$by_address_probe")"
+list_probe="$(sanitize_graphql_probe "vaultV2s_address_in" "$list_probe")"
+transactions_probe="$(sanitize_graphql_probe "vaultV2transactions" "$transactions_probe")"
+rpc_probe="$(sanitize_rpc_probe "$rpc_probe")"
 
 jq -nc \
   --arg graphql_url "$GRAPHQL_URL" \

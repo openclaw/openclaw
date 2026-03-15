@@ -86,6 +86,21 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     expect(context).toContain("Explicitly retract the outdated theory");
   });
 
+  it("does not require retraction without an exact artifact", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: prior theory"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"This is wrong, the previous guess was stale"}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "re-check the incident",
+      transcriptText,
+    });
+
+    expect(context).toContain("Latest human correction overrides older bot theories");
+    expect(context).not.toContain("Explicitly retract the outdated theory");
+  });
+
   it("detects reverse resolver mismatch", () => {
     const transcriptText = `
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultV2ByAddress realtime state is missing"}]}}
@@ -133,6 +148,8 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     });
 
     expect(context).toContain("db-data-incident-playbook.md");
+    expect(context).not.toContain("single-vault-graphql-evidence.sh");
+    expect(context).not.toContain("DB row/provenance fact");
     expect(noFalsePositive?.includes("db-data-incident-playbook.md")).not.toBe(true);
   });
 
@@ -148,6 +165,19 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     });
 
     expect(context).toContain("Latest user-supplied exact artifact detected");
+  });
+
+  it("applies prompt-based guardrails to sre-prefixed agents", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Previous triage exists"}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre-heartbeat",
+      prompt: "graphql vault v2 apy is null for one vault",
+      transcriptText,
+    });
+
+    expect(context).toContain("db-data-incident-playbook.md");
   });
 
   it("suppresses missing transcript files", async () => {
