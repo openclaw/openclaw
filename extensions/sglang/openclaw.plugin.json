@@ -1,0 +1,9 @@
+{
+  "id": "sglang",
+  "providers": ["sglang"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
