@@ -2,8 +2,27 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleSendChat, refreshChatAvatar, type ChatHost } from "./app-chat.ts";
+import type { ChatAutoScrollMode } from "./app-scroll.ts";
 
-function makeHost(overrides?: Partial<ChatHost>): ChatHost {
+type TestChatHost = ChatHost & {
+  chatUserNearBottom: boolean;
+  chatAutoScrollMode: ChatAutoScrollMode;
+  chatSuppressedBlockId: string | null;
+  chatNewMessagesBelow: boolean;
+  chatToolMessages: unknown[];
+  chatStreamSegments: Array<{ text: string; ts: number }>;
+  toolStreamById: Map<string, unknown>;
+  toolStreamOrder: string[];
+  toolStreamSyncTimer: number | null;
+  querySelector: (selector: string) => Element | null;
+  style: CSSStyleDeclaration;
+  chatScrollFrame: number | null;
+  chatScrollTimeout: number | null;
+  chatHasAutoScrolled: boolean;
+  settings: { lastActiveSessionKey: string };
+};
+
+function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
   return {
     client: null,
     chatMessages: [],
