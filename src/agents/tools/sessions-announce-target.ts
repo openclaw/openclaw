@@ -4,19 +4,22 @@ import { SessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 
+export type AnnounceTargetDecision =
+  | { kind: "external_target"; target: AnnounceTarget }
+  | { kind: "no_external_target" }
+  | { kind: "unknown"; reason: "miss" | "partial" | "error" };
+
 export async function resolveAnnounceTarget(params: {
   sessionKey: string;
   displayKey: string;
-}): Promise<AnnounceTarget | null> {
+}): Promise<AnnounceTargetDecision> {
   const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
-  const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
-  const fallback = parsed ?? parsedDisplay ?? null;
 
-  if (fallback) {
-    const normalized = normalizeChannelId(fallback.channel);
+  if (parsed) {
+    const normalized = normalizeChannelId(parsed.channel);
     const plugin = normalized ? getChannelPlugin(normalized) : null;
     if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
-      return fallback;
+      return { kind: "external_target", target: parsed };
     }
   }
 
@@ -48,11 +51,17 @@ export async function resolveAnnounceTarget(params: {
       (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
       (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined);
     if (channel && to) {
-      return { channel, to, accountId };
+      return { kind: "external_target", target: { channel, to, accountId } };
+    }
+    if (channel || to || accountId) {
+      return { kind: "unknown", reason: "partial" };
+    }
+    if (match) {
+      return { kind: "no_external_target" };
     }
   } catch {
-    // ignore
+    return { kind: "unknown", reason: "error" };
   }
 
-  return fallback;
+  return { kind: "unknown", reason: "miss" };
 }

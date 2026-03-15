@@ -51,10 +51,12 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
-    const announceTarget = await resolveAnnounceTarget({
+    const announceTargetDecision = await resolveAnnounceTarget({
       sessionKey: params.targetSessionKey,
       displayKey: params.displayKey,
     });
+    const announceTarget =
+      announceTargetDecision.kind === "external_target" ? announceTargetDecision.target : null;
     const targetChannel = announceTarget?.channel ?? "unknown";
 
     if (
