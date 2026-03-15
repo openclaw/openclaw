@@ -165,7 +165,7 @@ export const handleTrustCommand: CommandHandler = async (params, allowTextComman
   return {
     shouldContinue: false,
     reply: {
-      text: `⚙️ Trust enabled for ${parsed.minutes}m.`,
+      text: `🔓 Trust enabled for ${parsed.minutes}m.`,
     },
   };
 };
@@ -202,12 +202,12 @@ export const handleUntrustCommand: CommandHandler = async (params, allowTextComm
   if (!clearTrustWindow(params.sessionKey)) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ No active trust window for this session." },
+      reply: { text: "🔒 No active trust window for this session." },
     };
   }
 
   return {
     shouldContinue: false,
-    reply: { text: "⚙️ Trust revoked for this session." },
+    reply: { text: "🔒 Trust revoked for this session." },
   };
 };
