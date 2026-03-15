@@ -15,8 +15,8 @@
 ## Run
 
 - `export DB_PASSWORD="op://app-prod/db/password"`
-- `op run --no-masking -- printenv DB_PASSWORD`
-- `op run --env-file="./.env" -- printenv DB_PASSWORD`
+- `op run -- ./my-app`
+- `op run --env-file="./.env" -- ./my-app`
 
 ## Inject
 
