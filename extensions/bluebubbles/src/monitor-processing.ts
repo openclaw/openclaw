@@ -253,10 +253,7 @@ function resolveBlueBubblesAckReaction(params: {
   if (!raw) {
     return null;
   }
-  try {
-    normalizeBlueBubblesReactionInput(raw);
-    return raw;
-  } catch {
+  if (normalizeBlueBubblesReactionInput(raw) === null) {
     const key = raw.toLowerCase();
     if (!invalidAckReactions.has(key)) {
       invalidAckReactions.add(key);
@@ -268,6 +265,7 @@ function resolveBlueBubblesAckReaction(params: {
     }
     return null;
   }
+  return raw;
 }
 
 /**
