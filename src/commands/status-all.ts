@@ -57,6 +57,17 @@ export async function statusAllCommand(
     progress.setLabel("Checking Tailscale…");
     const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
     const tailscale = await (async () => {
+      // Skip probing the tailscale binary when mode is "off" to avoid
+      // misleading ENOENT warnings on machines without Tailscale installed.
+      if (tailscaleMode === "off") {
+        return {
+          ok: true as const,
+          backendState: null,
+          dnsName: null,
+          ips: [] as string[],
+          error: null,
+        };
+      }
       try {
         const parsed = await readTailscaleStatusJson(runExec, {
           timeoutMs: 1200,
