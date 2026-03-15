@@ -742,6 +742,8 @@ export function renderApp(state: AppViewState) {
                     state.sessionsIncludeArchived = next.includeArchived;
                     const activeMinutes = Number(next.activeMinutes);
                     const limit = Number(next.limit);
+                    // Reload immediately so filter changes take effect without waiting for polling.
+                    // Empty/invalid inputs fall back to 0 to disable that filter.
                     void loadSessions(state, {
                       activeMinutes: Number.isFinite(activeMinutes) ? activeMinutes : 0,
                       limit: Number.isFinite(limit) ? limit : 0,
