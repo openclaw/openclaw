@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/airi",
+  "version": "2026.3.2",
+  "description": "OpenClaw AIRI avatar channel — embodied AI companion with VRM/Live2D avatar, lip-synced TTS, and emotion-driven animations",
+  "type": "module",
+  "dependencies": {
+    "ws": "^8.19.0",
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

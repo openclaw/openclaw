@@ -1,0 +1,46 @@
+{
+  "id": "airi",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "host": { "type": "string" },
+      "port": { "type": "integer" },
+      "token": { "type": "string" },
+      "avatar": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["vrm", "live2d"] },
+          "modelUrl": { "type": "string" }
+        }
+      },
+      "tts": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "streamAudio": { "type": "boolean" }
+        }
+      },
+      "reconnect": {
+        "type": "object",
+        "properties": {
+          "maxRetries": { "type": "integer" },
+          "intervalMs": { "type": "integer" }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": { "label": "Enable AIRI Avatar Channel" },
+    "host": { "label": "AIRI Bridge Host", "placeholder": "127.0.0.1" },
+    "port": { "label": "AIRI Bridge Port", "placeholder": "18900" },
+    "token": { "label": "Bridge Auth Token", "sensitive": true },
+    "avatar.type": { "label": "Avatar Type", "help": "vrm for 3D VRM models, live2d for 2D Live2D models" },
+    "avatar.modelUrl": { "label": "Avatar Model URL", "help": "URL or path to the VRM/Live2D model file" },
+    "tts.enabled": { "label": "Enable TTS Audio Streaming", "help": "Stream TTS audio to avatar for lip-sync" },
+    "tts.streamAudio": { "label": "Stream Audio Chunks", "advanced": true },
+    "reconnect.maxRetries": { "label": "Max Reconnect Retries", "advanced": true },
+    "reconnect.intervalMs": { "label": "Reconnect Interval (ms)", "advanced": true }
+  }
+}
