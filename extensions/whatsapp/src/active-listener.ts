@@ -34,19 +34,13 @@ export type ActiveWebListener = {
 // (in chunk A) to register a listener that requireActiveWebListener (in chunk B)
 // cannot find. Storing on globalThis avoids this.
 const GLOBAL_KEY = "__openclaw_whatsapp_listeners__" as const;
-const GLOBAL_CURRENT_KEY = "__openclaw_whatsapp_current_listener__" as const;
 
 type ListenerGlobals = {
   [GLOBAL_KEY]?: Map<string, ActiveWebListener>;
-  [GLOBAL_CURRENT_KEY]?: ActiveWebListener | null;
 };
 
 const g = globalThis as unknown as ListenerGlobals;
-if (!g[GLOBAL_KEY]) {
-  g[GLOBAL_KEY] = new Map<string, ActiveWebListener>();
-}
-
-const listeners = g[GLOBAL_KEY];
+const listeners = (g[GLOBAL_KEY] ??= new Map<string, ActiveWebListener>());
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -88,9 +82,6 @@ export function setActiveWebListener(
     listeners.delete(id);
   } else {
     listeners.set(id, listener);
-  }
-  if (id === DEFAULT_ACCOUNT_ID) {
-    g[GLOBAL_CURRENT_KEY] = listener;
   }
 }
 
