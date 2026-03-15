@@ -544,6 +544,38 @@ describe("createOllamaStreamFn", () => {
       [{ type: "text", text: "final answer" }],
     );
   });
+
+  it("uses numCtxOverride when provided, ignoring model contextWindow", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434", undefined, 8192);
+        const stream = await streamFn(
+          {
+            id: "qwen2.5:14b",
+            api: "ollama",
+            provider: "ollama",
+            contextWindow: 32768,
+          } as unknown as Parameters<typeof streamFn>[0],
+          {
+            messages: [{ role: "user", content: "hello" }],
+          } as unknown as Parameters<typeof streamFn>[1],
+          {} as unknown as Parameters<typeof streamFn>[2],
+        );
+        await collectStreamEvents(stream);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const requestBody = JSON.parse(requestInit.body as string) as {
+          options: { num_ctx?: number };
+        };
+        expect(requestBody.options.num_ctx).toBe(8192);
+      },
+    );
+  });
 });
 
 describe("resolveOllamaBaseUrlForRun", () => {

@@ -99,7 +99,7 @@ import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-tt
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
-import { applyExtraParamsToAgent } from "../extra-params.js";
+import { applyExtraParamsToAgent, resolveExtraParams } from "../extra-params.js";
 import {
   logToolSchemasForGoogle,
   sanitizeSessionHistory,
@@ -408,6 +408,26 @@ export function shouldInjectOllamaCompatNumCtx(params: {
     config: params.config,
     providerId: params.providerId,
   });
+}
+
+/**
+ * Resolve user-configured num_ctx from agents.defaults.models.*.params.
+ * Returns the value if explicitly set, or undefined to fall back to model discovery.
+ */
+export function resolveUserNumCtx(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelId: string;
+}): number | undefined {
+  const extra = resolveExtraParams({
+    cfg: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+  });
+  if (extra && typeof extra.num_ctx === "number" && extra.num_ctx > 0) {
+    return extra.num_ctx;
+  }
+  return undefined;
 }
 
 export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: number): StreamFn {
@@ -1857,14 +1877,34 @@ export async function runEmbeddedAttempt(
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
+      // Resolve user-configured num_ctx override early so it feeds into context budgeting.
+      // Covers both native Ollama API and OpenAI-compat endpoints backed by Ollama.
+      const providerIdForEarlyNumCtx =
+        typeof params.model.provider === "string" && params.model.provider.trim().length > 0
+          ? params.model.provider
+          : params.provider;
+      const needsNumCtxOverride =
+        params.model.api === "ollama" ||
+        shouldInjectOllamaCompatNumCtx({
+          model: params.model,
+          config: params.config,
+          providerId: providerIdForEarlyNumCtx,
+        });
+      const userNumCtxEarly = needsNumCtxOverride
+        ? resolveUserNumCtx({
+            cfg: params.config,
+            provider: providerIdForEarlyNumCtx,
+            modelId: params.modelId,
+          })
+        : undefined;
+      const effectiveContextWindow =
+        userNumCtxEarly ??
+        params.model.contextWindow ??
+        params.model.maxTokens ??
+        DEFAULT_CONTEXT_TOKENS;
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
-        contextWindowTokens: Math.max(
-          1,
-          Math.floor(
-            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-          ),
-        ),
+        contextWindowTokens: Math.max(1, Math.floor(effectiveContextWindow)),
       });
       const cacheTrace = createCacheTrace({
         cfg: params.config,
@@ -1895,9 +1935,11 @@ export async function runEmbeddedAttempt(
         const providerConfig = params.config?.models?.providers?.[params.model.provider];
         const providerBaseUrl =
           typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
+        // User-configured num_ctx takes priority over model-discovery contextWindow.
         const ollamaStreamFn = createConfiguredOllamaStreamFn({
           model: params.model,
           providerBaseUrl,
+          numCtxOverride: userNumCtxEarly,
         });
         activeSession.agent.streamFn = ollamaStreamFn;
         ensureCustomApiRegistered(params.model.api, ollamaStreamFn);
@@ -1928,10 +1970,20 @@ export async function runEmbeddedAttempt(
         providerId: providerIdForNumCtx,
       });
       if (shouldInjectNumCtx) {
+        // User-configured num_ctx in agents.defaults.models.*.params takes priority
+        // over the model-discovery contextWindow (e.g. GGUF metadata from /api/show).
+        const userNumCtx = resolveUserNumCtx({
+          cfg: params.config,
+          provider: providerIdForNumCtx,
+          modelId: params.modelId,
+        });
         const numCtx = Math.max(
           1,
           Math.floor(
-            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+            userNumCtx ??
+              params.model.contextWindow ??
+              params.model.maxTokens ??
+              DEFAULT_CONTEXT_TOKENS,
           ),
         );
         activeSession.agent.streamFn = wrapOllamaCompatNumCtx(activeSession.agent.streamFn, numCtx);
