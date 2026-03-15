@@ -61,10 +61,11 @@ export type PluginHttpRequestHandler = (
 ) => Promise<boolean>;
 
 export function createGatewayPluginRequestHandler(params: {
-  registry: PluginRegistry;
+  /** @deprecated Routes are now read from the active plugin registry at request time. */
+  registry?: PluginRegistry;
   log: SubsystemLogger;
 }): PluginHttpRequestHandler {
-  const { registry: _registry, log } = params;
+  const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
     // Use the CURRENT active registry to find routes.
     // Channel plugins (like BlueBubbles) register webhook routes via requireActivePluginRegistry()
