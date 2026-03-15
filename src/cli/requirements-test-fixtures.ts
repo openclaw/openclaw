@@ -14,5 +14,6 @@ export function createEmptyInstallChecks() {
     missing: createEmptyRequirements(),
     configChecks: [],
     install: [],
+    hasInstallSpecs: false,
   };
 }

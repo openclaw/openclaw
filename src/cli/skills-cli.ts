@@ -92,8 +92,16 @@ export function registerSkillsCli(program: Command) {
           return;
         }
         if (skill.install.length === 0) {
-          defaultRuntime.log(`No install specs for skill: ${name}`);
-          defaultRuntime.exit(0);
+          if (skill.hasInstallSpecs) {
+            // Install specs exist but were filtered out (e.g. unsupported OS).
+            defaultRuntime.error(
+              `No installers available for skill: ${name} on this platform (${process.platform})`,
+            );
+            defaultRuntime.exit(1);
+          } else {
+            defaultRuntime.log(`No install specs for skill: ${name}`);
+            defaultRuntime.exit(0);
+          }
           return;
         }
         const { installSkill } = await import("../agents/skills-install.js");
