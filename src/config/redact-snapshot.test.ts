@@ -188,8 +188,8 @@ describe("redactConfigSnapshot", () => {
 
     const result = redactConfigSnapshot(snapshot);
     const cfg = result.config as typeof snapshot.config;
-    expect(cfg.models.providers.openai.baseUrl).toBe("https://example.test/v1");
-    expect(result.raw).toContain("https://example.test/v1");
+    expect(cfg.models.providers.openai.baseUrl).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
     expect(result.raw).not.toContain("alice:secret@");
   });
 

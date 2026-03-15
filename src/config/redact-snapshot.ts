@@ -221,8 +221,10 @@ function redactObjectWithLookup(
             const scrubbed = stripUrlUserInfo(value);
             if (scrubbed !== value) {
               values.push(value);
+              result[key] = REDACTED_SENTINEL;
+            } else {
+              result[key] = value;
             }
-            result[key] = scrubbed;
           }
           break;
         }
@@ -244,8 +246,10 @@ function redactObjectWithLookup(
           const scrubbed = stripUrlUserInfo(value);
           if (scrubbed !== value) {
             values.push(value);
+            result[key] = REDACTED_SENTINEL;
+          } else {
+            result[key] = value;
           }
-          result[key] = scrubbed;
         } else if (typeof value === "object" && value !== null) {
           result[key] = redactObjectGuessing(value, path, values, hints);
         }
@@ -314,8 +318,10 @@ function redactObjectGuessing(
         const scrubbed = stripUrlUserInfo(value);
         if (scrubbed !== value) {
           values.push(value);
+          result[key] = REDACTED_SENTINEL;
+        } else {
+          result[key] = value;
         }
-        result[key] = scrubbed;
       } else if (typeof value === "object" && value !== null) {
         result[key] = redactObjectGuessing(value, dotPath, values, hints);
       } else {
