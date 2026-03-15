@@ -21,8 +21,7 @@ vi.mock("../../../../src/media/fetch.js", () => ({
 }));
 
 vi.mock("../../../../src/infra/fs-safe.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../../src/infra/fs-safe.js")>();
+  const actual = await importOriginal<typeof import("../../../../src/infra/fs-safe.js")>();
   return {
     ...actual,
     readLocalFileSafely: (...args: unknown[]) => readLocalFileSafely(...args),
