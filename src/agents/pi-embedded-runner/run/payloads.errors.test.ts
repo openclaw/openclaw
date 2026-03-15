@@ -294,16 +294,15 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(0);
   });
 
+  it("suppresses mutating tool errors when messages.suppressToolErrors is enabled", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "write", error: "connection timeout" },
+      config: { messages: { suppressToolErrors: true } },
+    });
+    expect(payloads).toHaveLength(0);
+  });
+
   it.each([
-    {
-      name: "still shows mutating tool errors when messages.suppressToolErrors is enabled",
-      payload: {
-        lastToolError: { toolName: "write", error: "connection timeout" },
-        config: { messages: { suppressToolErrors: true } },
-      },
-      title: "Write",
-      absentDetail: "connection timeout",
-    },
     {
       name: "shows recoverable tool errors for mutating tools",
       payload: {
