@@ -193,7 +193,7 @@ async function createRealSession(profileName: string): Promise<ChromeMcpSession>
       await client.close().catch(() => {});
       throw new BrowserProfileUnavailableError(
         `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
-          `Make sure Chrome is running, enable chrome://inspect/#remote-debugging, and approve the connection. ` +
+          `Make sure Chrome (v146+) is running. ` +
           `Details: ${String(err)}`,
       );
     }
@@ -248,20 +248,24 @@ async function callTool(
   args: Record<string, unknown> = {},
 ): Promise<ChromeMcpToolResult> {
   const session = await getSession(profileName);
+  let result: ChromeMcpToolResult;
   try {
-    const result = (await session.client.callTool({
+    result = (await session.client.callTool({
       name,
       arguments: args,
     })) as ChromeMcpToolResult;
-    if (result.isError) {
-      throw new Error(extractToolErrorMessage(result, name));
-    }
-    return result;
   } catch (err) {
+    // Transport/connection error — tear down session so it reconnects on next call
     sessions.delete(profileName);
     await session.client.close().catch(() => {});
     throw err;
   }
+  // Tool-level errors (element not found, script error, etc.) don't indicate a
+  // broken connection — don't tear down the session for these.
+  if (result.isError) {
+    throw new Error(extractToolErrorMessage(result, name));
+  }
+  return result;
 }
 
 async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T> {

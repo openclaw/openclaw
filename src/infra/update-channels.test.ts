@@ -180,6 +180,20 @@ describe("resolveUpdateChannelDisplay", () => {
     });
   });
 
+  it("prefers git tag precedence over branch metadata in the derived label", () => {
+    expect(
+      resolveUpdateChannelDisplay({
+        installKind: "git",
+        gitTag: "v2026.2.24-beta.1",
+        gitBranch: "feature/test",
+      }),
+    ).toEqual({
+      channel: "beta",
+      source: "git-tag",
+      label: "beta (v2026.2.24-beta.1)",
+    });
+  });
+
   it("does not synthesize git metadata when both tag and branch are missing", () => {
     expect(
       resolveUpdateChannelDisplay({

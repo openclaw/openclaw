@@ -96,6 +96,18 @@ describe("system run command helpers", () => {
     expect(res.commandText).toBe("echo hi");
   });
 
+  test("validateSystemRunCommandConsistency trims rawCommand before comparison", () => {
+    const res = validateSystemRunCommandConsistency({
+      argv: ["echo", "hi"],
+      rawCommand: "  echo hi  ",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.commandText).toBe("echo hi");
+  });
+
   test("validateSystemRunCommandConsistency rejects mismatched rawCommand vs direct argv", () => {
     expectRawCommandMismatch({
       argv: ["uname", "-a"],
@@ -182,6 +194,18 @@ describe("system run command helpers", () => {
     expect(res.details?.code).toBe("MISSING_COMMAND");
   });
 
+  test("resolveSystemRunCommand treats non-array command values as missing", () => {
+    const res = resolveSystemRunCommand({
+      command: "echo hi",
+      rawCommand: "echo hi",
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.details?.code).toBe("MISSING_COMMAND");
+  });
+
   test("resolveSystemRunCommand returns an empty success payload when no command is provided", () => {
     const res = resolveSystemRunCommand({});
     expect(res.ok).toBe(true);
@@ -204,6 +228,19 @@ describe("system run command helpers", () => {
     }
     expect(res.argv).toEqual(["echo", "123", "false", "null"]);
     expect(res.commandText).toBe("echo 123 false null");
+  });
+
+  test("resolveSystemRunCommandRequest trims legacy rawCommand shell payloads", () => {
+    const res = resolveSystemRunCommandRequest({
+      command: ["/bin/sh", "-lc", "echo hi"],
+      rawCommand: "  echo hi  ",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.previewText).toBe("echo hi");
+    expect(res.commandText).toBe('/bin/sh -lc "echo hi"');
   });
 
   test("resolveSystemRunCommandRequest accepts legacy shell payloads but returns canonical command text", () => {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mattermostPlugin } from "../../../extensions/mattermost/src/channel.js";
 import { discordOutbound } from "../../channels/plugins/outbound/discord.js";
 import { imessageOutbound } from "../../channels/plugins/outbound/imessage.js";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
@@ -24,40 +25,52 @@ const mocks = vi.hoisted(() => ({
   sendMessageSlack: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   sendMessageTelegram: vi.fn(async () => ({ messageId: "m1", chatId: "c1" })),
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "m1", toJid: "jid" })),
+  sendMessageMattermost: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   deliverOutboundPayloads: vi.fn(),
 }));
 
-vi.mock("../../discord/send.js", () => ({
+vi.mock("../../../extensions/discord/src/send.js", () => ({
   sendMessageDiscord: mocks.sendMessageDiscord,
 }));
-vi.mock("../../imessage/send.js", () => ({
+vi.mock("../../../extensions/imessage/src/send.js", () => ({
   sendMessageIMessage: mocks.sendMessageIMessage,
 }));
-vi.mock("../../signal/send.js", () => ({
+vi.mock("../../../extensions/signal/src/send.js", () => ({
   sendMessageSignal: mocks.sendMessageSignal,
 }));
-vi.mock("../../slack/send.js", () => ({
+vi.mock("../../../extensions/slack/src/send.js", () => ({
   sendMessageSlack: mocks.sendMessageSlack,
 }));
-vi.mock("../../telegram/send.js", () => ({
+vi.mock("../../../extensions/telegram/src/send.js", () => ({
   sendMessageTelegram: mocks.sendMessageTelegram,
 }));
-vi.mock("../../web/outbound.js", () => ({
+vi.mock("../../../extensions/telegram/src/send.js", () => ({
+  sendMessageTelegram: mocks.sendMessageTelegram,
+}));
+vi.mock("../../../extensions/whatsapp/src/send.js", () => ({
   sendMessageWhatsApp: mocks.sendMessageWhatsApp,
   sendPollWhatsApp: mocks.sendMessageWhatsApp,
 }));
-vi.mock("../../infra/outbound/deliver.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
-    "../../infra/outbound/deliver.js",
+vi.mock("../../../extensions/discord/src/send.js", () => ({
+  sendMessageDiscord: mocks.sendMessageDiscord,
+  sendPollDiscord: mocks.sendMessageDiscord,
+  sendWebhookMessageDiscord: vi.fn(),
+}));
+vi.mock("../../../extensions/mattermost/src/mattermost/send.js", () => ({
+  sendMessageMattermost: mocks.sendMessageMattermost,
+}));
+vi.mock("../../infra/outbound/deliver-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/outbound/deliver-runtime.js")>(
+    "../../infra/outbound/deliver-runtime.js",
   );
   return {
     ...actual,
     deliverOutboundPayloads: mocks.deliverOutboundPayloads,
   };
 });
-const actualDeliver = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
-  "../../infra/outbound/deliver.js",
-);
+const actualDeliver = await vi.importActual<
+  typeof import("../../infra/outbound/deliver-runtime.js")
+>("../../infra/outbound/deliver-runtime.js");
 
 const { routeReply } = await import("./route-reply.js");
 
@@ -289,6 +302,36 @@ describe("routeReply", () => {
     );
   });
 
+  it("formats BTW replies prominently on routed sends", async () => {
+    mocks.sendMessageSlack.mockClear();
+    await routeReply({
+      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      "BTW\nQuestion: what is 17 * 19?\n\n323",
+      expect.any(Object),
+    );
+  });
+
+  it("formats BTW replies prominently on routed discord sends", async () => {
+    mocks.sendMessageDiscord.mockClear();
+    await routeReply({
+      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
+      channel: "discord",
+      to: "channel:123456",
+      cfg: {} as never,
+    });
+    expect(mocks.sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123456",
+      "BTW\nQuestion: what is 17 * 19?\n\n323",
+      expect.any(Object),
+    );
+  });
+
   it("passes replyToId to Telegram sends", async () => {
     mocks.sendMessageTelegram.mockClear();
     await routeReply({
@@ -332,6 +375,33 @@ describe("routeReply", () => {
       "channel:C123",
       "hi",
       expect.objectContaining({ threadTs: "1710000000.9999" }),
+    );
+  });
+
+  it("uses threadId as replyToId for Mattermost when replyToId is missing", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "mattermost",
+      to: "channel:CHAN1",
+      threadId: "post-root",
+      cfg: {
+        channels: {
+          mattermost: {
+            enabled: true,
+            botToken: "test-token",
+            baseUrl: "https://chat.example.com",
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "mattermost",
+        to: "channel:CHAN1",
+        replyToId: "post-root",
+        threadId: "post-root",
+      }),
     );
   });
 
@@ -499,6 +569,11 @@ const defaultRegistry = createTestRegistry([
     plugin: createMSTeamsPlugin({
       outbound: createMSTeamsOutbound(),
     }),
+    source: "test",
+  },
+  {
+    pluginId: "mattermost",
+    plugin: mattermostPlugin,
     source: "test",
   },
 ]);

@@ -41,6 +41,7 @@ type RuntimeFixture = {
   expectedArgvIndex: number;
   binName?: string;
   binNames?: string[];
+  skipOnWin32?: boolean;
 };
 
 type UnsafeRuntimeInvocationCase = {
@@ -508,6 +509,7 @@ describe("hardenApprovedExecutionPaths", () => {
       scriptName: "run.ts",
       initialBody: 'console.log("SAFE");\n',
       expectedArgvIndex: 3,
+      skipOnWin32: true,
     },
     {
       name: "pnpm exec double-dash tsx file",
@@ -557,6 +559,9 @@ describe("hardenApprovedExecutionPaths", () => {
 
   for (const runtimeCase of mutableOperandCases) {
     it(`captures mutable ${runtimeCase.name} operands in approval plans`, () => {
+      if (runtimeCase.skipOnWin32 && process.platform === "win32") {
+        return;
+      }
       const binNames =
         runtimeCase.binNames ??
         (runtimeCase.binName ? [runtimeCase.binName] : ["bunx", "pnpm", "npm", "npx", "tsx"]);

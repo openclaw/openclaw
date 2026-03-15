@@ -1,1 +1,1 @@
-export { loginWeb } from "../../web/login.js";
+export { loginWeb } from "../../../extensions/whatsapp/src/login.js";
