@@ -85,6 +85,7 @@ export function evaluateMissingDeviceIdentity(params: {
   hasDeviceIdentity: boolean;
   role: GatewayRole;
   isControlUi: boolean;
+  isWebchat?: boolean;
   controlUiAuthPolicy: ControlUiAuthPolicy;
   trustedProxyAuthOk?: boolean;
   sharedAuthOk: boolean;
@@ -104,6 +105,13 @@ export function evaluateMissingDeviceIdentity(params: {
     // sessions only; node-role sessions must still satisfy device identity so
     // that the break-glass flag cannot be abused to admit device-less node
     // registrations (see #45405 review).
+    return { kind: "allow" };
+  }
+  if (params.isWebchat && params.controlUiAuthPolicy.allowBypass && params.role === "operator") {
+    // dangerouslyDisableDeviceAuth also applies to webchat clients because they
+    // share the same browser-based SubtleCrypto limitation as Control UI.
+    // Without HTTPS, device-identity key generation is unavailable, so token
+    // auth must be sufficient for operator webchat sessions.
     return { kind: "allow" };
   }
   if (params.isControlUi && !params.controlUiAuthPolicy.allowBypass) {

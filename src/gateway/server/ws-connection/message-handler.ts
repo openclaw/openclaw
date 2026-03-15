@@ -524,6 +524,7 @@ export function attachGatewayWsMessageHandler(params: {
             hasDeviceIdentity: Boolean(device),
             role,
             isControlUi,
+            isWebchat,
             controlUiAuthPolicy,
             trustedProxyAuthOk,
             sharedAuthOk,
@@ -533,8 +534,8 @@ export function attachGatewayWsMessageHandler(params: {
           });
           // Shared token/password auth can bypass pairing for trusted operators, but
           // device-less backend clients must not self-declare scopes. Control UI
-          // keeps its explicitly allowed device-less scopes on the allow path.
-          if (!device && (!isControlUi || decision.kind !== "allow")) {
+          // and webchat keep their explicitly allowed device-less scopes on the allow path.
+          if (!device && (!isControlUi && !isWebchat || decision.kind !== "allow")) {
             clearUnboundScopes();
           }
           if (decision.kind === "allow") {

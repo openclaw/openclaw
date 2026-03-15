@@ -207,6 +207,60 @@ describe("ws connect policy", () => {
         isLocalClient: false,
       }).kind,
     ).toBe("reject-device-required");
+
+    // dangerouslyDisableDeviceAuth also applies to webchat operator connections
+    // because webchat clients share the same browser SubtleCrypto limitation.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: false,
+        isWebchat: true,
+        controlUiAuthPolicy: bypass,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+
+    // Webchat node-role must still be rejected even with the flag set.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "node",
+        isControlUi: false,
+        isWebchat: true,
+        controlUiAuthPolicy: bypass,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("reject-device-required");
+
+    // Webchat without the bypass flag must still require device identity.
+    const strict = resolveControlUiAuthPolicy({
+      isControlUi: false,
+      controlUiConfig: undefined,
+      deviceRaw: null,
+    });
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: false,
+        isWebchat: true,
+        controlUiAuthPolicy: strict,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: true,
+        authOk: true,
+        hasSharedAuth: true,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow"); // sharedAuthOk is true, so roleCanSkipDeviceIdentity allows it
   });
 
   test("dangerouslyDisableDeviceAuth skips pairing for operator control-ui only", () => {
