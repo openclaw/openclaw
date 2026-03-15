@@ -176,14 +176,12 @@ export const registerTelegramHandlers = ({
   };
   const documentBatchBuffer = new Map<string, DocumentBatchEntry>();
   let documentBatchProcessing: Promise<void> = Promise.resolve();
-  const telegramMediaResolveTransport = telegramTransport
-    ? {
-        ...telegramTransport,
-        // Keep batched media downloads on the same wrapped Telegram fetch path
-        // as non-batch/media-group processing so proxy and network behavior stays aligned.
-        sourceFetch: telegramTransport.fetch,
-      }
-    : undefined;
+  // Use the transport as-is for batched media downloads so DNS pinning
+  // (resolvePinnedHostnameWithPolicy / TELEGRAM_MEDIA_SSRF_POLICY) is preserved
+  // on the same wrapped Telegram fetch path as non-batch/media-group processing.
+  // Overriding sourceFetch with fetch would make fetch === sourceFetch true,
+  // causing downloadAndSaveTelegramFile to set pinDns: false and bypass DNS pinning.
+  const telegramMediaResolveTransport = telegramTransport ?? undefined;
 
   type TextFragmentEntry = {
     key: string;
