@@ -3180,8 +3180,8 @@ public struct ToolInterruptEmitParams: Codable, Sendable {
         normalizedargshash: String?,
         interrupt: [String: AnyCodable],
         timeoutms: Int?,
-        twophase: Bool?
-    ) {
+        twophase: Bool?)
+    {
         self.approvalrequestid = approvalrequestid
         self.runid = runid
         self.sessionkey = sessionkey
@@ -3192,6 +3192,7 @@ public struct ToolInterruptEmitParams: Codable, Sendable {
         self.timeoutms = timeoutms
         self.twophase = twophase
     }
+
     private enum CodingKeys: String, CodingKey {
         case approvalrequestid = "approvalRequestId"
         case runid = "runId"
@@ -3209,10 +3210,11 @@ public struct ToolInterruptListParams: Codable, Sendable {
     public let state: String?
 
     public init(
-        state: String?
-    ) {
+        state: String?)
+    {
         self.state = state
     }
+
     private enum CodingKeys: String, CodingKey {
         case state
     }
@@ -3244,8 +3246,8 @@ public struct ToolInterruptResumeParams: Codable, Sendable {
         policyruleid: AnyCodable?,
         decisionatms: Int?,
         decisionmeta: [String: AnyCodable]?,
-        result: AnyCodable
-    ) {
+        result: AnyCodable)
+    {
         self.approvalrequestid = approvalrequestid
         self.runid = runid
         self.sessionkey = sessionkey
@@ -3259,6 +3261,7 @@ public struct ToolInterruptResumeParams: Codable, Sendable {
         self.decisionmeta = decisionmeta
         self.result = result
     }
+
     private enum CodingKeys: String, CodingKey {
         case approvalrequestid = "approvalRequestId"
         case runid = "runId"
