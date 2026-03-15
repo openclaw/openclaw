@@ -260,11 +260,14 @@ function renderContextNotice(
     return nothing;
   }
 
-  // Prefer totalTokens (per-turn snapshot) when marked fresh — it reflects
-  // the actual current context size, not the cumulative sum across all turns.
-  // When totalTokensFresh===false the snapshot is stale/missing; fall back to
-  // inputTokens capped at the context window so the ratio never exceeds 1.
-  const isFresh = session?.totalTokensFresh !== false;
+  // Use totalTokens when explicitly marked fresh — it reflects the actual current
+  // context size from the last API call, not the cumulative sum across all turns.
+  // Fall back to inputTokens capped at the context window when:
+  //   - totalTokensFresh is false (snapshot unavailable for this run), or
+  //   - totalTokensFresh is absent (old gateway / test fixture without the field).
+  // Treating absent as stale is the safe default: it keeps the warning visible
+  // for rows that predate the totalTokensFresh field rather than silently hiding it.
+  const isFresh = session?.totalTokensFresh === true;
   const used = isFresh ? (session?.totalTokens ?? 0) : Math.min(session?.inputTokens ?? 0, limit);
 
   if (!used) {
