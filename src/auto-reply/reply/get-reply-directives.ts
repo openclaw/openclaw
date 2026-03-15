@@ -365,7 +365,7 @@ export async function resolveReplyDirectives(params: {
     ? (directives.elevatedLevel ??
       (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
       (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
-      "on")
+      "off")
     : "off";
   const resolvedBlockStreaming =
     opts?.disableBlockStreaming === true
