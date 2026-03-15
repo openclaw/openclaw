@@ -474,6 +474,14 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
  * When `entry.text` is present it takes precedence over `entry.content` to avoid
  * dropping messages that carry real text alongside a stale `content: "NO_REPLY"`.
  */
+function isDeliveryMirrorMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  return entry.role === "assistant" && entry.model === "delivery-mirror";
+}
+
 function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
@@ -515,6 +523,12 @@ function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   for (const message of messages) {
     const res = sanitizeChatHistoryMessage(message);
     changed ||= res.changed;
+    // Drop internal delivery-mirror transcript entries so webchat doesn't
+    // show duplicate assistant messages (the real reply + the mirror copy).
+    if (isDeliveryMirrorMessage(res.message)) {
+      changed = true;
+      continue;
+    }
     // Drop assistant messages whose entire visible text is the silent reply token.
     const text = extractAssistantTextForSilentCheck(res.message);
     if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
