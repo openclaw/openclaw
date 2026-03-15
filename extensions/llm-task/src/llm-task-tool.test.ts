@@ -142,9 +142,14 @@ describe("llm-task tool (json-only)", () => {
 
   it("throws on unsupported xhigh thinking level", async () => {
     const tool = createLlmTaskTool(fakeApi());
-    await expect(tool.execute("id", { prompt: "x", thinking: "xhigh" })).rejects.toThrow(
-      /only supported/i,
-    );
+    await expect(
+      tool.execute("id", {
+        prompt: "x",
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        thinking: "xhigh",
+      }),
+    ).rejects.toThrow(/only supported/i);
   });
 
   it("does not pass thinkLevel when thinking is omitted", async () => {
