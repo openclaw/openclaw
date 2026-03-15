@@ -43,6 +43,7 @@ import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import { readReplyApplied } from "./reply-applied.js";
 import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
@@ -735,11 +736,29 @@ async function deliverOutboundPayloadsCore(
       }).quoteTimestamp !== undefined
     );
   };
+  const didSendApplyReply = <T>(
+    resultCountBeforeSend: number,
+    value?: T,
+    sent?: (value: T) => boolean,
+  ) => {
+    const valueFlag = value === undefined ? undefined : readReplyApplied(value);
+    if (valueFlag !== undefined) {
+      return valueFlag;
+    }
+    const resultFlags = results
+      .slice(resultCountBeforeSend)
+      .map((result) => readReplyApplied(result))
+      .filter((flag): flag is boolean => flag !== undefined);
+    if (resultFlags.length > 0) {
+      return resultFlags.some(Boolean);
+    }
+    return value !== undefined && sent ? sent(value) : results.length > resultCountBeforeSend;
+  };
   const markReplyConsumedIfSendSucceeded = (
     replyTo: string | undefined,
     resultCountBeforeSend: number,
   ) => {
-    if (shouldConsumeReplyAfterSend(replyTo) && results.length > resultCountBeforeSend) {
+    if (shouldConsumeReplyAfterSend(replyTo) && didSendApplyReply(resultCountBeforeSend)) {
       replyConsumed = true;
     }
   };
@@ -753,7 +772,7 @@ async function deliverOutboundPayloadsCore(
       const value = await send();
       if (
         shouldConsumeReplyAfterSend(replyTo) &&
-        (sent?.(value) ?? results.length > resultCountBeforeSend)
+        didSendApplyReply(resultCountBeforeSend, value, sent)
       ) {
         replyConsumed = true;
       }

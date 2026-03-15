@@ -4,6 +4,7 @@ import {
   sendPayloadMediaSequence,
 } from "../../../src/channels/plugins/outbound/direct-text-media.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
+import { markReplyApplied } from "../../../src/infra/outbound/reply-applied.js";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -15,6 +16,13 @@ import { sendMessageTelegram } from "./send.js";
 
 type TelegramSendFn = typeof sendMessageTelegram;
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];
+
+function attachReplyAppliedMarker<T extends object>(
+  result: T,
+  baseOpts: { replyToMessageId?: number },
+) {
+  return markReplyApplied(result, baseOpts.replyToMessageId !== undefined);
+}
 
 function resolveTelegramSendContext(params: {
   cfg: NonNullable<TelegramSendOpts>["cfg"];
@@ -103,7 +111,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     const result = await send(to, text, {
       ...baseOpts,
     });
-    return { channel: "telegram", ...result };
+    return attachReplyAppliedMarker({ channel: "telegram", ...result }, baseOpts);
   },
   sendMedia: async ({
     cfg,
@@ -130,7 +138,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       mediaLocalRoots,
       forceDocument: forceDocument ?? false,
     });
-    return { channel: "telegram", ...result };
+    return attachReplyAppliedMarker({ channel: "telegram", ...result }, baseOpts);
   },
   sendPayload: async ({
     cfg,
@@ -160,6 +168,6 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         forceDocument: forceDocument ?? false,
       },
     });
-    return { channel: "telegram", ...result };
+    return attachReplyAppliedMarker({ channel: "telegram", ...result }, baseOpts);
   },
 };

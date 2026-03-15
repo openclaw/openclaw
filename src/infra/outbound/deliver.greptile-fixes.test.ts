@@ -356,6 +356,78 @@ describe("deliverOutboundPayloads Greptile fixes", () => {
     expect(results).toHaveLength(2);
   });
 
+  it("does not consume inherited telegram reply state after an invalid payload-level text override", async () => {
+    const sendTelegram = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "tg-1", chatId: "chat-1" })
+      .mockResolvedValueOnce({ messageId: "tg-2", chatId: "chat-1" });
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { botToken: "tok-1", textChunkLimit: 4000 } },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "first", replyToId: "not-a-number" }, { text: "second" }],
+      replyToId: "777",
+      deps: { sendTelegram },
+      skipQueue: true,
+    });
+
+    const firstOpts = sendTelegram.mock.calls[0]?.[2] as { replyToMessageId?: number } | undefined;
+    const secondOpts = sendTelegram.mock.calls[1]?.[2] as { replyToMessageId?: number } | undefined;
+
+    expect(sendTelegram).toHaveBeenCalledTimes(2);
+    expect(firstOpts?.replyToMessageId).toBeUndefined();
+    expect(secondOpts?.replyToMessageId).toBe(777);
+    expect(results).toEqual([
+      { channel: "telegram", messageId: "tg-1", chatId: "chat-1" },
+      { channel: "telegram", messageId: "tg-2", chatId: "chat-1" },
+    ]);
+  });
+
+  it("does not consume inherited telegram reply state after an invalid payload-level sendPayload override", async () => {
+    const sendTelegram = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "tg-1", chatId: "chat-1" })
+      .mockResolvedValueOnce({ messageId: "tg-2", chatId: "chat-1" });
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { botToken: "tok-1", textChunkLimit: 4000 } },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "telegram",
+      to: "123",
+      payloads: [
+        {
+          text: "first",
+          replyToId: "not-a-number",
+          channelData: { telegram: { buttons: [] } },
+        },
+        {
+          text: "second",
+          channelData: { telegram: { buttons: [] } },
+        },
+      ],
+      replyToId: "777",
+      deps: { sendTelegram },
+      skipQueue: true,
+    });
+
+    const firstOpts = sendTelegram.mock.calls[0]?.[2] as { replyToMessageId?: number } | undefined;
+    const secondOpts = sendTelegram.mock.calls[1]?.[2] as { replyToMessageId?: number } | undefined;
+
+    expect(sendTelegram).toHaveBeenCalledTimes(2);
+    expect(firstOpts?.replyToMessageId).toBeUndefined();
+    expect(secondOpts?.replyToMessageId).toBe(777);
+    expect(results).toEqual([
+      { channel: "telegram", messageId: "tg-1", chatId: "chat-1" },
+      { channel: "telegram", messageId: "tg-2", chatId: "chat-1" },
+    ]);
+  });
+
   it("retries replyToId on later non-signal media payloads after a best-effort failure", async () => {
     const sendText = vi.fn();
     const sendMedia = vi
