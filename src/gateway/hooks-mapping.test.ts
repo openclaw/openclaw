@@ -513,4 +513,95 @@ describe("hooks mapping", () => {
       });
     });
   });
+
+  it("passes sessionMode from mapping to action", async () => {
+    const mappings = resolveHookMappings({
+      enabled: true,
+      mappings: [
+        {
+          match: { path: "fizzy" },
+          messageTemplate: "card update",
+          sessionKey: "hook:fizzy:card-1",
+          sessionMode: "persistent",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: {},
+      headers: {},
+      url: new URL("http://localhost/hooks/fizzy"),
+      path: "fizzy",
+    });
+    expect(result).toBeDefined();
+    expect(result!.ok).toBe(true);
+    if (result!.ok && result!.action?.kind === "agent") {
+      expect(result!.action.sessionMode).toBe("persistent");
+    } else {
+      throw new Error("expected agent action");
+    }
+  });
+
+  it("defaults sessionMode to undefined when not set", async () => {
+    const mappings = resolveHookMappings({
+      enabled: true,
+      mappings: [
+        {
+          match: { path: "test" },
+          messageTemplate: "test",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: {},
+      headers: {},
+      url: new URL("http://localhost/hooks/test"),
+      path: "test",
+    });
+    expect(result).toBeDefined();
+    expect(result!.ok).toBe(true);
+    if (result!.ok && result!.action?.kind === "agent") {
+      expect(result!.action.sessionMode).toBeUndefined();
+    } else {
+      throw new Error("expected agent action");
+    }
+  });
+
+  it("allows transform to override sessionMode", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-mode-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(transformsRoot, "override.mjs"),
+      'export default function() { return { sessionMode: "persistent" }; }',
+    );
+
+    const mappings = resolveHookMappings(
+      {
+        enabled: true,
+        mappings: [
+          {
+            match: { path: "custom" },
+            messageTemplate: "msg",
+            sessionMode: "isolated",
+            transform: { module: "override.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: {},
+      headers: {},
+      url: new URL("http://localhost/hooks/custom"),
+      path: "custom",
+    });
+    expect(result).toBeDefined();
+    expect(result!.ok).toBe(true);
+    if (result!.ok && result!.action?.kind === "agent") {
+      expect(result!.action.sessionMode).toBe("persistent");
+    } else {
+      throw new Error("expected agent action");
+    }
+  });
 });

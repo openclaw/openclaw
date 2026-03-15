@@ -210,6 +210,8 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
   deliveryContract?: IsolatedDeliveryContract;
+  /** When "persistent", reuse existing session for multi-turn hook conversations. */
+  sessionMode?: "isolated" | "persistent";
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
@@ -342,8 +344,9 @@ export async function runCronIsolatedAgentTurn(params: {
     sessionKey: agentSessionKey,
     agentId,
     nowMs: now,
-    // Isolated cron runs must not carry prior turn context across executions.
-    forceNew: params.job.sessionTarget === "isolated",
+    // Isolated cron runs get a fresh session each execution.
+    // Persistent hook sessions reuse the existing session for multi-turn history.
+    forceNew: params.job.sessionTarget === "isolated" && params.sessionMode !== "persistent",
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")
