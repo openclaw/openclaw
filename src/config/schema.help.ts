@@ -653,7 +653,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.allowCrossContextSend":
     "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":
-    "Allow sends to other channels within the same provider (default: true).",
+    "Allow sends to other channels within the same provider (default: false).",
   "tools.message.crossContext.allowAcrossProviders":
     "Allow sends across different providers (default: false).",
   "tools.message.crossContext.marker.enabled":

@@ -4,6 +4,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parseTelegramTarget } from "../../telegram/targets.js";
 import {
   getChannelMessageAdapter,
   type CrossContextComponentsBuilder,
@@ -69,6 +70,28 @@ function normalizeTarget(channel: ChannelId, raw: string): string | undefined {
   return normalizeTargetForProvider(channel, raw) ?? raw.trim();
 }
 
+function isTelegramSameContextTarget(params: {
+  target: string;
+  toolContext?: ChannelThreadingToolContext;
+}): boolean {
+  const currentTarget = params.toolContext?.currentChannelId?.trim();
+  if (!currentTarget) {
+    return false;
+  }
+  const parsedTarget = parseTelegramTarget(params.target);
+  const parsedCurrent = parseTelegramTarget(currentTarget);
+  if (parsedTarget.chatId.toLowerCase() !== parsedCurrent.chatId.toLowerCase()) {
+    return false;
+  }
+  const currentThreadTs = params.toolContext?.currentThreadTs?.trim();
+  if (!currentThreadTs) {
+    return parsedTarget.messageThreadId == null;
+  }
+  return (
+    parsedTarget.messageThreadId == null || String(parsedTarget.messageThreadId) === currentThreadTs
+  );
+}
+
 function isCrossContextTarget(params: {
   channel: ChannelId;
   target: string;
@@ -77,6 +100,12 @@ function isCrossContextTarget(params: {
   const currentTarget = params.toolContext?.currentChannelId?.trim();
   if (!currentTarget) {
     return false;
+  }
+  if (params.channel === "telegram") {
+    return !isTelegramSameContextTarget({
+      target: params.target,
+      toolContext: params.toolContext,
+    });
   }
   const normalizedTarget = normalizeTarget(params.channel, params.target);
   const normalizedCurrent = normalizeTarget(params.channel, currentTarget);
@@ -106,8 +135,7 @@ export function enforceCrossContextPolicy(params: {
   }
 
   const currentProvider = params.toolContext?.currentChannelProvider;
-  const allowWithinProvider =
-    params.cfg.tools?.message?.crossContext?.allowWithinProvider !== false;
+  const allowWithinProvider = params.cfg.tools?.message?.crossContext?.allowWithinProvider === true;
   const allowAcrossProviders =
     params.cfg.tools?.message?.crossContext?.allowAcrossProviders === true;
 

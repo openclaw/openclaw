@@ -33,6 +33,17 @@ vi.mock("../../config/sessions.js", async () => {
 
 import { runMessageAction } from "./message-action-runner.js";
 
+const telegramConfigAllowWithinProvider = {
+  ...telegramConfig,
+  tools: {
+    message: {
+      crossContext: {
+        allowWithinProvider: true,
+      },
+    },
+  },
+} as typeof telegramConfig;
+
 async function runThreadingAction(params: {
   cfg: typeof slackConfig;
   actionParams: Record<string, unknown>;
@@ -129,7 +140,7 @@ describe("runMessageAction threading auto-injection", () => {
     mockHandledSendAction();
 
     const call = await runThreadingAction({
-      cfg: telegramConfig,
+      cfg: telegramConfigAllowWithinProvider,
       actionParams: {
         channel: "telegram",
         target: testCase.target,

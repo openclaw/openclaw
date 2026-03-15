@@ -201,6 +201,27 @@ describe("scheduleChatScroll", () => {
 
     expect(host.chatNewMessagesBelow).toBe(true);
   });
+
+  it("falls back to the document scroll container when the host has no querySelector", async () => {
+    const host = {
+      updateComplete: Promise.resolve(),
+      style: { setProperty: vi.fn() } as unknown as CSSStyleDeclaration,
+      chatScrollFrame: null as number | null,
+      chatScrollTimeout: null as number | null,
+      chatHasAutoScrolled: false,
+      chatUserNearBottom: true,
+      chatNewMessagesBelow: false,
+      logsScrollFrame: null as number | null,
+      logsAtBottom: true,
+      topbarObserver: null as ResizeObserver | null,
+    } as unknown as Parameters<typeof scheduleChatScroll>[0];
+
+    scheduleChatScroll(host, true);
+    await host.updateComplete;
+
+    expect(host.chatHasAutoScrolled).toBe(true);
+    expect(host.chatNewMessagesBelow).toBe(false);
+  });
 });
 
 /* ------------------------------------------------------------------ */

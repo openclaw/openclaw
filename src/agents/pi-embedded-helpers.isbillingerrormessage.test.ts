@@ -859,5 +859,10 @@ describe("classifyFailoverReason", () => {
         '{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
       ),
     ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID c69ab225-9c66-48c4-87c9-2a46bf07e104 in your message.","param":null},"sequence_number":2}',
+      ),
+    ).toBe("timeout");
   });
 });

@@ -241,7 +241,6 @@ describe("runMessageAction context isolation", () => {
           },
           toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
         }),
-      expectedKind: "send",
     },
     {
       name: "thread-reply when channelId differs from current slack channel",
@@ -256,11 +255,9 @@ describe("runMessageAction context isolation", () => {
           },
           toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
         }),
-      expectedKind: "action",
     },
-  ])("blocks cross-context UI handoff for $name", async ({ run, expectedKind }) => {
-    const result = await run();
-    expect(result.kind).toBe(expectedKind);
+  ])("blocks cross-context UI handoff for $name", async ({ run }) => {
+    await expect(run()).rejects.toThrow(/Cross-context messaging denied/);
   });
 
   it.each([
@@ -276,6 +273,23 @@ describe("runMessageAction context isolation", () => {
       target: "imessage:+15551234567",
       currentChannelId: "imessage:+15551234567",
     },
+  ] as const)("$name", async (testCase) => {
+    const result = await runDrySend({
+      cfg: whatsappConfig,
+      actionParams: {
+        channel: testCase.channel,
+        target: testCase.target,
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: testCase.currentChannelId,
+      },
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
+  it.each([
     {
       name: "whatsapp mismatch",
       channel: "whatsapp",
@@ -291,22 +305,20 @@ describe("runMessageAction context isolation", () => {
       currentChannelProvider: "imessage",
     },
   ] as const)("$name", async (testCase) => {
-    const result = await runDrySend({
-      cfg: whatsappConfig,
-      actionParams: {
-        channel: testCase.channel,
-        target: testCase.target,
-        message: "hi",
-      },
-      toolContext: {
-        currentChannelId: testCase.currentChannelId,
-        ...(testCase.currentChannelProvider
-          ? { currentChannelProvider: testCase.currentChannelProvider }
-          : {}),
-      },
-    });
-
-    expect(result.kind).toBe("send");
+    await expect(
+      runDrySend({
+        cfg: whatsappConfig,
+        actionParams: {
+          channel: testCase.channel,
+          target: testCase.target,
+          message: "hi",
+        },
+        toolContext: {
+          currentChannelId: testCase.currentChannelId,
+          currentChannelProvider: testCase.currentChannelProvider,
+        },
+      }),
+    ).rejects.toThrow(/Cross-context messaging denied/);
   });
 
   it.each([
@@ -382,17 +394,8 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
-      name: "blocks same-provider cross-context when disabled",
-      cfg: {
-        ...slackConfig,
-        tools: {
-          message: {
-            crossContext: {
-              allowWithinProvider: false,
-            },
-          },
-        },
-      } as OpenClawConfig,
+      name: "blocks same-provider cross-context by default",
+      cfg: slackConfig,
       actionParams: {
         channel: "slack",
         target: "channel:C99999999",
@@ -409,6 +412,32 @@ describe("runMessageAction context isolation", () => {
         toolContext,
       }),
     ).rejects.toThrow(message);
+  });
+
+  it("allows same-provider cross-context when explicitly enabled", async () => {
+    const cfg = {
+      ...slackConfig,
+      tools: {
+        message: {
+          crossContext: {
+            allowWithinProvider: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await runDrySend({
+      cfg,
+      actionParams: {
+        channel: "slack",
+        target: "channel:C99999999",
+        message: "hi",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+    });
+
+    expect(result.kind).toBe("send");
+    expect(result.channel).toBe("slack");
   });
 
   it.each([

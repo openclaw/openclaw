@@ -22,6 +22,14 @@ const discordConfig = {
   },
 } as OpenClawConfig;
 
+const telegramConfig = {
+  channels: {
+    telegram: {
+      botToken: "telegram-test",
+    },
+  },
+} as OpenClawConfig;
+
 describe("outbound policy helpers", () => {
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
@@ -54,11 +62,23 @@ describe("outbound policy helpers", () => {
     ).toThrow(/target provider "telegram" while bound to "slack"/);
   });
 
-  it("blocks same-provider cross-context sends when allowWithinProvider is false", () => {
+  it("blocks same-provider cross-context sends by default", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        cfg: slackConfig,
+        channel: "slack",
+        action: "send",
+        args: { to: "C999" },
+        toolContext: { currentChannelId: "C123", currentChannelProvider: "slack" },
+      }),
+    ).toThrow(/target="C999" while bound to "C123"/);
+  });
+
+  it("allows same-provider cross-context sends when allowWithinProvider is true", () => {
     const cfg = {
       ...slackConfig,
       tools: {
-        message: { crossContext: { allowWithinProvider: false } },
+        message: { crossContext: { allowWithinProvider: true } },
       },
     } as OpenClawConfig;
 
@@ -70,7 +90,39 @@ describe("outbound policy helpers", () => {
         args: { to: "C999" },
         toolContext: { currentChannelId: "C123", currentChannelProvider: "slack" },
       }),
-    ).toThrow(/target="C999" while bound to "C123"/);
+    ).not.toThrow();
+  });
+
+  it("allows Telegram explicit current-topic targets by default", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        cfg: telegramConfig,
+        channel: "telegram",
+        action: "send",
+        args: { to: "telegram:-100123:topic:42" },
+        toolContext: {
+          currentChannelId: "telegram:-100123",
+          currentChannelProvider: "telegram",
+          currentThreadTs: "42",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("blocks Telegram explicit different-topic targets by default", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        cfg: telegramConfig,
+        channel: "telegram",
+        action: "send",
+        args: { to: "telegram:-100123:topic:99" },
+        toolContext: {
+          currentChannelId: "telegram:-100123",
+          currentChannelProvider: "telegram",
+          currentThreadTs: "42",
+        },
+      }),
+    ).toThrow(/Cross-context messaging denied/);
   });
 
   it("uses components when available and preferred", async () => {
