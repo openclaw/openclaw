@@ -91,12 +91,13 @@ export type RuntimeVersionEnv = {
 };
 
 export const RUNTIME_SERVICE_VERSION_FALLBACK = "unknown";
+const UNUSABLE_RUNTIME_VERSION_MARKERS = new Set(["0.0.0", "dev", "unknown"]);
 
 export function resolveUsableRuntimeVersion(version: string | undefined): string | undefined {
   const trimmed = version?.trim();
-  // "0.0.0" is the resolver's hard fallback when module metadata cannot be read.
-  // Prefer explicit service/package markers in that edge case.
-  if (!trimmed || trimmed === "0.0.0") {
+  const normalized = trimmed?.toLowerCase();
+  // Placeholder markers like "dev" and "unknown" should not win over concrete versions.
+  if (!trimmed || !normalized || UNUSABLE_RUNTIME_VERSION_MARKERS.has(normalized)) {
     return undefined;
   }
   return trimmed;
@@ -106,16 +107,12 @@ export function resolveRuntimeServiceVersion(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
   fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
+  const envVersion = resolveUsableRuntimeVersion(env["OPENCLAW_VERSION"]);
   const runtimeVersion = resolveUsableRuntimeVersion(VERSION);
+  const serviceVersion = resolveUsableRuntimeVersion(env["OPENCLAW_SERVICE_VERSION"]);
+  const packageVersion = resolveUsableRuntimeVersion(env["npm_package_version"]);
 
-  return (
-    firstNonEmpty(
-      env["OPENCLAW_VERSION"],
-      runtimeVersion,
-      env["OPENCLAW_SERVICE_VERSION"],
-      env["npm_package_version"],
-    ) ?? fallback
-  );
+  return firstNonEmpty(envVersion, runtimeVersion, serviceVersion, packageVersion) ?? fallback;
 }
 
 // Single source of truth for the current OpenClaw version.
