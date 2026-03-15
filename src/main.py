@@ -593,9 +593,18 @@ class OpenClawGateway:
             "target",
             "spread",
         ]
-        keyword_result = (
-            "Dmarket" if any(kw in prompt.lower() for kw in dmarket_keywords) else "OpenClaw"
-        )
+        openclaw_keywords = [
+            "config", "конфиг", "pipeline", "модел", "model", "vllm",
+            "бригад", "brigade", "роль", "role", "mcp", "плагин", "plugin",
+            "бот", "bot", "openclaw", "gateway", "память", "memory",
+        ]
+        lower_prompt = prompt.lower()
+        if any(kw in lower_prompt for kw in dmarket_keywords):
+            keyword_result = "Dmarket"
+        elif any(kw in lower_prompt for kw in openclaw_keywords):
+            keyword_result = "OpenClaw"
+        else:
+            keyword_result = "General"
 
         # Try LLM-based classification
         import aiohttp
@@ -615,12 +624,14 @@ class OpenClawGateway:
 
         try:
             brigades = list(self.config.get("brigades", {}).keys())
+            all_classes = brigades + ["General"]
             classify_prompt = (
-                f"Classify this user request into ONE of these brigades: {', '.join(brigades)}.\n"
+                f"Classify this user request into ONE of these categories: {', '.join(all_classes)}.\n"
                 f"Dmarket = trading, buying, selling items, prices, market, skins, inventory.\n"
-                f"OpenClaw = system administration, framework, configuration, models, bots.\n\n"
+                f"OpenClaw = system administration, framework, configuration, models, bots, pipeline.\n"
+                f"General = general questions, chitchat, greetings, unrelated topics, unclear intent.\n\n"
                 f"Request: {prompt}\n\n"
-                f"Reply with ONLY the brigade name, nothing else."
+                f"Reply with ONLY the category name, nothing else."
             )
             payload = {
                 "model": classify_model,
@@ -636,20 +647,24 @@ class OpenClawGateway:
                     if resp.status == 200:
                         data = await resp.json()
                         result = data["choices"][0]["message"]["content"].strip()
-                        # Validate response is a known brigade
-                        for b in brigades:
+                        # Validate response is a known brigade or General
+                        for b in all_classes:
                             if b.lower() in result.lower():
-                                self._intent_cache[cache_key] = b
+                                # Map General → OpenClaw (uses shorter Planner-only chain)
+                                resolved = "OpenClaw" if b == "General" else b
+                                self._intent_cache[cache_key] = resolved
                                 logger.info(
-                                    "Intent classified by LLM", brigade=b, raw_response=result
+                                    "Intent classified by LLM", brigade=resolved, raw_class=b, raw_response=result
                                 )
-                                return b
+                                return resolved
         except Exception as e:
             logger.warning("LLM intent classification failed, using keyword fallback", error=str(e))
 
-        # Fallback to keyword result
-        self._intent_cache[cache_key] = keyword_result
-        return keyword_result
+        # Fallback to keyword result (General → OpenClaw)
+        resolved_fallback = "OpenClaw" if keyword_result == "General" else keyword_result
+        self._intent_cache[cache_key] = resolved_fallback
+        logger.info("Intent classified by keywords", brigade=resolved_fallback, keyword_class=keyword_result)
+        return resolved_fallback
 
     async def handle_prompt(self, message: Message):
         if message.from_user.id != self.admin_id:

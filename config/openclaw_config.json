@@ -23,7 +23,7 @@
     "vllm_gpu_memory_utilization": 0.90,
     "vllm_max_model_len": 8192,
     "vllm_quantization": null,
-    "vllm_extra_args": ["--enable-prefix-caching"],
+    "vllm_extra_args": ["--enable-prefix-caching", "--enable-auto-tool-choice", "--tool-call-parser", "hermes"],
     "polling_gateway_url": "",
     "polling_interval": 30,
     "session_management": {

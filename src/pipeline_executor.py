@@ -703,6 +703,24 @@ class PipelineExecutor:
                                 error_body = await resp.text()
                             except Exception:
                                 pass
+                            # Fallback: if 400 due to tool_choice not supported, retry without tools
+                            if resp.status == 400 and "tool" in error_body.lower() and model_tools:
+                                logger.warning("vLLM rejected tools, retrying without tool_choice", status=resp.status)
+                                payload.pop("tools", None)
+                                payload.pop("tool_choice", None)
+                                async with session.post(
+                                    f"{self.vllm_url}/chat/completions",
+                                    json=payload,
+                                    timeout=timeout,
+                                ) as retry_resp:
+                                    if retry_resp.status == 200:
+                                        retry_data = await retry_resp.json()
+                                        text = retry_data["choices"][0]["message"]["content"].strip()
+                                        if not preserve_think:
+                                            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+                                        return text
+                                    retry_body = await retry_resp.text()
+                                    return f"⚠️ vLLM Error ({retry_resp.status}): {retry_body[:200]}"
                             if resp.status == 404:
                                 return (
                                     f"⚠️ Model `{model}` not found on vLLM server (HTTP 404).\n"
