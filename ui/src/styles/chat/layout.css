@@ -908,6 +908,9 @@
 .agent-chat__avatar--logo {
   width: 48px;
   height: 48px;
+  max-width: 48px;
+  max-height: 48px;
+  flex-shrink: 0;
   border-radius: 14px;
   background: var(--panel-strong);
   border: 1px solid var(--border);
@@ -919,6 +922,8 @@
 .agent-chat__avatar--logo img {
   width: 32px;
   height: 32px;
+  max-width: 32px;
+  max-height: 32px;
   object-fit: contain;
 }
 
