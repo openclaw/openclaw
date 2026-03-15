@@ -44,7 +44,8 @@ node scripts/watch-node.mjs gateway --force
 ```
 
 The watcher restarts on build-relevant files under `src/`, extension source files,
-`tsconfig.json`, `package.json`, and `tsdown.config.ts`.
+extension `package.json` and `openclaw.plugin.json` metadata, `tsconfig.json`,
+`package.json`, and `tsdown.config.ts`.
 
 Add any gateway CLI flags after `gateway:watch` and they will be passed through on
 each restart.

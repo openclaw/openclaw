@@ -12,6 +12,7 @@ const runNodeSourceRoots = ["src", "extensions"];
 const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
+const extensionBuildMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
 
 const normalizePath = (filePath) => String(filePath ?? "").replaceAll("\\", "/");
 
@@ -26,6 +27,9 @@ const isIgnoredSourcePath = (relativePath) => {
 
 const isBuildRelevantExtensionPath = (relativePath) => {
   const normalizedPath = normalizePath(relativePath);
+  if (extensionBuildMetadataFiles.has(path.posix.basename(normalizedPath))) {
+    return true;
+  }
   return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
 };
 
@@ -118,6 +122,26 @@ const resolveGitHead = (deps) => {
   return head || null;
 };
 
+const readGitStatus = (deps) => {
+  try {
+    const result = deps.spawnSync(
+      "git",
+      ["status", "--porcelain", "--untracked-files=normal", "--", ...runNodeWatchedPaths],
+      {
+        cwd: deps.cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    if (result.status !== 0) {
+      return null;
+    }
+    return result.stdout ?? "";
+  } catch {
+    return null;
+  }
+};
+
 const parseGitStatusPaths = (output) =>
   output
     .split("\n")
@@ -126,10 +150,7 @@ const parseGitStatusPaths = (output) =>
     .filter(Boolean);
 
 const hasDirtySourceTree = (deps) => {
-  const output = runGit(
-    ["status", "--porcelain", "--untracked-files=normal", "--", ...runNodeWatchedPaths],
-    deps,
-  );
+  const output = readGitStatus(deps);
   if (output === null) {
     return null;
   }
