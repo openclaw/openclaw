@@ -631,6 +631,7 @@ describe("applyMistralProviderConfig", () => {
     );
     expect(mistralDefault?.contextWindow).toBe(262144);
     expect(mistralDefault?.maxTokens).toBe(262144);
+    expect(mistralDefault?.compat?.maxTokensField).toBe("max_tokens");
   });
 });
 
