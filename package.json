@@ -44,6 +44,10 @@
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
     },
+    "./plugin-sdk/web-search": {
+      "types": "./dist/plugin-sdk/web-search.d.ts",
+      "default": "./dist/plugin-sdk/web-search.js"
+    },
     "./plugin-sdk/compat": {
       "types": "./dist/plugin-sdk/compat.d.ts",
       "default": "./dist/plugin-sdk/compat.js"

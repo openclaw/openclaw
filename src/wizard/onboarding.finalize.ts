@@ -26,6 +26,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import { resolveCapabilitySlotSelection } from "../plugins/capability-slots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
 import { runTui } from "../tui/tui.js";
@@ -481,30 +482,93 @@ export async function finalizeOnboardingWizard(
     );
   }
 
-  const webSearchProvider = nextConfig.tools?.web?.search?.provider;
+  const webSearchProvider = resolveCapabilitySlotSelection(nextConfig, "providers.search");
   const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
   if (webSearchProvider) {
-    const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey, hasExistingKey, hasKeyInEnv } =
-      await import("../commands/onboard-search.js");
-    const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === webSearchProvider);
-    const label = entry?.label ?? webSearchProvider;
-    const storedKey = resolveExistingKey(nextConfig, webSearchProvider);
-    const keyConfigured = hasExistingKey(nextConfig, webSearchProvider);
-    const envAvailable = entry ? hasKeyInEnv(entry) : false;
+    const {
+      SEARCH_PROVIDER_OPTIONS,
+      resolveExistingKey,
+      hasExistingKey,
+      hasKeyInEnv,
+      resolveSearchProviderPickerEntry,
+      resolveSearchProviderPickerEntries,
+    } = await import("../commands/onboard-search.js");
+    const pickerEntry = await resolveSearchProviderPickerEntry(
+      nextConfig,
+      webSearchProvider,
+      options.workspaceDir,
+    );
+    const providerEntries = await resolveSearchProviderPickerEntries(
+      nextConfig,
+      options.workspaceDir,
+    );
+    const configuredProviderCount = providerEntries.filter((entry) => entry.configured).length;
+    const builtinEntry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === webSearchProvider);
+    const label = pickerEntry?.label ?? builtinEntry?.label ?? webSearchProvider;
+    const sourceLine =
+      pickerEntry?.kind === "plugin"
+        ? `Source: ${pickerEntry.origin === "bundled" ? "Bundled plugin" : "External plugin"}`
+        : undefined;
+    const storedKey = builtinEntry ? resolveExistingKey(nextConfig, builtinEntry.value) : undefined;
+    const keyConfigured = builtinEntry ? hasExistingKey(nextConfig, builtinEntry.value) : false;
+    const envAvailable = builtinEntry ? hasKeyInEnv(builtinEntry) : false;
     const hasKey = keyConfigured || envAvailable;
     const keySource = storedKey
       ? "API key: stored in config."
       : keyConfigured
         ? "API key: configured via secret reference."
         : envAvailable
-          ? `API key: provided via ${entry?.envKeys.join(" / ")} env var.`
+          ? `API key: provided via ${builtinEntry?.envKeys.join(" / ")} env var.`
           : undefined;
-    if (webSearchEnabled !== false && hasKey) {
+    if (pickerEntry?.kind === "plugin") {
+      await prompter.note(
+        [
+          webSearchEnabled !== false
+            ? "Web search is enabled through a plugin-provided provider."
+            : "Web search is configured through a plugin-provided provider but currently disabled.",
+          "",
+          `Active provider: ${label}`,
+          ...(sourceLine ? [sourceLine] : []),
+          ...(configuredProviderCount > 1
+            ? [
+                "Multiple web search providers are configured; the others remain available to switch to later via configure.",
+              ]
+            : []),
+          "Plugin-managed providers may use plugin config or plugin-specific credentials instead of the built-in API key fields.",
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    } else if (!builtinEntry) {
+      await prompter.note(
+        [
+          webSearchEnabled !== false
+            ? "Web search is enabled through a plugin-provided provider."
+            : "Web search is configured through a plugin-provided provider but currently disabled.",
+          "",
+          `Active provider: ${label}`,
+          ...(configuredProviderCount > 1
+            ? [
+                "Multiple web search providers are configured; the others remain available to switch to later via configure.",
+              ]
+            : []),
+          "Plugin-managed providers may use plugin config or plugin-specific credentials instead of the built-in API key fields.",
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    } else if (webSearchEnabled !== false && hasKey) {
       await prompter.note(
         [
           "Web search is enabled, so your agent can look things up online when needed.",
           "",
-          `Provider: ${label}`,
+          `Active provider: ${label}`,
+          ...(sourceLine ? [sourceLine] : []),
+          ...(configuredProviderCount > 1
+            ? [
+                "Multiple web search providers are configured; the others remain available to switch to later via configure.",
+              ]
+            : []),
           ...(keySource ? [keySource] : []),
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
@@ -517,7 +581,7 @@ export async function finalizeOnboardingWizard(
           "web_search will not work until a key is added.",
           `  ${formatCliCommand("openclaw configure --section web")}`,
           "",
-          `Get your key at: ${entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web"}`,
+          `Get your key at: ${builtinEntry?.signupUrl ?? "https://docs.openclaw.ai/tools/web"}`,
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
         "Web search",

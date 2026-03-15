@@ -11,6 +11,7 @@ const ciWorkers = isWindows ? 2 : 3;
 const pluginSdkSubpaths = [
   "account-id",
   "core",
+  "web-search",
   "compat",
   "telegram",
   "discord",

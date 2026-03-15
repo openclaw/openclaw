@@ -31,6 +31,9 @@ export type PluginManifestRecord = {
   channels: string[];
   providers: string[];
   skills: string[];
+  provides: string[];
+  requires: string[];
+  conflicts: string[];
   origin: PluginOrigin;
   workspaceDir?: string;
   rootDir: string;
@@ -126,6 +129,9 @@ function buildRecord(params: {
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
     skills: params.manifest.skills ?? [],
+    provides: params.manifest.provides ?? [],
+    requires: params.manifest.requires ?? [],
+    conflicts: params.manifest.conflicts ?? [],
     origin: params.candidate.origin,
     workspaceDir: params.candidate.workspaceDir,
     rootDir: params.candidate.rootDir,

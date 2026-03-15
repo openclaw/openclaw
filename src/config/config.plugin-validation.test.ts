@@ -22,6 +22,7 @@ async function writePluginFixture(params: {
   id: string;
   schema: Record<string, unknown>;
   channels?: string[];
+  manifest?: Record<string, unknown>;
 }) {
   await mkdirSafe(params.dir);
   await fs.writeFile(
@@ -32,6 +33,7 @@ async function writePluginFixture(params: {
   const manifest: Record<string, unknown> = {
     id: params.id,
     configSchema: params.schema,
+    ...params.manifest,
   };
   if (params.channels) {
     manifest.channels = params.channels;
@@ -59,6 +61,10 @@ describe("config plugin validation", () => {
       CLAWDBOT_STATE_DIR: undefined,
       OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "10000",
     }) satisfies NodeJS.ProcessEnv;
+  let capabilityProviderDir = "";
+  let capabilityConsumerDir = "";
+  let capabilityConflictADir = "";
+  let capabilityConflictBDir = "";
 
   const validateInSuite = (raw: unknown) =>
     validateConfigObjectWithPlugins(raw, { env: suiteEnv() });
@@ -102,6 +108,43 @@ describe("config plugin validation", () => {
       id: "bluebubbles-plugin",
       channels: ["bluebubbles"],
       schema: { type: "object" },
+    });
+    capabilityProviderDir = path.join(suiteHome, "capability-provider");
+    await writePluginFixture({
+      dir: capabilityProviderDir,
+      id: "capability-provider",
+      schema: { type: "object" },
+      manifest: {
+        provides: ["providers.embedding.fixture"],
+      },
+    });
+    capabilityConsumerDir = path.join(suiteHome, "capability-consumer");
+    await writePluginFixture({
+      dir: capabilityConsumerDir,
+      id: "capability-consumer",
+      schema: { type: "object" },
+      manifest: {
+        requires: ["providers.embedding.fixture"],
+      },
+    });
+    capabilityConflictADir = path.join(suiteHome, "capability-conflict-a");
+    await writePluginFixture({
+      dir: capabilityConflictADir,
+      id: "capability-conflict-a",
+      schema: { type: "object" },
+      manifest: {
+        provides: ["memory.backend.fixtureA"],
+      },
+    });
+    capabilityConflictBDir = path.join(suiteHome, "capability-conflict-b");
+    await writePluginFixture({
+      dir: capabilityConflictBDir,
+      id: "capability-conflict-b",
+      schema: { type: "object" },
+      manifest: {
+        provides: ["memory.backend.fixtureB"],
+        conflicts: ["memory.backend.*"],
+      },
     });
     voiceCallSchemaPluginDir = path.join(suiteHome, "voice-call-schema-plugin");
     const voiceCallManifestPath = path.join(
@@ -231,6 +274,84 @@ describe("config plugin validation", () => {
           issue.message.includes("invalid config"),
       );
       expect(hasIssue).toBe(true);
+    }
+  });
+
+  it("warns when a plugin is missing a declared required capability", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [capabilityConsumerDir] },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toContainEqual({
+        path: "plugins.entries.capability-consumer",
+        message:
+          "plugin capability-consumer: missing required capability: providers.embedding.fixture",
+      });
+    }
+  });
+
+  it("does not warn when a declared required capability is present", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [capabilityProviderDir, capabilityConsumerDir] },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(
+        res.warnings.some((warning) => warning.message.includes("missing required capability")),
+      ).toBe(false);
+    }
+  });
+
+  it("errors when a plugin declares a conflicting capability pattern", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [capabilityConflictADir, capabilityConflictBDir] },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toContainEqual({
+        path: "plugins.entries.capability-conflict-b",
+        message:
+          "plugin capability-conflict-b: conflicting capability present: memory.backend.* (capability-conflict-a)",
+      });
+    }
+  });
+
+  it("routes missing slot selection diagnostics to the slot config path", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        slots: { memory: "missing-memory-backend" },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toContainEqual({
+        path: "plugins.slots.memory",
+        message: "plugin not found: missing-memory-backend",
+      });
+      expect(res.warnings).toContainEqual({
+        path: "plugins.slots.memory",
+        message:
+          "plugin: memory slot plugin not found or not marked as memory: missing-memory-backend",
+      });
     }
   });
 

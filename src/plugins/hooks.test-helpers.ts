@@ -20,6 +20,7 @@ export function createMockPluginRegistry(
     cliRegistrars: [],
     services: [],
     providers: [],
+    searchProviders: [],
     commands: [],
   } as unknown as PluginRegistry;
 }

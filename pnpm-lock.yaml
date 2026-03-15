@@ -457,6 +457,16 @@ importers:
 
   extensions/sglang: {}
 
+  extensions/search-brave: {}
+
+  extensions/search-gemini: {}
+
+  extensions/search-grok: {}
+
+  extensions/search-kimi: {}
+
+  extensions/search-perplexity: {}
+
   extensions/signal: {}
 
   extensions/slack: {}
@@ -466,6 +476,8 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/tavily-search: {}
 
   extensions/telegram: {}
 

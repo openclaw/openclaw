@@ -5,6 +5,7 @@ import {
   listTelegramAccountIds,
   resolveTelegramAccount,
 } from "../../extensions/telegram/src/accounts.js";
+import { isBuiltinWebSearchProviderId } from "../agents/tools/web-search-provider-catalog.js";
 import {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
@@ -16,7 +17,12 @@ import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gatewa
 import { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { CONFIG_PATH, migrateLegacyConfig, readConfigFileSnapshot } from "../config/config.js";
+import {
+  CONFIG_PATH,
+  migrateLegacyConfig,
+  readConfigFileSnapshot,
+  validateConfigObjectWithPlugins,
+} from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -77,6 +83,181 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function parseConfigPath(pathLabel: string): Array<string | number> | null {
+  if (!pathLabel || pathLabel === "<root>") {
+    return [];
+  }
+  const parts: Array<string | number> = [];
+  let token = "";
+  for (let i = 0; i < pathLabel.length; i += 1) {
+    const ch = pathLabel[i];
+    if (ch === ".") {
+      if (token) {
+        parts.push(token);
+        token = "";
+      }
+      continue;
+    }
+    if (ch === "[") {
+      if (token) {
+        parts.push(token);
+        token = "";
+      }
+      const end = pathLabel.indexOf("]", i);
+      if (end === -1) {
+        return null;
+      }
+      const indexText = pathLabel.slice(i + 1, end);
+      const index = Number.parseInt(indexText, 10);
+      if (!Number.isInteger(index)) {
+        return null;
+      }
+      parts.push(index);
+      i = end;
+      continue;
+    }
+    token += ch;
+  }
+  if (token) {
+    parts.push(token);
+  }
+  return parts;
+}
+
+function deleteConfigPath(root: unknown, path: Array<string | number>): boolean {
+  if (path.length === 0) {
+    return false;
+  }
+  let current: unknown = root;
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const part = path[i];
+    if (typeof part === "number") {
+      if (!Array.isArray(current) || part < 0 || part >= current.length) {
+        return false;
+      }
+      current = current[part];
+      continue;
+    }
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return false;
+    }
+    const record = current as Record<string, unknown>;
+    if (!(part in record)) {
+      return false;
+    }
+    current = record[part];
+  }
+
+  const leaf = path[path.length - 1];
+  if (typeof leaf === "number") {
+    if (!Array.isArray(current) || leaf < 0 || leaf >= current.length) {
+      return false;
+    }
+    current.splice(leaf, 1);
+    return true;
+  }
+  if (!current || typeof current !== "object" || Array.isArray(current)) {
+    return false;
+  }
+  const record = current as Record<string, unknown>;
+  if (!(leaf in record)) {
+    return false;
+  }
+  delete record[leaf];
+  return true;
+}
+
+function maybeRepairInvalidPluginConfig(candidate: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const validation = validateConfigObjectWithPlugins(candidate);
+  if (validation.ok) {
+    return { config: candidate, changes: [] };
+  }
+
+  const next = structuredClone(candidate);
+  const changes: string[] = [];
+  const affectedPluginIds = new Set<string>();
+  for (const issue of validation.issues) {
+    if (!issue.path.startsWith("plugins.entries.")) {
+      continue;
+    }
+    if (!issue.message.startsWith("invalid config:")) {
+      continue;
+    }
+    const parts = parseConfigPath(issue.path);
+    if (!parts || parts.length <= 4) {
+      continue;
+    }
+    if (
+      parts[0] !== "plugins" ||
+      parts[1] !== "entries" ||
+      typeof parts[2] !== "string" ||
+      parts[3] !== "config"
+    ) {
+      continue;
+    }
+    const pluginId = parts[2];
+    if (deleteConfigPath(next, parts)) {
+      affectedPluginIds.add(pluginId);
+      changes.push(
+        `- Removed invalid plugin config value at ${issue.path}; re-run configure to re-enter a valid value if you still want this plugin enabled.`,
+      );
+    }
+  }
+
+  if (changes.length === 0) {
+    return { config: candidate, changes: [] };
+  }
+
+  const revalidated = validateConfigObjectWithPlugins(next);
+  if (!revalidated.ok) {
+    for (const pluginId of affectedPluginIds) {
+      const configRoot = `plugins.entries.${pluginId}.config`;
+      const stillInvalid = revalidated.issues.some((issue) => issue.path.startsWith(configRoot));
+      if (!stillInvalid) {
+        continue;
+      }
+      const pluginEntry = next.plugins?.entries?.[pluginId];
+      if (pluginEntry) {
+        delete pluginEntry.config;
+        pluginEntry.enabled = false;
+      }
+      changes.push(
+        `- Disabled plugin ${pluginId} and cleared its config because required plugin settings were still incomplete after removing invalid values.`,
+      );
+    }
+  }
+
+  const finalValidation = validateConfigObjectWithPlugins(next);
+  if (!finalValidation.ok) {
+    const activeProvider = next.tools?.web?.search?.provider?.trim().toLowerCase();
+    const hasProviderIssue = finalValidation.issues.some(
+      (issue) =>
+        issue.path === "tools.web.search.provider" &&
+        issue.message.startsWith("unknown web search provider:"),
+    );
+    if (hasProviderIssue && activeProvider && !isBuiltinWebSearchProviderId(activeProvider)) {
+      if (next.tools?.web?.search) {
+        delete next.tools.web.search.provider;
+        changes.push(
+          `- Cleared tools.web.search.provider because it referenced repaired plugin provider "${activeProvider}", which is no longer available after the config cleanup.`,
+        );
+      }
+    }
+  }
+
+  return { config: next, changes };
+}
+
+function maybeRepairMissingPluginEntries(candidate: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  return { config: candidate, changes: [] };
 }
 
 function normalizeBindingChannelKey(raw?: string | null): string {
@@ -1823,6 +2004,22 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
     if (safeBinProfileRepair.warnings.length > 0) {
       note(safeBinProfileRepair.warnings.join("\n"), "Doctor warnings");
+    }
+
+    const missingPluginEntryRepair = maybeRepairMissingPluginEntries(candidate);
+    if (missingPluginEntryRepair.changes.length > 0) {
+      note(missingPluginEntryRepair.changes.join("\n"), "Doctor changes");
+      candidate = missingPluginEntryRepair.config;
+      pendingChanges = true;
+      cfg = missingPluginEntryRepair.config;
+    }
+
+    const invalidPluginConfigRepair = maybeRepairInvalidPluginConfig(candidate);
+    if (invalidPluginConfigRepair.changes.length > 0) {
+      note(invalidPluginConfigRepair.changes.join("\n"), "Doctor changes");
+      candidate = invalidPluginConfigRepair.config;
+      pendingChanges = true;
+      cfg = invalidPluginConfigRepair.config;
     }
   } else {
     const hits = scanTelegramAllowFromUsernameEntries(candidate);

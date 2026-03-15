@@ -1,0 +1,8 @@
+{
+  "id": "search-gemini",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  },
+  "provides": ["providers.search.gemini"]
+}

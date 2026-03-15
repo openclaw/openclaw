@@ -239,6 +239,97 @@ export type OpenClawPluginGatewayMethod = {
   handler: GatewayRequestHandler;
 };
 
+export type SearchProviderRequest = {
+  query: string;
+  count: number;
+  country?: string;
+  language?: string;
+  search_lang?: string;
+  ui_lang?: string;
+  freshness?: string;
+  dateAfter?: string;
+  dateBefore?: string;
+  domainFilter?: string[];
+  maxTokens?: number;
+  maxTokensPerPage?: number;
+  providerConfig?: Record<string, unknown>;
+};
+
+export type SearchProviderResultItem = {
+  url: string;
+  title?: string;
+  description?: string;
+  published?: string;
+};
+
+export type SearchProviderCitation =
+  | string
+  | {
+      url: string;
+      title?: string;
+    };
+
+export type SearchProviderSuccessResult = {
+  error?: undefined;
+  message?: undefined;
+  results?: SearchProviderResultItem[];
+  citations?: SearchProviderCitation[];
+  content?: string;
+  tookMs?: number;
+};
+
+export type SearchProviderErrorResult = {
+  error: string;
+  message?: string;
+  docs?: string;
+  tookMs?: number;
+};
+
+export type SearchProviderExecutionResult = SearchProviderSuccessResult | SearchProviderErrorResult;
+
+export type SearchProviderContext = {
+  config: OpenClawConfig;
+  timeoutSeconds: number;
+  cacheTtlMs: number;
+  pluginConfig?: Record<string, unknown>;
+};
+
+export type SearchProviderLegacyConfigMetadata = {
+  hint?: string;
+  envKeys?: readonly string[];
+  placeholder?: string;
+  signupUrl?: string;
+  apiKeyConfigPath?: string;
+  readApiKeyValue?: (search: Record<string, unknown> | undefined) => unknown;
+  writeApiKeyValue?: (search: Record<string, unknown>, value: unknown) => void;
+};
+
+export type SearchProviderRuntimeMetadata = Record<string, unknown>;
+
+export type SearchProviderRuntimeMetadataResolver = (params: {
+  search: Record<string, unknown> | undefined;
+  keyValue?: string;
+  keySource: "config" | "secretRef" | "env" | "missing";
+  fallbackEnvVar?: string;
+}) => SearchProviderRuntimeMetadata;
+
+export type SearchProviderPlugin = {
+  id: string;
+  name: string;
+  description?: string;
+  pluginId?: string;
+  pluginOwnedExecution?: boolean;
+  docsUrl?: string;
+  configFieldOrder?: string[];
+  legacyConfig?: SearchProviderLegacyConfigMetadata;
+  resolveRuntimeMetadata?: SearchProviderRuntimeMetadataResolver;
+  isAvailable?: (config?: OpenClawConfig) => boolean;
+  search: (
+    params: SearchProviderRequest,
+    ctx: SearchProviderContext,
+  ) => Promise<SearchProviderExecutionResult>;
+};
+
 // =============================================================================
 // Plugin Commands
 // =============================================================================
@@ -388,6 +479,7 @@ export type OpenClawPluginApi = {
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
   registerProvider: (provider: ProviderPlugin) => void;
+  registerSearchProvider: (provider: SearchProviderPlugin) => void;
   /**
    * Register a custom command that bypasses the LLM agent.
    * Plugin commands are processed before built-in commands and before agent invocation.
@@ -415,6 +507,17 @@ export type PluginDiagnostic = {
   message: string;
   pluginId?: string;
   source?: string;
+  code?:
+    | "plugin_path_not_found"
+    | "capability_declared_duplicate"
+    | "capability_declared_not_registered"
+    | "capability_missing_requirement"
+    | "capability_conflict_present"
+    | "capability_slot_conflict"
+    | "capability_registered_not_declared"
+    | "capability_slot_selection_missing";
+  capability?: string;
+  slot?: string;
 };
 
 // ============================================================================
@@ -425,6 +528,12 @@ export type PluginHookName =
   | "before_model_resolve"
   | "before_prompt_build"
   | "before_agent_start"
+  | "before_provider_configure"
+  | "before_search_provider_configure"
+  | "after_provider_configure"
+  | "after_search_provider_configure"
+  | "after_provider_activate"
+  | "after_search_provider_activate"
   | "llm_input"
   | "llm_output"
   | "agent_end"
@@ -451,6 +560,12 @@ export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
   "before_prompt_build",
   "before_agent_start",
+  "before_provider_configure",
+  "before_search_provider_configure",
+  "after_provider_configure",
+  "after_search_provider_configure",
+  "after_provider_activate",
+  "after_search_provider_activate",
   "llm_input",
   "llm_output",
   "agent_end",
@@ -588,6 +703,91 @@ export const stripPromptMutationFieldsFromLegacyHookResult = (
   return Object.keys(remaining).length > 0
     ? (remaining as PluginHookBeforeAgentStartOverrideResult)
     : undefined;
+};
+
+// search-provider hooks
+export type PluginHookSearchProviderContext = {
+  workspaceDir?: string;
+};
+
+export type PluginHookProviderLifecycleContext = {
+  workspaceDir?: string;
+};
+
+export type PluginHookSearchProviderSource = "builtin" | "plugin";
+
+export type PluginHookProviderKind = "search";
+
+export type PluginHookBeforeProviderConfigureEvent = {
+  providerKind: PluginHookProviderKind;
+  slot: string;
+  providerId: string;
+  providerLabel: string;
+  providerSource: PluginHookSearchProviderSource;
+  pluginId?: string;
+  intent: "switch-active" | "configure-provider";
+  activeProviderId?: string | null;
+  configured: boolean;
+};
+
+export type PluginHookBeforeProviderConfigureResult = {
+  note?: string;
+};
+
+export type PluginHookBeforeSearchProviderConfigureEvent = {
+  providerId: string;
+  providerLabel: string;
+  providerSource: PluginHookSearchProviderSource;
+  pluginId?: string;
+  intent: "switch-active" | "configure-provider";
+  activeProviderId?: string | null;
+  configured: boolean;
+};
+
+export type PluginHookBeforeSearchProviderConfigureResult = {
+  note?: string;
+};
+
+export type PluginHookAfterProviderConfigureEvent = {
+  providerKind: PluginHookProviderKind;
+  slot: string;
+  providerId: string;
+  providerLabel: string;
+  providerSource: PluginHookSearchProviderSource;
+  pluginId?: string;
+  intent: "switch-active" | "configure-provider";
+  activeProviderId?: string | null;
+  configured: boolean;
+};
+
+export type PluginHookAfterSearchProviderConfigureEvent = {
+  providerId: string;
+  providerLabel: string;
+  providerSource: PluginHookSearchProviderSource;
+  pluginId?: string;
+  intent: "switch-active" | "configure-provider";
+  activeProviderId?: string | null;
+  configured: boolean;
+};
+
+export type PluginHookAfterProviderActivateEvent = {
+  providerKind: PluginHookProviderKind;
+  slot: string;
+  providerId: string;
+  providerLabel: string;
+  providerSource: PluginHookSearchProviderSource;
+  pluginId?: string;
+  previousProviderId?: string | null;
+  intent: "switch-active" | "configure-provider";
+};
+
+export type PluginHookAfterSearchProviderActivateEvent = {
+  providerId: string;
+  providerLabel: string;
+  providerSource: PluginHookSearchProviderSource;
+  pluginId?: string;
+  previousProviderId?: string | null;
+  intent: "switch-active" | "configure-provider";
 };
 
 // llm_input hook
@@ -903,6 +1103,36 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
+  before_provider_configure: (
+    event: PluginHookBeforeProviderConfigureEvent,
+    ctx: PluginHookProviderLifecycleContext,
+  ) =>
+    | Promise<PluginHookBeforeProviderConfigureResult | void>
+    | PluginHookBeforeProviderConfigureResult
+    | void;
+  before_search_provider_configure: (
+    event: PluginHookBeforeSearchProviderConfigureEvent,
+    ctx: PluginHookSearchProviderContext,
+  ) =>
+    | Promise<PluginHookBeforeSearchProviderConfigureResult | void>
+    | PluginHookBeforeSearchProviderConfigureResult
+    | void;
+  after_provider_configure: (
+    event: PluginHookAfterProviderConfigureEvent,
+    ctx: PluginHookProviderLifecycleContext,
+  ) => Promise<void> | void;
+  after_search_provider_configure: (
+    event: PluginHookAfterSearchProviderConfigureEvent,
+    ctx: PluginHookSearchProviderContext,
+  ) => Promise<void> | void;
+  after_provider_activate: (
+    event: PluginHookAfterProviderActivateEvent,
+    ctx: PluginHookProviderLifecycleContext,
+  ) => Promise<void> | void;
+  after_search_provider_activate: (
+    event: PluginHookAfterSearchProviderActivateEvent,
+    ctx: PluginHookSearchProviderContext,
+  ) => Promise<void> | void;
   llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,

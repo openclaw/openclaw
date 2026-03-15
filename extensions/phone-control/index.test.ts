@@ -31,6 +31,17 @@ function createApi(params: {
         writeConfigFile: (next: Record<string, unknown>) => params.writeConfig(next),
       },
     } as OpenClawPluginApi["runtime"],
+    logger: { info() {}, warn() {}, error() {} },
+    registerTool() {},
+    registerHook() {},
+    registerHttpRoute() {},
+    registerChannel() {},
+    registerGatewayMethod() {},
+    registerCli() {},
+    registerService() {},
+    registerProvider() {},
+    registerSearchProvider() {},
+    registerContextEngine() {},
     registerCommand: params.registerCommand,
   }) as OpenClawPluginApi;
 }

@@ -114,6 +114,32 @@ describe("resolveEffectiveEnableState", () => {
     });
     expect(state).toEqual({ enabled: false, reason: "disabled in config" });
   });
+
+  it("enables bundled search provider plugins by default", () => {
+    const normalized = normalizePluginsConfig({
+      enabled: true,
+    });
+    const state = resolveEffectiveEnableState({
+      id: "search-brave",
+      origin: "bundled",
+      config: normalized,
+      rootConfig: {},
+    });
+    expect(state).toEqual({ enabled: true });
+  });
+
+  it("enables other migrated bundled search provider plugins by default", () => {
+    const normalized = normalizePluginsConfig({
+      enabled: true,
+    });
+    const state = resolveEffectiveEnableState({
+      id: "search-gemini",
+      origin: "bundled",
+      config: normalized,
+      rootConfig: {},
+    });
+    expect(state).toEqual({ enabled: true });
+  });
 });
 
 describe("resolveEnableState", () => {

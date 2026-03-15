@@ -1,8 +1,73 @@
 import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createBundledBraveSearchProvider,
+  __testing as bundledBraveTesting,
+} from "../../../extensions/search-brave/src/provider.js";
+import {
+  createBundledGeminiSearchProvider,
+  __testing as bundledGeminiTesting,
+} from "../../../extensions/search-gemini/src/provider.js";
+import {
+  createBundledGrokSearchProvider,
+  __testing as bundledGrokTesting,
+} from "../../../extensions/search-grok/src/provider.js";
+import {
+  createBundledKimiSearchProvider,
+  __testing as bundledKimiTesting,
+} from "../../../extensions/search-kimi/src/provider.js";
+import {
+  createBundledPerplexitySearchProvider,
+  __testing as bundledPerplexityTesting,
+} from "../../../extensions/search-perplexity/src/provider.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { __testing as webSearchTesting } from "./web-search.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
+
+let previousPluginRegistry = getActivePluginRegistry();
+
+const BUNDLED_PROVIDER_CREATORS = {
+  brave: createBundledBraveSearchProvider,
+  gemini: createBundledGeminiSearchProvider,
+  grok: createBundledGrokSearchProvider,
+  kimi: createBundledKimiSearchProvider,
+  perplexity: createBundledPerplexitySearchProvider,
+} as const;
+
+beforeEach(() => {
+  previousPluginRegistry = getActivePluginRegistry();
+  const registry = createEmptyPluginRegistry();
+  (
+    Object.entries(BUNDLED_PROVIDER_CREATORS) as Array<
+      [
+        keyof typeof BUNDLED_PROVIDER_CREATORS,
+        (typeof BUNDLED_PROVIDER_CREATORS)[keyof typeof BUNDLED_PROVIDER_CREATORS],
+      ]
+    >
+  ).forEach(([providerId, createProvider]) => {
+    registry.searchProviders.push({
+      pluginId: `search-${providerId}`,
+      source: `/plugins/search-${providerId}`,
+      provider: {
+        ...createProvider(),
+        pluginId: `search-${providerId}`,
+      },
+    });
+  });
+  setActivePluginRegistry(registry);
+  webSearchTesting.SEARCH_CACHE.clear();
+  bundledBraveTesting.clearSearchProviderCaches();
+  bundledPerplexityTesting.clearSearchProviderCaches();
+  bundledGrokTesting.clearSearchProviderCaches();
+  bundledGeminiTesting.clearSearchProviderCaches();
+  bundledKimiTesting.clearSearchProviderCaches();
+});
+
+afterEach(() => {
+  setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
+});
 
 function installMockFetch(payload: unknown) {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
@@ -169,8 +234,8 @@ describe("web tools defaults", () => {
     expect(tool?.name).toBe("web_search");
   });
 
-  it("prefers runtime-selected web_search provider over local provider config", async () => {
-    const mockFetch = installMockFetch(createProviderSuccessPayload("gemini"));
+  it("uses the configured built-in web_search provider from config", async () => {
+    const mockFetch = installMockFetch(createProviderSuccessPayload("brave"));
     const tool = createWebSearchTool({
       config: {
         tools: {
@@ -186,20 +251,380 @@ describe("web tools defaults", () => {
         },
       },
       sandboxed: true,
-      runtimeWebSearch: {
-        providerConfigured: "brave",
-        providerSource: "auto-detect",
-        selectedProvider: "gemini",
-        selectedProviderKeySource: "secretRef",
-        diagnostics: [],
-      },
     });
 
-    const result = await tool?.execute?.("call-runtime-provider", { query: "runtime override" });
+    const result = await tool?.execute?.("call-config-provider", { query: "config provider" });
 
     expect(mockFetch).toHaveBeenCalled();
-    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("generativelanguage.googleapis.com");
-    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("gemini");
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("api.search.brave.com");
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("brave");
+  });
+});
+
+describe("web_search plugin providers", () => {
+  it.each(["brave", "perplexity", "grok", "gemini", "kimi"] as const)(
+    "resolves configured built-in provider %s through bundled plugin registrations when available",
+    async (providerId) => {
+      const registry = createEmptyPluginRegistry();
+      const bundledProvider = BUNDLED_PROVIDER_CREATORS[providerId]();
+      registry.searchProviders.push({
+        pluginId: `search-${providerId}`,
+        source: `/plugins/search-${providerId}`,
+        provider: {
+          ...bundledProvider,
+          pluginId: `search-${providerId}`,
+        },
+      });
+      setActivePluginRegistry(registry);
+
+      const mockFetch = installMockFetch(createProviderSuccessPayload(providerId));
+      const provider = webSearchTesting.resolveRegisteredSearchProvider({
+        config: {
+          tools: {
+            web: {
+              search:
+                providerId === "perplexity"
+                  ? { provider: providerId, perplexity: { apiKey: "pplx-config-test" } }
+                  : providerId === "grok"
+                    ? { provider: providerId, grok: { apiKey: "xai-config-test" } }
+                    : providerId === "gemini"
+                      ? { provider: providerId, gemini: { apiKey: "gemini-config-test" } }
+                      : providerId === "kimi"
+                        ? { provider: providerId, kimi: { apiKey: "moonshot-config-test" } }
+                        : { provider: providerId, apiKey: "brave-config-test" },
+            },
+          },
+        },
+      });
+
+      expect(provider.pluginId).toBe(`search-${providerId}`);
+
+      const tool = createWebSearchTool({
+        config: {
+          tools: {
+            web: {
+              search:
+                providerId === "perplexity"
+                  ? { provider: providerId, perplexity: { apiKey: "pplx-config-test" } }
+                  : providerId === "grok"
+                    ? { provider: providerId, grok: { apiKey: "xai-config-test" } }
+                    : providerId === "gemini"
+                      ? { provider: providerId, gemini: { apiKey: "gemini-config-test" } }
+                      : providerId === "kimi"
+                        ? { provider: providerId, kimi: { apiKey: "moonshot-config-test" } }
+                        : { provider: providerId, apiKey: "brave-config-test" },
+            },
+          },
+        },
+        sandboxed: true,
+      });
+
+      const result = await tool?.execute?.(`call-bundled-${providerId}`, {
+        query: `bundled ${providerId}`,
+      });
+
+      expect(mockFetch).toHaveBeenCalled();
+      expect((result?.details as { provider?: string } | undefined)?.provider).toBe(providerId);
+    },
+  );
+
+  it("prefers an explicitly configured plugin provider over a built-in provider with the same id", async () => {
+    const searchMock = vi.fn(async () => ({
+      results: [
+        {
+          title: "Plugin Result",
+          url: "https://example.com/plugin",
+          description: "Plugin description",
+        },
+      ],
+    }));
+    const registry = createEmptyPluginRegistry();
+    registry.searchProviders.push({
+      pluginId: "plugin-search",
+      source: "test",
+      provider: {
+        id: "brave",
+        name: "Plugin Brave Override",
+        pluginId: "plugin-search",
+        search: searchMock,
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            "plugin-search": {
+              enabled: true,
+              config: { endpoint: "https://plugin.example" },
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              apiKey: "brave-config-test", // pragma: allowlist secret
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+
+    const result = await tool?.execute?.("plugin-explicit", { query: "override" });
+    const details = result?.details as
+      | {
+          provider?: string;
+          results?: Array<{ url: string }>;
+        }
+      | undefined;
+
+    expect(searchMock).toHaveBeenCalledOnce();
+    expect(details?.provider).toBe("brave");
+    expect(details?.results?.[0]?.url).toBe("https://example.com/plugin");
+  });
+
+  it("keeps an explicitly configured plugin provider even when built-in credentials are also present", async () => {
+    const searchMock = vi.fn(async () => ({
+      content: "Plugin-configured answer",
+      citations: ["https://example.com/plugin-configured"],
+    }));
+    const registry = createEmptyPluginRegistry();
+    registry.searchProviders.push({
+      pluginId: "plugin-search",
+      source: "test",
+      provider: {
+        id: "searxng",
+        name: "SearXNG",
+        pluginId: "plugin-search",
+        search: searchMock,
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            "plugin-search": {
+              enabled: true,
+              config: { endpoint: "https://plugin.example" },
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "searxng",
+              apiKey: "brave-config-test", // pragma: allowlist secret
+              gemini: {
+                apiKey: "gemini-config-test", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+
+    const result = await tool?.execute?.("plugin-over-runtime", { query: "plugin configured" });
+    const details = result?.details as { provider?: string; citations?: string[] } | undefined;
+
+    expect(searchMock).toHaveBeenCalledOnce();
+    expect(details?.provider).toBe("searxng");
+    expect(details?.citations).toEqual(["https://example.com/plugin-configured"]);
+  });
+
+  it("auto-detects plugin providers before built-in API key detection", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-brave-key"); // pragma: allowlist secret
+    const searchMock = vi.fn(async () => ({
+      content: "Plugin answer",
+      citations: ["https://example.com/plugin-auto"],
+    }));
+    const registry = createEmptyPluginRegistry();
+    registry.searchProviders.push({
+      pluginId: "plugin-auto",
+      source: "test",
+      provider: {
+        id: "plugin-auto",
+        name: "Plugin Auto",
+        pluginId: "plugin-auto",
+        isAvailable: () => true,
+        search: searchMock,
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({ config: {}, sandboxed: true });
+    const result = await tool?.execute?.("plugin-auto", { query: "auto" });
+    const details = result?.details as { provider?: string; citations?: string[] } | undefined;
+
+    expect(searchMock).toHaveBeenCalledOnce();
+    expect(details?.provider).toBe("plugin-auto");
+    expect(details?.citations).toEqual(["https://example.com/plugin-auto"]);
+  });
+
+  it("fails closed when a configured custom provider is not registered", async () => {
+    const mockFetch = installMockFetch(createProviderSuccessPayload("brave"));
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "searxng",
+              apiKey: "brave-config-test", // pragma: allowlist secret
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+
+    const result = await tool?.execute?.("plugin-missing", { query: "missing provider" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      error: "unknown_search_provider",
+      provider: "searxng",
+    });
+  });
+
+  it("preserves plugin error payloads without caching them as success responses", async () => {
+    webSearchTesting.SEARCH_CACHE.clear();
+    const searchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ error: "rate_limited" })
+      .mockResolvedValueOnce({
+        results: [
+          {
+            title: "Recovered",
+            url: "https://example.com/recovered",
+          },
+        ],
+      });
+    const registry = createEmptyPluginRegistry();
+    registry.searchProviders.push({
+      pluginId: "plugin-search",
+      source: "test",
+      provider: {
+        id: "searxng",
+        name: "SearXNG",
+        pluginId: "plugin-search",
+        search: searchMock,
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "searxng",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+
+    const firstResult = await tool?.execute?.("plugin-error-1", { query: "same-query" });
+    const secondResult = await tool?.execute?.("plugin-error-2", { query: "same-query" });
+
+    expect(searchMock).toHaveBeenCalledTimes(2);
+    expect(firstResult?.details).toMatchObject({
+      error: "rate_limited",
+      provider: "searxng",
+    });
+    expect((secondResult?.details as { cached?: boolean } | undefined)?.cached).not.toBe(true);
+    expect(secondResult?.details).toMatchObject({
+      provider: "searxng",
+      results: [{ url: "https://example.com/recovered" }],
+    });
+  });
+
+  it("does not reuse cached plugin results across different plugin configs", async () => {
+    webSearchTesting.SEARCH_CACHE.clear();
+    const searchMock = vi
+      .fn()
+      .mockImplementation(async (_request, context: { pluginConfig?: { endpoint?: string } }) => ({
+        results: [
+          {
+            title: "Plugin Result",
+            url: `https://example.com/${context.pluginConfig?.endpoint || "missing"}`,
+          },
+        ],
+      }));
+    const registry = createEmptyPluginRegistry();
+    registry.searchProviders.push({
+      pluginId: "plugin-search",
+      source: "test",
+      provider: {
+        id: "searxng",
+        name: "SearXNG",
+        pluginId: "plugin-search",
+        search: searchMock,
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const firstTool = createWebSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            "plugin-search": {
+              enabled: true,
+              config: { endpoint: "tenant-a" },
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "searxng",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const secondTool = createWebSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            "plugin-search": {
+              enabled: true,
+              config: { endpoint: "tenant-b" },
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "searxng",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+
+    const firstResult = await firstTool?.execute?.("plugin-cache-a", { query: "same-query" });
+    const secondResult = await secondTool?.execute?.("plugin-cache-b", { query: "same-query" });
+    const firstDetails = firstResult?.details as
+      | { results?: Array<{ url: string }>; cached?: boolean }
+      | undefined;
+    const secondDetails = secondResult?.details as
+      | { results?: Array<{ url: string }>; cached?: boolean }
+      | undefined;
+
+    expect(searchMock).toHaveBeenCalledTimes(2);
+    expect(firstDetails?.results?.[0]?.url).toBe("https://example.com/tenant-a");
+    expect(secondDetails?.results?.[0]?.url).toBe("https://example.com/tenant-b");
+    expect(secondDetails?.cached).not.toBe(true);
   });
 });
 
@@ -330,6 +755,11 @@ describe("web_search perplexity Search API", () => {
     vi.unstubAllEnvs();
     global.fetch = priorFetch;
     webSearchTesting.SEARCH_CACHE.clear();
+    bundledBraveTesting.clearSearchProviderCaches();
+    bundledPerplexityTesting.clearSearchProviderCaches();
+    bundledGrokTesting.clearSearchProviderCaches();
+    bundledGeminiTesting.clearSearchProviderCaches();
+    bundledKimiTesting.clearSearchProviderCaches();
   });
 
   it("uses Perplexity Search API when PERPLEXITY_API_KEY is set", async () => {
@@ -467,6 +897,11 @@ describe("web_search perplexity OpenRouter compatibility", () => {
     vi.unstubAllEnvs();
     global.fetch = priorFetch;
     webSearchTesting.SEARCH_CACHE.clear();
+    bundledBraveTesting.clearSearchProviderCaches();
+    bundledPerplexityTesting.clearSearchProviderCaches();
+    bundledGrokTesting.clearSearchProviderCaches();
+    bundledGeminiTesting.clearSearchProviderCaches();
+    bundledKimiTesting.clearSearchProviderCaches();
   });
 
   it("routes OPENROUTER_API_KEY through chat completions", async () => {

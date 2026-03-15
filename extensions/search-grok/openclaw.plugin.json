@@ -1,0 +1,8 @@
+{
+  "id": "search-grok",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  },
+  "provides": ["providers.search.grok"]
+}

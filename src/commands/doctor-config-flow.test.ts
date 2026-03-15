@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import { validateConfigObjectWithPlugins } from "../config/config.js";
 import * as noteModule from "../terminal/note.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { runDoctorConfigWithInput } from "./doctor-config-flow.test-utils.js";
@@ -27,7 +28,7 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
       run: loadAndMaybeMigrateDoctorConfig,
     });
     return noteSpy.mock.calls
-      .filter((call) => call[1] === "Doctor warnings")
+      .filter((call) => call[1] === "Doctor warnings" || call[1] === "Config warnings")
       .map((call) => String(call[0]));
   } finally {
     noteSpy.mockRestore();
@@ -126,6 +127,56 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
+  it("surfaces missing required plugin capabilities as doctor warnings", async () => {
+    const temp = await withTempHome(async (homeDir) => {
+      const providerDir = path.join(homeDir, "embedding-provider");
+      await fs.mkdir(providerDir, { recursive: true });
+      await fs.writeFile(
+        path.join(providerDir, "index.js"),
+        'export default { id: "embedding-provider", register() {} };',
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(providerDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "embedding-provider",
+          configSchema: { type: "object" },
+          provides: ["providers.embedding.fixture"],
+        }),
+        "utf-8",
+      );
+      const consumerDir = path.join(homeDir, "embedding-consumer");
+      await fs.mkdir(consumerDir, { recursive: true });
+      await fs.writeFile(
+        path.join(consumerDir, "index.js"),
+        'export default { id: "embedding-consumer", register() {} };',
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(consumerDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "embedding-consumer",
+          configSchema: { type: "object" },
+          requires: ["providers.embedding.fixture"],
+        }),
+        "utf-8",
+      );
+
+      return collectDoctorWarnings({
+        plugins: {
+          enabled: true,
+          load: { paths: [consumerDir] },
+        },
+      });
+    });
+
+    expect(
+      temp.some((line) =>
+        line.includes("missing required capability: providers.embedding.fixture"),
+      ),
+    ).toBe(true);
+  });
+
   it("does not warn on mutable Zalouser group entries when dangerous name matching is enabled", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
@@ -140,7 +191,6 @@ describe("doctor config flow", () => {
 
     expect(doctorWarnings.some((line) => line.includes("channels.zalouser.groups"))).toBe(false);
   });
-
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
@@ -177,6 +227,138 @@ describe("doctor config flow", () => {
       mode: "token",
       token: "ok",
     });
+  });
+
+  it("removes invalid plugin config leaves and disables the affected plugin on repair", async () => {
+    const tavilyPath = path.join(process.cwd(), "extensions", "tavily-search");
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        plugins: {
+          load: { paths: [tavilyPath] },
+          allow: ["tavily-search"],
+          entries: {
+            "tavily-search": {
+              enabled: true,
+              config: {
+                apiKey: "◇  Enable web_search?",
+                searchDepth: "basic",
+              },
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      plugins?: {
+        entries?: Record<string, { enabled?: boolean; config?: Record<string, unknown> }>;
+      };
+      tools?: { web?: { search?: { provider?: string } } };
+    };
+    expect(cfg.plugins?.entries?.["tavily-search"]?.enabled).toBe(false);
+    expect(cfg.plugins?.entries?.["tavily-search"]?.config).toBeUndefined();
+    expect(cfg.tools?.web?.search?.provider).toBe("brave");
+
+    const validated = validateConfigObjectWithPlugins(cfg);
+    expect(validated.ok).toBe(true);
+  });
+
+  it("does not delete missing plugin entries during repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        plugins: {
+          allow: ["webchat"],
+          entries: {
+            webchat: {
+              enabled: true,
+              config: {
+                port: 3000,
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      plugins?: {
+        allow?: string[];
+        entries?: Record<string, unknown>;
+      };
+    };
+    expect(cfg.plugins?.entries?.webchat).toBeDefined();
+    expect(cfg.plugins?.allow).toContain("webchat");
+
+    const validated = validateConfigObjectWithPlugins(cfg);
+    expect(validated.ok).toBe(false);
+    expect(
+      validated.warnings.some(
+        (warning) =>
+          warning.path === "plugins.entries.webchat" &&
+          warning.message.includes("plugin not found"),
+      ),
+    ).toBe(true);
+    expect(
+      validated.issues.some(
+        (issue) => issue.path === "plugins.allow" && issue.message.includes("plugin not found"),
+      ),
+    ).toBe(true);
+  });
+
+  it("clears active web search provider when it points at a repaired plugin", async () => {
+    const tavilyPath = path.join(process.cwd(), "extensions", "tavily-search");
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        plugins: {
+          load: { paths: [tavilyPath] },
+          allow: ["tavily-search"],
+          entries: {
+            "tavily-search": {
+              enabled: true,
+              config: {
+                apiKey: "not-a-real-key",
+                searchDepth: "basic",
+              },
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "tavily",
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      plugins?: {
+        entries?: Record<string, { enabled?: boolean; config?: Record<string, unknown> }>;
+      };
+      tools?: { web?: { search?: { provider?: string } } };
+    };
+    expect(cfg.plugins?.entries?.["tavily-search"]?.enabled).toBe(false);
+    expect(cfg.plugins?.entries?.["tavily-search"]?.config).toBeUndefined();
+    expect(cfg.tools?.web?.search?.provider).toBeUndefined();
+
+    const validated = validateConfigObjectWithPlugins(cfg);
+    expect(validated.ok).toBe(true);
   });
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {

@@ -28,7 +28,7 @@ For local PR land/gate checks, run:
 - `pnpm test`
 - `pnpm check:docs`
 
-If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm vitest run <path/to/test>`. For memory-constrained hosts, use:
+If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm test -- <path/to/test>` so the repo test wrapper still applies the intended config/profile logic. On lower-memory hosts, prefer `pnpm test:macmini -- <path/to/test>`. For memory-constrained full-suite runs, use:
 
 - `OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test`
 

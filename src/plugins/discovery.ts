@@ -540,6 +540,7 @@ function discoverFromPath(params: {
   if (!fs.existsSync(resolved)) {
     params.diagnostics.push({
       level: "error",
+      code: "plugin_path_not_found",
       message: `plugin path not found: ${resolved}`,
       source: resolved,
     });

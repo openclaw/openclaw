@@ -1,3 +1,4 @@
+import type { BuiltinWebSearchProviderId } from "../agents/tools/web-search-provider-catalog.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
@@ -457,8 +458,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "gemini", "grok", "kimi", or "perplexity"). */
-      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+      /** Search provider. Built-ins include "brave", "gemini", "grok", "kimi", and "perplexity"; plugins use their registered id. */
+      provider?: BuiltinWebSearchProviderId | (string & {});
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */

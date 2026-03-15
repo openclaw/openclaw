@@ -107,6 +107,12 @@ describe("plugin-sdk exports", () => {
       "probeTelegram",
       "probeIMessage",
       "probeSignal",
+      "createBundledSearchProviderAdapter",
+      "createBundledBraveSearchProvider",
+      "createBundledGeminiSearchProvider",
+      "createBundledGrokSearchProvider",
+      "createBundledKimiSearchProvider",
+      "createBundledPerplexitySearchProvider",
     ];
 
     for (const key of forbidden) {

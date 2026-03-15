@@ -96,6 +96,7 @@ function writePlugin(params: {
   body: string;
   dir?: string;
   filename?: string;
+  manifest?: Record<string, unknown>;
 }): TempPlugin {
   const dir = params.dir ?? makeTempDir();
   const filename = params.filename ?? `${params.id}.cjs`;
@@ -105,7 +106,7 @@ function writePlugin(params: {
   fs.writeFileSync(
     path.join(dir, "openclaw.plugin.json"),
     JSON.stringify(
-      {
+      params.manifest ?? {
         id: params.id,
         configSchema: EMPTY_PLUGIN_SCHEMA,
       },
@@ -1623,17 +1624,53 @@ describe("loadOpenClawPlugins", () => {
     const options = {
       cache: false,
       logger: createWarningLogger(warnings),
+=======
+  it("suppresses the open allowlist warning when requested", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "warn-open-allow-suppressed",
+      body: `module.exports = { id: "warn-open-allow-suppressed", register() {} };`,
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      logger: createWarningLogger(warnings),
+      suppressOpenAllowlistWarning: true,
+>>>>>>> bd6c276db1 (feat: extend pluggable web search onboarding)
       config: {
         plugins: {
           load: { paths: [plugin.file] },
         },
       },
+<<<<<<< HEAD
     };
 
     loadOpenClawPlugins(options);
     loadOpenClawPlugins(options);
 
     expect(warnings.filter((msg) => msg.includes("plugins.allow is empty"))).toHaveLength(1);
+  });
+
+  it("suppresses the open allowlist warning when requested", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "warn-open-allow-suppressed",
+      body: `module.exports = { id: "warn-open-allow-suppressed", register() {} };`,
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      logger: createWarningLogger(warnings),
+      suppressOpenAllowlistWarning: true,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+        },
+      },
+    });
+    expect(
+      warnings.some((msg) => msg.includes("plugins.allow is empty") && msg.includes(plugin.id)),
+    ).toBe(false);
   });
 
   it("does not auto-load workspace-discovered plugins unless explicitly trusted", () => {
@@ -2186,5 +2223,197 @@ describe("loadOpenClawPlugins", () => {
       }),
     );
     expect(resolved).toBe(srcFile);
+  });
+
+  it("emits diagnostics for duplicate declared capabilities", () => {
+    useNoBundledPlugins();
+    const first = writePlugin({
+      id: "search-one",
+      body: `module.exports = { id: "search-one", register(api) { api.registerSearchProvider({ id: "alpha", name: "Alpha", search: async () => ({ content: "alpha" }) }); } };`,
+      manifest: {
+        id: "search-one",
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+        provides: ["providers.search.shared"],
+      },
+    });
+    const second = writePlugin({
+      id: "search-two",
+      body: `module.exports = { id: "search-two", register(api) { api.registerSearchProvider({ id: "beta", name: "Beta", search: async () => ({ content: "beta" }) }); } };`,
+      manifest: {
+        id: "search-two",
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+        provides: ["providers.search.shared"],
+      },
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [first.file, second.file] },
+        },
+      },
+    });
+
+    expect(
+      registry.diagnostics.filter((diag) =>
+        diag.message.includes("declared capability already provided by another plugin"),
+      ),
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ pluginId: "search-two" })]));
+    expect(registry.searchProviders.map((entry) => entry.provider.id)).toEqual(["alpha"]);
+    expect(registry.plugins).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "search-two", status: "error" })]),
+    );
+  });
+
+  it("warns when a declared required capability is missing", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "memory-ui",
+      body: `module.exports = { id: "memory-ui", register() {} };`,
+      manifest: {
+        id: "memory-ui",
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+        requires: ["memory.backend.*"],
+      },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({ plugin });
+
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "warn",
+          pluginId: "memory-ui",
+          message: "missing required capability: memory.backend.*",
+        }),
+      ]),
+    );
+  });
+
+  it("errors when a declared conflicting capability is present", () => {
+    useNoBundledPlugins();
+    const first = writePlugin({
+      id: "memory-a",
+      body: `module.exports = { id: "memory-a", register(api) { api.registerSearchProvider({ id: "alpha", name: "Alpha", search: async () => ({ content: "alpha" }) }); } };`,
+      manifest: {
+        id: "memory-a",
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+        provides: ["memory.backend.a"],
+      },
+    });
+    const second = writePlugin({
+      id: "memory-b",
+      body: `module.exports = { id: "memory-b", register(api) { api.registerSearchProvider({ id: "beta", name: "Beta", search: async () => ({ content: "beta" }) }); } };`,
+      manifest: {
+        id: "memory-b",
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+        provides: ["memory.backend.b"],
+        conflicts: ["memory.backend.*"],
+      },
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [first.file, second.file] },
+        },
+      },
+    });
+
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "error",
+          pluginId: "memory-b",
+          message: "conflicting capability present: memory.backend.* (memory-a)",
+        }),
+      ]),
+    );
+    expect(registry.searchProviders.map((entry) => entry.provider.id)).toEqual(["alpha"]);
+    expect(registry.plugins).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "memory-b", status: "error" })]),
+    );
+  });
+
+  it("errors when a declared capability is not registered at runtime", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "search-manifest-mismatch",
+      body: `module.exports = { id: "search-manifest-mismatch", register(api) { api.registerSearchProvider({ id: "alpha", name: "Alpha", search: async () => ({ content: "alpha" }) }); } };`,
+      manifest: {
+        id: "search-manifest-mismatch",
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+        provides: ["providers.search.beta"],
+      },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({ plugin });
+
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "error",
+          pluginId: "search-manifest-mismatch",
+          code: "capability_declared_not_registered",
+          capability: "providers.search.beta",
+          message: "declared capability was not registered at runtime: providers.search.beta",
+        }),
+      ]),
+    );
+  });
+
+  it("warns when a runtime capability is not declared in the manifest", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "search-runtime-undeclared",
+      body: `module.exports = { id: "search-runtime-undeclared", register(api) { api.registerSearchProvider({ id: "alpha", name: "Alpha", search: async () => ({ content: "alpha" }) }); } };`,
+      manifest: {
+        id: "search-runtime-undeclared",
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+      },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({ plugin });
+
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "warn",
+          pluginId: "search-runtime-undeclared",
+          code: "capability_registered_not_declared",
+          capability: "providers.search.alpha",
+          message: "runtime capability was not declared in manifest: providers.search.alpha",
+        }),
+      ]),
+    );
+  });
+
+  it("emits a structured diagnostic when the configured memory slot is missing", () => {
+    useNoBundledPlugins();
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          slots: {
+            memory: "missing-memory-backend",
+          },
+        },
+      },
+    });
+
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "warn",
+          code: "capability_slot_selection_missing",
+          slot: "memory.backend",
+          capability: "missing-memory-backend",
+          message: "memory slot plugin not found or not marked as memory: missing-memory-backend",
+        }),
+      ]),
+    );
   });
 });

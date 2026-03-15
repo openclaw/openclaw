@@ -1,0 +1,8 @@
+{
+  "id": "search-kimi",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  },
+  "provides": ["providers.search.kimi"]
+}

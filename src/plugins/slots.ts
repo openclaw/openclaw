@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginSlotsConfig } from "../config/types.plugins.js";
+import {
+  applyCapabilitySlotSelection,
+  resolveCapabilitySlotSelection,
+} from "./capability-slots.js";
 import type { PluginKind } from "./types.js";
 
 export type PluginSlotKey = keyof PluginSlotsConfig;
@@ -50,12 +54,10 @@ export function applyExclusiveSlotSelection(params: {
   const warnings: string[] = [];
   const pluginsConfig = params.config.plugins ?? {};
   const prevSlot = pluginsConfig.slots?.[slotKey];
-  const slots = {
-    ...pluginsConfig.slots,
-    [slotKey]: params.selectedId,
-  };
-
-  const inferredPrevSlot = prevSlot ?? defaultSlotIdForKey(slotKey);
+  const inferredPrevSlot =
+    slotKey === "memory"
+      ? resolveCapabilitySlotSelection(params.config, "memory.backend")
+      : (prevSlot ?? defaultSlotIdForKey(slotKey));
   if (inferredPrevSlot && inferredPrevSlot !== params.selectedId) {
     warnings.push(
       `Exclusive slot "${slotKey}" switched from "${inferredPrevSlot}" to "${params.selectedId}".`,
@@ -95,12 +97,29 @@ export function applyExclusiveSlotSelection(params: {
     return { config: params.config, warnings: [], changed: false };
   }
 
+  const baseConfig =
+    slotKey === "memory"
+      ? applyCapabilitySlotSelection({
+          config: params.config,
+          slot: "memory.backend",
+          selectedId: params.selectedId,
+        })
+      : {
+          ...params.config,
+          plugins: {
+            ...pluginsConfig,
+            slots: {
+              ...pluginsConfig.slots,
+              [slotKey]: params.selectedId,
+            },
+          },
+        };
+
   return {
     config: {
-      ...params.config,
+      ...baseConfig,
       plugins: {
-        ...pluginsConfig,
-        slots,
+        ...baseConfig.plugins,
         entries,
       },
     },

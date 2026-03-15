@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/search-grok",
+  "version": "2026.3.12",
+  "private": true,
+  "description": "OpenClaw bundled Grok search provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -20,6 +20,9 @@ const gatewayServiceRestart = vi.hoisted(() =>
 );
 const gatewayServiceUninstall = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
+const loadOpenClawPlugins = vi.hoisted(() =>
+  vi.fn(() => ({ searchProviders: [] as unknown[], plugins: [] as unknown[] })),
+);
 const resolveGatewayInstallToken = vi.hoisted(() =>
   vi.fn(async () => ({
     token: undefined,
@@ -88,6 +91,10 @@ vi.mock("../infra/control-ui-assets.js", () => ({
   ensureControlUiAssetsBuilt: vi.fn(async () => ({ ok: true })),
 }));
 
+vi.mock("../plugins/loader.js", () => ({
+  loadOpenClawPlugins,
+}));
+
 vi.mock("../terminal/restore.js", () => ({
   restoreTerminalState: vi.fn(),
 }));
@@ -118,6 +125,10 @@ function expectFirstOnboardingInstallPlanCallOmitsToken() {
 }
 
 describe("finalizeOnboardingWizard", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     runTui.mockClear();
     probeGatewayReachable.mockClear();
@@ -130,6 +141,8 @@ describe("finalizeOnboardingWizard", () => {
     gatewayServiceRestart.mockResolvedValue({ outcome: "completed" });
     gatewayServiceUninstall.mockReset();
     resolveGatewayInstallToken.mockClear();
+    loadOpenClawPlugins.mockReset();
+    loadOpenClawPlugins.mockReturnValue({ searchProviders: [], plugins: [] });
     isSystemdUserServiceAvailable.mockReset();
     isSystemdUserServiceAvailable.mockResolvedValue(true);
   });
@@ -306,5 +319,155 @@ describe("finalizeOnboardingWizard", () => {
     expect(gatewayServiceUninstall).not.toHaveBeenCalled();
     expect(progressUpdate).toHaveBeenCalledWith("Restarting Gateway service…");
     expect(progressStop).toHaveBeenCalledWith("Gateway service restart scheduled.");
+  });
+
+  it("does not report plugin-provided web search providers as missing API keys", async () => {
+    loadOpenClawPlugins.mockReturnValue({
+      searchProviders: [
+        {
+          pluginId: "tavily-search",
+          provider: {
+            id: "tavily",
+            name: "Tavily Search",
+            description: "Plugin search",
+            search: async () => ({ content: "ok" }),
+          },
+        },
+      ],
+      plugins: [
+        {
+          id: "tavily-search",
+          name: "Tavily Search",
+          description: "External Tavily plugin",
+          origin: "workspace",
+          source: "/tmp/tavily-search",
+          configJsonSchema: undefined,
+          configUiHints: undefined,
+        },
+      ],
+    });
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async () => "later") as never,
+      confirm: vi.fn(async () => false),
+    });
+    const runtime = createRuntime();
+
+    await finalizeOnboardingWizard({
+      flow: "advanced",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: true,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "tavily",
+            },
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime,
+    });
+
+    const noteCalls = (prompter.note as ReturnType<typeof vi.fn>).mock.calls;
+    const webSearchNote = noteCalls.find((call) => call?.[1] === "Web search");
+    expect(webSearchNote?.[0]).toContain("plugin-provided provider");
+    expect(webSearchNote?.[0]).toContain("Source: External plugin");
+    expect(webSearchNote?.[0]).not.toContain("no API key was found");
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp",
+      }),
+    );
+  });
+
+  it("describes the chosen provider as the active provider when multiple are configured", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "BSA-test-key");
+    loadOpenClawPlugins.mockReturnValue({
+      searchProviders: [
+        {
+          pluginId: "tavily-search",
+          provider: {
+            id: "tavily",
+            name: "Tavily Search",
+            description: "Plugin search",
+            isAvailable: () => true,
+            search: async () => ({ content: "ok" }),
+          },
+        },
+      ],
+      plugins: [
+        {
+          id: "tavily-search",
+          name: "Tavily Search",
+          description: "External Tavily plugin",
+          origin: "workspace",
+          source: "/tmp/tavily-search",
+          configJsonSchema: undefined,
+          configUiHints: undefined,
+        },
+      ],
+    });
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async () => "later") as never,
+      confirm: vi.fn(async () => false),
+    });
+    const runtime = createRuntime();
+
+    await finalizeOnboardingWizard({
+      flow: "advanced",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: true,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "tavily",
+            },
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime,
+    });
+
+    const noteCalls = (prompter.note as ReturnType<typeof vi.fn>).mock.calls;
+    const webSearchNote = noteCalls.find((call) => call?.[1] === "Web search");
+    expect(webSearchNote?.[0]).toContain("Active provider: Tavily Search");
+    expect(webSearchNote?.[0]).toContain(
+      "Multiple web search providers are configured; the others remain available to switch to later via configure.",
+    );
   });
 });

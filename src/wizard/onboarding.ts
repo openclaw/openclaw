@@ -531,6 +531,7 @@ export async function runOnboardingWizard(
     nextConfig = await setupSearch(nextConfig, runtime, prompter, {
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
+      workspaceDir,
     });
   }
 

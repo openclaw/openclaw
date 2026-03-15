@@ -1,3 +1,4 @@
+import { MIGRATED_BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "../agents/tools/web-search-provider-catalog.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginRecord } from "./registry.js";
@@ -28,6 +29,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "ollama",
   "phone-control",
   "sglang",
+  ...MIGRATED_BUNDLED_WEB_SEARCH_PLUGIN_IDS,
   "talk-voice",
   "vllm",
 ]);

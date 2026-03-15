@@ -1,15 +1,108 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject, validateConfigObjectWithPlugins } from "./config.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
+
+const loadOpenClawPlugins = vi.hoisted(() => vi.fn(() => ({ searchProviders: [] as unknown[] })));
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock("../plugins/loader.js", () => ({
+  loadOpenClawPlugins,
+}));
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: vi.fn(async () => null),
+  getOAuthProviders: () => [],
 }));
 
 const { __testing } = await import("../agents/tools/web-search.js");
 const { resolveSearchProvider } = __testing;
 
 describe("web search provider config", () => {
+  beforeEach(() => {
+    loadOpenClawPlugins.mockReset();
+    loadOpenClawPlugins.mockReturnValue({ searchProviders: [] });
+  });
+
+  it("accepts custom plugin provider ids", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "searxng",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown custom plugin provider ids during plugin-aware validation", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        provider: "brvae",
+      }),
+    );
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "tools.web.search.provider")).toBe(true);
+    }
+  });
+
+  it("accepts registered custom plugin provider ids during plugin-aware validation", () => {
+    loadOpenClawPlugins.mockReturnValue({
+      searchProviders: [
+        {
+          provider: {
+            id: "searxng",
+          },
+        },
+      ],
+    });
+
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        provider: "searxng",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("surfaces plugin loading failures during plugin-aware validation", () => {
+    loadOpenClawPlugins.mockImplementation(() => {
+      throw new Error("plugin import failed");
+    });
+
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        provider: "searxng",
+      }),
+    );
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path === "tools.web.search.provider" &&
+            issue.message.includes("plugin loading failed") &&
+            issue.message.includes("plugin import failed"),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects invalid custom plugin provider ids", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "SearXNG!",
+      }),
+    );
+
+    expect(res.ok).toBe(false);
+  });
+
   it("accepts perplexity provider and config", () => {
     const res = validateConfigObject(
       buildWebSearchProviderConfig({

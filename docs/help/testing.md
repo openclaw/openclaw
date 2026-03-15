@@ -28,6 +28,7 @@ When you touch tests or want extra confidence:
 
 - Coverage gate: `pnpm test:coverage`
 - E2E suite: `pnpm test:e2e`
+- Targeted local repro: `pnpm test -- <path/to/test>` or `pnpm test:macmini -- <path/to/test>` on lower-memory hosts
 
 When debugging real providers/models (requires real creds):
 

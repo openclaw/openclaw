@@ -15,6 +15,9 @@ export type PluginManifest = {
   channels?: string[];
   providers?: string[];
   skills?: string[];
+  provides?: string[];
+  requires?: string[];
+  conflicts?: string[];
   name?: string;
   description?: string;
   version?: string;
@@ -94,6 +97,9 @@ export function loadPluginManifest(
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
   const skills = normalizeStringList(raw.skills);
+  const provides = normalizeStringList(raw.provides);
+  const requires = normalizeStringList(raw.requires);
+  const conflicts = normalizeStringList(raw.conflicts);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
   if (isRecord(raw.uiHints)) {
@@ -109,6 +115,9 @@ export function loadPluginManifest(
       channels,
       providers,
       skills,
+      provides,
+      requires,
+      conflicts,
       name,
       description,
       version,

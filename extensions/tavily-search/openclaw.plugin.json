@@ -1,0 +1,32 @@
+{
+  "id": "tavily-search",
+  "provides": ["providers.search.tavily"],
+  "uiHints": {
+    "apiKey": {
+      "label": "Tavily API key",
+      "placeholder": "tvly-...",
+      "help": "API key for Tavily web search",
+      "sensitive": true
+    },
+    "searchDepth": {
+      "label": "Search depth",
+      "help": "Use advanced for deeper search at higher cost"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^tvly-\\S+$"
+      },
+      "searchDepth": {
+        "type": "string",
+        "enum": ["basic", "advanced"]
+      }
+    },
+    "required": ["apiKey"]
+  }
+}
