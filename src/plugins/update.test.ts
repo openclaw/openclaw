@@ -15,6 +15,16 @@ vi.mock("./bundled-sources.js", () => ({
   resolveBundledPluginSources: (...args: unknown[]) => resolveBundledPluginSourcesMock(...args),
 }));
 
+type InstallNpmSpecCallArgs = {
+  onIntegrityDrift?: (drift: {
+    spec: string;
+    expectedIntegrity: string;
+    actualIntegrity: string;
+    resolution: { resolvedSpec?: string; version?: string };
+  }) => Promise<boolean> | boolean;
+  [key: string]: unknown;
+};
+
 describe("updateNpmInstalledPlugins", () => {
   beforeEach(() => {
     installPluginFromNpmSpecMock.mockReset();
@@ -155,6 +165,165 @@ describe("updateNpmInstalledPlugins", () => {
         message: "Failed to check bad: unsupported npm spec: github:evil/evil",
       },
     ]);
+  });
+
+  describe("integrity drift on version update", () => {
+    it("does not trigger onIntegrityDrift when the resolved spec changes to a new pinned version (legitimate update)", async () => {
+      // Scenario: user updated their pinned spec from myplugin@1.0.0 to myplugin@2.0.0.
+      // The stored integrity is from v1.0.0, but npm correctly resolves myplugin@2.0.0
+      // to itself. Different hash is expected and benign — no drift to report.
+      installPluginFromNpmSpecMock.mockImplementation(async (args: InstallNpmSpecCallArgs) => {
+        // Simulate the infrastructure detecting a hash mismatch and calling onIntegrityDrift
+        const proceed = await args.onIntegrityDrift?.({
+          spec: "myplugin@2.0.0",
+          expectedIntegrity: "sha512-OLD==",
+          actualIntegrity: "sha512-NEW==",
+          resolution: { resolvedSpec: "myplugin@2.0.0", version: "2.0.0" },
+        });
+        if (!proceed) {
+          return {
+            ok: false,
+            error: "aborted: npm package integrity drift detected for myplugin@2.0.0",
+          };
+        }
+        return {
+          ok: true,
+          pluginId: "myplugin",
+          targetDir: "/tmp/myplugin",
+          extensions: ["index.ts"],
+          version: "2.0.0",
+        };
+      });
+
+      const outerDriftHandler = vi.fn().mockResolvedValue(true);
+      const { updateNpmInstalledPlugins } = await import("./update.js");
+
+      const result = await updateNpmInstalledPlugins({
+        config: {
+          plugins: {
+            installs: {
+              myplugin: {
+                source: "npm",
+                spec: "myplugin@2.0.0",
+                installPath: "/tmp/myplugin",
+                integrity: "sha512-OLD==",
+                resolvedSpec: "myplugin@1.0.0", // previously installed version
+                resolvedVersion: "1.0.0",
+              },
+            },
+          },
+        },
+        pluginIds: ["myplugin"],
+        onIntegrityDrift: outerDriftHandler,
+      });
+
+      // Update succeeded without prompting the user
+      expect(result.outcomes[0]?.status).toBe("updated");
+      expect(outerDriftHandler).not.toHaveBeenCalled();
+    });
+
+    it("triggers onIntegrityDrift when the same resolved spec has a different hash (possible tampering)", async () => {
+      // Same version re-published with different content → suspect
+      installPluginFromNpmSpecMock.mockImplementation(async (args: InstallNpmSpecCallArgs) => {
+        const proceed = await args.onIntegrityDrift?.({
+          spec: "myplugin",
+          expectedIntegrity: "sha512-ORIGINAL==",
+          actualIntegrity: "sha512-TAMPERED==",
+          resolution: { resolvedSpec: "myplugin@1.0.0", version: "1.0.0" },
+        });
+        if (!proceed) {
+          return {
+            ok: false,
+            error: "aborted: npm package integrity drift detected for myplugin@1.0.0",
+          };
+        }
+        return {
+          ok: true,
+          pluginId: "myplugin",
+          targetDir: "/tmp/myplugin",
+          extensions: ["index.ts"],
+          version: "1.0.0",
+        };
+      });
+
+      const outerDriftHandler = vi.fn().mockResolvedValue(false); // user says no
+      const { updateNpmInstalledPlugins } = await import("./update.js");
+
+      const result = await updateNpmInstalledPlugins({
+        config: {
+          plugins: {
+            installs: {
+              myplugin: {
+                source: "npm",
+                spec: "myplugin",
+                installPath: "/tmp/myplugin",
+                integrity: "sha512-ORIGINAL==",
+                resolvedSpec: "myplugin@1.0.0", // same version
+                resolvedVersion: "1.0.0",
+              },
+            },
+          },
+        },
+        pluginIds: ["myplugin"],
+        onIntegrityDrift: outerDriftHandler,
+      });
+
+      // Drift was surfaced to the caller and user rejected
+      expect(outerDriftHandler).toHaveBeenCalledOnce();
+      expect(result.outcomes[0]?.status).toBe("error");
+    });
+
+    it("triggers onIntegrityDrift when npm resolves to a different spec than requested (anomalous registry redirect)", async () => {
+      // Spec is pinned to myplugin@2.0.0 but registry returns myplugin@3.0.0 — suspicious.
+      // resolvedSpec !== drift.spec, so the skip guard does not apply.
+      installPluginFromNpmSpecMock.mockImplementation(async (args: InstallNpmSpecCallArgs) => {
+        const proceed = await args.onIntegrityDrift?.({
+          spec: "myplugin@2.0.0",
+          expectedIntegrity: "sha512-OLD==",
+          actualIntegrity: "sha512-UNEXPECTED==",
+          resolution: { resolvedSpec: "myplugin@3.0.0", version: "3.0.0" },
+        });
+        if (!proceed) {
+          return {
+            ok: false,
+            error: "aborted: npm package integrity drift detected for myplugin@2.0.0",
+          };
+        }
+        return {
+          ok: true,
+          pluginId: "myplugin",
+          targetDir: "/tmp/myplugin",
+          extensions: ["index.ts"],
+          version: "3.0.0",
+        };
+      });
+
+      const outerDriftHandler = vi.fn().mockResolvedValue(false); // caller blocks
+      const { updateNpmInstalledPlugins } = await import("./update.js");
+
+      const result = await updateNpmInstalledPlugins({
+        config: {
+          plugins: {
+            installs: {
+              myplugin: {
+                source: "npm",
+                spec: "myplugin@2.0.0",
+                installPath: "/tmp/myplugin",
+                integrity: "sha512-OLD==",
+                resolvedSpec: "myplugin@1.0.0",
+                resolvedVersion: "1.0.0",
+              },
+            },
+          },
+        },
+        pluginIds: ["myplugin"],
+        onIntegrityDrift: outerDriftHandler,
+      });
+
+      // Anomalous resolution was surfaced to the caller
+      expect(outerDriftHandler).toHaveBeenCalledOnce();
+      expect(result.outcomes[0]?.status).toBe("error");
+    });
   });
 });
 
