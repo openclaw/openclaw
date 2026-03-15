@@ -32,9 +32,15 @@ export interface ResponseObject {
 }
 
 export interface UsageInfo {
+  // OpenAI-style field names
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  // Alternative field names (e.g., dashscope/Bailian)
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  // Some providers return both in an array [prompt, completion]
+  prompt_completion_tokens?: [number, number];
 }
 
 export type OpenAIResponsesAssistantPhase = "commentary" | "final_answer";
