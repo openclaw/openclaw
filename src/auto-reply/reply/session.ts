@@ -39,6 +39,7 @@ import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js"
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
+import { resolveNamedDmSessionKey } from "../../routing/session-key.js";
 import { parseDiscordParentChannelFromSessionKey } from "./discord-parent-channel.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -295,6 +296,20 @@ export async function initSessionState(params: {
   }
 
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
+
+  // Named DM session routing: if this is a DM (not a group/thread) and not a reset
+  // command, check if the user has an active named session and swap the key.
+  if (!isGroup && !resetTriggered) {
+    const peerId = (ctx.SenderId ?? "").toString().trim();
+    if (peerId) {
+      sessionKey = resolveNamedDmSessionKey({
+        sessionKey,
+        sessionStore,
+        peerId,
+      });
+    }
+  }
+
   const retiredLegacyMainDelivery = maybeRetireLegacyMainDeliveryRoute({
     sessionCfg,
     sessionKey,
