@@ -115,6 +115,10 @@ function normalizeEmoji(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+export function normalizeTelegramReactionEmoji(emoji: string): string {
+  return emoji.normalize("NFC").replace(/\uFE0F/g, "");
+}
+
 function toUniqueNonEmpty(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
@@ -156,9 +160,7 @@ export function buildTelegramStatusReactionVariants(
 }
 
 export function isTelegramSupportedReactionEmoji(emoji: string): boolean {
-  // Normalize variation selectors (e.g. ❤️ U+FE0F → ❤) so equivalent
-  // Unicode forms match the canonical set entries.
-  return TELEGRAM_SUPPORTED_REACTION_EMOJIS.has(emoji.replace(/\uFE0F/g, ""));
+  return TELEGRAM_SUPPORTED_REACTION_EMOJIS.has(normalizeTelegramReactionEmoji(emoji));
 }
 
 export function extractTelegramAllowedEmojiReactions(

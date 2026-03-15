@@ -28,6 +28,7 @@ import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import {
   buildTelegramStatusReactionVariants,
   isTelegramSupportedReactionEmoji,
+  normalizeTelegramReactionEmoji,
   resolveTelegramAllowedEmojiReactions,
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
@@ -392,7 +393,7 @@ export const buildTelegramMessageContext = async ({
           },
         })
       : null;
-  const normalizedAckReaction = ackReaction.replace(/\uFE0F/g, "");
+  const normalizedAckReaction = normalizeTelegramReactionEmoji(ackReaction);
 
   // When status reactions are enabled, setQueued() replaces the simple ack reaction
   const ackReactionPromise = statusReactionController

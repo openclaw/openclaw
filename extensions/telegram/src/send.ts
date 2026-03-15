@@ -34,7 +34,10 @@ import {
 } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
-import { isTelegramSupportedReactionEmoji } from "./status-reaction-variants.js";
+import {
+  isTelegramSupportedReactionEmoji,
+  normalizeTelegramReactionEmoji,
+} from "./status-reaction-variants.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import {
   normalizeTelegramChatId,
@@ -1011,9 +1014,7 @@ export async function reactMessageTelegram(
   });
   const remove = opts.remove === true;
   const trimmedEmoji = emoji.trim();
-  // Normalize variation-selector forms (e.g. ❤️ U+FE0F → ❤) so that
-  // equivalent Unicode representations match the supported emoji set.
-  const normalizedEmoji = trimmedEmoji.replace(/\uFE0F/g, "");
+  const normalizedEmoji = normalizeTelegramReactionEmoji(trimmedEmoji);
   // Pre-validate emoji against the known Telegram-supported set to avoid
   // REACTION_INVALID errors from the API.
   if (!remove && trimmedEmoji && !isTelegramSupportedReactionEmoji(normalizedEmoji)) {

@@ -176,13 +176,14 @@ export const registerTelegramHandlers = ({
   };
   const documentBatchBuffer = new Map<string, DocumentBatchEntry>();
   let documentBatchProcessing: Promise<void> = Promise.resolve();
-  const telegramMediaResolveTransport =
-    opts.proxyFetch || typeof globalThis.fetch !== "function"
-      ? telegramTransport
-      : {
-          ...telegramTransport,
-          sourceFetch: globalThis.fetch,
-        };
+  const telegramMediaResolveTransport = telegramTransport
+    ? {
+        ...telegramTransport,
+        // Keep batched media downloads on the same wrapped Telegram fetch path
+        // as non-batch/media-group processing so proxy and network behavior stays aligned.
+        sourceFetch: telegramTransport.fetch,
+      }
+    : undefined;
 
   type TextFragmentEntry = {
     key: string;
@@ -226,15 +227,19 @@ export const registerTelegramHandlers = ({
     date?: number;
     from?: Message["from"];
     entities?: Message["entities"];
-  }): Message => ({
-    ...params.base,
-    ...(params.from ? { from: params.from } : {}),
-    text: params.text,
-    caption: undefined,
-    caption_entities: undefined,
-    entities: params.entities,
-    ...(params.date != null ? { date: params.date } : {}),
-  });
+  }): Message => {
+    const preservedEntities =
+      params.entities ?? params.base.entities ?? params.base.caption_entities;
+    return {
+      ...params.base,
+      ...(params.from ? { from: params.from } : {}),
+      text: params.text,
+      caption: undefined,
+      caption_entities: undefined,
+      entities: preservedEntities,
+      ...(params.date != null ? { date: params.date } : {}),
+    };
+  };
   const buildSyntheticContext = (
     ctx: Pick<TelegramContext, "me"> & { getFile?: unknown },
     message: Message,
