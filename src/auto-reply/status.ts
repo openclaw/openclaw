@@ -293,7 +293,11 @@ const readUsageFromSessionLog = (
     }
     input = lastUsage.input ?? 0;
     output = lastUsage.output ?? 0;
-    promptTokens = derivePromptTokens(lastUsage) ?? lastUsage.total ?? input + output;
+    // Use only derivePromptTokens (input + cacheRead + cacheWrite) for context size.
+    // Do NOT fall back to lastUsage.total which includes output tokens and is
+    // cumulative across API calls, inflating the context percentage.
+    // See: https://github.com/openclaw/openclaw/issues/46582
+    promptTokens = derivePromptTokens(lastUsage) ?? 0;
     const total = lastUsage.total ?? promptTokens + output;
     if (promptTokens === 0 && total === 0) {
       return undefined;
@@ -462,8 +466,10 @@ export function buildStatusMessage(args: StatusArgs): string {
   let cacheWrite = entry?.cacheWrite;
   let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
 
-  // Prefer prompt-size tokens from the session transcript when it looks larger
-  // (cached prompt tokens are often missing from agent meta/store).
+  // Track actual context size separately from cumulative session total.
+  // totalTokens = cumulative session usage (for Tokens line)
+  // actualContextTokens = last message's prompt size (for Context line)
+  let actualContextTokens: number | undefined;
   if (args.includeTranscriptUsage) {
     const logUsage = readUsageFromSessionLog(
       entry?.sessionId,
@@ -476,6 +482,11 @@ export function buildStatusMessage(args: StatusArgs): string {
       const candidate = logUsage.promptTokens || logUsage.total;
       if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
         totalTokens = candidate;
+      }
+      // Use the last prompt's token count as actual context size
+      // (it represents the real context window usage, not cumulative session total)
+      if (logUsage.promptTokens > 0) {
+        actualContextTokens = logUsage.promptTokens;
       }
       if (!entry?.model && logUsage.model) {
         const slashIndex = logUsage.model.indexOf("/");
@@ -539,7 +550,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     : undefined;
 
   const contextLine = [
-    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}`,
+    `Context: ${formatTokens(actualContextTokens ?? entry?.inputTokens ?? totalTokens, contextTokens ?? null)}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
     .filter(Boolean)
