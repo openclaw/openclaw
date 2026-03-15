@@ -453,17 +453,20 @@ async function executeAnalytical(
 Your authorized tools for this role: ${toolScope}
 Only recommend actions using tools within your domain. For cross-domain needs, send a message to the appropriate C-suite agent.
 
-Respond in this EXACT format:
+You MUST respond in this EXACT format with ALL sections present. Do NOT use markdown formatting (no ** or ##). Each section MUST be on its own line followed by a newline, then bullet items starting with "- ":
+
 CONFIDENCE: [0.0-1.0]
 ASSESSMENT: [1-3 sentence analysis]
 BELIEF_UPDATES:
-- [belief to add/update, or "none"]
+- [a new fact or belief you can infer from these signals, e.g. "Cash flow is critically low due to $2M withdrawal"]
 GOAL_UPDATES:
-- [G-ID: progress% reason, or "none"]
+- [G-ID: progress% reason — use exact goal IDs from context, estimate progress based on actions taken]
 NEW_INTENTIONS:
-- [new intention description, or "none"]
+- [specific next action to take, or "none"]
 ACTIONS:
-- [recommended action, or "none"]`;
+- [concrete tool call or task to execute, or "none"]
+
+IMPORTANT: For BELIEF_UPDATES, always extract at least one factual observation from the signals. For GOAL_UPDATES, reference the exact G-ID from the active goals and estimate progress percentage. Do not say "none" unless truly nothing applies.`;
 
   const userPrompt = `Classification: uncertainty=${classification.uncertainty}, complexity=${classification.complexity}, stakes=${classification.stakes}, time_pressure=${classification.time_pressure}
 Selected method: ${topMethod} (${(methodScore * 100).toFixed(0)}% suitability)
@@ -605,17 +608,21 @@ async function executeDeliberative(
 Your authorized tools: ${toolScope}
 Only recommend actions within your domain. For cross-domain needs, use agent_message.
 
-Respond in this EXACT format:
+You MUST respond in this EXACT format with ALL sections. Do NOT use markdown formatting (no ** or ##). Each section header MUST be on its own line followed by a newline, then bullet items starting with "- ":
+
 CONFIDENCE: [0.0-1.0]
 ASSESSMENT: [2-5 sentence analysis]
 BELIEF_UPDATES:
-- [belief to add/update, or "none"]
+- [extract factual observations from signals and context, e.g. "Revenue is declining at 15% month-over-month"]
+- [at least one belief per deliberation cycle]
 GOAL_UPDATES:
-- [G-ID: progress% reason, or "none"]
-NEW_INTENTIONS:
-- [new intention, or "none"]
+- [use EXACT goal IDs from Active Goals below, e.g. "G-CFO-001: 10% Initial analysis and planning phase complete"]
 ACTIONS:
-- [recommended action, or "none"]`;
+- [concrete next step, or "none"]
+NEW_INTENTIONS:
+- [specific commitment to act on, or "none"]
+
+IMPORTANT: Always include at least one BELIEF_UPDATE based on signal analysis. For GOAL_UPDATES, use the exact G-ID from the Active Goals section and estimate realistic progress. Even early-stage work (analysis, planning) counts as 5-15% progress.`;
 
   const userPrompt = `## Triggering Signals (${signals.length})
 ${signalSummary}
@@ -641,7 +648,9 @@ ${recentMemory}
 ## Methods
 Apply these in order: ${top3Methods.join(", ")}
 Determine: actions, goal updates, new intentions, belief revisions.
-Before executing high-stakes actions (financial >$1000, legal, public-facing), verify approval requirements.`;
+Before executing high-stakes actions (financial >$1000, legal, public-facing), verify approval requirements.
+
+REMEMBER: Use the exact G-ID from Active Goals above for GOAL_UPDATES. Extract beliefs from the signals and context.`;
 
   // Invoke LLM
   const llmText = await callLlm(api, systemPrompt, userPrompt, {
@@ -1414,9 +1423,13 @@ export async function enhancedHeartbeatCycle(
       // 5c. Parse and execute LLM-recommended actions (analytical/deliberative)
       if (result.depth !== "reflexive" && result.conclusion) {
         try {
+          // Log first 500 chars of conclusion for observability
+          log.info(
+            `[cognitive-router] ${agentId} (${result.depth}): conclusion preview: ${result.conclusion.slice(0, 500).replace(/\n/g, " | ")}`,
+          );
           const llmActions = parseLlmActions(result.conclusion);
-          log.debug(
-            `[cognitive-router] ${agentId}: parsed ${llmActions.length} action(s) from LLM: ${llmActions.map((a) => a.type).join(", ") || "none"}`,
+          log.info(
+            `[cognitive-router] ${agentId}: parsed ${llmActions.length} action(s): ${llmActions.map((a) => `${a.type}${a.type === "goal_progress" ? `(${(a.data as any).goalId})` : ""}`).join(", ") || "none"}`,
           );
           if (llmActions.length > 0) {
             const applied = await executeLlmActions(
@@ -1426,7 +1439,7 @@ export async function enhancedHeartbeatCycle(
               llmActions,
               log,
             );
-            log.debug(`[cognitive-router] ${agentId}: applied ${applied} LLM action(s)`);
+            log.info(`[cognitive-router] ${agentId}: applied ${applied} LLM action(s)`);
           }
         } catch (err) {
           log.warn?.(
