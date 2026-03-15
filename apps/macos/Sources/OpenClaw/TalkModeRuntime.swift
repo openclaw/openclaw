@@ -20,7 +20,6 @@ actor TalkModeRuntime {
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
     private static let execuTorchMinSilenceWindowSeconds: TimeInterval = 1.2
     private static let execuTorchFinalizeDrainNs: UInt64 = 250_000_000
-    private static let execuTorchFinalizeSecondPassNs: UInt64 = 120_000_000
 
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
@@ -429,15 +428,9 @@ actor TalkModeRuntime {
             // Give the converter/tap pipeline a short drain window so the last spoken
             // word lands in the rolling buffer before the forced finalize decode.
             try? await Task.sleep(nanoseconds: Self.execuTorchFinalizeDrainNs)
-            let firstTailDelta = await self.etBridge.forceFinalOfflineDecodeDelta()
-            if !firstTailDelta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                finalTranscript = Self.mergeTranscriptForFinalize(base: finalTranscript, tail: firstTailDelta)
-            }
-            // A second short decode pass catches tail pieces that arrive one poll later.
-            try? await Task.sleep(nanoseconds: Self.execuTorchFinalizeSecondPassNs)
-            let secondTailDelta = await self.etBridge.forceFinalOfflineDecodeDelta()
-            if !secondTailDelta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                finalTranscript = Self.mergeTranscriptForFinalize(base: finalTranscript, tail: secondTailDelta)
+            let finalizeTailDelta = await self.etBridge.forceFinalOfflineDecodeDelta(baseTranscript: finalTranscript)
+            if !finalizeTailDelta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                finalTranscript = Self.mergeTranscriptForFinalize(base: finalTranscript, tail: finalizeTailDelta)
             }
         }
 
@@ -828,6 +821,9 @@ actor TalkModeRuntime {
     private func prepareForPlayback(generation: Int) async -> Bool {
         if self.useExecuTorch {
             // Keep capture running but suppress transcript emission during TTS (no echo cancellation).
+            self.lastTranscript = ""
+            self.lastHeard = nil
+            self.lastSpeechEnergyAt = nil
             await self.etBridge.setEmissionEnabled(false)
         } else {
             await self.startRecognition()

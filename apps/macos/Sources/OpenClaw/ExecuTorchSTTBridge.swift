@@ -96,6 +96,8 @@ actor ExecuTorchSTTBridge {
     private var observedChunkCount = 0
     private var offlinePollingActive = false
     private var lastOfflineTranscript = ""
+    private var lastVoicedActivityAt: CFAbsoluteTime?
+    private var emissionResumeGuardUntil: CFAbsoluteTime = 0
 
     // Latency measurement (baseline and tuning validation)
     private var sessionStartTime: CFAbsoluteTime?
@@ -121,6 +123,9 @@ actor ExecuTorchSTTBridge {
     private static let pollIntervalIdleNs: UInt64 = 800_000_000       // 800ms when quiet
     private static let minOfflineWindowSamples = 16_000                // 1s at 16kHz
     private static let maxOfflineWindowSamples = 32_000               // 2s (was 6s)
+    private static let finalizeRecentSpeechWindowSeconds: CFAbsoluteTime = 1.25
+    private static let emissionResumeGuardSeconds: CFAbsoluteTime = 0.35
+    private static let weakFinalizeTokens: Set<String> = ["uh", "um", "hmm", "huh", "okay", "ok"]
     private var isPolling = false
 
     /// When false, capture and poll continue but no transcript is forwarded (used during TTS to avoid echo).
@@ -266,6 +271,8 @@ actor ExecuTorchSTTBridge {
         self.observedChunkCount = 0
         self.offlinePollingActive = false
         self.lastOfflineTranscript = ""
+        self.lastVoicedActivityAt = nil
+        self.emissionResumeGuardUntil = 0
         self.offlinePollTask?.cancel()
         self.offlinePollTask = nil
         logger.info("executorch.stt: using offline-poll transcription (Parakeet)")
@@ -369,6 +376,8 @@ actor ExecuTorchSTTBridge {
         self.offlinePollTask = nil
         self.offlinePollingActive = false
         self.lastOfflineTranscript = ""
+        self.lastVoicedActivityAt = nil
+        self.emissionResumeGuardUntil = 0
         self.rollingBuffer?.removeAll()
         self.onTranscript = nil
         self.sessionStartTime = nil
@@ -424,6 +433,9 @@ actor ExecuTorchSTTBridge {
         buf.append(samples)
         let rms = Self.rms(samples)
         self.rollingRMS = Self.rmsAlpha * rms + (1 - Self.rmsAlpha) * self.rollingRMS
+        if rms >= Double(Self.rmsThreshold) {
+            self.lastVoicedActivityAt = CFAbsoluteTimeGetCurrent()
+        }
         if self.observedChunkCount == 1 || self.observedChunkCount % 50 == 0 {
             logger.info(
                 "executorch.stt: observe chunkCount=\(self.observedChunkCount) rollingSamples=\(buf.count)")
@@ -439,7 +451,80 @@ actor ExecuTorchSTTBridge {
     /// Turn transcript emission on or off. Capture keeps running; used during TTS to avoid echo without tearing down.
     func setEmissionEnabled(_ enabled: Bool) {
         self.emissionEnabled = enabled
-        logger.info("executorch.stt: emission \(enabled ? "enabled" : "disabled")")
+        let now = CFAbsoluteTimeGetCurrent()
+        self.transcriptBuffer = ""
+        self.lastOfflineTranscript = ""
+        self.lastVoicedActivityAt = nil
+        if enabled {
+            self.emissionResumeGuardUntil = now + Self.emissionResumeGuardSeconds
+            self.rollingBuffer?.removeAll()
+            self.minSamplesReadyTime = nil
+            logger.info(
+                "executorch.stt: emission enabled with resumeGuardMs=\(Int(Self.emissionResumeGuardSeconds * 1000))")
+        } else {
+            self.emissionResumeGuardUntil = 0
+            logger.info("executorch.stt: emission disabled and transient transcript state cleared")
+        }
+    }
+
+    private func hadRecentVoicedActivity(now: CFAbsoluteTime) -> Bool {
+        guard let lastVoicedActivityAt else { return false }
+        return (now - lastVoicedActivityAt) <= Self.finalizeRecentSpeechWindowSeconds
+    }
+
+    private enum FinalizeDeltaDecision: String {
+        case accept
+        case rejectEmpty
+        case rejectNonLexical
+        case rejectSilenceOnlySession
+        case rejectNoRecentSpeech
+        case rejectWeakSingleToken
+        case rejectRepeatedTail
+    }
+
+    private static func shouldAcceptFinalizeDelta(
+        baseTranscript: String,
+        delta: String,
+        hadRecentSpeech: Bool,
+        hadSessionSpeech: Bool
+    ) -> Bool {
+        finalizeDeltaDecision(
+            baseTranscript: baseTranscript,
+            delta: delta,
+            hadRecentSpeech: hadRecentSpeech,
+            hadSessionSpeech: hadSessionSpeech) == .accept
+    }
+
+    private static func finalizeDeltaDecision(
+        baseTranscript: String,
+        delta: String,
+        hadRecentSpeech: Bool,
+        hadSessionSpeech: Bool
+    ) -> FinalizeDeltaDecision {
+        let base = cleanModelOutput(baseTranscript)
+        let cleanedDelta = cleanModelOutput(delta)
+        guard !cleanedDelta.isEmpty else { return .rejectEmpty }
+        guard containsLetterOrDigit(cleanedDelta) else { return .rejectNonLexical }
+
+        let baseTokens = normalizedTokens(base)
+        let deltaTokens = normalizedTokens(cleanedDelta)
+        guard !deltaTokens.isEmpty else { return .rejectNonLexical }
+
+        if !hadSessionSpeech, baseTokens.isEmpty {
+            return .rejectSilenceOnlySession
+        }
+        guard hadRecentSpeech else { return .rejectNoRecentSpeech }
+
+        if deltaTokens.count == 1, let token = deltaTokens.first {
+            if weakFinalizeTokens.contains(token) {
+                return .rejectWeakSingleToken
+            }
+            if let lastBaseToken = baseTokens.last, lastBaseToken == token, baseTokens.count >= 3 {
+                return .rejectRepeatedTail
+            }
+        }
+
+        return .accept
     }
 
     /// Call from TalkModeRuntime when finalizing transcript (before stopRecognition). Records latency for p50/p90.
@@ -455,12 +540,30 @@ actor ExecuTorchSTTBridge {
 
     /// Attempt one last offline decode before finalization to capture tail words.
     /// Returns only newly discovered text since the last successful offline decode.
-    func forceFinalOfflineDecodeDelta() -> String {
+    func forceFinalOfflineDecodeDelta(baseTranscript: String) -> String {
         guard case .listening = self.state else { return "" }
         self.offlinePollTask?.cancel()
         self.offlinePollTask = nil
         let maxNewTokens: Int32 = self.hasEmittedFirstTokenThisSession ? 24 : 32
-        return self.decodeOfflineDelta(maxNewTokens: maxNewTokens, force: true) ?? ""
+        guard let delta = self.decodeOfflineDelta(maxNewTokens: maxNewTokens, force: true) else { return "" }
+
+        let base = Self.cleanModelOutput(baseTranscript)
+        let hadRecentSpeech = self.hadRecentVoicedActivity(now: CFAbsoluteTimeGetCurrent())
+        let decision = Self.finalizeDeltaDecision(
+            baseTranscript: base,
+            delta: delta,
+            hadRecentSpeech: hadRecentSpeech,
+            hadSessionSpeech: self.hasEmittedFirstTokenThisSession)
+        if decision != .accept {
+            logger.info(
+                "executorch.stt: finalize tail rejected reason=\(decision.rawValue, privacy: .public) baseChars=\(base.count) deltaChars=\(delta.count) hadRecentSpeech=\(hadRecentSpeech) hadSessionSpeech=\(self.hasEmittedFirstTokenThisSession)")
+            return ""
+        }
+        if Self.verboseLogging {
+            logger.info(
+                "executorch.stt: finalize tail accepted baseChars=\(base.count) deltaChars=\(delta.count) hadRecentSpeech=\(hadRecentSpeech)")
+        }
+        return delta
     }
 
     private func logLatencyStats() {
@@ -483,6 +586,19 @@ actor ExecuTorchSTTBridge {
 
     /// Returns true if we emitted transcript this poll (for adaptive cadence).
     private func pollOfflineTranscribeOnce(force: Bool = false) -> Bool {
+        if !force {
+            if !self.emissionEnabled {
+                return false
+            }
+            let now = CFAbsoluteTimeGetCurrent()
+            if now < self.emissionResumeGuardUntil {
+                if Self.verboseLogging {
+                    logger.info(
+                        "executorch.stt: poll skipped during resume guard remainingMs=\(Int((self.emissionResumeGuardUntil - now) * 1000))")
+                }
+                return false
+            }
+        }
         let maxNewTokens: Int32 = self.hasEmittedFirstTokenThisSession ? 16 : 24
         guard let delta = self.decodeOfflineDelta(maxNewTokens: maxNewTokens, force: force) else { return false }
         if Self.verboseLogging {
@@ -603,6 +719,17 @@ actor ExecuTorchSTTBridge {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private static func normalizedTokens(_ value: String) -> [String] {
+        value
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+
+    private static func containsLetterOrDigit(_ value: String) -> Bool {
+        value.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
+    }
+
     private static func deltaSuffix(previous: String, current: String) -> String {
         guard !current.isEmpty else { return "" }
         guard !previous.isEmpty else { return current }
@@ -634,6 +761,19 @@ actor ExecuTorchSTTBridge {
 extension ExecuTorchSTTBridge {
     nonisolated static func _testDeltaSuffix(previous: String, current: String) -> String {
         deltaSuffix(previous: previous, current: current)
+    }
+
+    nonisolated static func _testShouldAcceptFinalizeDelta(
+        baseTranscript: String,
+        delta: String,
+        hadRecentSpeech: Bool,
+        hadSessionSpeech: Bool
+    ) -> Bool {
+        shouldAcceptFinalizeDelta(
+            baseTranscript: baseTranscript,
+            delta: delta,
+            hadRecentSpeech: hadRecentSpeech,
+            hadSessionSpeech: hadSessionSpeech)
     }
 }
 #endif

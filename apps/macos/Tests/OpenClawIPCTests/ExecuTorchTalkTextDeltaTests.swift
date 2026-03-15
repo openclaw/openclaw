@@ -71,6 +71,42 @@ struct ExecuTorchTalkTextDeltaTests {
         #expect(merged == "Did you please open the finder?")
     }
 
+    @Test func `finalize gate rejects silence hallucination tail`() {
+        let base = "Can you open the finder?"
+        let tail = "Okay"
+        let shouldAccept = ExecuTorchSTTBridge._testShouldAcceptFinalizeDelta(
+            baseTranscript: base,
+            delta: tail,
+            hadRecentSpeech: false,
+            hadSessionSpeech: true)
+        let merged = shouldAccept ? TalkModeRuntime._testMergeTranscriptForFinalize(base: base, tail: tail) : base
+        #expect(merged == "Can you open the finder?")
+    }
+
+    @Test func `finalize gate rejects repeated filler tail`() {
+        let base = "Can you open the finder?"
+        let tail = "Uh finder. finder"
+        let shouldAccept = ExecuTorchSTTBridge._testShouldAcceptFinalizeDelta(
+            baseTranscript: base,
+            delta: tail,
+            hadRecentSpeech: false,
+            hadSessionSpeech: true)
+        let merged = shouldAccept ? TalkModeRuntime._testMergeTranscriptForFinalize(base: base, tail: tail) : base
+        #expect(merged == "Can you open the finder?")
+    }
+
+    @Test func `finalize gate accepts true tail completion`() {
+        let base = "Can you open the"
+        let tail = "finder"
+        let shouldAccept = ExecuTorchSTTBridge._testShouldAcceptFinalizeDelta(
+            baseTranscript: base,
+            delta: tail,
+            hadRecentSpeech: true,
+            hadSessionSpeech: true)
+        let merged = shouldAccept ? TalkModeRuntime._testMergeTranscriptForFinalize(base: base, tail: tail) : base
+        #expect(merged == "Can you open the finder")
+    }
+
     @Test func `execuTorch silence window enforces safer minimum`() {
         let effective = TalkModeRuntime._testEffectiveSilenceWindow(
             configured: 0.7,
