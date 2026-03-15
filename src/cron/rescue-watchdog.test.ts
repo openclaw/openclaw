@@ -267,6 +267,47 @@ describe("runRescueWatchdogJob", () => {
     );
   });
 
+  it("keeps device identity enabled for no-auth watchdog probes", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        port: 18_789,
+        bind: "tailnet",
+        auth: {
+          mode: "none",
+          token: "ignored",
+        },
+      },
+    });
+    resolveGatewayProbeAuthSafe.mockReturnValue({
+      auth: {},
+    });
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      error: null,
+    });
+
+    const result = await runRescueWatchdogJob({
+      job: {
+        id: "job-tailnet-no-auth",
+        name: "rescue",
+        payload: {
+          kind: "rescueWatchdog",
+          monitoredProfile: "work",
+          timeoutSeconds: 120,
+        },
+      } as never,
+      monitoredProfile: "work",
+    });
+
+    expect(result.status).toBe("ok");
+    const probeCall = probeGateway.mock.calls.at(-1)?.[0] as
+      | { disableDeviceIdentity?: boolean; url?: string }
+      | undefined;
+    expect(probeCall?.url).toBe("ws://100.64.0.10:18789");
+    expect(probeCall).not.toHaveProperty("disableDeviceIdentity");
+  });
+
   it("brackets IPv6 custom bind hosts in the watchdog probe URL", async () => {
     loadConfig.mockReturnValue({
       gateway: {

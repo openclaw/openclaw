@@ -153,19 +153,19 @@ async function probeProfileGateway(params: {
   timeoutMs?: number;
 }): Promise<{ healthy: boolean; detail?: string }> {
   const url = await resolveProfileGatewayProbeUrl(params.cfg, params.port);
+  const hasSharedProbeAuth = Boolean(params.auth.token || params.auth.password);
   const probe = await probeGateway({
     url,
-    auth:
-      params.auth.token || params.auth.password
-        ? { token: params.auth.token, password: params.auth.password }
-        : undefined,
+    auth: hasSharedProbeAuth
+      ? { token: params.auth.token, password: params.auth.password }
+      : undefined,
     timeoutMs:
       typeof params.timeoutMs === "number"
         ? Math.max(1, Math.min(PROBE_TIMEOUT_MS, params.timeoutMs))
         : PROBE_TIMEOUT_MS,
-    // Watchdog probes only need to validate managed service reachability.
-    // Skip device identity so remote/tailnet binds do not trigger pairing flows.
-    disableDeviceIdentity: true,
+    // Shared-secret probes do not need pairing, so keep them device-less to
+    // avoid remote/tailnet watchdog probes tripping pairing-required closes.
+    ...(hasSharedProbeAuth ? { disableDeviceIdentity: true } : {}),
   });
   if (probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason)) {
     return { healthy: true };
