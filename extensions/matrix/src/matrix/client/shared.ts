@@ -4,6 +4,7 @@ import type { CoreConfig } from "../../types.js";
 import { getMatrixLogService } from "../sdk-runtime.js";
 import { resolveMatrixAuth } from "./config.js";
 import { createMatrixClient } from "./create-client.js";
+import { configureMatrixProxy } from "./proxy.js";
 import { startMatrixClientWithGrace } from "./startup.js";
 import { DEFAULT_ACCOUNT_KEY } from "./storage.js";
 import type { MatrixAuth } from "./types.js";
@@ -36,6 +37,8 @@ async function createSharedMatrixClient(params: {
   timeoutMs?: number;
   accountId?: string | null;
 }): Promise<SharedMatrixClientState> {
+  // Configure proxy before creating Matrix client (supports HTTP_PROXY, HTTPS_PROXY, MATRIX_PROXY)
+  configureMatrixProxy();
   const client = await createMatrixClient({
     homeserver: params.auth.homeserver,
     userId: params.auth.userId,
