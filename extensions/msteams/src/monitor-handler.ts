@@ -93,7 +93,10 @@ async function handleFileConsentInvoke(
           contentType: pendingFile.contentType,
         });
 
-        // Send confirmation card
+        // Replace the original FileConsentCard with a FileInfoCard.
+        // Using updateActivity (when available) transitions the card in-place
+        // so the user sees the consent card change to a file download card
+        // instead of a stale Allow/Deny prompt remaining in the conversation.
         const fileInfoCard = buildFileInfoCard({
           filename: consentResponse.uploadInfo.name,
           contentUrl: consentResponse.uploadInfo.contentUrl,
@@ -101,10 +104,34 @@ async function handleFileConsentInvoke(
           fileType: consentResponse.uploadInfo.fileType,
         });
 
-        await context.sendActivity({
-          type: "message",
-          attachments: [fileInfoCard],
-        });
+        const consentActivityId =
+          typeof activity.replyToId === "string" ? activity.replyToId : undefined;
+
+        if (consentActivityId && typeof context.updateActivity === "function") {
+          try {
+            await context.updateActivity({
+              id: consentActivityId,
+              type: "message",
+              attachments: [fileInfoCard],
+            });
+          } catch (updateErr) {
+            // Fallback: if update fails (e.g. permissions, expired activity),
+            // send the FileInfoCard as a new message so the user still gets it.
+            log.debug?.("failed to update consent card, sending as new message", {
+              error: String(updateErr),
+            });
+            await context.sendActivity({
+              type: "message",
+              attachments: [fileInfoCard],
+            });
+          }
+        } else {
+          // No activity ID or updateActivity not available — send as new message.
+          await context.sendActivity({
+            type: "message",
+            attachments: [fileInfoCard],
+          });
+        }
 
         log.info("file upload complete", {
           uploadId,

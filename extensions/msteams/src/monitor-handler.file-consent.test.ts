@@ -91,8 +91,14 @@ function createInvokeContext(params: {
   conversationId: string;
   uploadId: string;
   action: "accept" | "decline";
-}): { context: MSTeamsTurnContext; sendActivity: ReturnType<typeof vi.fn> } {
+  replyToId?: string;
+}): {
+  context: MSTeamsTurnContext;
+  sendActivity: ReturnType<typeof vi.fn>;
+  updateActivity: ReturnType<typeof vi.fn>;
+} {
   const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
+  const updateActivity = vi.fn(async () => {});
   const uploadInfo =
     params.action === "accept"
       ? {
@@ -109,6 +115,7 @@ function createInvokeContext(params: {
         type: "invoke",
         name: "fileConsent/invoke",
         conversation: { id: params.conversationId },
+        replyToId: params.replyToId,
         value: {
           type: "fileUpload",
           action: params.action,
@@ -118,8 +125,10 @@ function createInvokeContext(params: {
       },
       sendActivity,
       sendActivities: async () => [],
+      updateActivity,
     } as unknown as MSTeamsTurnContext,
     sendActivity,
+    updateActivity,
   };
 }
 
@@ -158,6 +167,120 @@ describe("msteams file consent invoke authz", () => {
     expect(sendActivity).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "invokeResponse",
+      }),
+    );
+  });
+
+  it("updates consent card in-place via updateActivity when replyToId is present", async () => {
+    const uploadId = storePendingUpload({
+      buffer: Buffer.from("file content"),
+      filename: "report.pdf",
+      contentType: "application/pdf",
+      conversationId: "19:user@thread.v2",
+    });
+    const deps = createDeps();
+    const handler = registerMSTeamsHandlers(createActivityHandler(), deps);
+    const { context, sendActivity, updateActivity } = createInvokeContext({
+      conversationId: "19:user@thread.v2;messageid=abc123",
+      uploadId,
+      action: "accept",
+      replyToId: "consent-card-activity-id",
+    });
+
+    await handler.run?.(context);
+
+    // Should update the original consent card in-place
+    expect(updateActivity).toHaveBeenCalledTimes(1);
+    expect(updateActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "consent-card-activity-id",
+        type: "message",
+        attachments: [
+          expect.objectContaining({
+            contentType: "application/vnd.microsoft.teams.card.file.info",
+            name: "secret.txt",
+          }),
+        ],
+      }),
+    );
+
+    // Should NOT send FileInfoCard as a new message
+    const fileInfoCalls = sendActivity.mock.calls.filter(
+      (call: unknown[]) =>
+        typeof call[0] === "object" &&
+        call[0] !== null &&
+        "attachments" in (call[0] as Record<string, unknown>),
+    );
+    expect(fileInfoCalls).toHaveLength(0);
+  });
+
+  it("falls back to sendActivity when updateActivity fails", async () => {
+    const uploadId = storePendingUpload({
+      buffer: Buffer.from("file content"),
+      filename: "report.pdf",
+      contentType: "application/pdf",
+      conversationId: "19:user@thread.v2",
+    });
+    const deps = createDeps();
+    const handler = registerMSTeamsHandlers(createActivityHandler(), deps);
+    const { context, sendActivity, updateActivity } = createInvokeContext({
+      conversationId: "19:user@thread.v2;messageid=abc123",
+      uploadId,
+      action: "accept",
+      replyToId: "consent-card-activity-id",
+    });
+
+    // Simulate updateActivity failure
+    updateActivity.mockRejectedValueOnce(new Error("Activity not found"));
+
+    await handler.run?.(context);
+
+    // Should have attempted updateActivity
+    expect(updateActivity).toHaveBeenCalledTimes(1);
+
+    // Should fall back to sending FileInfoCard as a new message
+    expect(sendActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        attachments: [
+          expect.objectContaining({
+            contentType: "application/vnd.microsoft.teams.card.file.info",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("sends FileInfoCard as new message when replyToId is not present", async () => {
+    const uploadId = storePendingUpload({
+      buffer: Buffer.from("file content"),
+      filename: "report.pdf",
+      contentType: "application/pdf",
+      conversationId: "19:user@thread.v2",
+    });
+    const deps = createDeps();
+    const handler = registerMSTeamsHandlers(createActivityHandler(), deps);
+    const { context, sendActivity, updateActivity } = createInvokeContext({
+      conversationId: "19:user@thread.v2;messageid=abc123",
+      uploadId,
+      action: "accept",
+      // No replyToId
+    });
+
+    await handler.run?.(context);
+
+    // Should NOT call updateActivity
+    expect(updateActivity).not.toHaveBeenCalled();
+
+    // Should send FileInfoCard as a new message (fallback path)
+    expect(sendActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        attachments: [
+          expect.objectContaining({
+            contentType: "application/vnd.microsoft.teams.card.file.info",
+          }),
+        ],
       }),
     );
   });

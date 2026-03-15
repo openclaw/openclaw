@@ -16,4 +16,6 @@ export type MSTeamsTurnContext = {
   sendActivities: (
     activities: Array<{ type: string } & Record<string, unknown>>,
   ) => Promise<unknown>;
+  /** Update an existing activity in the conversation (e.g. replace a FileConsentCard). */
+  updateActivity?: (activity: { id: string } & Record<string, unknown>) => Promise<unknown>;
 };
