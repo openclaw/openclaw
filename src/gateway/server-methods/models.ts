@@ -1,5 +1,5 @@
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { buildAllowedModelSet } from "../../agents/model-selection.js";
+import { buildAllowedModelSet, normalizeProviderId } from "../../agents/model-selection.js";
 import { loadConfig } from "../../config/config.js";
 import {
   ErrorCodes,
@@ -25,12 +25,35 @@ export const modelsHandlers: GatewayRequestHandlers = {
     try {
       const catalog = await context.loadGatewayModelCatalog();
       const cfg = loadConfig();
-      const { allowedCatalog } = buildAllowedModelSet({
+      // Include providers from config AND providers with env-var API keys set
+      // so implicitly authenticated providers also appear in the picker.
+      const explicitProviders = Object.keys(cfg.models?.providers ?? {})
+        .map((provider) => normalizeProviderId(provider.trim()))
+        .filter(Boolean);
+
+      const { PROVIDER_ENV_API_KEY_CANDIDATES } =
+        await import("../../agents/model-auth-env-vars.js");
+      const envProviders = Object.entries(PROVIDER_ENV_API_KEY_CANDIDATES)
+        .filter(([, envVars]) => envVars.some((envVar) => process.env[envVar]))
+        .map(([provider]) => normalizeProviderId(provider));
+
+      const configuredProviders = new Set([...explicitProviders, ...envProviders]);
+      const { allowAny, allowedCatalog } = buildAllowedModelSet({
         cfg,
         catalog,
         defaultProvider: DEFAULT_PROVIDER,
       });
-      const models = allowedCatalog.length > 0 ? allowedCatalog : catalog;
+      const hasConfiguredProviders = configuredProviders.size > 0;
+      const providerScopedCatalog = hasConfiguredProviders
+        ? catalog.filter((entry) =>
+            configuredProviders.has(normalizeProviderId(entry.provider.trim())),
+          )
+        : catalog;
+      const models = allowAny
+        ? providerScopedCatalog.length > 0
+          ? providerScopedCatalog
+          : catalog
+        : allowedCatalog;
       respond(true, { models }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));

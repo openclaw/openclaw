@@ -319,6 +319,39 @@ describe("gateway server models + voicewake", () => {
     expect(piSdkMock.discoverCalls).toBe(1);
   });
 
+  test("models.list scopes to configured providers when no allowlist is set", async () => {
+    await withModelsConfig(
+      {
+        models: {
+          providers: {
+            openai: {
+              apiKeyEnv: "OPENAI_API_KEY",
+            },
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await listModels();
+
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual([
+          {
+            id: "gpt-test-a",
+            name: "A-Model",
+            provider: "openai",
+            contextWindow: 8000,
+          },
+          {
+            id: "gpt-test-z",
+            name: "gpt-test-z",
+            provider: "openai",
+          },
+        ]);
+      },
+    );
+  });
+
   test("models.list filters to allowlisted configured models by default", async () => {
     await expectAllowlistedModels({
       primary: "openai/gpt-test-z",
