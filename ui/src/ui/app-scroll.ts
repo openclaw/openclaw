@@ -164,7 +164,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         // Once the newest block grows beyond the viewport, stop auto-following that block.
         host.chatSuppressedBlockId = latestBlockId;
       }
-      host.chatLastScrollTop = target.scrollTop;
+      host.chatLastScrollTop = scrollTop;
       host.chatUserNearBottom = measureDistanceFromBottom(target) <= BOTTOM_EPSILON;
       host.chatNewMessagesBelow = false;
       const retryDelay = effectiveForce ? 150 : 120;
@@ -190,10 +190,11 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         if (!shouldStickRetry) {
           return;
         }
-        latest.scrollTop =
+        const retryScrollTop =
           effectiveForce && !latestBlockRetry
             ? computeBottomScrollTop(latest)
             : computeChatScrollTop(latest, latestBlockRetry, host.chatAutoScrollMode);
+        latest.scrollTop = retryScrollTop;
         if (
           !effectiveForce &&
           latestBlockRetryId &&
@@ -202,7 +203,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         ) {
           host.chatSuppressedBlockId = latestBlockRetryId;
         }
-        host.chatLastScrollTop = latest.scrollTop;
+        host.chatLastScrollTop = retryScrollTop;
         host.chatUserNearBottom = measureDistanceFromBottom(latest) <= BOTTOM_EPSILON;
       }, retryDelay);
     });
