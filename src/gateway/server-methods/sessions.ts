@@ -223,6 +223,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         entry: applied.entry,
         storePath,
         archivedAt: applied.entry.archivedAt ?? undefined,
+      }).catch((err) => {
+        console.warn(`sessions.patch archive summary failed: ${String(err)}`);
       });
     }
 
