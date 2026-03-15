@@ -324,7 +324,7 @@ export async function runExecProcess(opts: {
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
     notifyOnExit: opts.notifyOnExit,
-    notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
+    notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess !== false,
     exitNotified: false,
     child: undefined,
     stdin: undefined,
