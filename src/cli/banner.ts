@@ -1,8 +1,9 @@
 import { loadConfig } from "../config/config.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { visibleWidth } from "../terminal/ansi.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { hasRootVersionAlias } from "./argv.js";
+import { hasFlag, hasRootVersionAlias } from "./argv.js";
 import { pickTagline, type TaglineMode, type TaglineOptions } from "./tagline.js";
 
 type BannerOptions = TaglineOptions & {
@@ -10,6 +11,7 @@ type BannerOptions = TaglineOptions & {
   commit?: string | null;
   columns?: number;
   richTty?: boolean;
+  quiet?: boolean;
 };
 
 let bannerEmitted = false;
@@ -28,6 +30,18 @@ function splitGraphemes(value: string): string[] {
   } catch {
     return Array.from(value);
   }
+}
+
+function isQuietTagline(options: BannerOptions): boolean {
+  if (options.quiet !== undefined) {
+    return options.quiet;
+  }
+  const env = options.env ?? process.env;
+  if (isTruthyEnvValue(env?.OPENCLAW_NO_TAGLINE)) {
+    return true;
+  }
+  const argv = options.argv ?? process.argv;
+  return hasFlag(argv, "--quiet") || hasFlag(argv, "-q");
 }
 
 const hasJsonFlag = (argv: string[]) =>
@@ -60,6 +74,7 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
   const commit =
     options.commit ?? resolveCommitHash({ env: options.env, moduleUrl: import.meta.url });
   const commitLabel = commit ?? "unknown";
+  const quiet = isQuietTagline(options);
   const tagline = pickTagline({ ...options, mode: resolveTaglineMode(options) });
   const rich = options.richTty ?? isRich();
   const title = "🦞 OpenClaw";
@@ -67,6 +82,12 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
   const columns = options.columns ?? process.stdout.columns ?? 120;
   const plainBaseLine = `${title} ${version} (${commitLabel})`;
   const plainFullLine = tagline ? `${plainBaseLine} — ${tagline}` : plainBaseLine;
+  if (quiet) {
+    if (rich) {
+      return `${theme.heading(title)} ${theme.info(version)} ${theme.muted(`(${commitLabel})`)}`;
+    }
+    return `${title} ${version} (${commitLabel})`;
+  }
   const fitsOnOneLine = visibleWidth(plainFullLine) <= columns;
   if (rich) {
     if (fitsOnOneLine) {
