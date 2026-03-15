@@ -732,6 +732,10 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isToolUseResultMismatchError(raw)) {
+    return "Conversation history corruption detected. Please use /new to start a fresh session.";
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
@@ -782,6 +786,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
       );
     }
 
+    if (isToolUseResultMismatchError(trimmed)) {
+      return "Conversation history corruption detected. Please use /new to start a fresh session.";
+    }
+
     if (shouldRewriteContextOverflowText(trimmed)) {
       return (
         "Context overflow: prompt too large for the model. " +
@@ -827,6 +835,9 @@ const TOOL_CALL_INPUT_MISSING_RE =
 const TOOL_CALL_INPUT_PATH_RE =
   /messages\.\d+\.content\.\d+\.tool_(?:use|call)\.(?:input|arguments)/i;
 
+const TOOL_USE_RESULT_MISMATCH_RE =
+  /tool_use_id\b.*\b(?:not found|does not match|no (?:matching|corresponding)|mismatch)|tool_result.*corresponding.*tool_use|unexpected.*tool.*block/i;
+
 const IMAGE_DIMENSION_ERROR_RE =
   /image dimensions exceed max allowed size for many-image requests:\s*(\d+)\s*pixels/i;
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
@@ -837,6 +848,13 @@ export function isMissingToolCallInputError(raw: string): boolean {
     return false;
   }
   return TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw);
+}
+
+export function isToolUseResultMismatchError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return TOOL_USE_RESULT_MISMATCH_RE.test(raw);
 }
 
 export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {
