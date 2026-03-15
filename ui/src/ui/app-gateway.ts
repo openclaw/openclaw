@@ -73,7 +73,10 @@ function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string):
       return;
     }
     // Skip if an agent run is actively streaming — reload would clear chatStream
-    if (host.chatRunId) {
+    if (
+      host.chatRunId ||
+      (host as unknown as { chatStreamStartedAt?: number | null }).chatStreamStartedAt
+    ) {
       return;
     }
     void loadChatHistory(host as unknown as OpenClawApp);
@@ -83,7 +86,10 @@ function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string):
       if (host.sessionKey !== triggerSessionKey) {
         return;
       }
-      if (host.chatRunId) {
+      if (
+        host.chatRunId ||
+        (host as unknown as { chatStreamStartedAt?: number | null }).chatStreamStartedAt
+      ) {
         return;
       }
       void loadChatHistory(host as unknown as OpenClawApp);
