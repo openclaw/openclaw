@@ -359,7 +359,9 @@ describe("chrome extension relay server", () => {
     await waitForOpen(ext2);
     await ext1Closed;
 
-    const status = (await fetch(`${cdpUrl}/extension/status`).then((r) => r.json())) as {
+    const status = (await fetch(`${cdpUrl}/extension/status`, {
+      headers: relayAuthHeaders(cdpUrl),
+    }).then((r) => r.json())) as {
       connected?: boolean;
     };
     expect(status.connected).toBe(true);
@@ -972,7 +974,9 @@ describe("chrome extension relay server", () => {
       cdpUrl = `http://127.0.0.1:${port}`;
       const relay = await ensureChromeExtensionRelayServer({ cdpUrl });
       expect(relay.port).toBe(port);
-      const status = (await fetch(`${cdpUrl}/extension/status`).then((r) => r.json())) as {
+      const status = (await fetch(`${cdpUrl}/extension/status`, {
+        headers: relayAuthHeaders(cdpUrl),
+      }).then((r) => r.json())) as {
         connected?: boolean;
       };
       expect(status.connected).toBe(false);
