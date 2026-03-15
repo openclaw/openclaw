@@ -40,6 +40,23 @@ export type GatewayStartupHookEvent = InternalHookEvent & {
 };
 
 // ============================================================================
+// Agent Turn End Hook Events
+// ============================================================================
+
+export type AgentTurnEndHookContext = {
+  /** Whether the turn completed successfully */
+  success: boolean;
+  /** Turn duration in milliseconds */
+  durationMs: number;
+};
+
+export type AgentTurnEndHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "turn:end";
+  context: AgentTurnEndHookContext;
+};
+
+// ============================================================================
 // Message Hook Events
 // ============================================================================
 
@@ -336,6 +353,13 @@ function hasStringContextField<T extends Record<string, unknown>>(
   return typeof context[key] === "string";
 }
 
+function hasNumberContextField<T extends Record<string, unknown>>(
+  context: Partial<T>,
+  key: keyof T,
+): boolean {
+  return typeof context[key] === "number";
+}
+
 function hasBooleanContextField<T extends Record<string, unknown>>(
   context: Partial<T>,
   key: keyof T,
@@ -362,6 +386,17 @@ export function isGatewayStartupEvent(event: InternalHookEvent): event is Gatewa
     return false;
   }
   return Boolean(getHookContext<GatewayStartupHookContext>(event));
+}
+
+export function isAgentTurnEndEvent(event: InternalHookEvent): event is AgentTurnEndHookEvent {
+  if (!isHookEventTypeAndAction(event, "agent", "turn:end")) {
+    return false;
+  }
+  const context = getHookContext<AgentTurnEndHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return hasBooleanContextField(context, "success") && hasNumberContextField(context, "durationMs");
 }
 
 export function isMessageReceivedEvent(
