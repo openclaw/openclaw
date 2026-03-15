@@ -3164,15 +3164,19 @@ public struct DevicePairListParams: Codable, Sendable {}
 
 public struct DevicePairApproveParams: Codable, Sendable {
     public let requestid: String
+    public let displayname: String?
 
     public init(
-        requestid: String)
+        requestid: String,
+        displayname: String?)
     {
         self.requestid = requestid
+        self.displayname = displayname
     }
 
     private enum CodingKeys: String, CodingKey {
         case requestid = "requestId"
+        case displayname = "displayName"
     }
 }
 
