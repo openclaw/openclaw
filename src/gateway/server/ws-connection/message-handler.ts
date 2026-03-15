@@ -255,6 +255,13 @@ export function attachGatewayWsMessageHandler(params: {
     authRateLimiter,
   } = browserSecurity;
 
+  // Guard flag to prevent concurrent handshake attempts on the same connection.
+  // JavaScript is single-threaded, but async message handlers can interleave: if two
+  // connect frames arrive before the first handshake completes its async work,
+  // both see getClient() === null and attempt a parallel handshake. This flag
+  // serialises them so only one handshake can be in-flight at a time.
+  let handshakeInProgress = false;
+
   socket.on("message", async (data) => {
     if (isClosed()) {
       return;
@@ -298,6 +305,17 @@ export function attachGatewayWsMessageHandler(params: {
 
       const client = getClient();
       if (!client) {
+        // Reject concurrent handshake attempts. Two rapid connect frames can both
+        // observe getClient() === null before the first handshake's async work
+        // sets the client, causing a partial second handshake that leaves the
+        // connection in an inconsistent state. Serialise with handshakeInProgress.
+        if (handshakeInProgress) {
+          setCloseCause("handshake-race", { frameType, frameMethod, frameId });
+          close(1008, "handshake already in progress");
+          return;
+        }
+        handshakeInProgress = true;
+
         // Handshake must be a normal request:
         // { type:"req", method:"connect", params: ConnectParams }.
         const isRequestFrame = validateRequestFrame(parsed);
