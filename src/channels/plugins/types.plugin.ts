@@ -1,4 +1,5 @@
 import type { ChannelOnboardingAdapter } from "./onboarding-types.js";
+import type { ChannelSetupWizard } from "./setup-wizard.js";
 import type {
   ChannelAuthAdapter,
   ChannelCommandAdapter,
@@ -58,6 +59,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
   // CLI onboarding wizard hooks for this channel.
   onboarding?: ChannelOnboardingAdapter;
+  setupWizard?: ChannelSetupWizard;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
   setup?: ChannelSetupAdapter;
