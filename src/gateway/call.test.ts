@@ -15,6 +15,7 @@ let lastClientOptions: {
   tlsFingerprint?: string;
   scopes?: string[];
   deviceIdentity?: unknown;
+  skipDeviceIdentity?: boolean;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
 } | null = null;
@@ -45,6 +46,7 @@ vi.mock("./client.js", () => ({
       token?: string;
       password?: string;
       scopes?: string[];
+      skipDeviceIdentity?: boolean;
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
     }) {
@@ -344,6 +346,16 @@ describe("callGateway url resolution", () => {
 
     await callGatewayScoped({ method: "health", scopes: [] });
     expect(lastClientOptions?.scopes).toEqual([]);
+  });
+
+  it("passes skipDeviceIdentity through to GatewayClient", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "health", skipDeviceIdentity: true });
+    expect(lastClientOptions?.skipDeviceIdentity).toBe(true);
+
+    await callGateway({ method: "health" });
+    expect(lastClientOptions?.skipDeviceIdentity).toBeUndefined();
   });
 });
 

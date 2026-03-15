@@ -98,6 +98,12 @@ export type GatewayClientOptions = {
   permissions?: Record<string, boolean>;
   pathEnv?: string;
   deviceIdentity?: DeviceIdentity | null;
+  /**
+   * When true, skip device identity entirely — do not auto-load from disk.
+   * Used by internal callers (cron announce) to connect as a plain
+   * token-authenticated localhost client without triggering scope-upgrade.
+   */
+  skipDeviceIdentity?: boolean;
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
@@ -141,12 +147,16 @@ export class GatewayClient {
   private readonly requestTimeoutMs: number;
 
   constructor(opts: GatewayClientOptions) {
+    const resolvedDevice =
+      opts.skipDeviceIdentity || opts.deviceIdentity === null
+        ? undefined
+        : (opts.deviceIdentity ?? loadOrCreateDeviceIdentity());
+    if (opts.skipDeviceIdentity) {
+      logDebug(`[GatewayClient] skipDeviceIdentity=true, connecting without device identity`);
+    }
     this.opts = {
       ...opts,
-      deviceIdentity:
-        opts.deviceIdentity === null
-          ? undefined
-          : (opts.deviceIdentity ?? loadOrCreateDeviceIdentity()),
+      deviceIdentity: resolvedDevice,
     };
     this.requestTimeoutMs =
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
