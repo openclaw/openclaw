@@ -1056,9 +1056,16 @@ export function renderChat(props: ChatProps) {
       if (canCompose) {
         if (props.draft.trim()) {
           inputHistory.push(props.draft);
+          inputHistoryIndex = -1;
+          props.onSend();
         }
-        props.onSend();
       }
+      return;
+    }
+
+    // Allow Shift+Enter to fall through to default behavior (insert newline)
+    if (e.key === "Enter" && e.shiftKey) {
+      return;
     }
   };
 
