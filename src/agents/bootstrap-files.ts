@@ -7,6 +7,7 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
+import { buildTypeDefinitionsPrompt, loadTypeDefinitions } from "./type-definitions.js";
 import {
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
@@ -107,6 +108,7 @@ export async function resolveBootstrapContextForRun(params: {
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
+  typeDefinitionsPrompt?: string;
 }> {
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
@@ -114,5 +116,13 @@ export async function resolveBootstrapContextForRun(params: {
     totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
     warn: params.warn,
   });
-  return { bootstrapFiles, contextFiles };
+
+  // Load type definitions from src/types or types directory
+  const typeDefinitions = await loadTypeDefinitions({
+    workspaceDir: params.workspaceDir,
+  });
+
+  const typeDefinitionsPrompt = buildTypeDefinitionsPrompt(typeDefinitions);
+
+  return { bootstrapFiles, contextFiles, typeDefinitionsPrompt };
 }

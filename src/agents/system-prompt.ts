@@ -233,6 +233,8 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Type definitions prompt from src/types or types directory */
+  typeDefinitionsPrompt?: string;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -620,6 +622,13 @@ export function buildAgentSystemPrompt(params: {
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
+
+  // Inject type definitions before project context
+  const typeDefinitionsPrompt = params.typeDefinitionsPrompt?.trim();
+  if (typeDefinitionsPrompt) {
+    lines.push(typeDefinitionsPrompt, "");
+  }
+
   if (validContextFiles.length > 0 || bootstrapTruncationWarningLines.length > 0) {
     lines.push("# Project Context", "");
     if (validContextFiles.length > 0) {

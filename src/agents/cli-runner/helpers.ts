@@ -51,6 +51,7 @@ export function buildSystemPrompt(params: {
   bootstrapTruncationWarningLines?: string[];
   modelDisplay: string;
   agentId?: string;
+  typeDefinitionsPrompt?: string;
 }) {
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
@@ -95,6 +96,7 @@ export function buildSystemPrompt(params: {
     bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
+    typeDefinitionsPrompt: params.typeDefinitionsPrompt,
   });
 }
 
