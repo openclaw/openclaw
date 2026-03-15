@@ -14,5 +14,6 @@ export function ensureRuntimePluginsLoaded(params: {
   loadOpenClawPlugins({
     config: params.config,
     workspaceDir,
+    inheritSharedRuntimeOptions: true,
   });
 }

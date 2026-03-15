@@ -28,6 +28,7 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
   const pluginRegistry = loadOpenClawPlugins({
     config: cfg,
     workspaceDir,
+    activateGlobalHookRunner: false,
     logger: {
       info: () => {},
       warn: () => {},

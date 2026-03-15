@@ -622,6 +622,24 @@ public struct AgentParams: Codable, Sendable {
     }
 }
 
+public struct AgentAbortParams: Codable, Sendable {
+    public let runid: String
+    public let sessionkey: String?
+
+    public init(
+        runid: String,
+        sessionkey: String?)
+    {
+        self.runid = runid
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+        case sessionkey = "sessionKey"
+    }
+}
+
 public struct AgentIdentityParams: Codable, Sendable {
     public let agentid: String?
     public let sessionkey: String?

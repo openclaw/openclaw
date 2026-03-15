@@ -28,6 +28,7 @@ type DiscordMessageHandlerParams = Omit<
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
+  waitForIdle: () => Promise<void>;
 };
 
 export function createDiscordMessageHandler(
@@ -181,6 +182,7 @@ export function createDiscordMessageHandler(
   };
 
   handler.deactivate = inboundWorker.deactivate;
+  handler.waitForIdle = inboundWorker.waitForIdle;
 
   return handler;
 }

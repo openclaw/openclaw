@@ -44,7 +44,11 @@ import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
 import { getPluginCommandSpecs } from "../../../../src/plugins/commands.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../../../src/runtime.js";
 import { summarizeStringEntries } from "../../../../src/shared/string-sample.js";
-import { resolveDiscordAccount } from "../accounts.js";
+import {
+  forgetDiscordManagedBotIdentity,
+  rememberDiscordManagedBotIdentity,
+  resolveDiscordAccount,
+} from "../accounts.js";
 import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
@@ -616,9 +620,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let lifecycleStarted = false;
   let releaseEarlyGatewayErrorGuard = () => {};
   let deactivateMessageHandler: (() => void) | undefined;
+  let waitForMessageHandlerIdle: (() => Promise<void>) | undefined;
   let autoPresenceController: ReturnType<typeof createDiscordAutoPresenceController> | null = null;
   let earlyGatewayEmitter: ReturnType<typeof getDiscordGatewayEmitter> | undefined;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
+  let botUserId: string | undefined;
   try {
     const commands: BaseCommand[] = commandSpecs.map((spec) =>
       createDiscordNativeCommand({
@@ -809,7 +815,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     const logger = createSubsystemLogger("discord/monitor");
     const guildHistories = new Map<string, HistoryEntry[]>();
-    let botUserId: string | undefined;
     let botUserName: string | undefined;
     let voiceManager: DiscordVoiceManager | null = null;
 
@@ -846,6 +851,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const botUser = await client.fetchUser("@me");
       botUserId = botUser?.id;
       botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
+      if (botUserId) {
+        rememberDiscordManagedBotIdentity({
+          botUserId,
+          accountId: account.accountId,
+        });
+      }
       logDiscordStartupPhase({
         runtime,
         accountId: account.accountId,
@@ -904,6 +915,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       discordRestFetch,
     });
     deactivateMessageHandler = messageHandler.deactivate;
+    waitForMessageHandlerIdle = messageHandler.waitForIdle;
     const trackInboundEvent = opts.setStatus
       ? () => {
           const at = Date.now();
@@ -978,6 +990,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     });
   } finally {
     deactivateMessageHandler?.();
+    await waitForMessageHandlerIdle?.();
+    forgetDiscordManagedBotIdentity({
+      botUserId,
+      accountId: account.accountId,
+    });
     autoPresenceController?.stop();
     opts.setStatus?.({ connected: false });
     if (onEarlyGatewayDebug) {

@@ -62,6 +62,8 @@ export function resolvePluginTools(params: {
     config: effectiveConfig,
     workspaceDir: params.context.workspaceDir,
     env,
+    inheritSharedRuntimeOptions: true,
+    activateGlobalHookRunner: false,
     logger: createPluginLoaderLogger(log),
   });
 

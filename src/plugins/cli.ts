@@ -25,6 +25,7 @@ export function registerPluginCliCommands(
     config,
     workspaceDir,
     env,
+    activateGlobalHookRunner: false,
     logger,
   });
 

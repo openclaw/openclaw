@@ -233,6 +233,7 @@ export function reloadOnboardingPluginRegistry(params: {
     config: params.cfg,
     workspaceDir,
     cache: false,
+    activateGlobalHookRunner: false,
     logger: createPluginLoaderLogger(log),
   });
 }

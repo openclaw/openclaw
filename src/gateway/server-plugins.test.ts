@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { PluginRegistry } from "../plugins/registry.js";
+import {
+  clearSharedPluginRuntimeOptions,
+  getSharedPluginRuntimeOptions,
+} from "../plugins/runtime/shared-runtime-options.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginDiagnostic } from "../plugins/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
@@ -98,6 +102,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearSharedPluginRuntimeOptions();
   vi.resetModules();
 });
 
@@ -158,6 +163,26 @@ describe("loadGatewayPlugins", () => {
     const subagent = call?.runtimeOptions?.subagent;
     expect(typeof subagent?.getSessionMessages).toBe("function");
     expect(typeof subagent?.getSession).toBe("function");
+  });
+
+  test("publishes shared runtime options for later plugin reloads", async () => {
+    const { loadGatewayPlugins } = await importServerPluginsModule();
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+
+    expect(typeof getSharedPluginRuntimeOptions()?.subagent?.run).toBe("function");
   });
 
   test("shares fallback context across module reloads for existing runtimes", async () => {

@@ -48,6 +48,7 @@ import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { clearSharedPluginRuntimeOptions } from "../plugins/runtime/shared-runtime-options.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -591,6 +592,7 @@ export async function startGatewayServer(
     broadcast,
     broadcastToConnIds,
     agentRunSeq,
+    agentAbortControllers,
     dedupe,
     chatRunState,
     chatRunBuffers,
@@ -714,6 +716,7 @@ export async function startGatewayServer(
       refreshGatewayHealthSnapshot,
       logHealth,
       dedupe,
+      agentAbortControllers,
       chatAbortControllers,
       chatRunState,
       chatRunBuffers,
@@ -853,6 +856,7 @@ export async function startGatewayServer(
     },
     nodeRegistry,
     agentRunSeq,
+    agentAbortControllers,
     chatAbortControllers,
     chatAbortedRuns: chatRunState.abortedRuns,
     chatRunBuffers: chatRunState.buffers,
@@ -1082,6 +1086,7 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
+      clearSharedPluginRuntimeOptions();
       clearSecretsRuntimeSnapshot();
       await close(opts);
     },
