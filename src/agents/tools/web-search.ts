@@ -3,6 +3,8 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import type { SearchProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -599,6 +601,54 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
     docs: "https://docs.openclaw.ai/tools/web",
   };
+}
+
+function resolvePluginSearchProvider(
+  search?: WebSearchConfig,
+  config?: OpenClawConfig,
+): SearchProviderPlugin | null {
+  const raw =
+    search && "provider" in search && typeof search.provider === "string"
+      ? search.provider.trim().toLowerCase()
+      : "";
+  const registry = getActivePluginRegistry();
+  if (!registry || registry.searchProviders.length === 0) {
+    return null;
+  }
+  // Explicit match by provider id (case-insensitive to match Zod-validated config)
+  if (raw) {
+    const match = registry.searchProviders.find(
+      (entry) => entry.provider.id.trim().toLowerCase() === raw,
+    );
+    if (match) {
+      return match.provider;
+    }
+    // Warn when a non-built-in provider id doesn't resolve to any plugin
+    const builtIn = new Set(SEARCH_PROVIDERS as readonly string[]);
+    if (!builtIn.has(raw)) {
+      logVerbose(
+        `web_search: provider "${raw}" is not registered as a plugin provider, falling back to built-in resolution`,
+      );
+    }
+  }
+  // Auto-detect: try each plugin provider's isAvailable()
+  if (!raw) {
+    for (const entry of registry.searchProviders) {
+      try {
+        if (entry.provider.isAvailable?.(config)) {
+          logVerbose(
+            `web_search: no provider configured, auto-detected plugin provider "${entry.provider.id}"`,
+          );
+          return entry.provider;
+        }
+      } catch {
+        logVerbose(
+          `web_search: plugin provider "${entry.provider.id}" isAvailable() threw, skipping`,
+        );
+      }
+    }
+  }
+  return null;
 }
 
 function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
@@ -1888,6 +1938,124 @@ async function runWebSearch(params: {
   return payload;
 }
 
+function sanitizeUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      // Strip embedded credentials (user:pass@host) to avoid leaking secrets.
+      parsed.username = "";
+      parsed.password = "";
+      return parsed.href;
+    }
+  } catch {}
+  return undefined;
+}
+
+const MAX_PLUGIN_DESCRIPTION_LENGTH = 200;
+
+/** Strip control chars and cap length so plugin descriptions stay safe for LLM tool metadata. */
+function sanitizePluginDescription(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  const cleaned = raw.replace(/[\x00-\x1f\x7f]/g, " ").trim();
+  if (cleaned.length <= MAX_PLUGIN_DESCRIPTION_LENGTH) {
+    return cleaned;
+  }
+  return cleaned.slice(0, MAX_PLUGIN_DESCRIPTION_LENGTH).trimEnd() + "\u2026";
+}
+
+function createPluginSearchTool(
+  pluginProvider: SearchProviderPlugin,
+  search: WebSearchConfig | undefined,
+  config?: OpenClawConfig,
+): AnyAgentTool {
+  const cacheTtlMs = resolveCacheTtlMs(search?.cacheTtlMinutes);
+  const timeoutSeconds = resolveTimeoutSeconds(search?.timeoutSeconds);
+  const fallback = `Search the web using ${pluginProvider.name}. Returns titles, URLs, and descriptions for research.`;
+  const description = sanitizePluginDescription(pluginProvider.description ?? fallback);
+
+  return {
+    label: "Web Search",
+    name: "web_search",
+    description,
+    parameters: Type.Object({
+      query: Type.String({ description: "Search query" }),
+      count: Type.Optional(
+        Type.Number({ description: "Number of results (1-10)", minimum: 1, maximum: 10 }),
+      ),
+    }),
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const query = readStringParam(params, "query", { required: true });
+      if (!query) {
+        return jsonResult({ error: "missing_query", message: "query is required" });
+      }
+
+      const maxResults = readNumberParam(params, "count", { integer: true }) ??
+        search?.maxResults ?? DEFAULT_SEARCH_COUNT;
+      const cacheKey = normalizeCacheKey(`${pluginProvider.id}:${query}:${maxResults}`);
+      const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
+      if (cached) {
+        return jsonResult(cached.value);
+      }
+      const started = Date.now();
+
+      try {
+        const result = await pluginProvider.search({
+          query,
+          maxResults,
+          timeoutMs: timeoutSeconds * 1000,
+          config,
+        });
+
+        const payload = {
+          query,
+          provider: pluginProvider.id,
+          count: result.results?.length ?? 0,
+          tookMs: Date.now() - started,
+          externalContent: {
+            untrusted: true,
+            source: "web_search",
+            provider: pluginProvider.id,
+            wrapped: true,
+          },
+          ...(result.results && {
+            results: result.results
+              .filter((r) => sanitizeUrl(r.url))
+              .map((r) => ({
+                title: wrapWebContent(r.title),
+                url: sanitizeUrl(r.url)!,
+                description: r.description ? wrapWebContent(r.description) : undefined,
+                published: r.published,
+              })),
+          }),
+          ...(result.content && { content: wrapWebContent(result.content) }),
+          ...(result.citations && {
+            citations: result.citations
+              .map((c) => {
+                if (typeof c === "string") {
+                  return sanitizeUrl(c);
+                }
+                const url = sanitizeUrl(c.url);
+                return url
+                  ? { ...c, url, title: c.title ? wrapWebContent(c.title) : undefined }
+                  : undefined;
+              })
+              .filter(Boolean),
+          }),
+        };
+        writeCache(SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
+        return jsonResult(payload);
+      } catch (err) {
+        return jsonResult({
+          error: "search_failed",
+          provider: pluginProvider.id,
+          message: String(err),
+        });
+      }
+    },
+  };
+}
+
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
   sandboxed?: boolean;
@@ -1896,6 +2064,12 @@ export function createWebSearchTool(options?: {
   const search = resolveSearchConfig(options?.config);
   if (!resolveSearchEnabled({ search, sandboxed: options?.sandboxed })) {
     return null;
+  }
+
+  // Check plugin-registered search providers first.
+  const pluginProvider = resolvePluginSearchProvider(search, options?.config);
+  if (pluginProvider) {
+    return createPluginSearchTool(pluginProvider, search, options?.config);
   }
 
   const provider =

@@ -270,6 +270,7 @@ export const ToolsWebSearchSchema = z
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
+        z.string().regex(/^[a-z][a-z0-9_-]*$/, "custom provider id"),
       ])
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
