@@ -1,6 +1,6 @@
 ---
 name: gemini
-description: Gemini CLI for one-shot Q&A, summaries, and generation.
+description: Gemini CLI for one-shot Q&A, summaries, and text generation. Use when user asks to "ask Gemini", wants a second opinion from another AI model, needs a fast summary, or requests generation without using Claude directly.
 homepage: https://ai.google.dev/
 metadata:
   {
