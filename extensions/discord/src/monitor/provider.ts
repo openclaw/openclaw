@@ -809,7 +809,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     const logger = createSubsystemLogger("discord/monitor");
     const guildHistories = new Map<string, HistoryEntry[]>();
-    let botUserId: string | undefined;
+    // Discord application id is also the bot user id, so keep it as a
+    // fallback when fetchUser("@me") is temporarily unavailable.
+    let botUserId: string | undefined = applicationId;
     let botUserName: string | undefined;
     let voiceManager: DiscordVoiceManager | null = null;
 
@@ -844,7 +846,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     });
     try {
       const botUser = await client.fetchUser("@me");
-      botUserId = botUser?.id;
+      botUserId = botUser?.id || applicationId;
       botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
       logDiscordStartupPhase({
         runtime,
@@ -890,6 +892,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       abortSignal: opts.abortSignal,
       workerRunTimeoutMs: discordCfg.inboundWorker?.runTimeoutMs,
       botUserId,
+      botUserName,
       guildHistories,
       historyLimit,
       mediaMaxBytes,

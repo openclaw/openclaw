@@ -2,9 +2,44 @@ import { ChannelType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
+const hasControlCommandMock = vi.hoisted(() => vi.fn(() => false));
+const loadConfigMock = vi.hoisted(() => vi.fn());
+const shouldHandleTextCommandsMock = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("../../../../src/media-understanding/audio-preflight.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
+}));
+vi.mock("../../../../src/auto-reply/command-detection.js", () => ({
+  hasControlCommand: (...args: unknown[]) => hasControlCommandMock(...args),
+}));
+vi.mock("../../../../src/auto-reply/commands-registry.js", () => ({
+  shouldHandleTextCommands: (...args: unknown[]) => shouldHandleTextCommandsMock(...args),
+}));
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: vi.fn(),
+  getOAuthProviders: () => [],
+}));
+vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+  Client: class Client {
+    async connect() {
+      return undefined;
+    }
+    async listTools() {
+      return { tools: [] };
+    }
+    async close() {
+      return undefined;
+    }
+  },
+}));
+vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+  StdioClientTransport: class StdioClientTransport {
+    pid: number | null = null;
+  },
+}));
+vi.mock("../../../../src/config/config.js", () => ({
+  loadConfig: loadConfigMock,
+  getRuntimeConfigSnapshot: () => loadConfigMock(),
 }));
 import {
   __testing as sessionBindingTesting,
@@ -224,6 +259,184 @@ describe("preflightDiscordMessage", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     transcribeFirstAudioMock.mockReset();
+    hasControlCommandMock.mockReset();
+    hasControlCommandMock.mockReturnValue(false);
+    loadConfigMock.mockReset();
+    loadConfigMock.mockReturnValue(DEFAULT_PREFLIGHT_CFG);
+    shouldHandleTextCommandsMock.mockReset();
+    shouldHandleTextCommandsMock.mockReturnValue(true);
+  });
+
+  it("allows an explicitly mentioned alternate bot account to route via its account binding", async () => {
+    const channelId = "channel-polymarket";
+    const guildId = "guild-1";
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            name: "Kakashi",
+            workspace: "/tmp/main-workspace",
+            agentDir: "/tmp/main-agent",
+          },
+          {
+            id: "monitor",
+            name: "Hinata",
+            workspace: "/tmp/monitor-workspace",
+            agentDir: "/tmp/monitor-agent",
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            guildId,
+            peer: {
+              kind: "channel",
+              id: channelId,
+            },
+          },
+        },
+        {
+          agentId: "monitor",
+          match: {
+            channel: "discord",
+            accountId: "notifier",
+          },
+        },
+      ],
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+    } as import("../../../../src/config/config.js").OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const client = createGuildTextClient(channelId);
+    const message = createDiscordMessage({
+      id: "m-explicit-alt-bot",
+      channelId,
+      content: "<@notifier-bot> hello",
+      mentionedUsers: [{ id: "notifier-bot" }],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "aphrodite44444",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg,
+        discordConfig: {
+          allowBots: true,
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      accountId: "notifier",
+      botUserId: "notifier-bot",
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.route.agentId).toBe("monitor");
+    expect(result?.route.accountId).toBe("notifier");
+    expect(result?.route.matchedBy).toBe("binding.account");
+    expect(result?.wasMentioned).toBe(true);
+  });
+
+  it("allows a text mention of the alternate bot name to route via its account binding", async () => {
+    const channelId = "channel-yelp";
+    const guildId = "guild-1";
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            name: "Kakashi",
+            workspace: "/tmp/main-workspace",
+            agentDir: "/tmp/main-agent",
+          },
+          {
+            id: "monitor",
+            name: "Hinata",
+            workspace: "/tmp/monitor-workspace",
+            agentDir: "/tmp/monitor-agent",
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "monitor",
+          match: {
+            channel: "discord",
+            accountId: "notifier",
+            guildId,
+            peer: {
+              kind: "channel",
+              id: channelId,
+            },
+          },
+        },
+        {
+          agentId: "main",
+          match: {
+            channel: "discord",
+            accountId: "default",
+          },
+        },
+      ],
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+    } as import("../../../../src/config/config.js").OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const client = createGuildTextClient(channelId);
+    const message = createDiscordMessage({
+      id: "m-text-alt-bot",
+      channelId,
+      content: "@旗木卡卡西 你可以说话吗？",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "aphrodite44444",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg,
+        discordConfig: {
+          allowBots: true,
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      accountId: "default",
+      botUserId: "kakashi-bot",
+      botUserName: "旗木卡卡西",
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.route.agentId).toBe("main");
+    expect(result?.route.accountId).toBe("default");
+    expect(result?.route.matchedBy).toBe("binding.account");
+    expect(result?.wasMentioned).toBe(true);
   });
 
   it("drops bound-thread bot system messages to prevent ACP self-loop", async () => {
