@@ -455,8 +455,8 @@ describe("loadSettings default gateway URL derivation", () => {
     // Verify new key exists
     expect(localStorage.getItem("openclaw.control.settings.v1:/apps/openclaw")).toBeTruthy();
 
-    // Verify old key was removed
-    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
+    // Verify old key was preserved (for root-path deployments)
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeTruthy();
   });
 
   it("does not migrate when basePath is empty (root path)", async () => {
@@ -565,5 +565,69 @@ describe("loadSettings default gateway URL derivation", () => {
     const loaded = loadSettings();
     expect(loaded.sessionKey).toBe("session-b");
     expect(loaded.splitRatio).toBe(0.7);
+  });
+
+  it("preserves root settings during non-root migration", async () => {
+    // Setup: root-path deployment saves settings
+    setTestLocation({
+      protocol: "https:",
+      host: "example.com",
+      pathname: "/",
+    });
+    setControlUiBasePath(undefined);
+
+    const { saveSettings: saveRoot } = await import("./storage.ts");
+    saveRoot({
+      gatewayUrl: "wss://example.com",
+      token: "root-token",
+      sessionKey: "root-session",
+      lastActiveSessionKey: "root-session",
+      theme: "claw",
+      themeMode: "dark",
+      chatFocusMode: false,
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 240,
+      navGroupsCollapsed: {},
+    });
+
+    // Verify root settings saved to legacy key
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeTruthy();
+
+    // Switch to non-root basePath
+    vi.resetModules();
+    setTestLocation({
+      protocol: "https:",
+      host: "example.com",
+      pathname: "/gateway-a/chat",
+    });
+    setControlUiBasePath(undefined);
+
+    const { loadSettings: loadNonRoot } = await import("./storage.ts");
+    loadNonRoot(); // Trigger migration
+
+    // Verify migration created new key
+    expect(localStorage.getItem("openclaw.control.settings.v1:/gateway-a")).toBeTruthy();
+
+    // Verify root settings were preserved (not deleted)
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeTruthy();
+
+    // Switch back to root path
+    vi.resetModules();
+    setTestLocation({
+      protocol: "https:",
+      host: "example.com",
+      pathname: "/",
+    });
+    setControlUiBasePath(undefined);
+
+    const { loadSettings: loadRoot } = await import("./storage.ts");
+    const rootSettings = loadRoot();
+
+    // Verify root settings still work
+    expect(rootSettings.sessionKey).toBe("root-session");
+    expect(rootSettings.splitRatio).toBe(0.6);
   });
 });

@@ -162,9 +162,8 @@ export function loadSettings(): UiSettings {
     if (!raw && basePath) {
       raw = localStorage.getItem(KEY);
       if (raw) {
-        // Migrate: copy old data to new key, then remove old key
+        // Copy old data to new key (preserve legacy key for root-path deployments)
         localStorage.setItem(storageKey, raw);
-        localStorage.removeItem(KEY);
       }
     }
 
