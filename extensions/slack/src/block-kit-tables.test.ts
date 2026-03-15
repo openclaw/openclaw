@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { markdownTableToBlockKit, markdownTablesToBlockKitAttachment } from "./block-kit-tables.js";
 import type { MarkdownTableData } from "../../../src/markdown/ir.js";
+import { markdownTableToBlockKit, markdownTablesToBlockKitAttachment } from "./block-kit-tables.js";
 
 describe("markdownTableToBlockKit", () => {
   it("converts a simple table to Block Kit format", () => {
