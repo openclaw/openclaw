@@ -152,6 +152,16 @@ export type TelegramAccountConfig = {
   /** Network transport overrides for Telegram. */
   network?: TelegramNetworkConfig;
   proxy?: string;
+  /**
+   * Custom base URL for all outbound Telegram Bot API calls.
+   * Defaults to `https://api.telegram.org`. Useful for:
+   * - Self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api)
+   * - Centralized gateway proxies that inject bot tokens
+   * - Testing with mock Bot API servers
+   *
+   * Env fallback: `TELEGRAM_API_ROOT`.
+   */
+  apiRoot?: string;
   webhookUrl?: string;
   webhookSecret?: string;
   webhookPath?: string;

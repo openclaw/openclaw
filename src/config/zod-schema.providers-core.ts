@@ -212,6 +212,14 @@ export const TelegramAccountSchemaBase = z
       .strict()
       .optional(),
     proxy: z.string().optional(),
+    apiRoot: z
+      .string()
+      .optional()
+      .describe(
+        "Custom base URL for all outbound Telegram Bot API calls. Defaults to https://api.telegram.org. " +
+          "Use this to route API calls through a self-hosted Bot API server or a centralized proxy. " +
+          "Env fallback: TELEGRAM_API_ROOT.",
+      ),
     webhookUrl: z
       .string()
       .optional()

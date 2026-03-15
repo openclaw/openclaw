@@ -1413,6 +1413,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow Telegram to write config in response to channel events/commands (default: true).",
   "channels.telegram.botToken":
     "Telegram bot token used to authenticate Bot API requests for this account/provider config. Use secret/env substitution and rotate tokens if exposure is suspected.",
+  "channels.telegram.apiRoot":
+    "Custom base URL for all outbound Telegram Bot API calls. Defaults to https://api.telegram.org. Point this at a self-hosted Bot API server or a centralized gateway proxy.",
   "channels.telegram.capabilities.inlineButtons":
     "Enable Telegram inline button components for supported command and interaction surfaces. Disable if your deployment needs plain-text-only compatibility behavior.",
   "channels.telegram.execApprovals":
