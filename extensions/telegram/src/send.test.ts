@@ -1565,6 +1565,56 @@ describe("reactMessageTelegram", () => {
       }),
     );
   });
+
+  it("sends custom emoji reaction when customEmojiId is provided", async () => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const api = { setMessageReaction } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+    };
+
+    await reactMessageTelegram("123", 456, "", {
+      token: "tok",
+      api,
+      customEmojiId: "5368324170671202286",
+    });
+
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [
+      { type: "custom_emoji", custom_emoji_id: "5368324170671202286" },
+    ]);
+  });
+
+  it("prefers customEmojiId over emoji when both are provided", async () => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const api = { setMessageReaction } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+    };
+
+    await reactMessageTelegram("123", 456, "👍", {
+      token: "tok",
+      api,
+      customEmojiId: "5368324170671202286",
+    });
+
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [
+      { type: "custom_emoji", custom_emoji_id: "5368324170671202286" },
+    ]);
+  });
+
+  it("removes reaction even when customEmojiId is provided with remove flag", async () => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const api = { setMessageReaction } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+    };
+
+    await reactMessageTelegram("123", 456, "", {
+      token: "tok",
+      api,
+      customEmojiId: "5368324170671202286",
+      remove: true,
+    });
+
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, []);
+  });
 });
 
 describe("sendStickerTelegram", () => {

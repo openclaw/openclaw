@@ -93,6 +93,7 @@ type TelegramReactionOpts = {
   remove?: boolean;
   verbose?: boolean;
   retry?: RetryConfig;
+  customEmojiId?: string;
 };
 
 type TelegramTypingOpts = {
@@ -1010,12 +1011,15 @@ export async function reactMessageTelegram(
   });
   const remove = opts.remove === true;
   const trimmedEmoji = emoji.trim();
-  // Build the reaction array. We cast emoji to the grammY union type since
-  // Telegram validates emoji server-side; invalid emojis fail gracefully.
+  const customEmojiId = opts.customEmojiId?.trim();
+  // Build the reaction array. Custom emoji takes priority when provided.
+  // We cast emoji to the grammY union type since Telegram validates server-side.
   const reactions: ReactionType[] =
-    remove || !trimmedEmoji
+    remove || (!trimmedEmoji && !customEmojiId)
       ? []
-      : [{ type: "emoji", emoji: trimmedEmoji as ReactionTypeEmoji["emoji"] }];
+      : customEmojiId
+        ? [{ type: "custom_emoji", custom_emoji_id: customEmojiId }]
+        : [{ type: "emoji", emoji: trimmedEmoji as ReactionTypeEmoji["emoji"] }];
   if (typeof api.setMessageReaction !== "function") {
     throw new Error("Telegram reactions are unavailable in this bot API.");
   }
@@ -1024,7 +1028,8 @@ export async function reactMessageTelegram(
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     if (/REACTION_INVALID/i.test(msg)) {
-      return { ok: false as const, warning: `Reaction unavailable: ${trimmedEmoji}` };
+      const label = customEmojiId ? `custom_emoji:${customEmojiId}` : trimmedEmoji;
+      return { ok: false as const, warning: `Reaction unavailable: ${label}` };
     }
     throw err;
   }
