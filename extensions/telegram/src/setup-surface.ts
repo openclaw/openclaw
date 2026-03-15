@@ -1,7 +1,4 @@
-import {
-  type ChannelOnboardingAdapter,
-  type ChannelOnboardingDmPolicy,
-} from "../../../src/channels/plugins/onboarding-types.js";
+import { type ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   patchChannelConfigForAccount,
   promptResolvedAllowFrom,
@@ -14,12 +11,8 @@ import {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
 } from "../../../src/channels/plugins/setup-helpers.js";
-import {
-  buildChannelOnboardingAdapterFromSetupWizard,
-  type ChannelSetupWizard,
-} from "../../../src/channels/plugins/setup-wizard.js";
+import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { getChatChannelMeta } from "../../../src/channels/registry.js";
 import { formatCliCommand } from "../../../src/cli/command-format.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
@@ -236,45 +229,48 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         return account.configured;
       }),
   },
-  credential: {
-    inputKey: "token",
-    providerHint: channel,
-    credentialLabel: "Telegram bot token",
-    preferredEnvVar: "TELEGRAM_BOT_TOKEN",
-    helpTitle: "Telegram bot token",
-    helpLines: TELEGRAM_TOKEN_HELP_LINES,
-    envPrompt: "TELEGRAM_BOT_TOKEN detected. Use env var?",
-    keepPrompt: "Telegram token already configured. Keep it?",
-    inputPrompt: "Enter Telegram bot token",
-    allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
-    inspect: ({ cfg, accountId }) => {
-      const resolved = resolveTelegramAccount({ cfg, accountId });
-      const hasConfiguredBotToken = hasConfiguredSecretInput(resolved.config.botToken);
-      const hasConfiguredValue =
-        hasConfiguredBotToken || Boolean(resolved.config.tokenFile?.trim());
-      return {
-        accountConfigured: Boolean(resolved.token) || hasConfiguredValue,
-        hasConfiguredValue,
-        resolvedValue: resolved.token?.trim() || undefined,
-        envValue:
-          accountId === DEFAULT_ACCOUNT_ID
-            ? process.env.TELEGRAM_BOT_TOKEN?.trim() || undefined
-            : undefined,
-      };
+  credentials: [
+    {
+      inputKey: "token",
+      providerHint: channel,
+      credentialLabel: "Telegram bot token",
+      preferredEnvVar: "TELEGRAM_BOT_TOKEN",
+      helpTitle: "Telegram bot token",
+      helpLines: TELEGRAM_TOKEN_HELP_LINES,
+      envPrompt: "TELEGRAM_BOT_TOKEN detected. Use env var?",
+      keepPrompt: "Telegram token already configured. Keep it?",
+      inputPrompt: "Enter Telegram bot token",
+      allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
+      inspect: ({ cfg, accountId }) => {
+        const resolved = resolveTelegramAccount({ cfg, accountId });
+        const hasConfiguredBotToken = hasConfiguredSecretInput(resolved.config.botToken);
+        const hasConfiguredValue =
+          hasConfiguredBotToken || Boolean(resolved.config.tokenFile?.trim());
+        return {
+          accountConfigured: Boolean(resolved.token) || hasConfiguredValue,
+          hasConfiguredValue,
+          resolvedValue: resolved.token?.trim() || undefined,
+          envValue:
+            accountId === DEFAULT_ACCOUNT_ID
+              ? process.env.TELEGRAM_BOT_TOKEN?.trim() || undefined
+              : undefined,
+        };
+      },
     },
-  },
+  ],
   allowFrom: {
     helpTitle: "Telegram user id",
     helpLines: TELEGRAM_USER_ID_HELP_LINES,
+    credentialInputKey: "token",
     message: "Telegram allowFrom (numeric sender id; @username resolves to id)",
     placeholder: "@username",
     invalidWithoutCredentialNote:
       "Telegram token missing; use numeric sender ids (usernames require a bot token).",
     parseInputs: splitOnboardingEntries,
     parseId: parseTelegramAllowFromId,
-    resolveEntries: async ({ credentialValue, entries }) =>
+    resolveEntries: async ({ credentialValues, entries }) =>
       resolveTelegramAllowFromEntries({
-        credentialValue,
+        credentialValue: credentialValues.token,
         entries,
       }),
     apply: async ({ cfg, accountId, allowFrom }) =>
@@ -288,25 +284,3 @@ export const telegramSetupWizard: ChannelSetupWizard = {
   dmPolicy,
   disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
 };
-
-const telegramSetupPlugin = {
-  id: channel,
-  meta: {
-    ...getChatChannelMeta(channel),
-    quickstartAllowFrom: true,
-  },
-  config: {
-    listAccountIds: listTelegramAccountIds,
-    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
-      resolveTelegramAccount({ cfg, accountId }),
-    resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
-      resolveTelegramAccount({ cfg, accountId }).config.allowFrom,
-  },
-  setup: telegramSetupAdapter,
-} as const;
-
-export const telegramOnboardingAdapter: ChannelOnboardingAdapter =
-  buildChannelOnboardingAdapterFromSetupWizard({
-    plugin: telegramSetupPlugin,
-    wizard: telegramSetupWizard,
-  });
