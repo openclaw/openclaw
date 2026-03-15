@@ -186,14 +186,11 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(/message required/i);
   });
 
-  // Poll params on send actions are now silently stripped instead of rejected.
-  // This prevents false positives when models auto-fill poll fields from the
-  // shared tool schema on plain send requests.
-  // See: https://github.com/openclaw/openclaw/issues/42820
-  //      https://github.com/openclaw/openclaw/issues/43015
+  // Send requests with explicit pollQuestion are rejected — the caller likely
+  // intended action="poll" and should get a corrective error.
   it.each([
     {
-      name: "structured poll params",
+      name: "structured poll params with pollQuestion",
       actionParams: {
         channel: "slack",
         target: "#C12345678",
@@ -203,17 +200,7 @@ describe("runMessageAction context isolation", () => {
       },
     },
     {
-      name: "string-encoded poll params",
-      actionParams: {
-        channel: "slack",
-        target: "#C12345678",
-        message: "hi",
-        pollDurationSeconds: "60",
-        pollPublic: "true",
-      },
-    },
-    {
-      name: "snake_case poll params",
+      name: "snake_case poll params with poll_question",
       actionParams: {
         channel: "slack",
         target: "#C12345678",
@@ -223,8 +210,33 @@ describe("runMessageAction context isolation", () => {
         poll_public: "true",
       },
     },
-  ])("strips poll params from send actions that include $name", async ({ actionParams }) => {
-    // Should NOT reject — poll params are stripped and send proceeds normally
+  ])("rejects send actions that include $name", async ({ actionParams }) => {
+    await expect(
+      runDrySend({
+        cfg: slackConfig,
+        actionParams,
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow(/use action "poll" instead of "send"/i);
+  });
+
+  // Send requests with only noise poll params (no pollQuestion) are allowed.
+  // Models auto-fill defaults like pollDurationSeconds or pollPublic from the
+  // shared schema; these should be silently stripped, not rejected.
+  // See: https://github.com/openclaw/openclaw/issues/42820
+  //      https://github.com/openclaw/openclaw/issues/43015
+  it.each([
+    {
+      name: "string-encoded poll noise params",
+      actionParams: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "hi",
+        pollDurationSeconds: "60",
+        pollPublic: "true",
+      },
+    },
+  ])("strips noise poll params from send actions that include $name", async ({ actionParams }) => {
     await expect(
       runDrySend({
         cfg: slackConfig,

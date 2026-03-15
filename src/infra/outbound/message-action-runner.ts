@@ -14,7 +14,11 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { resolveTelegramPollVisibility, stripPollCreationParams } from "../../poll-params.js";
+import {
+  hasPollCreationParams,
+  resolveTelegramPollVisibility,
+  stripPollCreationParams,
+} from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -779,11 +783,18 @@ export async function runMessageAction(
     cfg,
   });
 
-  // Strip auto-populated poll fields from send requests.
-  // Models often fill optional poll params from the shared tool schema even
-  // when only a plain message/attachment send is intended. Stripping them
-  // here means the send path silently ignores stray poll defaults instead
-  // of surfacing a confusing "use action poll" error.
+  // Guard: reject send requests that carry explicit poll intent (pollQuestion
+  // is non-empty). This preserves the corrective error for callers that
+  // accidentally use action="send" when they meant action="poll".
+  if (action === "send" && hasPollCreationParams(params)) {
+    throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
+  }
+
+  // Strip auto-populated poll noise from send requests.
+  // Models often fill optional poll params (pollDurationHours, pollMulti, etc.)
+  // from the shared tool schema even when only a plain message/attachment send
+  // is intended. Since hasPollCreationParams() gates on pollQuestion, these
+  // stray defaults are harmless noise that should be cleaned up.
   // See: https://github.com/openclaw/openclaw/issues/42820
   //      https://github.com/openclaw/openclaw/issues/43015
   if (action === "send") {
