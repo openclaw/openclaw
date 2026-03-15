@@ -1557,7 +1557,7 @@ async function runBraveLlmContextSearch(params: {
       init: {
         method: "GET",
         headers: {
-          Accept: "application/json",
+          Accept: "application/json, text/markdown;q=0.9",
           "X-Subscription-Token": params.apiKey,
         },
       },
@@ -1841,7 +1841,7 @@ async function runWebSearch(params: {
       init: {
         method: "GET",
         headers: {
-          Accept: "application/json",
+          Accept: "application/json, text/markdown;q=0.9",
           "X-Subscription-Token": params.apiKey,
         },
       },
