@@ -255,6 +255,7 @@ export async function processMessage(params: {
         })()
       : undefined;
 
+  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.route.accountId });
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
   const tableMode = resolveMarkdownTableMode({
@@ -402,12 +403,12 @@ export async function processMessage(params: {
         }
       },
       deliver: async (payload: ReplyPayload, info) => {
-        if (info.kind !== "final") {
-          // Only deliver final replies to external messaging channels (WhatsApp).
-          // Block (reasoning/thinking) and tool updates are meant for the internal
-          // web UI only; sending them here leaks chain-of-thought to end users.
+        if (info.kind === "tool") {
+          // Tool updates are internal-only; don't deliver to WhatsApp.
           return;
         }
+        // Reasoning blocks are already filtered upstream by shouldSuppressReasoningPayload
+        // in dispatch-from-config.ts. Only user-facing text/media blocks reach here.
         await deliverWebReply({
           replyResult: payload,
           msg: params.msg,
@@ -450,9 +451,8 @@ export async function processMessage(params: {
       onReplyStart: params.msg.sendComposing,
     },
     replyOptions: {
-      // WhatsApp delivery intentionally suppresses non-final payloads.
-      // Keep block streaming disabled so final replies are still produced.
-      disableBlockStreaming: true,
+      disableBlockStreaming:
+        typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
       onModelSelected,
     },
   });
