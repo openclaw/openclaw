@@ -440,6 +440,45 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
+    // On Linux without brew, try apt-get as a fallback (common in Docker).
+    if (process.platform === "linux" && spec.formula && hasBinary("apt-get")) {
+      const aptInstallArgv = ["apt-get", "install", "-y", spec.formula];
+      const aptUpdateArgv = ["apt-get", "update", "-qq"];
+      const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+
+      if (isRoot) {
+        // Best effort: fresh containers often need package indexes populated.
+        await runBestEffortCommand(aptUpdateArgv, { timeoutMs });
+        const aptResult = await runCommandSafely(aptInstallArgv, { timeoutMs });
+        if (aptResult.code === 0) {
+          return withWarnings(
+            {
+              ok: true,
+              message: `Installed ${spec.formula} via apt-get (brew unavailable)`,
+              ...aptResult,
+            },
+            warnings,
+          );
+        }
+      } else if (hasBinary("sudo")) {
+        // Verify passwordless sudo before running to avoid hanging.
+        const sudoCheck = await runCommandSafely(["sudo", "-n", "true"], { timeoutMs: 5_000 });
+        if (sudoCheck.code === 0) {
+          await runBestEffortCommand(["sudo", ...aptUpdateArgv], { timeoutMs });
+          const aptResult = await runCommandSafely(["sudo", ...aptInstallArgv], { timeoutMs });
+          if (aptResult.code === 0) {
+            return withWarnings(
+              {
+                ok: true,
+                message: `Installed ${spec.formula} via apt-get (brew unavailable)`,
+                ...aptResult,
+              },
+              warnings,
+            );
+          }
+        }
+      }
+    }
     return withWarnings(resolveBrewMissingFailure(spec), warnings);
   }
 
