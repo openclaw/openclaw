@@ -173,8 +173,12 @@ export class TelegramPollingSession {
     }
     try {
       await bot.api.getUpdates({ offset: lastUpdateId + 1, limit: 1, timeout: 0 });
-    } catch {
+    } catch (err) {
       // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
+      // Log a warning so operators can diagnose duplicate-message issues (#46674).
+      this.opts.log(
+        `[telegram] failed to confirm persisted offset ${lastUpdateId}: ${formatErrorMessage(err)}; relying on dedup cache.`,
+      );
     }
   }
 
