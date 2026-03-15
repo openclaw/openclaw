@@ -42,6 +42,53 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+const LOGS_FOLLOW_CONNECT_RETRIES = 3;
+const LOGS_FOLLOW_RETRY_DELAY_MS = 1_500;
+
+/** Exported for tests. True when a short delay + reconnect may succeed (e.g. handshake still in flight). */
+export function isTransientGatewayConnectError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /gateway not connected/i.test(msg) ||
+    /gateway connect failed/i.test(msg) ||
+    /gateway closed/i.test(msg) ||
+    /gateway timeout/i.test(msg) ||
+    /ECONNREFUSED|ETIMEDOUT|EAI_AGAIN/i.test(msg) ||
+    /not reachable/i.test(msg) ||
+    /closed before connect/i.test(msg) ||
+    /handshake timeout/i.test(msg)
+  );
+}
+
+/**
+ * First logs.tail in --follow is prone to races (CLI slow vs gateway handshake window).
+ * Retry a few times only for transient connect errors.
+ */
+export async function fetchLogsWithConnectRetries(
+  opts: LogsCliOptions,
+  cursor: number | undefined,
+  showProgress: boolean,
+  followFirstFetch: boolean,
+): Promise<LogsTailPayload> {
+  const maxAttempts = followFirstFetch ? LOGS_FOLLOW_CONNECT_RETRIES : 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await fetchLogs(opts, cursor, showProgress);
+    } catch (err) {
+      const retryable =
+        followFirstFetch &&
+        attempt < maxAttempts &&
+        isTransientGatewayConnectError(err);
+      if (retryable) {
+        await delay(LOGS_FOLLOW_RETRY_DELAY_MS);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("fetchLogsWithConnectRetries: unreachable");
+}
+
 async function fetchLogs(
   opts: LogsCliOptions,
   cursor: number | undefined,
@@ -227,11 +274,17 @@ export function registerLogsCli(program: Command) {
       Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));
 
     while (true) {
-      let payload: LogsTailPayload;
       // Show progress spinner only on first fetch, not during follow polling
       const showProgress = first && !opts.follow;
+      const followFirstFetch = Boolean(opts.follow && first);
+      let payload: LogsTailPayload;
       try {
-        payload = await fetchLogs(opts, cursor, showProgress);
+        payload = await fetchLogsWithConnectRetries(
+          opts,
+          cursor,
+          showProgress,
+          followFirstFetch,
+        );
       } catch (err) {
         emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
         process.exit(1);

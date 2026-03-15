@@ -1,6 +1,10 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
-import { formatLogTimestamp } from "./logs-cli.js";
+import {
+  fetchLogsWithConnectRetries,
+  formatLogTimestamp,
+  isTransientGatewayConnectError,
+} from "./logs-cli.js";
 
 const callGatewayFromCli = vi.fn();
 
@@ -107,6 +111,68 @@ describe("logs cli", () => {
     await runLogsCli(["logs"]);
 
     expect(stderrWrites.join("")).toContain("output stdout closed");
+  });
+
+  describe("follow connect retries", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("isTransientGatewayConnectError matches gateway and handshake failures", () => {
+      expect(isTransientGatewayConnectError(new Error("gateway not connected"))).toBe(true);
+      expect(isTransientGatewayConnectError(new Error("gateway connect failed: x"))).toBe(true);
+      expect(
+        isTransientGatewayConnectError(new Error("gateway closed (1000 normal closure): no close reason")),
+      ).toBe(true);
+      expect(isTransientGatewayConnectError(new Error("gateway timeout after 5ms\nws://x"))).toBe(
+        true,
+      );
+      expect(
+        isTransientGatewayConnectError(new Error("closed before connect ... handshakeMs=3000")),
+      ).toBe(true);
+      expect(isTransientGatewayConnectError(new Error("handshake timeout conn=1"))).toBe(true);
+      expect(isTransientGatewayConnectError(new Error("ECONNREFUSED"))).toBe(true);
+      expect(isTransientGatewayConnectError(new Error("ETIMEDOUT"))).toBe(true);
+      expect(isTransientGatewayConnectError(new Error("EAI_AGAIN"))).toBe(true);
+      expect(isTransientGatewayConnectError(new Error("host not reachable"))).toBe(true);
+      expect(isTransientGatewayConnectError(new Error("wrong password"))).toBe(false);
+    });
+
+    it("fetchLogsWithConnectRetries succeeds after transient failures (follow first fetch only)", async () => {
+      vi.useFakeTimers();
+      callGatewayFromCli
+        .mockRejectedValueOnce(new Error("gateway not connected"))
+        .mockRejectedValueOnce(new Error("closed before connect"))
+        .mockResolvedValueOnce({ file: "/tmp/a.log", lines: ["line1"], cursor: 2 });
+
+      const p = fetchLogsWithConnectRetries({}, undefined, false, true);
+      await vi.advanceTimersByTimeAsync(1500);
+      await vi.advanceTimersByTimeAsync(1500);
+      const payload = await p;
+
+      expect(callGatewayFromCli).toHaveBeenCalledTimes(3);
+      expect(payload.lines).toEqual(["line1"]);
+      vi.useRealTimers();
+    });
+
+    it("fetchLogsWithConnectRetries does not retry when not follow-first", async () => {
+      callGatewayFromCli.mockRejectedValueOnce(new Error("gateway not connected"));
+      await expect(
+        fetchLogsWithConnectRetries({}, undefined, false, false),
+      ).rejects.toThrow("gateway not connected");
+      expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+    });
+
+    it("fetchLogsWithConnectRetries throws after max attempts", async () => {
+      vi.useFakeTimers();
+      callGatewayFromCli.mockRejectedValue(new Error("gateway not connected"));
+
+      const p = fetchLogsWithConnectRetries({}, undefined, false, true);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(p).rejects.toThrow("gateway not connected");
+      expect(callGatewayFromCli).toHaveBeenCalledTimes(3);
+      vi.useRealTimers();
+    });
   });
 
   describe("formatLogTimestamp", () => {
