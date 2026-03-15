@@ -233,10 +233,22 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
   res.end(body);
 }
 
-function serveResolvedIndexHtml(res: ServerResponse, body: string) {
+/** Prepend basePath to favicon/apple-touch-icon href values in link tags.
+ *  Handles both absolute (`/favicon.svg`) and Vite-built relative (`./favicon.svg`) paths. */
+function injectFaviconBasePath(html: string, basePath: string | null): string {
+  if (!basePath) {
+    return html;
+  }
+  return html.replace(
+    /\bhref="\.?\/((?:favicon|apple-touch-icon)[^"]*)"/g,
+    (_, p1) => `href="${basePath}/${p1}"`,
+  );
+}
+
+function serveResolvedIndexHtml(res: ServerResponse, body: string, basePath?: string | null) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(body);
+  res.end(injectFaviconBasePath(body, basePath ?? null));
 }
 
 function isExpectedSafePathError(error: unknown): boolean {
@@ -441,7 +453,7 @@ export function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
+        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"), basePath);
         return true;
       }
       serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
@@ -469,7 +481,7 @@ export function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
+      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"), basePath);
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);

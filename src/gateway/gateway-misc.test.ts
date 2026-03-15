@@ -151,6 +151,58 @@ describe("GatewayClient", () => {
       expect(res.statusCode).toBe(200);
     });
   });
+
+  it("rewrites favicon hrefs when basePath is set", async () => {
+    const indexHtml = [
+      "<html><head>",
+      '<link rel="icon" href="./favicon.svg" />',
+      '<link rel="icon" href="/favicon.svg" />',
+      '<link rel="icon" href="./favicon-32.png" />',
+      '<link rel="apple-touch-icon" href="./apple-touch-icon.png" />',
+      '<link rel="stylesheet" href="./assets/index.css" />',
+      "</head></html>",
+    ].join("\n");
+
+    await withControlUiRoot({ indexHtml }, async (tmp) => {
+      const { res } = makeControlUiResponse();
+      handleControlUiHttpRequest({ url: "/webchat/", method: "GET" } as IncomingMessage, res, {
+        root: { kind: "resolved", path: tmp },
+        basePath: "/webchat",
+      });
+      const body = (res.end as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+
+      expect(body).toContain('href="/webchat/favicon.svg"');
+      expect(body).toContain('href="/webchat/favicon-32.png"');
+      expect(body).toContain('href="/webchat/apple-touch-icon.png"');
+      // Non-favicon hrefs must remain unchanged
+      expect(body).toContain('href="./assets/index.css"');
+      // No leftover original relative favicon paths
+      expect(body).not.toContain('href="./favicon.svg"');
+      expect(body).not.toContain('href="/favicon.svg"');
+    });
+  });
+
+  it("leaves favicon hrefs unchanged when basePath is not set", async () => {
+    const indexHtml = [
+      "<html><head>",
+      '<link rel="icon" href="./favicon.svg" />',
+      '<link rel="icon" href="/favicon.svg" />',
+      '<link rel="apple-touch-icon" href="./apple-touch-icon.png" />',
+      "</head></html>",
+    ].join("\n");
+
+    await withControlUiRoot({ indexHtml }, async (tmp) => {
+      const { res } = makeControlUiResponse();
+      handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
+        root: { kind: "resolved", path: tmp },
+      });
+      const body = (res.end as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+
+      expect(body).toContain('href="./favicon.svg"');
+      expect(body).toContain('href="/favicon.svg"');
+      expect(body).toContain('href="./apple-touch-icon.png"');
+    });
+  });
 });
 
 type TestSocket = {
