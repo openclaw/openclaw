@@ -299,6 +299,11 @@ const mockPromptErrorThenSuccessfulAttempt = (errorMessage: string) => {
     );
 };
 
+const mockStandaloneHtmlPromptErrorThenSuccessfulAttempt = () => {
+  const htmlError = buildStandaloneHtmlError();
+  mockPromptErrorThenSuccessfulAttempt(htmlError);
+};
+
 const mockStandaloneHtmlErrorThenSuccessfulAttempt = () => {
   const htmlError = `<!DOCTYPE html>
 <html>
@@ -865,6 +870,53 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     );
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
+  });
+
+  it("retries standalone HTML prompt failures on the same profile before fallback", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      runEmbeddedAttemptMock.mockClear();
+      mockStandaloneHtmlPromptErrorThenSuccessfulAttempt();
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:standalone-html-prompt-retry",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig({ fallbacks: ["openai/mock-2"] }),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:standalone-html-prompt-retry",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      const authProfileIds = runEmbeddedAttemptMock.mock.calls.map((call) => {
+        const params = call[0] as { authProfileId?: string };
+        return params.authProfileId;
+      });
+      expect(authProfileIds).toEqual(["openai:p1", "openai:p1"]);
+      const usageStats = await readUsageStats(agentDir);
+      expect(typeof usageStats["openai:p1"]?.lastUsed).toBe("number");
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(usageStats["openai:p2"]?.lastUsed).toBe(2);
+      expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+      expect(computeBackoffMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialMs: 500,
+          maxMs: 4_000,
+          factor: 2,
+          jitter: 0.2,
+        }),
+        1,
+      );
+      expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+      expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
+    });
   });
 
   it("rotates on timeout without cooling down the timed-out profile", async () => {
