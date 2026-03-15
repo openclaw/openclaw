@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { buildHistoryContextFromEntries } from "../auto-reply/reply/history.js";
-import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { buildAgentMessageFromConversationEntries } from "./agent-prompt.js";
 
 describe("gateway agent prompt", () => {
@@ -31,7 +30,7 @@ describe("gateway agent prompt", () => {
           },
         },
       ]),
-    ).toBe("hi there");
+    ).toBe("hi\nthere");
   });
 
   it("uses history context when there is history", () => {
@@ -87,11 +86,29 @@ describe("gateway agent prompt", () => {
     ] as const;
 
     const expected = buildHistoryContextFromEntries({
-      entries: entries.map((e) => e.entry),
-      currentMessage: "User: next step",
-      formatEntry: (e) => `${e.sender}: ${extractTextFromChatContent(e.body) ?? ""}`,
+      entries: [
+        { sender: "Assistant", body: "prev" },
+        { sender: "User", body: "next\nstep" },
+      ],
+      currentMessage: "User: next\nstep",
+      formatEntry: (e) => `${e.sender}: ${e.body}`,
     });
 
     expect(buildAgentMessageFromConversationEntries([...entries])).toBe(expected);
+  });
+
+  it("preserves newline semantics instead of collapsing multiline body to spaces", () => {
+    expect(
+      buildAgentMessageFromConversationEntries([
+        { role: "user", entry: { sender: "User", body: "line 1\nline 2" } },
+      ]),
+    ).toBe("line 1\nline 2");
+  });
+
+  it("preserves leading indentation inside multiline body text", () => {
+    const body = "def foo():\n    return bar";
+    expect(
+      buildAgentMessageFromConversationEntries([{ role: "user", entry: { sender: "User", body } }]),
+    ).toBe(body);
   });
 });
