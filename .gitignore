@@ -121,6 +121,14 @@ dist/protocol.schema.json
 **/.settings/
 **/.gradle/
 
+# Private keys, certificates, and keystores (NEVER COMMIT)
+*.pem
+*.key
+*.keystore
+*.jks
+*.p12
+google-services.json
+
 # Synthing
 **/.stfolder/
 .dev-state
