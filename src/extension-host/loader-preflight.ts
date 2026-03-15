@@ -18,6 +18,27 @@ export type ExtensionHostLoaderPreflightOptions = {
   mode?: ExtensionHostPluginLoadMode;
 };
 
+export type ExtensionHostLoaderPreflightCacheHit = {
+  cacheHit: true;
+  registry: ReturnType<typeof getCachedExtensionHostRegistry> extends infer T
+    ? Exclude<T, undefined>
+    : never;
+};
+
+export type ExtensionHostLoaderPreflightReady = {
+  cacheHit: false;
+  env: NodeJS.ProcessEnv;
+  config: OpenClawConfig;
+  logger: PluginLogger;
+  validateOnly: boolean;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  cacheKey: string;
+};
+
+export type ExtensionHostLoaderPreflightResult =
+  | ExtensionHostLoaderPreflightCacheHit
+  | ExtensionHostLoaderPreflightReady;
+
 export function prepareExtensionHostLoaderPreflight(params: {
   options: ExtensionHostLoaderPreflightOptions;
   createDefaultLogger: () => PluginLogger;
@@ -27,7 +48,7 @@ export function prepareExtensionHostLoaderPreflight(params: {
   buildCacheKey?: typeof buildExtensionHostRegistryCacheKey;
   getCachedRegistry?: typeof getCachedExtensionHostRegistry;
   activateRegistry?: typeof activateExtensionHostRegistry;
-}) {
+}): ExtensionHostLoaderPreflightResult {
   const applyTestDefaults = params.applyTestDefaults ?? applyTestPluginDefaults;
   const normalizeConfig = params.normalizeConfig ?? normalizePluginsConfig;
   const buildCacheKey = params.buildCacheKey ?? buildExtensionHostRegistryCacheKey;
