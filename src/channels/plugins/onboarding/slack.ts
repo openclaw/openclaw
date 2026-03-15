@@ -110,7 +110,7 @@ async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Pr
       "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
       `Docs: ${formatDocsLink("/slack", "slack")}`,
       "",
-      "Manifest (JSON):",
+      "Manifest (JSON - copy without formatting):",
       manifest,
     ].join("\n"),
     "Slack socket mode tokens",
