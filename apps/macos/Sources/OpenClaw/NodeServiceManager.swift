@@ -6,7 +6,7 @@ enum NodeServiceManager {
 
     static func start() async -> String? {
         let result = await self.runServiceCommandResult(
-            ["node", "start"],
+            ["start"],
             timeout: 20,
             quiet: false)
         if let error = self.errorMessage(from: result, treatNotLoadedAsError: true) {
@@ -18,7 +18,7 @@ enum NodeServiceManager {
 
     static func stop() async -> String? {
         let result = await self.runServiceCommandResult(
-            ["node", "stop"],
+            ["stop"],
             timeout: 15,
             quiet: false)
         if let error = self.errorMessage(from: result, treatNotLoadedAsError: false) {
@@ -53,7 +53,7 @@ extension NodeServiceManager {
         quiet: Bool) async -> CommandResult
     {
         let command = CommandResolver.openclawCommand(
-            subcommand: "service",
+            subcommand: "node",
             extraArgs: self.withJsonFlag(args),
             // Service management must always run locally, even if remote mode is configured.
             configRoot: ["gateway": ["mode": "local"]])
