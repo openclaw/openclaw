@@ -453,6 +453,11 @@ export async function monitorWebInbox(options: {
       const reactorJid = userJid ?? (group ? undefined : remoteJid);
       // In groups, reactor identity is required — skip unattributable reactions.
       if (group && !reactorJid) continue;
+
+      // Deduplicate before expensive async JID resolution — dedupeKey uses only sync fields.
+      const dedupeKey = `${options.accountId}:${remoteJid}:${reactorJid ?? ""}:${emoji}:${key?.id ?? ""}`;
+      if (isRecentInboundMessage(dedupeKey)) continue;
+
       const senderE164 = reactorJid ? await resolveInboundJid(reactorJid) : null;
       // In DMs, `from` must be the E.164 of the conversation peer, not the reactor.
       // Mirror normalizeInboundMessage: drop the event if E.164 resolution fails rather than
@@ -460,10 +465,6 @@ export async function monitorWebInbox(options: {
       const resolvedFrom = group ? remoteJid : await resolveInboundJid(remoteJid);
       if (!resolvedFrom) continue;
       const from = resolvedFrom;
-
-      // Deduplicate reaction events (e.g. reconnect re-delivery).
-      const dedupeKey = `${options.accountId}:${remoteJid}:${reactorJid ?? ""}:${emoji}:${key?.id ?? ""}`;
-      if (isRecentInboundMessage(dedupeKey)) continue;
 
       recordChannelActivity({
         channel: "whatsapp",
@@ -487,7 +488,9 @@ export async function monitorWebInbox(options: {
         group,
         pushName: undefined,
         isFromMe,
-        messageTimestampMs: Date.now(),
+        // Reactions carry no timestamp from Baileys. Passing 0 ensures suppressPairingReply is
+        // always true, so unknown DM senders who react never trigger a pairing-challenge reply.
+        messageTimestampMs: 0,
         connectedAtMs,
         sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
         remoteJid,
