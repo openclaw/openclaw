@@ -174,16 +174,28 @@ function resolveExplicitModelWithRegistry(params: {
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (model) {
+    const resolvedModel = normalizeResolvedModel({
+      provider,
+      model: applyConfiguredProviderOverrides({
+        discoveredModel: model,
+        providerConfig,
+        modelId,
+      }),
+    });
+    // Forward-compat may define updated contextWindow/maxTokens for models
+    // already in the SDK registry (e.g. gpt-5.4 1M context vs stale 272K).
+    const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
+    if (forwardCompat) {
+      if (forwardCompat.contextWindow > resolvedModel.contextWindow) {
+        resolvedModel.contextWindow = forwardCompat.contextWindow;
+      }
+      if (forwardCompat.maxTokens > resolvedModel.maxTokens) {
+        resolvedModel.maxTokens = forwardCompat.maxTokens;
+      }
+    }
     return {
       kind: "resolved",
-      model: normalizeResolvedModel({
-        provider,
-        model: applyConfiguredProviderOverrides({
-          discoveredModel: model,
-          providerConfig,
-          modelId,
-        }),
-      }),
+      model: resolvedModel,
     };
   }
 
