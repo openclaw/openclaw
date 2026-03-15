@@ -1,0 +1,49 @@
+{
+  "cluster": [
+    {
+      "name": "node-a",
+      "host": "192.168.1.10",
+      "watchdogPort": 19000,
+      "secret": "CHANGE_TO_YOUR_RANDOM_SECRET_KEY_32CHARS"
+    },
+    {
+      "name": "node-b",
+      "host": "192.168.1.11",
+      "watchdogPort": 19000,
+      "secret": "CHANGE_TO_YOUR_RANDOM_SECRET_KEY_32CHARS"
+    },
+    {
+      "name": "node-c",
+      "host": "192.168.1.12",
+      "watchdogPort": 19000,
+      "secret": "CHANGE_TO_YOUR_RANDOM_SECRET_KEY_32CHARS"
+    }
+  ],
+  "openclaw": {
+    "command": "openclaw",
+    "args": ["gateway", "start"],
+    "workDir": "/home/deploy/.openclaw",
+    "installDir": "/home/deploy/.openclaw",
+    "dataDir": "/home/deploy/.openclaw/data",
+    "configFile": "/home/deploy/.openclaw/config.yaml",
+    "healthCheckUrl": "http://127.0.0.1:3000/health",
+    "healthCheckInterval": 10000,
+    "restartDelay": 5000,
+    "maxRestarts": 10,
+    "maxRestartWindow": 300000,
+    "repo": "https://github.com/openclaw/openclaw.git",
+    "branch": "main",
+    "npmRegistry": "https://registry.npmjs.org"
+  },
+  "monitor": {
+    "checkInterval": 15000,
+    "timeout": 10000,
+    "failThreshold": 3
+  },
+  "doctor": {
+    "maxDiagnosticTime": 120000,
+    "maxRepairAttempts": 3,
+    "cleanupThresholdMB": 500,
+    "backupBeforeRepair": true
+  }
+}

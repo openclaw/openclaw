@@ -1,0 +1,18 @@
+{
+  "Label": "Hive Monitor",
+  "Disabled": false,
+  "ProgramArguments": [
+    "/usr/local/bin/node",
+    "/opt/hive-resurrection/monitor.js",
+    "/opt/hive-resurrection/config.json",
+    "node-a"
+  ],
+  "RunAtLoad": true,
+  "KeepAlive": true,
+  "WorkingDirectory": "/opt/hive-resurrection",
+  "StandardOutPath": "/Users/deploy/.hive/logs/monitor.log",
+  "StandardErrorPath": "/Users/deploy/.hive/logs/monitor.err",
+  "EnvironmentVariables": {
+    "NODE_ENV": "production"
+  }
+}

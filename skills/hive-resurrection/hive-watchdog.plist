@@ -1,0 +1,18 @@
+{
+  "Label": "Hive Watchdog",
+  "Disabled": false,
+  "ProgramArguments": [
+    "/usr/local/bin/node",
+    "/opt/hive-resurrection/watchdog.js",
+    "/opt/hive-resurrection/config.json",
+    "node-a"
+  ],
+  "RunAtLoad": true,
+  "KeepAlive": true,
+  "WorkingDirectory": "/opt/hive-resurrection",
+  "StandardOutPath": "/Users/deploy/.hive/logs/watchdog.log",
+  "StandardErrorPath": "/Users/deploy/.hive/logs/watchdog.err",
+  "EnvironmentVariables": {
+    "NODE_ENV": "production"
+  }
+}
