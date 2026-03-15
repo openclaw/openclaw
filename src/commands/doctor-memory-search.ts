@@ -79,6 +79,10 @@ export async function noteMemorySearchHealth(
       );
       return;
     }
+    // Ollama runs locally and does not require an API key.
+    if (resolved.provider === "ollama") {
+      return;
+    }
     // Remote provider — check for API key
     if (hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir))) {
       return;
