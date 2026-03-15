@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { resolveNpmSpecMetadata, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
@@ -102,7 +103,116 @@ function expectedIntegrityForUpdate(
   return integrity;
 }
 
-async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
+function matchesPreviouslyValidatedArtifact(params: {
+  record: {
+    resolvedSpec?: string;
+    resolvedName?: string;
+    resolvedVersion?: string;
+    integrity?: string;
+    shasum?: string;
+  };
+  metadata: NpmSpecResolution;
+}): boolean {
+  if (params.record.resolvedSpec && params.metadata.resolvedSpec) {
+    return params.record.resolvedSpec === params.metadata.resolvedSpec;
+  }
+  if (
+    params.record.resolvedName &&
+    params.record.resolvedVersion &&
+    params.metadata.name &&
+    params.metadata.version
+  ) {
+    return (
+      params.record.resolvedName === params.metadata.name &&
+      params.record.resolvedVersion === params.metadata.version
+    );
+  }
+  if (params.record.integrity && params.metadata.integrity) {
+    return params.record.integrity === params.metadata.integrity;
+  }
+  if (params.record.shasum && params.metadata.shasum) {
+    return params.record.shasum === params.metadata.shasum;
+  }
+  return false;
+}
+
+function hasIntegrityDrift(params: {
+  expectedIntegrity?: string;
+  expectedShasum?: string;
+  metadata: NpmSpecResolution;
+}): boolean {
+  if (params.expectedIntegrity) {
+    if (!params.metadata.integrity) {
+      return true;
+    }
+    return params.expectedIntegrity !== params.metadata.integrity;
+  }
+  if (params.expectedShasum) {
+    if (!params.metadata.shasum) {
+      return true;
+    }
+    return params.expectedShasum !== params.metadata.shasum;
+  }
+  return false;
+}
+
+async function probeNpmUpdateTarget(params: {
+  spec: string;
+  currentVersion?: string;
+  expectedIntegrity?: string;
+  expectedShasum?: string;
+  validatedArtifact: {
+    resolvedSpec?: string;
+    resolvedName?: string;
+    resolvedVersion?: string;
+    integrity?: string;
+    shasum?: string;
+  };
+}): Promise<
+  { ok: true; unchanged: boolean; metadata: NpmSpecResolution } | { ok: false; error: string }
+> {
+  const probe = await resolveNpmSpecMetadata({
+    spec: params.spec,
+    timeoutMs: 120_000,
+  });
+  if (!probe.ok) {
+    return probe;
+  }
+
+  const sameVersion =
+    !!params.currentVersion &&
+    !!probe.metadata.version &&
+    params.currentVersion === probe.metadata.version;
+  if (!sameVersion) {
+    return { ok: true, unchanged: false, metadata: probe.metadata };
+  }
+
+  if (
+    !matchesPreviouslyValidatedArtifact({
+      record: params.validatedArtifact,
+      metadata: probe.metadata,
+    })
+  ) {
+    return { ok: true, unchanged: false, metadata: probe.metadata };
+  }
+
+  if (
+    hasIntegrityDrift({
+      expectedIntegrity: params.expectedIntegrity,
+      expectedShasum: params.expectedShasum,
+      metadata: probe.metadata,
+    })
+  ) {
+    return { ok: true, unchanged: false, metadata: probe.metadata };
+  }
+
+  return { ok: true, unchanged: true, metadata: probe.metadata };
+}
+
+async function readInstalledPackageManifest(dir: string): Promise<{
+  name?: string;
+  version?: string;
+}> {
   const manifestPath = path.join(dir, "package.json");
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
@@ -110,14 +220,17 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
     boundaryLabel: "installed plugin directory",
   });
   if (!opened.ok) {
-    return undefined;
+    return {};
   }
   try {
     const raw = fsSync.readFileSync(opened.fd, "utf-8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : undefined;
+    const parsed = JSON.parse(raw) as { name?: unknown; version?: unknown };
+    return {
+      name: typeof parsed.name === "string" ? parsed.name : undefined,
+      version: typeof parsed.version === "string" ? parsed.version : undefined,
+    };
   } catch {
-    return undefined;
+    return {};
   } finally {
     fsSync.closeSync(opened.fd);
   }
@@ -262,7 +375,41 @@ export async function updateNpmInstalledPlugins(params: {
       });
       continue;
     }
-    const currentVersion = await readInstalledPackageVersion(installPath);
+    const currentManifest = await readInstalledPackageManifest(installPath);
+    const currentVersion = currentManifest.version;
+    const expectedIntegrity = expectedIntegrityForUpdate(record.spec, record.integrity);
+    let versionProbe: Awaited<ReturnType<typeof probeNpmUpdateTarget>> | null = null;
+    try {
+      versionProbe = await probeNpmUpdateTarget({
+        spec: record.spec,
+        currentVersion,
+        expectedIntegrity,
+        expectedShasum: record.shasum,
+        validatedArtifact: {
+          resolvedSpec: record.resolvedSpec,
+          resolvedName: record.resolvedName ?? currentManifest.name,
+          resolvedVersion: record.resolvedVersion ?? currentVersion,
+          integrity: record.integrity,
+          shasum: record.shasum,
+        },
+      });
+    } catch (err) {
+      logger.warn?.(`Skipping pre-check for "${pluginId}": ${String(err)}`);
+    }
+    if (versionProbe && !versionProbe.ok) {
+      logger.warn?.(`Skipping pre-check for "${pluginId}": ${versionProbe.error}`);
+    }
+    if (versionProbe?.ok && versionProbe.unchanged) {
+      const version = versionProbe.metadata.version ?? currentVersion ?? "unknown";
+      outcomes.push({
+        pluginId,
+        status: "unchanged",
+        currentVersion: currentVersion ?? undefined,
+        nextVersion: versionProbe.metadata.version ?? undefined,
+        message: `${pluginId} already at ${version}.`,
+      });
+      continue;
+    }
 
     if (params.dryRun) {
       let probe: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
@@ -272,7 +419,7 @@ export async function updateNpmInstalledPlugins(params: {
           mode: "update",
           dryRun: true,
           expectedPluginId: pluginId,
-          expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
+          expectedIntegrity,
           onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
             pluginId,
             dryRun: true,
@@ -331,7 +478,7 @@ export async function updateNpmInstalledPlugins(params: {
         spec: record.spec,
         mode: "update",
         expectedPluginId: pluginId,
-        expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
+        expectedIntegrity,
         onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
           pluginId,
           dryRun: false,
@@ -362,7 +509,8 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
+    const nextVersion =
+      result.version ?? (await readInstalledPackageManifest(result.targetDir)).version ?? null;
     next = recordPluginInstall(next, {
       pluginId,
       source: "npm",

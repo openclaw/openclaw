@@ -200,6 +200,84 @@ async function findPackedArchiveInDir(cwd: string): Promise<string | undefined> 
   return sortedByMtime[0]?.name;
 }
 
+function parseJsonCandidate(raw: string): unknown {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const objectStart = trimmed.indexOf("{");
+  const arrayStart = trimmed.indexOf("[");
+  const starts = [objectStart, arrayStart].filter((value) => value >= 0).toSorted((a, b) => a - b);
+  const candidates = [trimmed, ...starts.map((index) => trimmed.slice(index))];
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+  }
+
+  return undefined;
+}
+
+export async function resolveNpmSpecMetadata(params: {
+  spec: string;
+  timeoutMs: number;
+  cwd?: string;
+}): Promise<
+  | {
+      ok: true;
+      metadata: NpmSpecResolution;
+    }
+  | {
+      ok: false;
+      error: string;
+    }
+> {
+  const res = await runCommandWithTimeout(
+    ["npm", "view", params.spec, "version", "dist.integrity", "dist.shasum", "name", "--json"],
+    {
+      timeoutMs: Math.max(params.timeoutMs, 60_000), // keep registry metadata probes above flaky short timeouts
+      cwd: params.cwd ?? os.tmpdir(),
+      env: {
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+      },
+    },
+  );
+  if (res.code !== 0) {
+    const raw = res.stderr.trim() || res.stdout.trim();
+    if (/E404|is not in this registry|No match found for version/i.test(raw)) {
+      return {
+        ok: false,
+        error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
+      };
+    }
+    return { ok: false, error: `npm view failed: ${raw}` };
+  }
+
+  const parsed = parseJsonCandidate(res.stdout || "");
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, error: "npm view returned invalid metadata" };
+  }
+
+  const rec = parsed as Record<string, unknown>;
+  const name = toOptionalString(rec.name);
+  const version = toOptionalString(rec.version);
+  return {
+    ok: true,
+    metadata: {
+      name,
+      version,
+      resolvedSpec: name && version ? `${name}@${version}` : undefined,
+      integrity: toOptionalString(rec["dist.integrity"]),
+      shasum: toOptionalString(rec["dist.shasum"]),
+      resolvedAt: new Date().toISOString(),
+    },
+  };
+}
+
 export async function packNpmSpecToArchive(params: {
   spec: string;
   timeoutMs: number;
