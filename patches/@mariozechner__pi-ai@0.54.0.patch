@@ -1,0 +1,22 @@
+--- a/dist/providers/amazon-bedrock.js
++++ b/dist/providers/amazon-bedrock.js
+@@ -343,6 +343,10 @@
+ }
+ function normalizeToolCallId(id) {
+     const sanitized = id.replace(/[^a-zA-Z0-9_-]/g, "_");
++    return sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
++}
++function normalizeToolName(name) {
++    const sanitized = (name || "unknown_tool").replace(/[^a-zA-Z0-9_-]/g, "_");
+     return sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
+ }
+ function convertMessages(context, model, cacheRetention) {
+@@ -385,7 +389,7 @@
+                             break;
+                         case "toolCall":
+                             contentBlocks.push({
+-                                toolUse: { toolUseId: c.id, name: c.name, input: c.arguments },
++                                toolUse: { toolUseId: c.id, name: normalizeToolName(c.name), input: c.arguments },
+                             });
+                             break;
+                         case "thinking":
