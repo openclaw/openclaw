@@ -38,6 +38,15 @@ const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
+/** Well-known macOS SIP-protected system directories whose binaries are
+ *  root-owned by design. */
+const MACOS_SYSTEM_DIRS = ["/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/"];
+
+function isMacOSSystemPath(filePath: string): boolean {
+  const normalized = path.resolve(filePath);
+  return MACOS_SYSTEM_DIRS.some((dir) => normalized.startsWith(dir));
+}
+
 export type SecretRefResolveCache = {
   resolvedByRefKey?: Map<string, Promise<unknown>>;
   filePayloadByProvider?: Map<string, Promise<unknown>>;
@@ -267,9 +276,18 @@ async function assertSecurePath(params: {
   if (process.platform !== "win32" && typeof process.getuid === "function" && stat.uid != null) {
     const uid = process.getuid();
     if (stat.uid !== uid) {
-      throw new Error(
-        `${params.label} must be owned by the current user (uid=${uid}): ${effectivePath}`,
-      );
+      // On macOS, system binaries in SIP-protected directories are owned by
+      // root:wheel. Rejecting them forces users into allowInsecurePath for
+      // standard tools like /usr/bin/security. Accept root ownership for
+      // well-known system paths — SIP provides stronger tamper protection
+      // than file-ownership checks.
+      const isRootOwnedSystemBinary =
+        process.platform === "darwin" && stat.uid === 0 && isMacOSSystemPath(effectivePath);
+      if (!isRootOwnedSystemBinary) {
+        throw new Error(
+          `${params.label} must be owned by the current user (uid=${uid}): ${effectivePath}`,
+        );
+      }
     }
   }
   return effectivePath;
