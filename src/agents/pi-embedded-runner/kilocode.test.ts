@@ -10,8 +10,8 @@ describe("kilocode cache-ttl eligibility", () => {
     expect(isCacheTtlEligibleProvider("kilocode", "anthropic/claude-sonnet-4")).toBe(true);
   });
 
-  it("is not eligible for non-anthropic models on kilocode", () => {
-    expect(isCacheTtlEligibleProvider("kilocode", "openai/gpt-5")).toBe(false);
+  it("is eligible for non-anthropic models on kilocode", () => {
+    expect(isCacheTtlEligibleProvider("kilocode", "openai/gpt-5")).toBe(true);
   });
 
   it("is case-insensitive for provider name", () => {
