@@ -1169,7 +1169,7 @@ function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   };
 }
 
-/** Shallow-merge two optional messageMeta bags (arrays are concatenated). */
+/** Shallow-merge two optional messageMeta bags (plugin-namespaced objects are deep-merged, arrays concatenated). */
 function mergeShallowMeta(
   a: Record<string, unknown> | undefined,
   b: Record<string, unknown> | undefined,
@@ -1184,8 +1184,28 @@ function mergeShallowMeta(
   for (const key of Object.keys(b)) {
     const aVal = a[key];
     const bVal = b[key];
-    if (Array.isArray(aVal) && Array.isArray(bVal)) {
-      merged[key] = [...aVal, ...bVal];
+    // Deep-merge plugin namespace objects
+    if (
+      aVal &&
+      bVal &&
+      typeof aVal === "object" &&
+      !Array.isArray(aVal) &&
+      typeof bVal === "object" &&
+      !Array.isArray(bVal)
+    ) {
+      const innerMerged: Record<string, unknown> = {
+        ...(aVal as Record<string, unknown>),
+      };
+      for (const innerKey of Object.keys(bVal as Record<string, unknown>)) {
+        const av = (aVal as Record<string, unknown>)[innerKey];
+        const bv = (bVal as Record<string, unknown>)[innerKey];
+        if (Array.isArray(av) && Array.isArray(bv)) {
+          innerMerged[innerKey] = [...av, ...bv];
+        } else {
+          innerMerged[innerKey] = bv;
+        }
+      }
+      merged[key] = innerMerged;
     } else {
       merged[key] = bVal;
     }

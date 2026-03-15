@@ -1366,10 +1366,12 @@ export type PluginHookBeforePromptBuildResult = {
   appendSystemContext?: string;
   /**
    * Generic key-value bag for plugins to attach metadata to the persisted
-   * user message. Keys are namespaced by plugin ID to avoid collisions.
+   * user message. Top-level keys are namespaced by plugin ID (e.g.
+   * `"memory-lancedb"`) so each plugin's data is isolated from others.
    *
-   * Standard key: `displayStripPatterns` — an array of `{ regex: string; flags?: string }`
-   * that tells the UI to strip matching text from the user bubble before display.
+   * Example: memory-lancedb stores `displayStripPatterns` under its own
+   * namespace: `{ "memory-lancedb": { displayStripPatterns: [...] } }`.
+   * The UI reads only `messageMeta["memory-lancedb"]` to apply strip patterns.
    */
   messageMeta?: Record<string, unknown>;
 };
