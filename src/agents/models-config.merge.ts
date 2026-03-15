@@ -180,7 +180,7 @@ function shouldPreserveExistingApiKey(params: {
 }): boolean {
   const { providerKey, existing, nextEntry, secretRefManagedProviders } = params;
   const nextApiKey = typeof nextEntry.apiKey === "string" ? nextEntry.apiKey : "";
-  if (nextApiKey && isNonSecretApiKeyMarker(nextApiKey)) {
+  if (nextApiKey) {
     return false;
   }
   return (
