@@ -38,6 +38,7 @@ vi.mock("./runtime.js", () => ({
 }));
 
 import {
+  detectFileType,
   downloadImageFeishu,
   downloadMessageResourceFeishu,
   sanitizeFileNameForUpload,
@@ -541,13 +542,11 @@ describe("downloadMessageResourceFeishu", () => {
 
 describe("detectFileType", () => {
   it("detects opus audio files", () => {
-    const { detectFileType } = require("./media.js");
     expect(detectFileType("voice.opus")).toBe("opus");
     expect(detectFileType("voice.ogg")).toBe("opus");
   });
 
   it("detects common audio formats as opus (Issue #37868)", () => {
-    const { detectFileType } = require("./media.js");
     expect(detectFileType("voice.mp3")).toBe("opus");
     expect(detectFileType("voice.wav")).toBe("opus");
     expect(detectFileType("voice.m4a")).toBe("opus");
@@ -557,14 +556,12 @@ describe("detectFileType", () => {
   });
 
   it("detects video files as mp4", () => {
-    const { detectFileType } = require("./media.js");
     expect(detectFileType("video.mp4")).toBe("mp4");
     expect(detectFileType("video.mov")).toBe("mp4");
     expect(detectFileType("video.avi")).toBe("mp4");
   });
 
   it("detects document files", () => {
-    const { detectFileType } = require("./media.js");
     expect(detectFileType("document.pdf")).toBe("pdf");
     expect(detectFileType("document.doc")).toBe("doc");
     expect(detectFileType("document.docx")).toBe("doc");
@@ -575,14 +572,12 @@ describe("detectFileType", () => {
   });
 
   it("falls back to stream for unknown extensions", () => {
-    const { detectFileType } = require("./media.js");
     expect(detectFileType("file.zip")).toBe("stream");
     expect(detectFileType("file.txt")).toBe("stream");
     expect(detectFileType("file")).toBe("stream");
   });
 
   it("handles case-insensitive extensions", () => {
-    const { detectFileType } = require("./media.js");
     expect(detectFileType("VOICE.MP3")).toBe("opus");
     expect(detectFileType("Video.MP4")).toBe("mp4");
     expect(detectFileType("DOC.PDF")).toBe("pdf");
@@ -623,7 +618,7 @@ describe("sendMediaFeishu - audio edge cases", () => {
       cfg: mockCfg,
       to: "user@example.com",
       mediaBuffer: audioBuffer,
-      fileName: null, // No extension → can't detect as audio
+      fileName: undefined, // No extension → can't detect as audio
     });
 
     expect(warnSpy).toHaveBeenCalledWith(
@@ -670,7 +665,7 @@ describe("sendMediaFeishu - audio edge cases", () => {
       cfg: mockCfg,
       to: "user@example.com",
       mediaBuffer: emptyBuffer,
-      fileName: null,
+      fileName: undefined,
     });
 
     // No warning for empty buffer (mediaBuffer.length === 0)
