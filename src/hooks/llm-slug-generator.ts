@@ -12,7 +12,7 @@ import {
   resolveAgentEffectiveModelPrimary,
 } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from "../agents/defaults.js";
-import { parseModelRef } from "../agents/model-selection.js";
+import { normalizeCliProviderForEmbedded, parseModelRef } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -47,7 +47,11 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     // Resolve model from agent config instead of using hardcoded defaults
     const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, agentId);
     const parsed = modelRef ? parseModelRef(modelRef, DEFAULT_PROVIDER) : null;
-    const provider = parsed?.provider ?? DEFAULT_PROVIDER;
+    // CLI-only providers (codex-cli, claude-cli) route through the CLI runner
+    // for interactive sessions but need their API-backed equivalent in embedded
+    // helper paths.
+    const rawProvider = parsed?.provider ?? DEFAULT_PROVIDER;
+    const provider = normalizeCliProviderForEmbedded(rawProvider);
     const model = parsed?.model ?? DEFAULT_MODEL;
 
     const result = await runEmbeddedPiAgent({
