@@ -258,6 +258,8 @@ function extractSubagentOutputText(message: unknown): string {
   }
   const role = (message as { role?: unknown }).role;
   const content = (message as { content?: unknown }).content;
+
+  // Try assistant role first
   if (role === "assistant") {
     const assistantText = extractAssistantText(message);
     if (assistantText) {
@@ -271,10 +273,14 @@ function extractSubagentOutputText(message: unknown): string {
     }
     return "";
   }
+
+  // Try toolResult or tool role
   if (role === "toolResult" || role === "tool") {
     return extractToolResultText((message as ToolResultMessage).content);
   }
-  if (role == null) {
+
+  // Try user role as fallback - subagent results might be in user messages
+  if (role === "user") {
     if (typeof content === "string") {
       return sanitizeTextContent(content);
     }
@@ -282,6 +288,30 @@ function extractSubagentOutputText(message: unknown): string {
       return extractInlineTextContent(content);
     }
   }
+
+  // Handle null/undefined role - check all possible content fields
+  if (role == null) {
+    // Try all possible content fields
+    if (typeof content === "string") {
+      return sanitizeTextContent(content);
+    }
+    if (Array.isArray(content)) {
+      return extractInlineTextContent(content);
+    }
+
+    // Check for raw result field at message root
+    const rawResult = (message as { result?: unknown }).result;
+    if (typeof rawResult === "string") {
+      return sanitizeTextContent(rawResult);
+    }
+
+    // Check for output field at message root
+    const output = (message as { output?: unknown }).output;
+    if (typeof output === "string") {
+      return sanitizeTextContent(output);
+    }
+  }
+
   return "";
 }
 
