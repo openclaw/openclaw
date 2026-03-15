@@ -226,6 +226,19 @@ describe("resolveAnnounceTarget", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("derives thread announce target from channel-thread session key", async () => {
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:telegram:thread:-1003173393372:463",
+      displayKey: "agent:main:telegram:thread:-1003173393372:463",
+    });
+    expect(target).toEqual({
+      channel: "telegram",
+      to: "group:-1003173393372",
+      threadId: "463",
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("hydrates WhatsApp accountId from sessions.list when available", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
@@ -253,6 +266,35 @@ describe("resolveAnnounceTarget", () => {
     const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
     expect(first).toBeDefined();
     expect(first?.method).toBe("sessions.list");
+  });
+
+  it("hydrates announce threadId from deliveryContext for thread sessions", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:thread:-1003173393372:463",
+          deliveryContext: {
+            channel: "telegram",
+            to: "group:-1003173393372",
+            accountId: "bot-main",
+            threadId: 463,
+          },
+          lastThreadId: 463,
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:thread:-1003173393372:463",
+      displayKey: "agent:main:thread:-1003173393372:463",
+    });
+
+    expect(target).toEqual({
+      channel: "telegram",
+      to: "group:-1003173393372",
+      accountId: "bot-main",
+      threadId: "463",
+    });
   });
 });
 
