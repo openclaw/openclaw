@@ -265,7 +265,9 @@ describe("web monitor inbox", () => {
             remoteJid: "999@s.whatsapp.net",
           },
           message: { conversation: "old message" },
-          messageTimestamp: nowSeconds(),
+          // Use a timestamp well outside the recency grace window (> 60 s before
+          // connection) so the append-recency filter correctly skips auto-reply.
+          messageTimestamp: nowSeconds(-120_000),
           pushName: "History Sender",
         },
       ],
