@@ -700,6 +700,27 @@ describe("monitorDiscordProvider", () => {
     expect(eventQueue?.listenerTimeout).toBe(120_000);
   });
 
+  it("keeps the application id as botUserId when fetchUser(@me) fails", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const runtime = baseRuntime();
+    clientFetchUserMock.mockRejectedValueOnce(new Error("fetch failed"));
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime,
+    });
+
+    const params = getFirstDiscordMessageHandlerParams<{
+      botUserId?: string;
+      botUserName?: string;
+    }>();
+    expect(params?.botUserId).toBe("app-1");
+    expect(params?.botUserName).toBeUndefined();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "discord: failed to fetch bot identity: Error: fetch failed",
+    );
+  });
+
   it("forwards custom eventQueue config from discord config to Carbon Client", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 
