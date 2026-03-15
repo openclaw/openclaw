@@ -19,6 +19,9 @@ export function formatRunStatus(entry: SubagentRunRecord) {
   if (!entry.endedAt) {
     return "running";
   }
+  if (!entry.cleanupCompletedAt) {
+    return "completing";
+  }
   const status = entry.outcome?.status ?? "done";
   return status === "ok" ? "done" : status;
 }
