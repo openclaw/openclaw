@@ -43,7 +43,7 @@ vi.mock("./client.js", () => ({
 const { probeGateway } = await import("./probe.js");
 
 describe("probeGateway", () => {
-  it("connects with operator.read scope", async () => {
+  it("connects with operator.read scope and strips identity when explicit token provided", async () => {
     const result = await probeGateway({
       url: "ws://127.0.0.1:18789",
       auth: { token: "secret" },
@@ -58,6 +58,16 @@ describe("probeGateway", () => {
       "system-presence",
       "config.get",
     ]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("keeps device identity enabled for local probes when no explicit auth is provided", async () => {
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+    });
+
+    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
     expect(result.ok).toBe(true);
   });
 
@@ -80,5 +90,6 @@ describe("probeGateway", () => {
 
     expect(result.ok).toBe(true);
     expect(gatewayClientState.requests).toEqual([]);
+    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
   });
 });
