@@ -381,6 +381,14 @@ Then in Chrome:
 2. Enable remote debugging
 3. Keep Chrome running and approve the connection prompt when OpenClaw attaches
 
+Important:
+
+- Do **not** use `--remote-debugging-port` for this flow. On modern Chrome,
+  default-profile launches reject that mode unless you use a separate
+  non-default user data directory, which defeats signed-in session reuse.
+- `driver: "existing-session"` uses Chrome DevTools MCP attach (consent prompt),
+  not the legacy raw-CDP port workflow.
+
 Live attach smoke test:
 
 ```bash
