@@ -68,10 +68,14 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
   const forcedUsageStreaming = compat?.supportsUsageInStreaming === true;
   const targetStrictMode = compat?.supportsStrictMode ?? false;
+  // Non-native endpoints are unlikely to support reasoning_effort; default off
+  // unless the user explicitly opted in (#33272).
+  const targetReasoningEffort = compat?.supportsReasoningEffort ?? false;
   if (
     compat?.supportsDeveloperRole !== undefined &&
     compat?.supportsUsageInStreaming !== undefined &&
-    compat?.supportsStrictMode !== undefined
+    compat?.supportsStrictMode !== undefined &&
+    compat?.supportsReasoningEffort !== undefined
   ) {
     return model;
   }
@@ -85,11 +89,13 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
           supportsDeveloperRole: forcedDeveloperRole || false,
           supportsUsageInStreaming: forcedUsageStreaming || false,
           supportsStrictMode: targetStrictMode,
+          supportsReasoningEffort: targetReasoningEffort,
         }
       : {
           supportsDeveloperRole: false,
           supportsUsageInStreaming: false,
           supportsStrictMode: false,
+          supportsReasoningEffort: false,
         },
   } as typeof model;
 }
