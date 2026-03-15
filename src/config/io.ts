@@ -16,7 +16,7 @@ import {
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
-import { maintainConfigBackups } from "./backup-rotation.js";
+import { CONFIG_BACKUP_COUNT, maintainConfigBackups } from "./backup-rotation.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
@@ -1556,4 +1556,37 @@ export async function writeConfigFile(
   }
   // When we had no runtime snapshot, keep callers reading from disk/cache so external/manual
   // edits to openclaw.json remain visible (no stale snapshot).
+}
+
+/**
+ * Iterate through config backup files (.bak, .bak.1, …) and return the first
+ * snapshot that passes the full config read pipeline ($include resolution,
+ * ${ENV} substitution, and Zod validation).
+ * Returns `null` when no usable backup exists.
+ */
+export async function tryLoadValidConfigBackup(
+  configPath: string,
+): Promise<{ snapshot: ConfigFileSnapshot; backupPath: string } | null> {
+  const backupBase = `${configPath}.bak`;
+  const candidates = [backupBase];
+  for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
+    candidates.push(`${backupBase}.${i}`);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) {
+        continue;
+      }
+      const io = createConfigIO({ configPath: candidate });
+      const snapshot = await io.readConfigFileSnapshot();
+      if (snapshot.exists && snapshot.valid) {
+        return { snapshot, backupPath: candidate };
+      }
+    } catch {
+      // Backup unreadable or invalid — try the next one.
+    }
+  }
+
+  return null;
 }
