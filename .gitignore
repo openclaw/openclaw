@@ -124,3 +124,16 @@ dist/protocol.schema.json
 .env.bak.*
 docker-compose.yml.bak.*
 .gitignore.bak.*
+*.pyo
+*.swp
+*.tmp
+dashboard-web/__pycache__/
+dashboard-web/*.pyc
+dashboard-web/server.py.fix-*
+dashboard-web/stable/server.py.current-ok
+dashboard-web/stable/server.py.current-ok.link
+dashboard-web/stable/server.py.ok-safe-rollback-*
+dashboard-web/stable/server.py.live-before-*
+dashboard-web/stable/server.py.broken-*
+dashboard-web/stable/server.py.diff-*
+dashboard-web/stable/rollback-server-py-async.sh
