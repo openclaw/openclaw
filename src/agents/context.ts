@@ -205,7 +205,15 @@ export function lookupContextTokens(modelId?: string): number | undefined {
   }
   // Best-effort: kick off loading, but don't block.
   void ensureContextWindowCacheLoaded();
-  return MODEL_CACHE.get(modelId);
+  const direct = MODEL_CACHE.get(modelId);
+  if (direct !== undefined) {
+    return direct;
+  }
+  // Fallback: strip -1m suffix (Anthropic 1M context convention) and retry
+  if (modelId.endsWith("-1m")) {
+    return MODEL_CACHE.get(modelId.replace(/-1m$/, ""));
+  }
+  return undefined;
 }
 
 if (!shouldSkipEagerContextWindowWarmup()) {
