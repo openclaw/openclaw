@@ -179,10 +179,16 @@ export function resolveExecHostApprovalContext(params: {
     security: params.security,
     ask: params.ask,
   });
-  const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  // An explicit ask=off policy in exec-approvals.json must be able to suppress
-  // prompts even when tool/runtime defaults are stricter (for example on-miss).
-  const hostAsk = approvals.agent.ask === "off" ? "off" : maxAsk(params.ask, approvals.agent.ask);
+  const trustWindowActive = approvals.trustWindowActive;
+  // Trust window bypasses host-level security/ask caps.
+  const hostSecurity = trustWindowActive
+    ? approvals.agent.security
+    : minSecurity(params.security, approvals.agent.security);
+  const hostAsk = trustWindowActive
+    ? approvals.agent.ask
+    : approvals.agent.ask === "off"
+      ? "off"
+      : maxAsk(params.ask, approvals.agent.ask);
   const askFallback = approvals.agent.askFallback;
   if (hostSecurity === "deny") {
     throw new Error(`exec denied: host=${params.host} security=deny`);

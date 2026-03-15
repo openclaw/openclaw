@@ -3030,6 +3030,60 @@ public struct ExecApprovalsNodeSetParams: Codable, Sendable {
     }
 }
 
+public struct ExecApprovalsTrustStatusParams: Codable, Sendable {
+    public let agentid: String?
+
+    public init(
+        agentid: String?)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
+
+public struct ExecApprovalsTrustParams: Codable, Sendable {
+    public let agentid: String?
+    public let minutes: Int
+    public let force: Bool?
+
+    public init(
+        agentid: String?,
+        minutes: Int,
+        force: Bool?)
+    {
+        self.agentid = agentid
+        self.minutes = minutes
+        self.force = force
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case minutes
+        case force
+    }
+}
+
+public struct ExecApprovalsUntrustParams: Codable, Sendable {
+    public let agentid: String?
+    public let keepaudit: Bool?
+
+    public init(
+        agentid: String?,
+        keepaudit: Bool?)
+    {
+        self.agentid = agentid
+        self.keepaudit = keepaudit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case keepaudit = "keepAudit"
+    }
+}
+
 public struct ExecApprovalsSnapshot: Codable, Sendable {
     public let path: String
     public let exists: Bool

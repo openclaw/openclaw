@@ -1,12 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import {
+  type ExecHost,
+  getTrustWindow,
+  isTrustWindowActive,
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
+} from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
+import { tryAppendTrustAuditEntry } from "../infra/trust-audit.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { markBackgrounded } from "./bash-process-registry.js";
@@ -332,6 +340,7 @@ export function createExecTool(
       if (bypassApprovals) {
         ask = "off";
       }
+      const trustWindowActiveAtStart = isTrustWindowActive(getTrustWindow(agentId));
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
       if (
@@ -558,6 +567,19 @@ export function createExecTool(
             if (yieldTimer) {
               clearTimeout(yieldTimer);
             }
+            if (
+              host === "gateway" &&
+              trustWindowActiveAtStart &&
+              isTrustWindowActive(getTrustWindow(agentId))
+            ) {
+              tryAppendTrustAuditEntry({
+                agentId,
+                command: params.command,
+                exitCode: outcome.exitCode,
+                durationMs: outcome.durationMs,
+                logLabel: "gateway",
+              });
+            }
             if (yielded || run.session.backgrounded) {
               return;
             }
@@ -582,6 +604,18 @@ export function createExecTool(
             });
           })
           .catch((err) => {
+            if (
+              host === "gateway" &&
+              trustWindowActiveAtStart &&
+              isTrustWindowActive(getTrustWindow(agentId))
+            ) {
+              tryAppendTrustAuditEntry({
+                agentId,
+                command: params.command,
+                exitCode: null,
+                logLabel: "gateway error",
+              });
+            }
             if (yieldTimer) {
               clearTimeout(yieldTimer);
             }
