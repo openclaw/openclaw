@@ -1,4 +1,5 @@
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+export type EffectiveThinkLevel = ThinkLevel | "on";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
@@ -13,11 +14,38 @@ export type ThinkingCatalogEntry = {
 
 const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 
+export type ThinkingCapabilities = {
+  binaryThinking?: boolean;
+  nativeAdaptive?: boolean;
+  reasoningSupported?: boolean;
+};
+
+export type EffectiveThinkingResolution =
+  | {
+      requested: ThinkLevel;
+      effective: EffectiveThinkLevel;
+      status: "exact";
+    }
+  | {
+      requested: ThinkLevel;
+      effective: EffectiveThinkLevel;
+      status: "downgraded";
+      reason: "adaptive_best_effort" | "binary_enabled";
+    }
+  | {
+      requested: ThinkLevel;
+      status: "unsupported";
+      reason: "reasoning_unsupported";
+    };
+
 function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
     return "";
   }
   const normalized = provider.trim().toLowerCase();
+  if (normalized === "bedrock" || normalized === "aws-bedrock") {
+    return "amazon-bedrock";
+  }
   if (normalized === "z.ai" || normalized === "z-ai") {
     return "zai";
   }
@@ -29,6 +57,17 @@ function normalizeProviderId(provider?: string | null): string {
 
 export function isBinaryThinkingProvider(provider?: string | null): boolean {
   return normalizeProviderId(provider) === "zai";
+}
+
+export function supportsNativeAdaptiveThinking(
+  provider?: string | null,
+  model?: string | null,
+): boolean {
+  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedModel = model?.trim().toLowerCase() ?? "";
+  const isAnthropicFamily =
+    normalizedProvider === "anthropic" || normalizedProvider === "amazon-bedrock";
+  return isAnthropicFamily && /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.:])/i.test(normalizedModel);
 }
 
 export const XHIGH_MODEL_REFS = [
@@ -118,6 +157,34 @@ export function listThinkingLevelLabels(provider?: string | null, model?: string
   return listThinkingLevels(provider, model);
 }
 
+export function resolveThinkingCapabilities(params?: {
+  provider?: string | null;
+  model?: string | null;
+  binaryThinking?: boolean;
+  nativeAdaptive?: boolean;
+  reasoningSupported?: boolean;
+}): ThinkingCapabilities {
+  const capabilities: ThinkingCapabilities = {};
+  const binaryThinking =
+    params?.binaryThinking ??
+    (params?.provider ? isBinaryThinkingProvider(params.provider) : undefined);
+  if (binaryThinking !== undefined) {
+    capabilities.binaryThinking = binaryThinking;
+  }
+  const nativeAdaptive =
+    params?.nativeAdaptive ??
+    (params?.provider || params?.model
+      ? supportsNativeAdaptiveThinking(params?.provider, params?.model)
+      : undefined);
+  if (params?.nativeAdaptive !== undefined || nativeAdaptive === true) {
+    capabilities.nativeAdaptive = nativeAdaptive;
+  }
+  if (params?.reasoningSupported !== undefined) {
+    capabilities.reasoningSupported = params.reasoningSupported;
+  }
+  return capabilities;
+}
+
 export function formatThinkingLevels(
   provider?: string | null,
   model?: string | null,
@@ -162,6 +229,71 @@ export function resolveThinkingDefaultForModel(params: {
     return "low";
   }
   return "off";
+}
+
+export function resolveEffectiveThinking(params: {
+  requested: ThinkLevel;
+  capabilities?: ThinkingCapabilities;
+}): EffectiveThinkingResolution {
+  const capabilities = params.capabilities ?? {};
+
+  if (params.requested === "off") {
+    return { requested: "off", effective: "off", status: "exact" };
+  }
+
+  if (capabilities.reasoningSupported === false) {
+    return {
+      requested: params.requested,
+      status: "unsupported",
+      reason: "reasoning_unsupported",
+    };
+  }
+
+  if (capabilities.binaryThinking) {
+    return {
+      requested: params.requested,
+      effective: "on",
+      status: "downgraded",
+      reason: "binary_enabled",
+    };
+  }
+
+  if (params.requested === "adaptive") {
+    if (capabilities.nativeAdaptive) {
+      return {
+        requested: "adaptive",
+        effective: "adaptive",
+        status: "exact",
+      };
+    }
+    return {
+      requested: "adaptive",
+      effective: "medium",
+      status: "downgraded",
+      reason: "adaptive_best_effort",
+    };
+  }
+
+  return {
+    requested: params.requested,
+    effective: params.requested,
+    status: "exact",
+  };
+}
+
+export function formatEffectiveThinkingResolution(
+  resolution: EffectiveThinkingResolution,
+): string | undefined {
+  if (resolution.status === "unsupported") {
+    return "Reasoning is not supported for this model.";
+  }
+  if (resolution.status === "downgraded" && resolution.reason === "adaptive_best_effort") {
+    return `Adaptive thinking is not supported natively; using ${resolution.effective} instead.`;
+  }
+  if (resolution.status === "downgraded" && resolution.reason === "binary_enabled") {
+    return "Binary thinking only supports off/on; using on instead.";
+  }
+  return undefined;
 }
 
 type OnOffFullLevel = "off" | "on" | "full";

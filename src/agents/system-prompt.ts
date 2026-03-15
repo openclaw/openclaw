@@ -1,5 +1,5 @@
 import { createHmac, createHash } from "node:crypto";
-import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
+import { type ReasoningLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -166,6 +166,25 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
     return [];
   }
   return ["## Voice (TTS)", hint, ""];
+}
+
+function buildAdaptiveThinkingSection(params: { availableTools: Set<string> }) {
+  if (!params.availableTools.has("set_thinking_level")) {
+    return [];
+  }
+  return [
+    "## Adaptive Thinking",
+    "Raise thinking with `set_thinking_level` when the next step requires deeper reasoning to choose the right action, not just to carry out an already-made decision.",
+    '- Prefer `set_thinking_level` with `scope: "turn"` for one-off hard work or current run adjustments; do this early instead of waiting until you are stuck.',
+    '- Use `scope: "session"` only for lasting or user-requested changes.',
+    "Raise thinking for diagnosis, decision-making, or ambiguity: complex debugging, merge/conflict resolution, multi-file refactors, prompt or policy changes, ambiguous requirements, root-cause investigation, or tasks that require both code changes and verification.",
+    "Keep default or low thinking for straightforward commands, simple lookups, and other mechanical work.",
+    "Lower thinking once the hard part is resolved and the next step is mostly execution of an already-made decision.",
+    "Lower for execution, cleanup, or routine verification: after root cause is identified and only implementation remains, after conflicts are resolved and only cleanup remains, after the key design choice is made and only straightforward edits remain, or when work shifts to routine test reruns, formatting, or status checks.",
+    "Do not keep high thinking just because the task started hard; lower it once the remaining work is routine.",
+    "Avoid repeated or thrashing thinking-level changes within the same flow; one deliberate downgrade after the difficult phase ends is fine, but do not bounce levels back and forth without a real task change.",
+    "",
+  ];
 }
 
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
@@ -407,6 +426,7 @@ export function buildAgentSystemPrompt(params: {
     availableTools,
     citationsMode: params.memoryCitationsMode,
   });
+  const adaptiveThinkingSection = buildAdaptiveThinkingSection({ availableTools });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     isMinimal,
@@ -478,6 +498,7 @@ export function buildAgentSystemPrompt(params: {
     "- openclaw gateway restart",
     "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
     "",
+    ...adaptiveThinkingSection,
     ...skillsSection,
     ...memorySection,
     // Skip self-update for subagent/none modes

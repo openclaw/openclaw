@@ -331,6 +331,42 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.reasoning).toEqual({ effort: "low" });
   });
 
+  it("re-reads thinking level for later OpenRouter calls in the same run", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const thinkingState: { current: "off" | "high" } = { current: "off" };
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "openrouter",
+      "openai/gpt-5",
+      undefined,
+      (() => thinkingState.current) as unknown as Parameters<typeof applyExtraParamsToAgent>[5],
+    );
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openai/gpt-5",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+    thinkingState.current = "high";
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+    expect(payloads[1]?.reasoning).toEqual({ effort: "high" });
+  });
+
   it("removes legacy reasoning_effort and keeps reasoning unset when thinkingLevel is off", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -696,6 +732,42 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.thinking).toEqual({ type: "enabled" });
     expect(payloads[0]?.tool_choice).toBe("auto");
+  });
+
+  it("re-reads thinking level for later Moonshot calls in the same run", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const thinkingState: { current: "off" | "high" } = { current: "off" };
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "moonshot",
+      "kimi-k2.5",
+      undefined,
+      (() => thinkingState.current) as unknown as Parameters<typeof applyExtraParamsToAgent>[5],
+    );
+
+    const model = {
+      api: "openai-completions",
+      provider: "moonshot",
+      id: "kimi-k2.5",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+    thinkingState.current = "high";
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
+    expect(payloads[1]?.thinking).toEqual({ type: "enabled" });
   });
 
   it("disables thinking instead of broadening pinned Moonshot tool_choice", () => {

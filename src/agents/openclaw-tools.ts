@@ -1,3 +1,4 @@
+import { supportsNativeAdaptiveThinking, type ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
@@ -22,6 +23,7 @@ import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
+import { createSetThinkingLevelTool } from "./tools/set-thinking-level-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
@@ -69,6 +71,12 @@ export function createOpenClawTools(
     requesterSenderId?: string | null;
     /** Whether the requesting sender is an owner. */
     senderIsOwner?: boolean;
+    provider?: string;
+    modelId?: string;
+    reasoningSupported?: boolean;
+    getRequestedThinkingLevel?: () => ThinkLevel | undefined;
+    setRequestedThinkingLevelForScope?: (scope: "turn" | "session", level: ThinkLevel) => void;
+    applyEffectiveThinkingLevel?: (level: ThinkLevel) => void;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
     /**
@@ -82,6 +90,10 @@ export function createOpenClawTools(
     onYield?: (message: string) => Promise<void> | void;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
+  const supportsNativeAdaptiveThinkingForModel = supportsNativeAdaptiveThinking(
+    options?.provider,
+    options?.modelId,
+  );
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const spawnWorkspaceDir = resolveWorkspaceRoot(
     options?.spawnWorkspaceDir ?? options?.workspaceDir,
@@ -210,6 +222,20 @@ export function createOpenClawTools(
       config: options?.config,
       sandboxed: options?.sandboxed,
     }),
+    ...(!supportsNativeAdaptiveThinkingForModel
+      ? [
+          createSetThinkingLevelTool({
+            agentSessionKey: options?.agentSessionKey,
+            config: options?.config,
+            provider: options?.provider,
+            modelId: options?.modelId,
+            reasoningSupported: options?.reasoningSupported,
+            getRequestedThinkingLevel: options?.getRequestedThinkingLevel,
+            setRequestedThinkingLevelForScope: options?.setRequestedThinkingLevelForScope,
+            applyEffectiveThinkingLevel: options?.applyEffectiveThinkingLevel,
+          }),
+        ]
+      : []),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),

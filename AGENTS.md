@@ -58,6 +58,7 @@
 ## Docs Linking (Mintlify)
 
 - Docs are hosted on Mintlify (docs.openclaw.ai).
+- Do not add planning/design scratch files under `docs/`; `docs/` is only for actual repository documentation.
 - Internal doc links in `docs/**/*.md`: root-relative, no `.md`/`.mdx` (example: `[Config](/configuration)`).
 - When working with documentation, read the mintlify skill.
 - For docs, UI copy, and picker lists, order services/providers alphabetically unless the section is explicitly describing runtime behavior (for example auto-detection or execution order).

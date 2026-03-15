@@ -59,6 +59,12 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
   }
 }
 
+function resolveThinkingLevel(
+  thinkingLevel?: ThinkLevel | (() => ThinkLevel | undefined),
+): ThinkLevel | undefined {
+  return typeof thinkingLevel === "function" ? thinkingLevel() : thinkingLevel;
+}
+
 export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -100,7 +106,7 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
 
 export function createOpenRouterWrapper(
   baseStreamFn: StreamFn | undefined,
-  thinkingLevel?: ThinkLevel,
+  thinkingLevel?: ThinkLevel | (() => ThinkLevel | undefined),
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -112,7 +118,7 @@ export function createOpenRouterWrapper(
         ...options?.headers,
       },
       onPayload: (payload) => {
-        normalizeProxyReasoningPayload(payload, thinkingLevel);
+        normalizeProxyReasoningPayload(payload, resolveThinkingLevel(thinkingLevel));
         return onPayload?.(payload, model);
       },
     });
@@ -125,7 +131,7 @@ export function isProxyReasoningUnsupported(modelId: string): boolean {
 
 export function createKilocodeWrapper(
   baseStreamFn: StreamFn | undefined,
-  thinkingLevel?: ThinkLevel,
+  thinkingLevel?: ThinkLevel | (() => ThinkLevel | undefined),
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -137,7 +143,7 @@ export function createKilocodeWrapper(
         ...resolveKilocodeAppHeaders(),
       },
       onPayload: (payload) => {
-        normalizeProxyReasoningPayload(payload, thinkingLevel);
+        normalizeProxyReasoningPayload(payload, resolveThinkingLevel(thinkingLevel));
         return onPayload?.(payload, model);
       },
     });
