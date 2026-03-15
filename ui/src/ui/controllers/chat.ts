@@ -41,6 +41,7 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatStreamLastActivityAt: number | null;
   lastError: string | null;
 };
 
@@ -196,6 +197,7 @@ export async function sendChatMessage(
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
+  state.chatStreamLastActivityAt = now;
 
   // Convert attachments to API format
   const apiAttachments = hasAttachments
@@ -228,6 +230,7 @@ export async function sendChatMessage(
     state.chatRunId = null;
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    state.chatStreamLastActivityAt = null;
     state.lastError = error;
     state.chatMessages = [
       ...state.chatMessages,
@@ -283,6 +286,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
 
   if (payload.state === "delta") {
+    state.chatStreamLastActivityAt = Date.now();
     const next = extractText(payload.message);
     if (typeof next === "string" && !isSilentReplyStream(next)) {
       const current = state.chatStream ?? "";
@@ -307,6 +311,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatStreamLastActivityAt = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
@@ -327,11 +332,51 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatStreamLastActivityAt = null;
   } else if (payload.state === "error") {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatStreamLastActivityAt = null;
     state.lastError = payload.errorMessage ?? "chat error";
   }
   return payload.state;
+}
+
+const STREAM_STALL_TIMEOUT_MS = 60_000;
+
+/**
+ * Detect and reset a chat stream that has stalled (no events received for
+ * STREAM_STALL_TIMEOUT_MS). This covers the case where a WebSocket disconnect
+ * prevents final/aborted/error events from arriving, leaving the UI stuck.
+ * Returns true if the stream was reset.
+ */
+export function resetStalledChatStream(state: ChatState, now = Date.now()): boolean {
+  if (!state.chatRunId) {
+    return false;
+  }
+  const lastActivity = state.chatStreamLastActivityAt ?? state.chatStreamStartedAt;
+  if (!lastActivity) {
+    return false;
+  }
+  if (now - lastActivity < STREAM_STALL_TIMEOUT_MS) {
+    return false;
+  }
+  const streamedText = state.chatStream ?? "";
+  if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: streamedText }],
+        timestamp: now,
+      },
+    ];
+  }
+  state.chatStream = null;
+  state.chatRunId = null;
+  state.chatStreamStartedAt = null;
+  state.chatStreamLastActivityAt = null;
+  state.lastError = "Response timed out. Please try again.";
+  return true;
 }
