@@ -68,14 +68,16 @@ export async function executeRevenueCommand(
     let opportunityId: string | undefined;
     let opportunityError: string | undefined;
     try {
-        deps.logger?.warn(
-          `[debug] createOpportunity payload: ${JSON.stringify({
-            contactId: contact.id,
-            name: parsed.opportunityName,
-            amount: parsed.price,
-            locationId,
-          })}`,
-        );
+      deps.logger?.warn(
+        `[debug] createOpportunity payload: ${JSON.stringify({
+          contactId: contact.id,
+          name: parsed.opportunityName,
+          amount: parsed.price,
+          locationId,
+          pipelineId: process.env.OPENCLAW_REVENUE_GHL_PIPELINE_ID,
+          pipelineStageId: process.env.OPENCLAW_REVENUE_GHL_PIPELINE_STAGE_ID,
+        })}`,
+      );
       const opp = await deps.ghl.createOpportunity({
         contactId: contact.id,
         name: parsed.opportunityName,
