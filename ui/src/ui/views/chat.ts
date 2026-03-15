@@ -1324,9 +1324,9 @@ export function renderChat(props: ChatProps) {
             }
           </div>
         </div>
-        </div>
       </div>
-    </section>
+    </div>
+  </section>
   `;
 }
 
