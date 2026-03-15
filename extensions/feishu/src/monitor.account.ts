@@ -16,6 +16,8 @@ import {
   recordProcessedFeishuMessage,
   releaseFeishuMessageProcessing,
   tryBeginFeishuMessageProcessing,
+  tryRecordMessage,
+  tryRecordMessagePersistent,
   warmupDedupFromDisk,
 } from "./dedup.js";
 import { isMentionForwardRequest } from "./mention.js";
