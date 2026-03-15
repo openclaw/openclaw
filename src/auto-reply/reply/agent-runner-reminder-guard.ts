@@ -5,8 +5,11 @@ export const UNSCHEDULED_REMINDER_NOTE =
   "Note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
 
 const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
-  /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?(?:remember|remind|ping|follow up|follow-up|check back|circle back)\b/i,
-  /\b(?:i\s*['’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
+  // Match unambiguous reminder-action verbs (not bare "remember" which overlaps with memory/knowledge retention)
+  /\b(?:i\s*['']?ll|i will)\s+(?:make sure to\s+)?(?:remind|ping|follow up|follow-up|check back|circle back)\b/i,
+  // "remember to [verb]" implies a future action/reminder, not memory storage
+  /\b(?:i\s*['']?ll|i will)\s+(?:make sure to\s+)?remember\s+to\s+/i,
+  /\b(?:i\s*['']?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
 ];
 
 export function hasUnbackedReminderCommitment(text: string): boolean {
