@@ -66,13 +66,20 @@ describe("copyBundledPluginMetadata", () => {
         "utf8",
       ),
     ).toContain("ACP Router");
+    const bundledManifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "dist", "extensions", "acpx", "openclaw.plugin.json"),
+        "utf8",
+      ),
+    ) as { skills?: string[] };
+    expect(bundledManifest.skills).toEqual(["./skills"]);
     const packageJson = JSON.parse(
       fs.readFileSync(path.join(repoRoot, "dist", "extensions", "acpx", "package.json"), "utf8"),
     ) as { openclaw?: { extensions?: string[] } };
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
   });
 
-  it("dereferences node_modules-backed skill paths into the bundled dist tree", () => {
+  it("relocates node_modules-backed skill paths into bundled-skills and rewrites the manifest", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-node-modules-");
     const pluginDir = path.join(repoRoot, "extensions", "tlon");
     const storeSkillDir = path.join(
@@ -101,10 +108,7 @@ describe("copyBundledPluginMetadata", () => {
       name: "@openclaw/tlon",
       openclaw: { extensions: ["./index.ts"] },
     });
-
-    copyBundledPluginMetadata({ repoRoot });
-
-    const copiedSkillDir = path.join(
+    const staleNodeModulesSkillDir = path.join(
       repoRoot,
       "dist",
       "extensions",
@@ -113,11 +117,35 @@ describe("copyBundledPluginMetadata", () => {
       "@tloncorp",
       "tlon-skill",
     );
+    fs.mkdirSync(staleNodeModulesSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(staleNodeModulesSkillDir, "stale.txt"), "stale\n", "utf8");
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    const copiedSkillDir = path.join(
+      repoRoot,
+      "dist",
+      "extensions",
+      "tlon",
+      "bundled-skills",
+      "@tloncorp",
+      "tlon-skill",
+    );
     expect(fs.existsSync(path.join(copiedSkillDir, "SKILL.md"))).toBe(true);
     expect(fs.lstatSync(copiedSkillDir).isSymbolicLink()).toBe(false);
+    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "tlon", "node_modules"))).toBe(
+      false,
+    );
+    const bundledManifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "dist", "extensions", "tlon", "openclaw.plugin.json"),
+        "utf8",
+      ),
+    ) as { skills?: string[] };
+    expect(bundledManifest.skills).toEqual(["./bundled-skills/@tloncorp/tlon-skill"]);
   });
 
-  it("omits missing declared skill paths from the bundled manifest", () => {
+  it("omits missing declared skill paths and removes stale generated outputs", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-missing-skill-");
     const pluginDir = path.join(repoRoot, "extensions", "tlon");
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -130,6 +158,19 @@ describe("copyBundledPluginMetadata", () => {
       name: "@openclaw/tlon",
       openclaw: { extensions: ["./index.ts"] },
     });
+    const staleBundledSkillDir = path.join(
+      repoRoot,
+      "dist",
+      "extensions",
+      "tlon",
+      "bundled-skills",
+      "@tloncorp",
+      "tlon-skill",
+    );
+    fs.mkdirSync(staleBundledSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(staleBundledSkillDir, "SKILL.md"), "# stale\n", "utf8");
+    const staleNodeModulesDir = path.join(repoRoot, "dist", "extensions", "tlon", "node_modules");
+    fs.mkdirSync(staleNodeModulesDir, { recursive: true });
 
     copyBundledPluginMetadata({ repoRoot });
 
@@ -140,5 +181,9 @@ describe("copyBundledPluginMetadata", () => {
       ),
     ) as { skills?: string[] };
     expect(bundledManifest.skills).toEqual([]);
+    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "tlon", "bundled-skills"))).toBe(
+      false,
+    );
+    expect(fs.existsSync(staleNodeModulesDir)).toBe(false);
   });
 });

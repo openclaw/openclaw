@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { removeFileIfExists, writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
+import {
+  removeFileIfExists,
+  removePathIfExists,
+  writeTextFileIfChanged,
+} from "./runtime-postbuild-shared.mjs";
+
+const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
 
 export function rewritePackageExtensions(entries) {
   if (!Array.isArray(entries)) {
@@ -30,6 +36,31 @@ function ensurePathInsideRoot(rootDir, rawPath) {
   throw new Error(`path escapes plugin root: ${rawPath}`);
 }
 
+function normalizeManifestRelativePath(rawPath) {
+  return rawPath.replaceAll("\\", "/").replace(/^\.\//u, "");
+}
+
+function resolveBundledSkillTarget(rawPath) {
+  const normalized = normalizeManifestRelativePath(rawPath);
+  if (/^node_modules(?:\/|$)/u.test(normalized)) {
+    // Bundled dist/plugin roots must not publish nested node_modules trees. Relocate
+    // dependency-backed skill assets into a dist-owned directory and rewrite the manifest.
+    const trimmed = normalized.replace(/^node_modules\/?/u, "");
+    if (!trimmed) {
+      throw new Error(`node_modules skill path must point to a package: ${rawPath}`);
+    }
+    const bundledRelativePath = `${GENERATED_BUNDLED_SKILLS_DIR}/${trimmed}`;
+    return {
+      manifestPath: `./${bundledRelativePath}`,
+      outputPath: bundledRelativePath,
+    };
+  }
+  return {
+    manifestPath: rawPath,
+    outputPath: normalized,
+  };
+}
+
 function copyDeclaredPluginSkillPaths(params) {
   const skills = Array.isArray(params.manifest.skills) ? params.manifest.skills : [];
   const copiedSkills = [];
@@ -37,8 +68,8 @@ function copyDeclaredPluginSkillPaths(params) {
     if (typeof raw !== "string" || raw.trim().length === 0) {
       continue;
     }
-    const normalized = raw.replace(/^\.\//u, "");
     const sourcePath = ensurePathInsideRoot(params.pluginDir, raw);
+    const target = resolveBundledSkillTarget(raw);
     if (!fs.existsSync(sourcePath)) {
       // Some Docker/lightweight builds intentionally omit optional plugin-local
       // dependencies. Only advertise skill paths that were actually bundled.
@@ -47,14 +78,15 @@ function copyDeclaredPluginSkillPaths(params) {
       );
       continue;
     }
-    const targetPath = ensurePathInsideRoot(params.distPluginDir, normalized);
+    const targetPath = ensurePathInsideRoot(params.distPluginDir, target.outputPath);
+    removePathIfExists(targetPath);
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     fs.cpSync(sourcePath, targetPath, {
       dereference: true,
       force: true,
       recursive: true,
     });
-    copiedSkills.push(raw);
+    copiedSkills.push(target.manifestPath);
   }
   return copiedSkills;
 }
@@ -87,6 +119,10 @@ export function copyBundledPluginMetadata(params = {}) {
     }
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    // Generated skill assets live under a dedicated dist-owned directory. Also
+    // remove the older bad node_modules tree so release packs cannot pick it up.
+    removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
+    removePathIfExists(path.join(distPluginDir, "node_modules"));
     const copiedSkills = copyDeclaredPluginSkillPaths({ manifest, pluginDir, distPluginDir });
     const bundledManifest = Array.isArray(manifest.skills)
       ? { ...manifest, skills: copiedSkills }
