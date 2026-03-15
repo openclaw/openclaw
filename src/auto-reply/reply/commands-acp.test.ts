@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
@@ -348,6 +349,43 @@ async function runTelegramAcpCommand(commandBody: string, cfg: OpenClawConfig = 
 
 async function runTelegramDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   return handleAcpCommand(createTelegramDmParams(commandBody, cfg), true);
+}
+
+function createFeishuDmParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "feishu",
+    Surface: "feishu",
+    OriginatingChannel: "feishu",
+    OriginatingTo: "user:ou_sender_1",
+    AccountId: "default",
+    SenderId: "ou_sender_1",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
+// runFeishuDmAcpCommand is used by later test phases
+function _runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(createFeishuDmParams(commandBody, cfg), true);
+}
+void _runFeishuDmAcpCommand;
+
+async function runInternalAcpCommand(params: {
+  commandBody: string;
+  scopes: string[];
+  cfg?: OpenClawConfig;
+}) {
+  const commandParams = buildCommandTestParams(params.commandBody, params.cfg ?? baseCfg, {
+    Provider: INTERNAL_MESSAGE_CHANNEL,
+    Surface: INTERNAL_MESSAGE_CHANNEL,
+    OriginatingChannel: INTERNAL_MESSAGE_CHANNEL,
+    OriginatingTo: "webchat:conversation-1",
+    GatewayClientScopes: params.scopes,
+  });
+  commandParams.command.channel = INTERNAL_MESSAGE_CHANNEL;
+  commandParams.command.senderId = "user-1";
+  commandParams.command.senderIsOwner = true;
+  return handleAcpCommand(commandParams, true);
 }
 
 describe("/acp command", () => {
@@ -774,6 +812,64 @@ describe("/acp command", () => {
   it("updates ACP runtime mode via /acp set-mode", async () => {
     mockBoundThreadSession();
     const result = await runThreadAcpCommand("/acp set-mode plan", baseCfg);
+
+    expect(hoisted.setModeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "plan",
+      }),
+    );
+    expect(result?.reply?.text).toContain("Updated ACP runtime mode");
+  });
+
+  it("blocks mutating /acp actions for internal operator.write clients", async () => {
+    const result = await runInternalAcpCommand({
+      commandBody: "/acp set-mode plan",
+      scopes: ["operator.write"],
+    });
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("requires operator.admin");
+  });
+
+  it("blocks /acp status for internal operator.write clients", async () => {
+    const result = await runInternalAcpCommand({
+      commandBody: "/acp status",
+      scopes: ["operator.write"],
+    });
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("requires operator.admin");
+  });
+
+  it("keeps read-only /acp actions available to internal operator.write clients", async () => {
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      createAcpSessionEntry({
+        identity: {
+          state: "resolved",
+          source: "status",
+          acpxSessionId: "runtime-1",
+          agentSessionId: "session-1",
+          lastUpdatedAt: Date.now(),
+        },
+      }),
+    ]);
+
+    const result = await runInternalAcpCommand({
+      commandBody: "/acp sessions",
+      scopes: ["operator.write"],
+    });
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("ACP sessions");
+  });
+
+  it("allows mutating /acp actions for internal operator.admin clients", async () => {
+    mockBoundThreadSession();
+
+    const result = await runInternalAcpCommand({
+      commandBody: "/acp set-mode plan",
+      scopes: ["operator.admin"],
+    });
 
     expect(hoisted.setModeMock).toHaveBeenCalledWith(
       expect.objectContaining({
