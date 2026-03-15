@@ -125,6 +125,12 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
     );
   }
 
+  if (latestHumanCorrection && hasExactArtifactSignal) {
+    guidance.push(
+      "- New evidence contradicted an older theory. Explicitly retract the outdated theory in-thread before continuing from fresh live evidence.",
+    );
+  }
+
   if (hasExactArtifactSignal) {
     guidance.push(
       "- Latest user-supplied exact artifact detected. Replay that exact query/event/address first, then isolate the minimal failing field set before reusing older theories.",
@@ -134,6 +140,12 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
   if (latestUserArtifact && hasDataIncidentSignal) {
     guidance.push(
       "- For single-vault API/data incidents, compare one healthy same-chain control vault, direct onchain values, and public surfaces (`vaultV2ByAddress`, `vaultV2s`, `vaultV2transactions`) before calling it chain-wide.",
+    );
+    guidance.push(
+      "- Use `/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh` when possible so the exact query replay, healthy control, and public-surface split are captured before RCA ranking.",
+    );
+    guidance.push(
+      "- Do not call an ingestion/provenance root cause confirmed until you add one DB row/provenance fact and one job-path or simulation fact for the affected entity.",
     );
   }
 

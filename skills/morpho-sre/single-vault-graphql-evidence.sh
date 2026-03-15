@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+GRAPHQL_URL="${SINGLE_VAULT_GRAPHQL_URL:-https://api.morpho.org/graphql}"
+RPC_URL="${SINGLE_VAULT_RPC_URL:-}"
+CURL_TIMEOUT_SECONDS="${SINGLE_VAULT_CURL_TIMEOUT_SECONDS:-20}"
+
+ADDRESS=""
+CHAIN_ID=""
+CONTROL_ADDRESS=""
+QUERY=""
+QUERY_FILE=""
+VARIABLES_JSON=""
+VARIABLES_FILE=""
+LIST_QUERY_FILE=""
+TRANSACTIONS_QUERY_FILE=""
+PRINT_PLAN=0
+
+usage() {
+  cat <<'EOF'
+Usage:
+  single-vault-graphql-evidence.sh \
+    --address 0x... \
+    --chain-id 999 \
+    --query-file /tmp/query.graphql \
+    --variables-file /tmp/variables.json \
+    [--control-address 0x...] \
+    [--rpc-url https://...] \
+    [--list-query-file /tmp/list.graphql] \
+    [--transactions-query-file /tmp/transactions.graphql] \
+    [--print-plan]
+
+Captures a compact evidence bundle for one-address GraphQL incidents:
+- exact query replay
+- one same-chain control replay
+- public-surface split (`vaultV2ByAddress`, `vaultV2s`, `vaultV2transactions`)
+- optional direct RPC facts via `cast`
+EOF
+}
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf 'missing required command: %s\n' "$1" >&2
+    exit 1
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --address)
+      ADDRESS="${2:?address required}"
+      shift 2
+      ;;
+    --chain-id)
+      CHAIN_ID="${2:?chain id required}"
+      shift 2
+      ;;
+    --control-address)
+      CONTROL_ADDRESS="${2:?control address required}"
+      shift 2
+      ;;
+    --query)
+      QUERY="${2:?query required}"
+      shift 2
+      ;;
+    --query-file)
+      QUERY_FILE="${2:?query file required}"
+      shift 2
+      ;;
+    --variables-json)
+      VARIABLES_JSON="${2:?variables json required}"
+      shift 2
+      ;;
+    --variables-file)
+      VARIABLES_FILE="${2:?variables file required}"
+      shift 2
+      ;;
+    --list-query-file)
+      LIST_QUERY_FILE="${2:?list query file required}"
+      shift 2
+      ;;
+    --transactions-query-file)
+      TRANSACTIONS_QUERY_FILE="${2:?transactions query file required}"
+      shift 2
+      ;;
+    --rpc-url)
+      RPC_URL="${2:?rpc url required}"
+      shift 2
+      ;;
+    --print-plan)
+      PRINT_PLAN=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'unknown arg: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+require_cmd curl
+require_cmd jq
+
+[[ -n "$ADDRESS" ]] || {
+  printf 'address is required\n' >&2
+  exit 2
+}
+[[ -n "$CHAIN_ID" ]] || {
+  printf 'chain id is required\n' >&2
+  exit 2
+}
+[[ "$CHAIN_ID" =~ ^[0-9]+$ ]] || {
+  printf 'chain id must be numeric\n' >&2
+  exit 2
+}
+
+if [[ -n "$QUERY_FILE" ]]; then
+  QUERY="$(cat "$QUERY_FILE")"
+fi
+
+[[ -n "$QUERY" ]] || {
+  printf 'query or query-file is required\n' >&2
+  exit 2
+}
+
+if [[ -n "$VARIABLES_FILE" ]]; then
+  VARIABLES_JSON="$(cat "$VARIABLES_FILE")"
+fi
+
+if [[ -z "$VARIABLES_JSON" ]]; then
+  VARIABLES_JSON="$(jq -nc --arg address "$ADDRESS" --argjson chainId "$CHAIN_ID" '{address: $address, chainId: $chainId}')"
+fi
+
+LIST_QUERY_DEFAULT='query SingleVaultList($addresses: [String!], $chainIds: [Int!]) { vaultV2s(where: { address_in: $addresses, chainId_in: $chainIds }) { items { address name apy netApy totalAssets totalSupply sharePrice } } }'
+TRANSACTIONS_QUERY_DEFAULT='query SingleVaultTransactions($address: String!, $chainId: Int!) { vaultV2transactions(where: { vaultAddress_in: [$address], chainId_in: [$chainId] }, first: 1) { items { hash type timestamp } } }'
+BY_ADDRESS_QUERY='query SingleVaultByAddress($address: String!, $chainId: Int!) { vaultV2ByAddress(address: $address, chainId: $chainId) { address name apy netApy maxApy maxRate totalAssets totalSupply sharePrice } }'
+
+if [[ "$PRINT_PLAN" -eq 1 ]]; then
+  jq -nc \
+    --arg graphql_url "$GRAPHQL_URL" \
+    --arg address "$ADDRESS" \
+    --argjson chain_id "$CHAIN_ID" \
+    --arg control_address "$CONTROL_ADDRESS" \
+    --arg has_rpc "$( [[ -n "$RPC_URL" ]] && printf yes || printf no )" \
+    '{
+      graphql_url: $graphql_url,
+      address: $address,
+      chain_id: $chain_id,
+      control_address: (if $control_address == "" then null else $control_address end),
+      probes: [
+        "exact_query_replay",
+        "minimal_by_address",
+        "vaultV2s_address_in",
+        "vaultV2transactions",
+        "same_chain_control",
+        (if $has_rpc == "yes" then "direct_rpc" else "direct_rpc_skipped" end)
+      ]
+    }'
+  exit 0
+fi
+
+graphql_request() {
+  local query_text="${1:?query required}"
+  local variables_text="${2:?variables required}"
+
+  jq -nc --arg query "$query_text" --argjson variables "$variables_text" '{query: $query, variables: $variables}' \
+    | curl -fsS \
+        --max-time "$CURL_TIMEOUT_SECONDS" \
+        -H 'content-type: application/json' \
+        --data @- \
+        "$GRAPHQL_URL"
+}
+
+response_summary() {
+  local name="${1:?name required}"
+  local response="${2:?response required}"
+  jq -nc \
+    --arg name "$name" \
+    --argjson response "$response" \
+    '{
+      name: $name,
+      ok: (if ($response.errors // []) | length == 0 then "yes" else "partial_or_error" end),
+      error_count: (($response.errors // []) | length),
+      first_error: (($response.errors // [])[0].message // null),
+      data: ($response.data // null)
+    }'
+}
+
+run_probe() {
+  local name="${1:?name required}"
+  local query_text="${2:?query required}"
+  local variables_text="${3:?variables required}"
+  local raw
+  if raw="$(graphql_request "$query_text" "$variables_text" 2>/dev/null)"; then
+    response_summary "$name" "$raw"
+    return 0
+  fi
+  jq -nc --arg name "$name" '{name: $name, ok: "request_failed", error_count: 1, first_error: "request_failed", data: null}'
+}
+
+same_chain_control_variables() {
+  jq -nc --arg address "$CONTROL_ADDRESS" --argjson chainId "$CHAIN_ID" '{address: $address, chainId: $chainId}'
+}
+
+list_variables() {
+  jq -nc --arg address "$ADDRESS" --argjson chainId "$CHAIN_ID" '{addresses: [$address], chainIds: [$chainId]}'
+}
+
+if [[ -n "$LIST_QUERY_FILE" ]]; then
+  LIST_QUERY_DEFAULT="$(cat "$LIST_QUERY_FILE")"
+fi
+
+if [[ -n "$TRANSACTIONS_QUERY_FILE" ]]; then
+  TRANSACTIONS_QUERY_DEFAULT="$(cat "$TRANSACTIONS_QUERY_FILE")"
+fi
+
+control_probe='{"name":"same_chain_control","ok":"skipped","error_count":0,"first_error":null,"data":null}'
+if [[ -n "$CONTROL_ADDRESS" ]]; then
+  control_probe="$(run_probe "same_chain_control" "$BY_ADDRESS_QUERY" "$(same_chain_control_variables)")"
+fi
+
+exact_probe="$(run_probe "exact_query_replay" "$QUERY" "$VARIABLES_JSON")"
+by_address_probe="$(run_probe "minimal_by_address" "$BY_ADDRESS_QUERY" "$(jq -nc --arg address "$ADDRESS" --argjson chainId "$CHAIN_ID" '{address: $address, chainId: $chainId}')")"
+list_probe="$(run_probe "vaultV2s_address_in" "$LIST_QUERY_DEFAULT" "$(list_variables)")"
+transactions_probe="$(run_probe "vaultV2transactions" "$TRANSACTIONS_QUERY_DEFAULT" "$(jq -nc --arg address "$ADDRESS" --argjson chainId "$CHAIN_ID" '{address: $address, chainId: $chainId}')")"
+
+rpc_probe='{"status":"skipped","note":"rpc_url_missing_or_cast_unavailable"}'
+if [[ -n "$RPC_URL" ]] && command -v cast >/dev/null 2>&1; then
+  total_assets="$(cast call --rpc-url "$RPC_URL" "$ADDRESS" 'totalAssets()(uint256)' 2>/dev/null || true)"
+  total_supply="$(cast call --rpc-url "$RPC_URL" "$ADDRESS" 'totalSupply()(uint256)' 2>/dev/null || true)"
+  rpc_probe="$(jq -nc \
+    --arg total_assets "$total_assets" \
+    --arg total_supply "$total_supply" \
+    '{
+      status: (if $total_assets != "" or $total_supply != "" then "ok" else "failed" end),
+      totalAssets: (if $total_assets == "" then null else $total_assets end),
+      totalSupply: (if $total_supply == "" then null else $total_supply end)
+    }')"
+fi
+
+jq -nc \
+  --arg graphql_url "$GRAPHQL_URL" \
+  --arg address "$ADDRESS" \
+  --argjson chain_id "$CHAIN_ID" \
+  --arg control_address "$CONTROL_ADDRESS" \
+  --argjson exact_probe "$exact_probe" \
+  --argjson by_address_probe "$by_address_probe" \
+  --argjson list_probe "$list_probe" \
+  --argjson transactions_probe "$transactions_probe" \
+  --argjson control_probe "$control_probe" \
+  --argjson rpc_probe "$rpc_probe" \
+  '{
+    status: "ok",
+    graphql_url: $graphql_url,
+    address: $address,
+    chain_id: $chain_id,
+    control_address: (if $control_address == "" then null else $control_address end),
+    probes: {
+      exact_query_replay: $exact_probe,
+      minimal_by_address: $by_address_probe,
+      vaultV2s_address_in: $list_probe,
+      vaultV2transactions: $transactions_probe,
+      same_chain_control: $control_probe,
+      direct_rpc: $rpc_probe
+    },
+    summary: {
+      exact_query_replay: $exact_probe.ok,
+      healthy_control_check: $control_probe.ok,
+      public_surface_split: (if $by_address_probe.ok != "request_failed" or $list_probe.ok != "request_failed" or $transactions_probe.ok != "request_failed" then "captured" else "failed" end),
+      direct_rpc_check: ($rpc_probe.status // "skipped")
+    },
+    evidence_line: (
+      "address=" + $address
+      + " chainId=" + ($chain_id | tostring)
+      + " exact_query_replay=" + $exact_probe.ok
+      + " healthy_control_check=" + $control_probe.ok
+      + " public_surface_split=" + (if $by_address_probe.ok != "request_failed" or $list_probe.ok != "request_failed" or $transactions_probe.ok != "request_failed" then "captured" else "failed" end)
+      + " direct_rpc_check=" + ($rpc_probe.status // "skipped")
+    )
+  }'

@@ -27,11 +27,14 @@ const VALID_SKILL = `
 - if the same reward token appears on both supply and borrow for one market, first quote the live reward row/provenance
 
 ## Single-Vault API / GraphQL Data Incidents
+- use \`single-vault-graphql-evidence.sh\` before RCA ranking when possible
 - compare against one healthy control vault on the same chain
 - compare public surfaces:
   - \`vaultV2ByAddress\`
   - \`vaultV2s\`
   - \`vaultV2transactions\`
+- explicitly retract the outdated theory when new evidence contradicts a prior theory
+- do not call an ingestion/provenance root cause confirmed until you add one DB row/provenance fact and one job-path or simulation fact
 
 ## Blocked Mode Reply Contract
 - \`*Evidence:* <exact command> -> <exact error>\`

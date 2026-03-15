@@ -126,6 +126,11 @@ const REQUIRED_RULES: Array<{ id: string; re: RegExp; message: string }> = [
     message: "missing single-vault api/graphql workflow",
   },
   {
+    id: "single-vault-helper",
+    re: /single-vault-graphql-evidence\.sh/,
+    message: "missing single-vault graphql evidence helper guidance",
+  },
+  {
     id: "same-chain-control",
     re: /compare against one healthy control vault on the same chain/i,
     message: "missing same-chain control comparison guidance",
@@ -134,6 +139,17 @@ const REQUIRED_RULES: Array<{ id: string; re: RegExp; message: string }> = [
     id: "public-surface-compare",
     re: /vaultV2ByAddress[\s\S]*vaultV2s[\s\S]*vaultV2transactions/i,
     message: "missing public-surface comparison guidance for single-vault incidents",
+  },
+  {
+    id: "retract-after-contradiction",
+    re: /explicitly retract|retract the outdated theory|retract.*prior theory/i,
+    message:
+      "missing explicit retract-and-restart guidance when new evidence contradicts prior theory",
+  },
+  {
+    id: "single-vault-provenance-gate",
+    re: /DB row\/provenance fact[\s\S]*job-path or simulation fact/i,
+    message: "missing DB provenance and job-simulation gate for single-vault ingestion theories",
   },
 ];
 

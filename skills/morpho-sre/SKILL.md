@@ -58,6 +58,9 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - if user provides an exact query, event ID, trace ID, address, or says the prior answer is wrong, replay that exact artifact before reusing any prior theory
   - isolate the minimal failing field set before expanding the query or naming a cause
   - use Sentry event IDs only after a live lookup, or explicitly say creds are unavailable
+- Contradicted-theory recovery:
+  - if new live evidence or a human correction disproves the current theory, explicitly retract the outdated theory in-thread before continuing
+  - restart from the newest exact artifact instead of defending the old theory with adjacent evidence
 - Resolver / incident matching:
   - do not reuse a prior incident unless operation name, schema object, failing fields, chain, and address pattern match
   - treat `vaultByAddress` and `vaultV2ByAddress` as different resolver families unless live evidence proves the same failure path
@@ -98,6 +101,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Wiz MCP launcher: `/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh`
 - DB target helper: `/home/node/.openclaw/skills/morpho-sre/scripts/lib-db-target.sh`
 - DB evidence wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/db-evidence.sh`
+- Single-vault GraphQL evidence helper: `/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh`
 - Linear ticket API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh`
 - Sentinel snapshot helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-snapshot.sh`
 - Sentinel triage helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-triage.sh`
@@ -125,6 +129,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Use `incident-dossier-openclaw-sre-relationship-index-oom-2026-03-16.md` for openclaw-sre OOM incidents caused by truncated state files and hot retry loops in plugins like relationship-index.
 - Helper scripts that support RCA and eRPC investigation:
   - `erpc-context.sh`
+  - `single-vault-graphql-evidence.sh`
   - `wiz-mcp.sh`
   - `rca-provider-codex.sh`
   - `rca-provider-claude.sh`
@@ -264,6 +269,17 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - GraphQL `INTERNAL_SERVER_ERROR`
   - `sentryEventId` / `traceId` pasted by user
   - APY nulls, missing realtime state, or field-level GraphQL failures
+- Preferred collector:
+
+```bash
+/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh \
+  --address 0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34 \
+  --chain-id 999 \
+  --query-file /tmp/vault.graphql \
+  --variables-file /tmp/vault.variables.json \
+  --control-address 0x03944a2c5B9FEE78855F99d6830061c45e3A7Bcd
+```
+
 - Mandatory order:
   1. replay the exact user query
   2. isolate the minimal failing field set
@@ -279,6 +295,8 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - if same-factory controls are available, prefer them
   - do not jump from missing current state on one vault to “scheduler missing on the whole chain” if newer or peer controls materialize state
   - historical APY series can be a weak signal; prefer current-state fields plus direct RPC
+  - do not reuse older APY, scheduler, RPC, or unsupported-vault theories unless the newest exact artifact and resolver family still match them
+  - before naming an ingestion/provenance root cause, add one live DB row/provenance fact and one job-path or simulation fact for the affected entity
 - Required answer shape:
   - exact query result
   - minimal failing fields
@@ -349,6 +367,8 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Never leak progress chatter, tool-call JSON, exec-approval warnings, or command-construction failures into the thread.
 - Do not send progress-only replies like `On it`, `Found it`, `Let me verify`, or `Checking...` in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.
 - For recurring indexer freshness alerts on the same workload, answer as one ongoing RCA instead of a fresh transient update.
+- Keep the same 4-line incident header on every follow-up update, not just the first reply in the thread.
+- If new evidence disproves an earlier theory, state that directly in the next update and replace it with the new evidence-backed theory.
 - If fix is scoped/reversible and confidence >= `AUTO_PR_MIN_CONFIDENCE`, create PR via `autofix-pr.sh` and post PR URL in-thread.
 - If fix is not open-PR ready yet, still name 1-2 concrete PR candidates with repo/path/title/validation.
 - For every incident follow-up that needs code/config work, create or reuse a Linear ticket first and mention it in-thread.

@@ -58,8 +58,24 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
 
     expect(context).toContain("Latest user-supplied exact artifact detected");
     expect(context).toContain("single-vault API/data incidents");
+    expect(context).toContain("single-vault-graphql-evidence.sh");
+    expect(context).toContain("DB row/provenance fact");
     expect(context).toContain("db-data-incident-playbook.md");
     expect(context).toContain("Resolver mismatch detected");
+  });
+
+  it("requires explicit retraction when new evidence contradicts an older theory", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"This is wrong. query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } traceId=abc123"}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "look into this vault v2 graphql apy issue",
+      transcriptText,
+    });
+
+    expect(context).toContain("Explicitly retract the outdated theory");
   });
 
   it("detects reverse resolver mismatch", () => {
