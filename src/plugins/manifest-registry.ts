@@ -4,11 +4,12 @@ import {
   buildResolvedExtensionRecord,
   type ResolvedExtensionRecord,
 } from "../extension-host/manifest-registry.js";
+import { resolveLegacyExtensionDescriptor } from "../extension-host/schema.js";
 import { resolveUserPath } from "../utils.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
-import { loadPluginManifest, type PluginManifest } from "./manifest.js";
+import { loadPluginManifest, type PackageManifest, type PluginManifest } from "./manifest.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import type {
@@ -175,6 +176,35 @@ function buildBundleRecord(params: {
   candidate: PluginCandidate;
   manifestPath: string;
 }): PluginManifestRecord {
+  const packageManifest =
+    params.candidate.packageManifest ||
+    params.candidate.packageName ||
+    params.candidate.packageVersion ||
+    params.candidate.packageDescription
+      ? ({
+          openclaw: params.candidate.packageManifest,
+          name: params.candidate.packageName,
+          version: params.candidate.packageVersion,
+          description: params.candidate.packageDescription,
+        } as PackageManifest)
+      : undefined;
+  const resolvedExtension = resolveLegacyExtensionDescriptor({
+    manifest: {
+      id: params.manifest.id,
+      configSchema: {},
+      channels: [],
+      providers: [],
+      skills: params.manifest.skills ?? [],
+      name: params.manifest.name,
+      description: params.manifest.description,
+      version: params.manifest.version,
+    },
+    packageManifest,
+    origin: params.candidate.origin,
+    rootDir: params.candidate.rootDir,
+    source: params.candidate.source,
+    workspaceDir: params.candidate.workspaceDir,
+  });
   return {
     id: params.manifest.id,
     name: normalizeManifestLabel(params.manifest.name) ?? params.candidate.idHint,
@@ -196,6 +226,7 @@ function buildBundleRecord(params: {
     schemaCacheKey: undefined,
     configSchema: undefined,
     configUiHints: undefined,
+    resolvedExtension,
   };
 }
 

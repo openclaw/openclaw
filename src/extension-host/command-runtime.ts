@@ -210,6 +210,12 @@ export async function executeExtensionHostPluginCommand(params: {
     to: params.to,
     accountId: params.accountId,
     messageThreadId: params.messageThreadId,
+    requestConversationBinding: async () => ({
+      status: "error" as const,
+      message: "Conversation binding is unavailable for this command surface.",
+    }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
   };
 
   extensionHostCommandRegistryLocked = true;

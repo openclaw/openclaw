@@ -3,6 +3,7 @@ import type { ResolvedExtensionRegistry } from "../extension-host/resolved-regis
 export type ResolvedExtensionValidationEntry = {
   id: string;
   origin: "workspace" | "bundled" | "global" | "config";
+  format?: "bundle" | "openclaw";
   kind?: string;
   channels: string[];
   configSchema?: Record<string, unknown>;
@@ -37,6 +38,7 @@ export function buildResolvedExtensionValidationIndex(
     return {
       id: extension.id,
       origin: extension.origin ?? "workspace",
+      format: record.manifestPath.endsWith("package.json") ? "openclaw" : "bundle",
       kind: extension.kind,
       channels,
       configSchema: extension.staticMetadata.configSchema,

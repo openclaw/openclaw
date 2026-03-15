@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  DEFAULT_EXTENSION_ENTRY_CANDIDATES,
   getExtensionPackageMetadata,
   resolveExtensionEntryCandidates,
   type PackageManifest,
@@ -10,13 +9,7 @@ import {
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
-import {
-  DEFAULT_PLUGIN_ENTRY_CANDIDATES,
-  getPackageManifestMetadata,
-  resolvePackageExtensionEntries,
-  type OpenClawPackageManifest,
-  type PackageManifest,
-} from "./manifest.js";
+import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, loadPackageManifest } from "./manifest.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat, PluginOrigin } from "./types.js";

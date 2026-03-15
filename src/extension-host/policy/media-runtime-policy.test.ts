@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("./runtime-backend-catalog.js", () => ({
+vi.mock("../runtime-backend-catalog.js", () => ({
   listExtensionHostMediaRuntimeBackendCatalogEntries: vi.fn(() => [
     {
       id: "capability.runtime-backend:media.audio:deepgram",
@@ -72,7 +72,7 @@ vi.mock("./runtime-backend-catalog.js", () => ({
   ),
 }));
 
-vi.mock("./media-runtime-registry.js", () => ({
+vi.mock("../media-runtime-registry.js", () => ({
   normalizeExtensionHostMediaProviderId: vi.fn((id: string) =>
     id.trim().toLowerCase() === "gemini" ? "google" : id.trim().toLowerCase(),
   ),

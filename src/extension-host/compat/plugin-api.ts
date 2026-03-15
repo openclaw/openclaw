@@ -7,6 +7,7 @@ import type {
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
   OpenClawPluginHttpRouteParams,
+  PluginInteractiveHandlerRegistration,
   OpenClawPluginService,
   OpenClawPluginToolFactory,
   PluginLogger,
@@ -49,6 +50,7 @@ export function createExtensionHostPluginApi(params: {
       ? H
       : never,
   ) => void;
+  registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
@@ -78,6 +80,7 @@ export function createExtensionHostPluginApi(params: {
     registerChannel: (registration) => params.registerChannel(registration),
     registerProvider: (provider) => params.registerProvider(provider),
     registerGatewayMethod: (method, handler) => params.registerGatewayMethod(method, handler),
+    registerInteractiveHandler: (registration) => params.registerInteractiveHandler(registration),
     registerCli: (registrar, opts) => params.registerCli(registrar, opts),
     registerService: (service) => params.registerService(service),
     registerCommand: (command) => params.registerCommand(command),

@@ -36,11 +36,7 @@ import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-
 import * as skillScanner from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
-import {
-  loadPluginManifest,
-  resolvePackageExtensionEntries,
-  type PackageManifest as PluginPackageManifest,
-} from "./manifest.js";
+import { loadPluginManifest } from "./manifest.js";
 
 type PluginInstallLogger = {
   info?: (message: string) => void;

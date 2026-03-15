@@ -1,8 +1,10 @@
+import { registerPluginInteractiveHandler } from "../../plugins/interactive.js";
 import type { PluginRecord, PluginRegistry, PluginRegistryParams } from "../../plugins/registry.js";
 import type {
   PluginDiagnostic,
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
+  PluginInteractiveHandlerRegistration,
   ProviderPlugin,
 } from "../../plugins/types.js";
 import {
@@ -85,6 +87,20 @@ export function createExtensionHostPluginRegistry(params: {
       registerProvider: (provider) => registerProvider(record, provider),
       registerGatewayMethod: (method, handler) =>
         actions.registerGatewayMethod(record, method, handler),
+      registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => {
+        const result = registerPluginInteractiveHandler(record.id, registration, {
+          pluginName: record.name,
+          pluginRoot: record.rootDir,
+        });
+        if (!result.ok) {
+          pushDiagnostic({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message: result.error ?? "interactive handler registration failed",
+          });
+        }
+      },
       registerCli: (registrar, opts) => actions.registerCli(record, registrar, opts),
       registerService: (service) => actions.registerService(record, service),
       registerCommand: (command) => registerCommand(record, command),
