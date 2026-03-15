@@ -6,12 +6,18 @@ import {
 } from "../providers/github-copilot-token.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  resolveAuthProfileEligibility,
+  listProfilesForProvider,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import { findNormalizedProviderValue } from "./model-selection.js";
 import {
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,
@@ -879,6 +885,7 @@ export async function resolveImplicitProviders(
   if (!providers["github-copilot"]) {
     const implicitCopilot = await resolveImplicitCopilotProvider({
       agentDir: params.agentDir,
+      config: params.config,
       env,
     });
     if (implicitCopilot) {
@@ -910,6 +917,7 @@ export async function resolveImplicitProviders(
 
 export async function resolveImplicitCopilotProvider(params: {
   agentDir: string;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderConfig | null> {
   const env = params.env ?? process.env;
@@ -924,18 +932,91 @@ export async function resolveImplicitCopilotProvider(params: {
     return null;
   }
 
+  const resolveCopilotTokenFromProfile = (
+    profile: ReturnType<typeof ensureAuthProfileStore>["profiles"][string] | undefined,
+  ): string => {
+    if (!profile || profile.type !== "token") {
+      return "";
+    }
+    const inlineToken = profile.token?.trim() ?? "";
+    if (inlineToken) {
+      return inlineToken;
+    }
+    const tokenRef = coerceSecretRef(profile.tokenRef);
+    if (tokenRef?.source === "env" && tokenRef.id.trim()) {
+      return (env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim();
+    }
+    return "";
+  };
+
   let selectedGithubToken = githubToken;
   if (!selectedGithubToken && hasProfile) {
-    // Use the first available profile as a default for discovery (it will be
-    // re-resolved per-run by the embedded runner).
-    const profileId = listProfilesForProvider(authStore, "github-copilot")[0];
-    const profile = profileId ? authStore.profiles[profileId] : undefined;
-    if (profile && profile.type === "token") {
-      selectedGithubToken = profile.token?.trim() ?? "";
-      if (!selectedGithubToken) {
-        const tokenRef = coerceSecretRef(profile.tokenRef);
-        if (tokenRef?.source === "env" && tokenRef.id.trim()) {
-          selectedGithubToken = (env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim();
+    // Use the standard profile ordering so discovery respects auth.order and
+    // other auth-profile eligibility rules.
+    const orderedProfileIds = resolveAuthProfileOrder({
+      cfg: params.config,
+      store: authStore,
+      provider: "github-copilot",
+    });
+    const configuredOrder =
+      orderedProfileIds.length === 0
+        ? (findNormalizedProviderValue(params.config?.auth?.order, "github-copilot")?.filter(
+            (profileId) =>
+              resolveAuthProfileEligibility({
+                cfg: params.config,
+                store: authStore,
+                provider: "github-copilot",
+                profileId,
+              }).eligible,
+          ) ?? [])
+        : [];
+    const profileIds =
+      orderedProfileIds.length > 0
+        ? orderedProfileIds
+        : configuredOrder.length > 0
+          ? configuredOrder
+          : listProfilesForProvider(authStore, "github-copilot");
+    const profilesAlreadyEligible = profileIds === configuredOrder;
+    const seenProfileIds = new Set<string>();
+    for (const profileId of profileIds) {
+      if (seenProfileIds.has(profileId)) {
+        continue;
+      }
+      seenProfileIds.add(profileId);
+      if (
+        !profilesAlreadyEligible &&
+        !resolveAuthProfileEligibility({
+          cfg: params.config,
+          store: authStore,
+          provider: "github-copilot",
+          profileId,
+        }).eligible
+      ) {
+        continue;
+      }
+      selectedGithubToken = resolveCopilotTokenFromProfile(authStore.profiles[profileId]);
+      if (selectedGithubToken) {
+        break;
+      }
+    }
+    if (!selectedGithubToken && orderedProfileIds.length === 0 && configuredOrder.length > 0) {
+      for (const profileId of listProfilesForProvider(authStore, "github-copilot")) {
+        if (seenProfileIds.has(profileId)) {
+          continue;
+        }
+        if (
+          !resolveAuthProfileEligibility({
+            cfg: params.config,
+            store: authStore,
+            provider: "github-copilot",
+            profileId,
+          }).eligible
+        ) {
+          continue;
+        }
+        selectedGithubToken = resolveCopilotTokenFromProfile(authStore.profiles[profileId]);
+        if (selectedGithubToken) {
+          break;
         }
       }
     }
