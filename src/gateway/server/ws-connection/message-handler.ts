@@ -34,6 +34,7 @@ import {
 } from "../../canvas-capability.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 import {
+  extractNormalizedHeader,
   isLocalishHost,
   isLoopbackAddress,
   isTrustedProxyAddress,
@@ -222,6 +223,21 @@ export function attachGatewayWsMessageHandler(params: {
     }
     return raw;
   })();
+
+  const requestForwardedProto = (() => {
+    const raw = upgradeReq.headers["x-forwarded-proto"];
+    // Handle array (multiple headers)
+    if (Array.isArray(raw)) {
+      return raw[0];
+    }
+    // Handle comma-separated values
+    if (typeof raw === "string" && raw.includes(",")) {
+      return raw.split(",")[0].trim();
+    }
+    return raw;
+  })();
+
+  const forwardedHeader = extractNormalizedHeader(upgradeReq.headers, "forwarded");
 
   // If proxy headers are present but the remote address isn't trusted, don't treat
   // the connection as local. This prevents auth bypass when running behind a reverse
@@ -423,6 +439,8 @@ export function attachGatewayWsMessageHandler(params: {
           const originCheck = checkBrowserOrigin({
             requestHost,
             requestForwardedHost,
+            requestForwardedProto,
+            forwardedHeader,
             origin: requestOrigin,
             allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
             allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,

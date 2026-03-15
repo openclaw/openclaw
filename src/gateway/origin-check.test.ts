@@ -10,7 +10,11 @@ describe("checkBrowserOrigin", () => {
         origin: "http://127.0.0.1:18789",
         allowHostHeaderOriginFallback: true,
       },
-      expected: { ok: true as const, matchedBy: "host-header-fallback" as const },
+      expected: {
+        ok: true as const,
+        matchedBy: "host-header-fallback" as const,
+        wildcardMatched: false,
+      },
     },
     {
       name: "rejects same-origin host matches when fallback is disabled",
@@ -27,7 +31,11 @@ describe("checkBrowserOrigin", () => {
         origin: "http://localhost:5173",
         isLocalClient: true,
       },
-      expected: { ok: true as const, matchedBy: "local-loopback" as const },
+      expected: {
+        ok: true as const,
+        matchedBy: "local-loopback" as const,
+        wildcardMatched: false,
+      },
     },
     {
       name: "rejects loopback mismatches for non-local clients",
@@ -45,7 +53,11 @@ describe("checkBrowserOrigin", () => {
         origin: "https://CONTROL.example.com",
         allowedOrigins: [" https://control.example.com "],
       },
-      expected: { ok: true as const, matchedBy: "allowlist" as const },
+      expected: {
+        ok: true as const,
+        matchedBy: "allowlist" as const,
+        wildcardMatched: false,
+      },
     },
     {
       name: "accepts wildcard allowlists even alongside specific entries",
@@ -54,7 +66,11 @@ describe("checkBrowserOrigin", () => {
         origin: "https://any-origin.example.com",
         allowedOrigins: ["https://control.example.com", " * "],
       },
-      expected: { ok: true as const, matchedBy: "allowlist" as const },
+      expected: {
+        ok: true as const,
+        matchedBy: "allowlist" as const,
+        wildcardMatched: true,
+      },
     },
     {
       name: "rejects missing origin",
@@ -275,6 +291,226 @@ describe("checkBrowserOrigin", () => {
         requestForwardedHost: "gateway.tailnet.ts.net:8443",
         origin: "https://gateway.tailnet.ts.net:8443",
         allowedOrigins: ["https://gateway.tailnet.ts.net:8443"],
+      });
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  describe("protocol validation (Forwarded header)", () => {
+    it("accepts when origin proto matches Forwarded header proto", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "https://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        forwardedHeader: "for=192.0.2.1;host=gateway.tailnet.ts.net;proto=https",
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("rejects when origin proto mismatches Forwarded header proto", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "http://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        forwardedHeader: "for=192.0.2.1;host=gateway.tailnet.ts.net;proto=https",
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toContain("does not match Forwarded proto");
+      }
+    });
+
+    it("accepts HTTP origin when Forwarded header proto is http", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.internal",
+        origin: "http://gateway.internal",
+        allowedOrigins: ["http://gateway.internal"],
+        forwardedHeader: "for=192.0.2.1;host=gateway.internal;proto=http",
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("rejects HTTPS origin when Forwarded header proto is http", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.internal",
+        origin: "https://gateway.internal",
+        allowedOrigins: ["https://gateway.internal"],
+        forwardedHeader: "for=192.0.2.1;host=gateway.internal;proto=http",
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("handles quoted Forwarded header proto values", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "https://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        forwardedHeader: 'for=192.0.2.1;host="gateway.tailnet.ts.net";proto="https"',
+      });
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  describe("protocol validation (X-Forwarded-Proto header)", () => {
+    it("accepts when origin proto matches X-Forwarded-Proto", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "https://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        requestForwardedProto: "https",
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("rejects when origin proto mismatches X-Forwarded-Proto", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "http://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        requestForwardedProto: "https",
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toContain("does not match X-Forwarded-Proto");
+      }
+    });
+
+    it("accepts HTTP origin when X-Forwarded-Proto is http", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.internal",
+        origin: "http://gateway.internal",
+        allowedOrigins: ["http://gateway.internal"],
+        requestForwardedProto: "http",
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("rejects HTTPS origin when X-Forwarded-Proto is http", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.internal",
+        origin: "https://gateway.internal",
+        allowedOrigins: ["https://gateway.internal"],
+        requestForwardedProto: "http",
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("handles case-insensitive X-Forwarded-Proto", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "https://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        requestForwardedProto: "HTTPS",
+      });
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  describe("protocol validation (both headers)", () => {
+    it("rejects when origin proto mismatches Forwarded header even if X-Forwarded-Proto matches", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "http://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        forwardedHeader: "for=192.0.2.1;host=gateway.tailnet.ts.net;proto=https",
+        requestForwardedProto: "http",
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toContain("does not match Forwarded proto");
+      }
+    });
+
+    it("rejects when origin proto mismatches X-Forwarded-Proto even if Forwarded header matches", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "http://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        forwardedHeader: "for=192.0.2.1;host=gateway.tailnet.ts.net;proto=http",
+        requestForwardedProto: "https",
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toContain("does not match X-Forwarded-Proto");
+      }
+    });
+
+    it("accepts when origin proto matches both Forwarded and X-Forwarded-Proto", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "https://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        forwardedHeader: "for=192.0.2.1;host=gateway.tailnet.ts.net;proto=https",
+        requestForwardedProto: "https",
+      });
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  describe("protocol validation edge cases", () => {
+    it("bypasses protocol validation when strictProtoValidation is false", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: true,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "http://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        allowHostHeaderOriginFallback: true,
+        forwardedHeader: "for=192.0.2.1;host=gateway.tailnet.ts.net;proto=https",
+        requestForwardedProto: "https",
+        strictProtoValidation: false,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("bypasses protocol validation when not behind trusted proxy", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: false,
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "http://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        forwardedHeader: "for=192.0.2.1;host=gateway.tailnet.ts.net;proto=https",
+        requestForwardedProto: "https",
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe("origin not allowed");
+      }
+    });
+
+    it("accepts when no forwarded headers are present (direct connection)", () => {
+      const result = checkBrowserOrigin({
+        isTrustedProxy: false,
+        requestHost: "127.0.0.1:18789",
+        origin: "http://127.0.0.1:18789",
+        allowedOrigins: ["http://127.0.0.1:18789"],
       });
       expect(result.ok).toBe(true);
     });
