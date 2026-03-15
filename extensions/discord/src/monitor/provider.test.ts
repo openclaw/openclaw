@@ -829,4 +829,36 @@ describe("monitorDiscordProvider", () => {
     expect(connectedTrue).toBeDefined();
     expect(connectedFalse).toBeDefined();
   });
+
+  it("throws when fetchUser('@me') rejects during startup", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    clientFetchUserMock.mockRejectedValueOnce(new Error("Discord API unavailable"));
+
+    await expect(
+      monitorDiscordProvider({
+        config: baseConfig(),
+        runtime: baseRuntime(),
+      }),
+    ).rejects.toThrow("Failed to fetch bot identity");
+
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    expect(createdBindingManagers).toHaveLength(1);
+    expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws when fetchUser('@me') returns undefined or empty object", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    clientFetchUserMock.mockResolvedValueOnce({} as { id: string });
+
+    await expect(
+      monitorDiscordProvider({
+        config: baseConfig(),
+        runtime: baseRuntime(),
+      }),
+    ).rejects.toThrow("Failed to resolve Discord bot user id");
+
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    expect(createdBindingManagers).toHaveLength(1);
+    expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+  });
 });
