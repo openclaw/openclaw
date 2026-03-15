@@ -178,6 +178,7 @@ Then add the Ollama provider to your OpenClaw config:
       ollama: {
         baseUrl: "http://localhost:11434",
         apiKey: "ollama-local",
+        api: "ollama",
         models: [
           {
             id: "qwen3:14b",
