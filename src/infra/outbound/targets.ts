@@ -261,7 +261,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   if (target === "none") {
     const base = resolveSessionDeliveryTarget({ entry });
     return buildNoHeartbeatDeliveryTarget({
-      reason: "target-none",
+      reason: "delivery-disabled",
       lastChannel: base.lastChannel,
       lastAccountId: base.lastAccountId,
     });
