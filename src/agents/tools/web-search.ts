@@ -3,6 +3,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
+import { isAbortError } from "../../infra/unhandled-rejections.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -37,6 +38,10 @@ const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
+// Grok searches invoke the xAI Responses API with a native web_search tool call;
+// the reasoning step + tool round-trip routinely takes 20-45 s, so we use a
+// higher default than the global 30 s to avoid spurious timeouts.
+const GROK_DEFAULT_TIMEOUT_SECONDS = 60;
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
 const KIMI_WEB_SEARCH_TOOL = {
@@ -462,11 +467,19 @@ function extractGrokContent(data: GrokSearchResponse): {
 } {
   // xAI Responses API format: find the message output with text content
   for (const output of data.output ?? []) {
+    // Guard against null/undefined entries that can appear in malformed payloads (#35063)
+    if (output == null || typeof output !== "object") {
+      continue;
+    }
     if (output.type === "message") {
       for (const block of output.content ?? []) {
+        // Guard against null/undefined content entries (#35063)
+        if (block == null || typeof block !== "object") {
+          continue;
+        }
         if (block.type === "output_text" && typeof block.text === "string" && block.text) {
           const urls = (block.annotations ?? [])
-            .filter((a) => a.type === "url_citation" && typeof a.url === "string")
+            .filter((a) => a != null && a.type === "url_citation" && typeof a.url === "string")
             .map((a) => a.url as string);
           return { text: block.text, annotationCitations: [...new Set(urls)] };
         }
@@ -484,7 +497,8 @@ function extractGrokContent(data: GrokSearchResponse): {
         "annotations" in output && Array.isArray(output.annotations) ? output.annotations : [];
       const urls = rawAnnotations
         .filter(
-          (a: Record<string, unknown>) => a.type === "url_citation" && typeof a.url === "string",
+          (a: Record<string, unknown>) =>
+            a != null && a.type === "url_citation" && typeof a.url === "string",
         )
         .map((a: Record<string, unknown>) => a.url as string);
       return { text: output.text, annotationCitations: [...new Set(urls)] };
@@ -1356,7 +1370,20 @@ async function runGrokSearch(params: {
 
       return { content, citations, inlineCitations };
     },
-  );
+  ).catch((err: unknown) => {
+    // Convert AbortErrors from the internal fetch timeout into plain Errors so the
+    // tool execution framework returns a structured JSON error to the LLM instead of
+    // re-throwing them as session-level aborts (which silently swallows the result).
+    // See: https://github.com/openclaw/openclaw/issues/26355
+    if (isAbortError(err)) {
+      throw new Error(
+        `xAI web search timed out after ${params.timeoutSeconds}s. ` +
+          `Increase tools.web.search.timeoutSeconds in your config if queries are complex.`,
+        { cause: err },
+      );
+    }
+    throw err;
+  });
 }
 
 function extractKimiMessageText(message: KimiMessage | undefined): string | undefined {
@@ -2164,7 +2191,12 @@ export function createWebSearchTool(options?: {
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
         apiKey,
-        timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+        timeoutSeconds: resolveTimeoutSeconds(
+          search?.timeoutSeconds,
+          // Grok searches use xAI's Responses API with a native tool round-trip that
+          // regularly takes 20-45 s; use a higher default to avoid spurious timeouts.
+          provider === "grok" ? GROK_DEFAULT_TIMEOUT_SECONDS : DEFAULT_TIMEOUT_SECONDS,
+        ),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         provider,
         country,
