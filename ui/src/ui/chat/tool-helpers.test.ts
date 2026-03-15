@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import {
+  formatToolArgsForSidebar,
+  formatToolOutputForSidebar,
+  getTruncatedPreview,
+} from "./tool-helpers.ts";
 
 describe("tool-helpers", () => {
   describe("formatToolOutputForSidebar", () => {
@@ -77,6 +81,47 @@ describe("tool-helpers", () => {
     });
   });
 
+  describe("formatToolArgsForSidebar", () => {
+    it("formats full command as shell block", () => {
+      const result = formatToolArgsForSidebar({ command: "python3 script.py --flag long-value" });
+      expect(result).toEqual([
+        {
+          label: "Command",
+          body: "```shell\npython3 script.py --flag long-value\n```",
+        },
+      ]);
+    });
+
+    it("preserves sibling args when command exists", () => {
+      const result = formatToolArgsForSidebar({
+        command: "python3 script.py --flag long-value",
+        cwd: "/tmp/demo",
+        timeoutMs: 5000,
+      });
+      expect(result).toHaveLength(2);
+      expect(result[0]).toEqual({
+        label: "Command",
+        body: "```shell\npython3 script.py --flag long-value\n```",
+      });
+      expect(result[1]?.label).toBe("Args");
+      expect(result[1]?.body).toContain('"cwd": "/tmp/demo"');
+      expect(result[1]?.body).toContain('"timeoutMs": 5000');
+    });
+
+    it("uses longer fence when command contains triple backticks", () => {
+      const result = formatToolArgsForSidebar({ command: "echo ```hello```" });
+      expect(result[0]?.body).toBe("````shell\necho ```hello```\n````");
+    });
+
+    it("formats non-command args as json block", () => {
+      const result = formatToolArgsForSidebar({ path: "/tmp/demo", recursive: true });
+      expect(result[0]?.label).toBe("Args");
+      expect(result[0]?.body).toContain("```json");
+      expect(result[0]?.body).toContain('"path": "/tmp/demo"');
+      expect(result[0]?.body).toContain('"recursive": true');
+    });
+  });
+
   describe("getTruncatedPreview", () => {
     it("returns short text unchanged", () => {
       const input = "Short text";
@@ -97,7 +142,6 @@ describe("tool-helpers", () => {
       const input = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
       const result = getTruncatedPreview(input);
 
-      // Should only show first 2 lines (PREVIEW_MAX_LINES = 2)
       expect(result).toBe("Line 1\nLine 2…");
     });
 
@@ -129,12 +173,11 @@ describe("tool-helpers", () => {
     });
 
     it("truncates by chars even within line limit", () => {
-      // Two lines but very long content
       const longLine = "x".repeat(80);
       const input = `${longLine}\n${longLine}`;
       const result = getTruncatedPreview(input);
 
-      expect(result.length).toBe(101); // 100 + ellipsis
+      expect(result.length).toBe(101);
       expect(result.endsWith("…")).toBe(true);
     });
   });
