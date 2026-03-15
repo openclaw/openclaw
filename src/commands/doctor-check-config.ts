@@ -8,7 +8,10 @@ import {
 } from "../agents/model-selection.js";
 import { readConfigFileSnapshot, validateConfigObjectWithPlugins } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveTtsConfig, isTtsProviderConfigured, TTS_PROVIDERS } from "../tts/tts.js";
 
@@ -104,6 +107,9 @@ export async function runCheckConfig(): Promise<{
 
 function checkModelResolution(cfg: OpenClawConfig, results: CheckConfigResult[]): void {
   try {
+    // Check if the user explicitly configured a model that silently fell back
+    const rawConfigured = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)?.trim();
+
     const { provider, model } = resolveConfiguredModelRef({
       cfg,
       defaultProvider: DEFAULT_PROVIDER,
@@ -120,15 +126,28 @@ function checkModelResolution(cfg: OpenClawConfig, results: CheckConfigResult[])
       return;
     }
 
-    const parsed = parseModelRef(model, provider);
-    if (!parsed) {
+    // Detect silent fallback: user configured a model but resolution fell back to default
+    if (rawConfigured && rawConfigured !== `${provider}/${model}` && !rawConfigured.includes("/")) {
+      // User wrote a bare model name without provider — resolved but may not be what they intended
       results.push({
         category: "model",
         label: "Primary model",
-        status: "fail",
-        message: `could not parse model ref "${model}" with provider "${provider}"`,
+        status: "warn",
+        message: `"${rawConfigured}" resolved as ${provider}/${model} — consider using the full provider/model format`,
       });
       return;
+    }
+    if (rawConfigured && rawConfigured.includes("/")) {
+      const parsed = parseModelRef(rawConfigured, DEFAULT_PROVIDER);
+      if (parsed && (parsed.provider !== provider || parsed.model !== model)) {
+        results.push({
+          category: "model",
+          label: "Primary model",
+          status: "warn",
+          message: `configured "${rawConfigured}" could not be resolved — fell back to ${provider}/${model}`,
+        });
+        return;
+      }
     }
 
     results.push({
