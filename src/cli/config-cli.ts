@@ -5,7 +5,7 @@ import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-f
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { danger, info, success } from "../globals.js";
+import { danger, info, success, warn } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -258,6 +258,75 @@ function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
   );
 }
 
+/**
+ * Returns true when the given dot-path targets a model ref config key.
+ * Exported for testing.
+ */
+export function detectModelConfigPath(raw: string): boolean {
+  const path = parsePath(raw);
+  return isModelConfigPath(path);
+}
+
+function isModelConfigPath(path: PathSegment[]): boolean {
+  // agents.defaults.model or agents.defaults.model.primary
+  if (
+    pathEquals(path, ["agents", "defaults", "model"]) ||
+    pathEquals(path, ["agents", "defaults", "model", "primary"])
+  ) {
+    return true;
+  }
+  // agents.list.<index>.model (when value is a string model ref)
+  if (path.length === 4 && path[0] === "agents" && path[1] === "list" && path[3] === "model") {
+    return true;
+  }
+  return false;
+}
+
+async function warnIfModelNotInCatalog(
+  value: unknown,
+  runtime: RuntimeEnv = defaultRuntime,
+): Promise<void> {
+  if (typeof value !== "string" || !value.trim()) {
+    return;
+  }
+  try {
+    const { parseModelRef } = await import("../agents/model-selection.js");
+    const { loadModelCatalog } = await import("../agents/model-catalog.js");
+    const { DEFAULT_PROVIDER } = await import("../agents/defaults.js");
+    const { splitTrailingAuthProfile } = await import("../agents/model-ref-profile.js");
+    const ref = parseModelRef(value, DEFAULT_PROVIDER);
+    if (!ref) {
+      runtime.error(
+        warn(
+          `Warning: could not parse model ref "${value}". ` +
+            `Run ${formatCliCommand("openclaw models list")} to see available models.`,
+        ),
+      );
+      return;
+    }
+    const { findModelInCatalog } = await import("../agents/model-catalog.js");
+    const catalog = await loadModelCatalog();
+    // If catalog load degraded (transient failure), skip the warning to avoid false positives.
+    if (catalog.length === 0) {
+      return;
+    }
+    // Strip trailing @profile auth suffix (e.g. "gpt-5@work" -> "gpt-5") before lookup.
+    const { model: modelWithoutProfile } = splitTrailingAuthProfile(ref.model);
+    const found = !!findModelInCatalog(catalog, ref.provider, modelWithoutProfile);
+    const modelKey = `${ref.provider}/${modelWithoutProfile}`;
+    if (!found) {
+      runtime.error(
+        warn(
+          `Warning: model "${modelKey}" not found in the model catalog. ` +
+            `Run ${formatCliCommand("openclaw models list")} to see available models.`,
+        ),
+      );
+    }
+  } catch {
+    // Catalog loading can fail in some environments; don't block config set.
+  }
+}
+
 function ensureValidOllamaProviderForApiKeySet(
   root: Record<string, unknown>,
   path: PathSegment[],
@@ -442,6 +511,9 @@ export function registerConfigCli(program: Command) {
         // This prevents runtime defaults from leaking into the written config file (issue #6070)
         const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
         ensureValidOllamaProviderForApiKeySet(next, parsedPath);
+        if (isModelConfigPath(parsedPath)) {
+          await warnIfModelNotInCatalog(parsedValue);
+        }
         setAtPath(next, parsedPath, parsedValue);
         await writeConfigFile(next);
         defaultRuntime.log(info(`Updated ${path}. Restart the gateway to apply.`));
