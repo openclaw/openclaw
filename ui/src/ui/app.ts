@@ -437,6 +437,8 @@ export class OpenClawApp extends LitElement {
   private chatScrollTimeout: number | null = null;
   private chatHasAutoScrolled = false;
   private chatLastScrollTop: number | null = null;
+  private chatProgrammaticScrollFrom: number | null = null;
+  private chatProgrammaticScrollTarget: number | null = null;
   private chatAutoScrollBlockId: string | null = null;
   private chatAutoScrollMode: ChatAutoScrollMode = "bottom";
   private chatBottomFollowPinned = false;

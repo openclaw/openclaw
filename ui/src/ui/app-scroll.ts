@@ -11,6 +11,8 @@ type ScrollHost = {
   chatScrollTimeout: number | null;
   chatHasAutoScrolled: boolean;
   chatLastScrollTop: number | null;
+  chatProgrammaticScrollFrom: number | null;
+  chatProgrammaticScrollTarget: number | null;
   chatAutoScrollBlockId: string | null;
   chatAutoScrollMode: ChatAutoScrollMode;
   chatBottomFollowPinned: boolean;
@@ -100,6 +102,28 @@ function shouldStickToLatestBlock(
   );
 }
 
+function isProgrammaticSmoothScrollStep(host: ScrollHost, scrollTop: number) {
+  const target = host.chatProgrammaticScrollTarget;
+  const from = host.chatProgrammaticScrollFrom;
+  if (target == null || from == null) {
+    return false;
+  }
+  const previousDistance = Math.abs(target - from);
+  const nextDistance = Math.abs(target - scrollTop);
+  if (nextDistance <= BOTTOM_EPSILON) {
+    host.chatProgrammaticScrollFrom = null;
+    host.chatProgrammaticScrollTarget = null;
+    return true;
+  }
+  if (nextDistance <= previousDistance + BOTTOM_EPSILON) {
+    host.chatProgrammaticScrollFrom = scrollTop;
+    return true;
+  }
+  host.chatProgrammaticScrollFrom = null;
+  host.chatProgrammaticScrollTarget = null;
+  return false;
+}
+
 export function scheduleChatScroll(host: ScrollHost, force = false, smooth = false) {
   if (host.chatScrollFrame) {
     cancelAnimationFrame(host.chatScrollFrame);
@@ -175,6 +199,13 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
           ? computeBottomScrollTop(target)
           : computeChatScrollTop(target, latestBlock, host.chatAutoScrollMode);
       applyScrollTop(target, scrollTop, smoothEnabled);
+      if (smoothEnabled) {
+        host.chatProgrammaticScrollFrom = target.scrollTop;
+        host.chatProgrammaticScrollTarget = scrollTop;
+      } else {
+        host.chatProgrammaticScrollFrom = null;
+        host.chatProgrammaticScrollTarget = null;
+      }
       if (
         !effectiveForce &&
         latestBlockId &&
@@ -205,6 +236,8 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
             ? computeBottomScrollTop(latest)
             : computeChatScrollTop(latest, latestBlockRetry, host.chatAutoScrollMode);
         latest.scrollTop = retryScrollTop;
+        host.chatProgrammaticScrollFrom = null;
+        host.chatProgrammaticScrollTarget = null;
         if (
           !effectiveForce &&
           latestBlockRetryId &&
@@ -250,18 +283,24 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   const latestBlock = pickLatestChatBlock(host);
   const latestBlockId = latestBlock?.id ?? null;
   const previousScrollTop = host.chatLastScrollTop;
+  const programmaticSmoothStep = isProgrammaticSmoothScrollStep(host, container.scrollTop);
   if (
     latestBlockId &&
     previousScrollTop != null &&
     host.chatAutoScrollBlockId === latestBlockId &&
-    container.scrollTop < previousScrollTop
+    container.scrollTop < previousScrollTop &&
+    !programmaticSmoothStep
   ) {
     host.chatSuppressedBlockId = latestBlockId;
   }
   host.chatLastScrollTop = container.scrollTop;
   const distanceFromBottom = measureDistanceFromBottom(container);
   host.chatUserNearBottom = distanceFromBottom <= BOTTOM_EPSILON;
-  host.chatBottomFollowPinned = distanceFromBottom <= BOTTOM_EPSILON;
+  if (distanceFromBottom <= BOTTOM_EPSILON) {
+    host.chatBottomFollowPinned = true;
+  } else if (!programmaticSmoothStep) {
+    host.chatBottomFollowPinned = false;
+  }
   // Clear the "new messages below" indicator when user scrolls back to bottom.
   if (distanceFromBottom <= BOTTOM_EPSILON) {
     host.chatAutoScrollBlockId = latestBlockId;
@@ -283,6 +322,8 @@ export function handleLogsScroll(host: ScrollHost, event: Event) {
 export function resetChatScroll(host: ScrollHost) {
   host.chatHasAutoScrolled = false;
   host.chatLastScrollTop = null;
+  host.chatProgrammaticScrollFrom = null;
+  host.chatProgrammaticScrollTarget = null;
   host.chatAutoScrollBlockId = null;
   host.chatAutoScrollMode = "bottom";
   host.chatBottomFollowPinned = false;
