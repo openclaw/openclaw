@@ -745,7 +745,7 @@ export function attachGatewayWsMessageHandler(params: {
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
               const approved = await approveDevicePairing(pairing.request.requestId);
-              if (approved) {
+              if (approved && approved.status === "approved") {
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
                 );
