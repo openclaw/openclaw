@@ -68,5 +68,38 @@ metadata: |
         self.assertTrue(valid, message)
 
 
+    def test_rejects_non_list_non_string_allowed_tools(self):
+        skill_dir = self.temp_dir / "scalar-tools-skill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = "---\nname: my-skill\ndescription: ok\nallowed-tools: 42\n---\n# Skill\n"
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertFalse(valid)
+        self.assertIn("allowed-tools must be a list", message)
+
+    def test_rejects_empty_allowed_tools_entry(self):
+        skill_dir = self.temp_dir / "empty-tools-skill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = "---\nname: my-skill\ndescription: ok\nallowed-tools:\n  - gh\n  - \"\"\n---\n# Skill\n"
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertFalse(valid)
+        self.assertIn("cannot be empty", message)
+
+    def test_accepts_valid_allowed_tools(self):
+        skill_dir = self.temp_dir / "valid-tools-skill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = "---\nname: my-skill\ndescription: ok\nallowed-tools:\n  - gh\n  - curl\n---\n# Skill\n"
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertTrue(valid, message)
+
+
 if __name__ == "__main__":
     main()
