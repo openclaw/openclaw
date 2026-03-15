@@ -157,7 +157,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS permissions](/platforms/mac/permissions)
 - [macOS remote](/platforms/mac/remote)
 - [macOS signing](/platforms/mac/signing)
-- [macOS release](/platforms/mac/release)
 - [macOS gateway (launchd)](/platforms/mac/bundled-gateway)
 - [macOS XPC](/platforms/mac/xpc)
 - [macOS skills](/platforms/mac/skills)
@@ -190,5 +189,5 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Testing + release
 
 - [Testing](/reference/test)
-- [Release checklist](/reference/RELEASING)
+- [Release policy](/reference/RELEASING)
 - [Device models](/reference/device-models)
