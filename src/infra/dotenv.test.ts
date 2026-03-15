@@ -96,4 +96,33 @@ describe("loadDotEnv", () => {
       });
     });
   });
+
+  it("merges .env PATH entries into existing PATH instead of dropping them", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(path.join(stateDir, ".env"), "PATH=/custom/node/bin:/usr/local/bin\n");
+        process.chdir(cwdDir);
+        process.env.PATH = "/usr/bin:/bin";
+
+        loadDotEnv({ quiet: true });
+
+        // .env entries prepended, existing entries preserved, duplicates removed
+        expect(process.env.PATH).toBe("/custom/node/bin:/usr/local/bin:/usr/bin:/bin");
+      });
+    });
+  });
+
+  it("does not duplicate PATH entries already present", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(path.join(stateDir, ".env"), "PATH=/usr/bin:/custom/bin\n");
+        process.chdir(cwdDir);
+        process.env.PATH = "/usr/bin:/bin";
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.PATH).toBe("/usr/bin:/custom/bin:/bin");
+      });
+    });
+  });
 });

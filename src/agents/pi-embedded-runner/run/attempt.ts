@@ -45,6 +45,7 @@ import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
+import { createNonStreamingOpenAICompatStreamFn } from "../../non-streaming-openai-compat.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
@@ -60,6 +61,7 @@ import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
+import { isNonStreamingProvider } from "../../provider-capabilities.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -171,6 +173,14 @@ export function isOllamaCompatProvider(model: {
   }
 }
 
+/**
+ * Returns true if the provider is an openai-completions aggregator that doesn't
+ * support SSE streaming (returns plain JSON instead of SSE events).
+ */
+function isNonStreamingOpenAICompatProvider(provider: string): boolean {
+  return isNonStreamingProvider(provider);
+}
+
 export function resolveOllamaCompatNumCtxEnabled(params: {
   config?: OpenClawConfig;
   providerId?: string;
@@ -266,6 +276,30 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
 
 function isToolCallBlockType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+/**
+ * Replace `content: null` with `content: ""` in assistant messages within an OpenAI-format
+ * payload. Some aggregators (e.g. Straico) crash when content is null on tool-call turns.
+ */
+function fixNullAssistantContent(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const messages = (payload as Record<string, unknown>).messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+  for (const msg of messages) {
+    if (
+      msg &&
+      typeof msg === "object" &&
+      (msg as Record<string, unknown>).role === "assistant" &&
+      (msg as Record<string, unknown>).content === null
+    ) {
+      (msg as Record<string, unknown>).content = "";
+    }
+  }
 }
 
 function normalizeToolCallIdsInMessage(message: unknown): void {
@@ -1181,6 +1215,16 @@ export async function runEmbeddedAttempt(
           log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
           activeSession.agent.streamFn = streamSimple;
         }
+      } else if (isNonStreamingOpenAICompatProvider(params.provider)) {
+        // Some aggregators (e.g. Straico) return plain JSON instead of SSE when
+        // stream: true is sent. The OpenAI SDK yields zero chunks, producing empty
+        // responses. Use a custom non-streaming fetch + event-stream wrapper.
+        const providerConfig = params.config?.models?.providers?.[params.provider];
+        const baseUrl =
+          (typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : null) ??
+          (typeof params.model.baseUrl === "string" ? params.model.baseUrl : null) ??
+          "";
+        activeSession.agent.streamFn = createNonStreamingOpenAICompatStreamFn(baseUrl);
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;
@@ -1247,6 +1291,23 @@ export async function runEmbeddedAttempt(
           } as unknown;
           return inner(model, nextContext as typeof context, options);
         };
+      }
+
+      // Some aggregators (e.g. Straico) crash (HTTP 500) when an assistant message has
+      // content: null alongside tool_calls. This happens when a prior provider (e.g. GLM-5)
+      // produced tool-call turns whose thinking blocks are stripped, leaving only tool_calls
+      // with no text content. Wrap streamFn so every outbound payload replaces null content
+      // with an empty string in assistant messages.
+      if (transcriptPolicy.requiresNonNullAssistantContent) {
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) =>
+          inner(model, context, {
+            ...options,
+            onPayload: (payload: unknown, payloadModel) => {
+              fixNullAssistantContent(payload);
+              return options?.onPayload?.(payload, payloadModel);
+            },
+          });
       }
 
       // Mistral (and other strict providers) reject tool call IDs that don't match their

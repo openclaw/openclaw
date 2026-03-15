@@ -221,6 +221,7 @@ export function ChatHeader({
   const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
   const sessions = useChatStore((s) => s.sessions);
   const activeSessionKey = useChatStore((s) => s.activeSessionKey);
+  const pendingModelId = useChatStore((s) => s.pendingModelId);
 
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
   const modelSelectorRef = useRef<HTMLButtonElement>(null);
@@ -261,14 +262,14 @@ export function ChatHeader({
     () => models.find((m) => m.id === activeSession?.model),
     [models, activeSession?.model],
   );
-  const displayModel = activeModel ?? null;
-
-  const activeProvider =
-    (activeSession?.modelProvider as string | undefined) ?? displayModel?.provider;
-  const filteredModels = useMemo(
-    () => (activeProvider ? models.filter((m) => m.provider === activeProvider) : models),
-    [models, activeProvider],
+  // When there's no active session, show the pending model selection (or the first available model).
+  const pendingModel = useMemo(
+    () => models.find((m) => m.id === pendingModelId) ?? models[0] ?? null,
+    [models, pendingModelId],
   );
+  const displayModel = activeModel ?? pendingModel ?? null;
+
+  const filteredModels = models;
 
   // Context window usage — prefer totalTokens (prompt tokens from last API call = actual context usage)
   const tokenUsed =
@@ -616,6 +617,14 @@ export function ChatHeader({
     async (modelId: string, provider?: string) => {
       setModelSelectorOpen(false);
       const modelRef = provider ? `${provider}/${modelId}` : modelId;
+      // No active session yet — store as pending; will be applied after first send.
+      const activeSession = useChatStore
+        .getState()
+        .sessions.find((s) => s.key === useChatStore.getState().activeSessionKey);
+      if (!activeSession) {
+        useChatStore.getState().setPendingModelId(modelRef);
+        return;
+      }
       try {
         await sendRpc("sessions.patch", { key: activeSessionKey, model: modelRef });
         const result = await sendRpc<{ sessions: { key: string; model?: string }[] }>(
@@ -889,8 +898,8 @@ export function ChatHeader({
                 />
               </button>
 
-              {/* Model chip */}
-              {activeSession?.model && (
+              {/* Model chip — always visible so users can select a model before the first send */}
+              {displayModel && (
                 <>
                   <Separator orientation="vertical" className="h-3.5" />
                   <button
@@ -900,7 +909,7 @@ export function ChatHeader({
                   >
                     <Bot className="h-2.5 w-2.5" />
                     <span className="truncate max-w-[120px]">
-                      {displayModel?.name ?? activeSession.model.split("/").pop()}
+                      {displayModel.name ?? displayModel.id.split("/").pop()}
                     </span>
                     <ChevronDown
                       className={cn(

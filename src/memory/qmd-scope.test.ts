@@ -51,4 +51,18 @@ describe("qmd scope", () => {
     expect(isQmdScopeAllowed(scope, "agent:main:discord:channel:c123")).toBe(false);
     expect(isQmdScopeAllowed(scope, "agent:main:slack:channel:c123")).toBe(true);
   });
+
+  it("allows access when sessionKey is undefined (dashboard/CLI)", () => {
+    const denyAll: ResolvedQmdConfig["scope"] = { default: "deny" };
+    expect(isQmdScopeAllowed(denyAll, undefined)).toBe(true);
+    expect(isQmdScopeAllowed(denyAll, "")).toBe(true);
+    expect(isQmdScopeAllowed(denyAll, "  ")).toBe(true);
+  });
+
+  it("allows internal agent sessions without a channel component", () => {
+    const denyAll: ResolvedQmdConfig["scope"] = { default: "deny" };
+    // agent main loop and cron sessions have no channel — scope should not gate them
+    expect(isQmdScopeAllowed(denyAll, "agent:main:main")).toBe(true);
+    expect(isQmdScopeAllowed(denyAll, "agent:main:cron:ff05dbdc-1afc-484d")).toBe(true);
+  });
 });

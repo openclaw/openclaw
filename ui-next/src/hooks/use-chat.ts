@@ -190,6 +190,12 @@ export function useChat(sendRpc: SendRpc) {
           attachments,
           idempotencyKey: generateUUID(),
         });
+        // Apply pending model if set (e.g. model was selected before first send in a new session).
+        const pendingModelId = useChatStore.getState().pendingModelId;
+        if (pendingModelId) {
+          useChatStore.getState().setPendingModelId(null);
+          void sendRpc("sessions.patch", { key: capKey, model: pendingModelId });
+        }
         // Refresh session list so the new session appears in the sidebar immediately.
         void loadSessions();
         // Capture runId so abort works before the first delta event.

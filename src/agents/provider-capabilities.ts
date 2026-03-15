@@ -11,6 +11,12 @@ export type ProviderCapabilities = {
   transcriptToolCallIdModelHints: string[];
   geminiThoughtSignatureModelHints: string[];
   dropThinkingBlockModelHints: string[];
+  // Some aggregators (e.g. Straico) crash on `content: null` in assistant messages that
+  // have tool_calls. Set true to replace null content with "" in outbound payloads.
+  requiresNonNullAssistantContent: boolean;
+  // Provider returns plain JSON instead of SSE even when stream: true is sent.
+  // Use a non-streaming fetch wrapper instead of the OpenAI SDK streaming path.
+  nonStreaming: boolean;
 };
 
 const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
@@ -24,6 +30,8 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   transcriptToolCallIdModelHints: [],
   geminiThoughtSignatureModelHints: [],
   dropThinkingBlockModelHints: [],
+  requiresNonNullAssistantContent: false,
+  nonStreaming: false,
 };
 
 const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
@@ -72,6 +80,17 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   },
   "github-copilot": {
     dropThinkingBlockModelHints: ["claude"],
+  },
+  // Straico is an aggregator API (openai-completions). It does not support `thinking` content
+  // blocks in conversation history (returns a silent empty response). Drop them for all models
+  // (all Straico model IDs contain "/" e.g. "anthropic/claude-sonnet-4.5").
+  // It also crashes (500) on assistant messages with content: null + tool_calls (e.g. tool-call
+  // turns from GLM-5 where thinking is stripped, leaving only tool_calls with no text).
+  straico: {
+    openAiCompatTurnValidation: false,
+    dropThinkingBlockModelHints: ["/"],
+    requiresNonNullAssistantContent: true,
+    nonStreaming: true,
   },
 };
 
@@ -122,6 +141,14 @@ export function isOpenAiProviderFamily(provider?: string | null): boolean {
 
 export function isAnthropicProviderFamily(provider?: string | null): boolean {
   return resolveProviderCapabilities(provider).providerFamily === "anthropic";
+}
+
+export function requiresNonNullAssistantContentForProvider(provider?: string | null): boolean {
+  return resolveProviderCapabilities(provider).requiresNonNullAssistantContent;
+}
+
+export function isNonStreamingProvider(provider?: string | null): boolean {
+  return resolveProviderCapabilities(provider).nonStreaming;
 }
 
 export function shouldDropThinkingBlocksForModel(params: {

@@ -163,6 +163,9 @@ export type ChatState = {
   // Thinking level from history
   thinkingLevel: string;
 
+  // Pending model for the next new session (set via model picker before first send)
+  pendingModelId: string | null;
+
   // Per-session drafts (input text + attachments preserved across navigation)
   drafts: Record<string, SessionDraft>;
 
@@ -215,6 +218,7 @@ export type ChatState = {
   dequeueNext: () => QueuedMessage | null;
 
   setThinkingLevel: (level: string) => void;
+  setPendingModelId: (modelId: string | null) => void;
 
   // ─── Draft actions ───
   getDraft: (sessionKey: string) => SessionDraft;
@@ -347,6 +351,7 @@ const initialState = {
   messageQueue: restoredQueue.messageQueue,
   isQueueRunning: restoredQueue.isQueueRunning,
   thinkingLevel: "off",
+  pendingModelId: null as string | null,
   drafts: {} as Record<string, SessionDraft>,
 };
 
@@ -769,6 +774,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setThinkingLevel: (level) => set({ thinkingLevel: level }),
+  setPendingModelId: (modelId) => set({ pendingModelId: modelId }),
 
   // ─── Draft actions ───
 

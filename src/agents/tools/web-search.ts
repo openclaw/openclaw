@@ -368,6 +368,11 @@ type PerplexitySearchResponse = {
   choices?: Array<{
     message?: {
       content?: string;
+      // Straico wraps Perplexity citations as OpenAI-style annotations
+      annotations?: Array<{
+        type?: string;
+        url_citation?: { url?: string; title?: string };
+      }>;
     };
   }>;
   citations?: string[];
@@ -1214,7 +1219,23 @@ async function runPerplexitySearch(params: {
 
       const data = (await res.json()) as PerplexitySearchResponse;
       const content = data.choices?.[0]?.message?.content ?? "No response";
-      const citations = data.citations ?? [];
+
+      // Direct Perplexity / OpenRouter return top-level `citations`.
+      // Straico wraps them as `annotations` on the message instead.
+      let citations = data.citations ?? [];
+      if (citations.length === 0) {
+        const annotations = data.choices?.[0]?.message?.annotations;
+        if (annotations?.length) {
+          const seen = new Set<string>();
+          for (const a of annotations) {
+            const url = a.url_citation?.url?.trim();
+            if (url && !seen.has(url)) {
+              seen.add(url);
+              citations.push(url);
+            }
+          }
+        }
+      }
 
       return { content, citations };
     },

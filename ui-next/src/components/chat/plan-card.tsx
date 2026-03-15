@@ -10,13 +10,40 @@ export type PlanStep = {
 const TASK_LIST_RE = /^[-*]\s+\[([ xX])\]\s+(.+)$/gm;
 
 /**
+ * Check whether the checklist looks intentional (a plan) vs incidental
+ * (checklists embedded in memory/prose). A plan starts with the checklist
+ * near the top of the message — possibly after a short heading or label.
+ * Incidental checklists (from memory recalls, quoted content) appear after
+ * substantial prose and should not trigger the PlanCard.
+ */
+function looksLikeIntentionalPlan(text: string): boolean {
+  TASK_LIST_RE.lastIndex = 0;
+  const firstMatch = TASK_LIST_RE.exec(text);
+  if (!firstMatch) {
+    return false;
+  }
+  // Allow the checklist to start within the first ~300 chars (room for a heading + blank line)
+  const preamble = text.slice(0, firstMatch.index);
+  // Strip whitespace and short headings — a plan preamble is brief
+  const substantiveChars = preamble.replace(/^#+\s+.*$/gm, "").replace(/\s+/g, "").length;
+  return substantiveChars < 120;
+}
+
+/**
  * Extract markdown task list items (`- [ ]` / `- [x]`) from text.
  * Returns the steps and the text with task list lines removed.
+ *
+ * Only extracts when the checklist looks like an intentional plan (near the
+ * top of the message). Checklists buried in prose/memory content are ignored
+ * to avoid false PlanCard triggers.
  *
  * Deduplicates by step text, keeping the last (most recent) done state.
  * This handles streaming agents that re-emit the full plan as steps complete.
  */
 export function extractPlanSteps(text: string): { steps: PlanStep[]; rest: string } {
+  if (!looksLikeIntentionalPlan(text)) {
+    return { steps: [], rest: text };
+  }
   TASK_LIST_RE.lastIndex = 0; // reset global regex state before use
   const steps: PlanStep[] = [];
   const seen = new Map<string, number>(); // step text -> index in steps[]

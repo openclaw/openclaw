@@ -4,6 +4,7 @@ import {
   isAnthropicProviderFamily,
   isOpenAiProviderFamily,
   preservesAnthropicThinkingSignatures,
+  requiresNonNullAssistantContentForProvider,
   resolveTranscriptToolCallIdMode,
   shouldDropThinkingBlocksForModel,
   shouldSanitizeGeminiThoughtSignaturesForModel,
@@ -29,6 +30,8 @@ export type TranscriptPolicy = {
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
   allowSyntheticToolResults: boolean;
+  // Replace null assistant content with "" before sending to providers that crash on null.
+  requiresNonNullAssistantContent: boolean;
 };
 
 const OPENAI_MODEL_APIS = new Set([
@@ -120,5 +123,6 @@ export function resolveTranscriptPolicy(params: {
     validateGeminiTurns: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
     validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
+    requiresNonNullAssistantContent: requiresNonNullAssistantContentForProvider(provider),
   };
 }

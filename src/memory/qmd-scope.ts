@@ -11,7 +11,13 @@ export function isQmdScopeAllowed(scope: ResolvedQmdConfig["scope"], sessionKey?
   if (!scope) {
     return true;
   }
+  // No session key or no recognizable channel → caller is dashboard, CLI, cron,
+  // or an internal agent session (not a channel message). Scope rules gate
+  // channel-based access; non-channel callers always pass.
   const parsed = parseQmdSessionScope(sessionKey);
+  if (!parsed.normalizedKey || !parsed.channel) {
+    return true;
+  }
   const channel = parsed.channel;
   const chatType = parsed.chatType;
   const normalizedKey = parsed.normalizedKey ?? "";

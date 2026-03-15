@@ -639,6 +639,7 @@ After searching, cite the source: "From memory/2026-03-10.md#L42"
 #### 5D. Heartbeat-driven memory distillation
 
 - **Enhance HEARTBEAT.md template** with a structured distillation task:
+
   ```markdown
   ### Memory Distillation (weekly)
 
@@ -648,6 +649,7 @@ After searching, cite the source: "From memory/2026-03-10.md#L42"
   - Archive processed daily notes to memory/.archive/
   - CRITICAL: MEMORY.md must stay under 180 lines (system truncates at 200)
   ```
+
 - **MEMORY.md size management (addresses A9):** The system truncates MEMORY.md after 200 lines when injecting into agent context. Distillation must:
   - Target 180 lines max (20-line safety margin)
   - Merge new content into existing sections rather than appending new sections endlessly
