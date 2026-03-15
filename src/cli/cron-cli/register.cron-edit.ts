@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
-import { danger } from "../../globals.js";
+import { danger, warn } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
@@ -208,6 +208,23 @@ export function registerCronEditCommand(cron: Command) {
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
           const model =
             typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined;
+          if (model) {
+            try {
+              const { loadConfig } = await import("../../config/config.js");
+              const cfg = loadConfig();
+              const modelsMap = cfg.agents?.defaults?.models ?? {};
+              const allowlistKeys = Object.keys(modelsMap);
+              if (allowlistKeys.length > 0 && !allowlistKeys.includes(model)) {
+                defaultRuntime.error(
+                  warn(
+                    `Warning: "${model}" is not in agents.defaults.models. This cron may fail at execution time.`,
+                  ),
+                );
+              }
+            } catch {
+              // Config loading can fail; don't block cron edit.
+            }
+          }
           const thinking =
             typeof opts.thinking === "string" && opts.thinking.trim()
               ? opts.thinking.trim()
