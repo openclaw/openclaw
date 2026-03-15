@@ -386,12 +386,23 @@ describe("hasAlreadyFlushedForCurrentCompaction", () => {
     ).toBe(false);
   });
 
-  it("treats missing compactionCount as 0", () => {
+  it("returns false when compactionCount is 0 (never compacted)", () => {
+    // When compactionCount is 0, the session has never been compacted,
+    // so we should allow the first memory flush.
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 0,
+        memoryFlushCompactionCount: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("treats missing compactionCount as 0 and allows flush", () => {
     expect(
       hasAlreadyFlushedForCurrentCompaction({
         memoryFlushCompactionCount: 0,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

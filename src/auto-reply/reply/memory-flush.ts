@@ -218,11 +218,21 @@ export function shouldRunMemoryFlush(params: {
  * Returns true when a memory flush has already been performed for the current
  * compaction cycle. This prevents repeated flush runs within the same cycle —
  * important for both the token-based and transcript-size–based trigger paths.
+ *
+ * Note: When compactionCount is 0 (never compacted), we always return false
+ * to allow the first memory flush. This fixes the edge case where both
+ * compactionCount and memoryFlushCompactionCount are 0, which previously
+ * incorrectly returned true (0 === 0), blocking the first flush.
  */
 export function hasAlreadyFlushedForCurrentCompaction(
   entry: Pick<SessionEntry, "compactionCount" | "memoryFlushCompactionCount">,
 ): boolean {
   const compactionCount = entry.compactionCount ?? 0;
   const lastFlushAt = entry.memoryFlushCompactionCount;
+  // When compactionCount is 0, the session has never been compacted.
+  // Allow flush in this case to enable first-time memory flush.
+  if (compactionCount === 0) {
+    return false;
+  }
   return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
 }
