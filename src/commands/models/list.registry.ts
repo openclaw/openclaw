@@ -3,6 +3,7 @@ import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import {
   hasUsableCustomProviderApiKey,
   resolveAwsSdkEnvVarName,
@@ -188,7 +189,13 @@ export function toModelRow(params: {
     key,
     name: model.name || model.id,
     input,
-    contextWindow: model.contextWindow ?? null,
+    contextWindow:
+      resolveContextTokensForModel({
+        cfg,
+        provider: model.provider,
+        model: model.id,
+        fallbackContextTokens: model.contextWindow,
+      }) ?? null,
     local,
     available,
     tags: Array.from(mergedTags),
