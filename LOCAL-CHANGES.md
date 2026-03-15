@@ -12,9 +12,33 @@ file first. Those files contain local patches.
 
 ## Local Commits (newest first)
 
-### 3. TTS: implement forward command for post-generation audio delivery
+### 5–6. fix: add missing `forward` TypeScript type and Zod schema (post-update bugfix)
 
-**Commit**: `c3eacb9`
+**Commits**: `7be873c` (TypeScript type), `4e919b6` (Zod schema)
+**Status**: Local only (fixes to commits 3–4 below)
+
+After a `git pull --rebase` onto upstream `2026.3.14`, the gateway crash-looped
+on startup with:
+
+```
+Config invalid
+  - messages.tts: Unrecognized key: "forward"
+```
+
+Root cause: commit 3 added the `forward` runtime logic but never updated the Zod
+schema. `TtsConfigSchema` uses `.strict()`, so any unrecognised key is a hard
+rejection at gateway startup.
+
+**Files changed**:
+
+- `src/config/types.tts.ts` — adds `forward?: { enabled?, command?, timeoutMs? }` to `TtsConfig`
+- `src/config/zod-schema.core.ts` — adds `forward` object shape to `TtsConfigSchema`
+
+---
+
+### 3–4. TTS: implement forward command for post-generation audio delivery
+
+**Commits**: `648cde2` (implementation), `7a684d0` (docs)
 **Status**: Submitted upstream as PR #30114
 
 Adds a generic `{{file}}` shell command hook that fires (fire-and-forget) after
@@ -32,8 +56,6 @@ each TTS audio file is generated. Config at `messages.tts.forward`:
 
 - `src/tts/tts.ts` — adds `shellEscape()`, `substituteShellSafe()`, `maybeForwardTtsAudio()`,
   calls it fire-and-forget in `maybeApplyTtsToPayload` after a successful TTS result
-- `src/config/types.tts.ts` — adds `forward?: { enabled?, command?, timeoutMs? }` to `TtsConfig`
-- `src/config/zod-schema.core.ts` — adds `forward` field to the Zod TTS schema
 - `src/agents/openclaw-tools.ts` — mentions forward in TTS tool description
 - `src/agents/tools/tts-tool.ts` — forward in tool schema
 
