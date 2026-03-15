@@ -766,6 +766,7 @@ export const registerTelegramHandlers = ({
       const senderId = user?.id != null ? String(user.id) : "";
       const senderUsername = user?.username ?? "";
       const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
+      const isPrivateDm = reaction.chat.type === "private";
       const isForum = reaction.chat.is_forum === true;
 
       // Resolve reaction notification mode (default: "own").
@@ -776,8 +777,17 @@ export const registerTelegramHandlers = ({
       if (user?.is_bot) {
         return;
       }
-      if (reactionMode === "own" && !wasSentByBot(chatId, messageId)) {
-        return;
+      if (reactionMode === "own") {
+        const botSent = wasSentByBot(chatId, messageId);
+        // null = cache miss (restart / TTL expiry).
+        // In private DMs the bot is always a participant, so a cache miss is
+        // a false-negative — forward the reaction optimistically.
+        // For groups and channels (type !== "private"), unknown → skip
+        // (conservative to avoid noise in shared contexts).
+        const skip = isPrivateDm ? botSent === false : botSent !== true;
+        if (skip) {
+          return;
+        }
       }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId,

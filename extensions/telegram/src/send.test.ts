@@ -72,8 +72,8 @@ describe("sent-message-cache", () => {
     expect(wasSentByBot(123, 1)).toBe(true);
     expect(wasSentByBot(123, 2)).toBe(true);
     expect(wasSentByBot(456, 10)).toBe(true);
-    expect(wasSentByBot(123, 3)).toBe(false);
-    expect(wasSentByBot(789, 1)).toBe(false);
+    expect(wasSentByBot(123, 3)).toBe(false); // chat tracked, message not present
+    expect(wasSentByBot(789, 1)).toBe(null); // unknown chat — cache miss
   });
 
   it("handles string chat IDs", () => {
@@ -87,7 +87,7 @@ describe("sent-message-cache", () => {
     expect(wasSentByBot(123, 1)).toBe(true);
 
     clearSentMessageCache();
-    expect(wasSentByBot(123, 1)).toBe(false);
+    expect(wasSentByBot(123, 1)).toBe(null); // cache wiped — unknown
   });
 
   it("shares sent-message state across distinct module instances", async () => {
