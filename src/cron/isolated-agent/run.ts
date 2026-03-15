@@ -192,11 +192,19 @@ async function resolveCronDeliveryContext(params: {
 function appendCronDeliveryInstruction(params: {
   commandBody: string;
   deliveryRequested: boolean;
+  disableMessageTool: boolean;
 }) {
   if (!params.deliveryRequested) {
     return params.commandBody;
   }
-  return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+  // When the message tool is disabled (announce delivery handles it), be
+  // explicit so skills that reference the message tool do not confuse the
+  // agent into producing empty or error output.
+  // See: https://github.com/openclaw/openclaw/issues/42244
+  const instruction = params.disableMessageTool
+    ? "IMPORTANT: The message/send tool is not available for this run. Do NOT attempt to send messages directly. Return your complete output as plain text — it will be delivered to the user automatically."
+    : "Return your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.";
+  return `${params.commandBody}\n\n${instruction}`.trim();
 }
 
 export async function runCronIsolatedAgentTurn(params: {
@@ -478,7 +486,11 @@ export async function runCronIsolatedAgentTurn(params: {
     // Internal/trusted source - use original format
     commandBody = `${base}\n${timeLine}`.trim();
   }
-  commandBody = appendCronDeliveryInstruction({ commandBody, deliveryRequested });
+  commandBody = appendCronDeliveryInstruction({
+    commandBody,
+    deliveryRequested,
+    disableMessageTool: toolPolicy.disableMessageTool,
+  });
 
   const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
   const skillsSnapshot = resolveCronSkillsSnapshot({
@@ -825,9 +837,16 @@ export async function runCronIsolatedAgentTurn(params: {
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
   const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
+  // Only treat a matching message-tool send as the delivery path when the
+  // message tool was actually available. When the tool was disabled (announce
+  // mode), any `didSendViaMessagingTool` state is stale from a prior turn or
+  // subagent — counting it would suppress announce delivery, causing zero
+  // delivery to the user.
+  // See: https://github.com/openclaw/openclaw/issues/42244
   const skipMessagingToolDelivery =
     deliveryContract === "shared" &&
     deliveryRequested &&
+    !toolPolicy.disableMessageTool &&
     finalRunResult.didSendViaMessagingTool === true &&
     (finalRunResult.messagingToolSentTargets ?? []).some((target) =>
       matchesMessagingToolDeliveryTarget(target, {
