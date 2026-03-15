@@ -891,13 +891,30 @@ function resolveFeishuSession(
     accountId: params.accountId,
     peer,
   });
+
+  // Normalize the session "to" field so that downstream tooling (including the
+  // message tool in isolated/cron runs) sees the same Feishu target shapes as
+  // the main session:
+  // - DM/user targets -> user:ou_xxx
+  // - Chat/group targets -> chat:oc_xxx
+  // This keeps DeliveryContext.To aligned with the Feishu plugin's
+  // normalizeFeishuTarget/looksLikeFeishuId helpers and avoids
+  // Unknown target "user" for Feishu / missing-target errors when the
+  // message tool infers its default target from the session route.
+  const to =
+    isGroup || idLower.startsWith("oc_")
+      ? `chat:${trimmed}`
+      : idLower.startsWith("ou_") || idLower.startsWith("on_")
+        ? `user:${trimmed}`
+        : trimmed;
+
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
     peer,
     chatType: isGroup ? "group" : "direct",
     from: isGroup ? `feishu:group:${trimmed}` : `feishu:${trimmed}`,
-    to: trimmed,
+    to,
   };
 }
 
