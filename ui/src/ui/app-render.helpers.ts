@@ -563,11 +563,22 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    // Include provider prefix in the value so the server receives the full
+    // provider/model string and doesn't re-attach the default provider.
+    const qualifiedId = provider ? `${provider}/${entry.id}` : entry.id;
+    addOption(qualifiedId, provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
+  // Check if currentOverride is a bare model ID that matches a catalog entry.
+  // If so, don't add it again — the qualified version is already in the list.
   if (currentOverride) {
-    addOption(currentOverride);
+    const bareMatch = catalog.find((entry) => {
+      const provider = entry.provider?.trim();
+      return provider && currentOverride.trim() === entry.id.trim();
+    });
+    if (!bareMatch) {
+      addOption(currentOverride);
+    }
   }
   if (defaultModel) {
     addOption(defaultModel);
@@ -604,7 +615,13 @@ function renderChatModelSelect(state: AppViewState) {
           options,
           (entry) => entry.value,
           (entry) =>
-            html`<option value=${entry.value} ?selected=${entry.value === currentOverride}>
+            html`<option
+              value=${entry.value}
+              ?selected=${
+                entry.value === currentOverride ||
+                (currentOverride && entry.value.endsWith(`/${currentOverride}`))
+              }
+            >
               ${entry.label}
             </option>`,
         )}
