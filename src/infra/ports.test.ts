@@ -12,6 +12,14 @@ import { ensurePortAvailable, handlePortError, PortInUseError } from "./ports.js
 
 const describeUnix = process.platform === "win32" ? describe.skip : describe;
 
+async function allocateEphemeralPort(): Promise<number> {
+  const server = net.createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as net.AddressInfo).port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
 describe("ports helpers", () => {
   it("ensurePortAvailable rejects when port busy", async () => {
     const server = net.createServer();
@@ -77,6 +85,28 @@ describeUnix("inspectPortUsage", () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+
+  it("does not report lsof errors when ss fallback succeeds with no listeners", async () => {
+    const port = await allocateEphemeralPort();
+
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        throw Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" });
+      }
+      if (command === "ss") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(port);
+    expect(result.status).toBe("free");
+    expect(result.errors).toBeUndefined();
   });
 
   it("falls back to ss when lsof is unavailable", async () => {

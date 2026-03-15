@@ -191,6 +191,9 @@ async function readUnixListeners(
   if (ssFallback.listeners.length > 0) {
     return ssFallback;
   }
+  if (ssFallback.errors.length === 0) {
+    return { listeners: [], detail: ssFallback.detail, errors: [] };
+  }
 
   return {
     listeners: [],
