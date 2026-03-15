@@ -103,6 +103,15 @@ export type {
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
+  ProviderCacheTtlEligibilityContext,
+  ProviderPreparedRuntimeAuth,
+  ProviderPrepareExtraParamsContext,
+  ProviderPrepareDynamicModelContext,
+  ProviderPrepareRuntimeAuthContext,
+  ProviderResolveDynamicModelContext,
+  ProviderNormalizeResolvedModelContext,
+  ProviderRuntimeModel,
+  ProviderWrapStreamFnContext,
 } from "../plugins/types.js";
 export type {
   GatewayRequestHandler,
@@ -805,7 +814,11 @@ export type { ContextEngineFactory } from "../context-engine/registry.js";
 // agentDir/store) rather than importing raw helpers directly.
 export { requireApiKey } from "../agents/model-auth.js";
 export type { ResolvedProviderAuth } from "../agents/model-auth.js";
-export type { ProviderDiscoveryContext } from "../plugins/types.js";
+export type {
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderDiscoveryContext,
+} from "../plugins/types.js";
 export {
   applyProviderDefaultModel,
   promptAndConfigureOpenAICompatibleSelfHostedProvider,

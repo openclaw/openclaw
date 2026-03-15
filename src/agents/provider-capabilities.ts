@@ -1,3 +1,4 @@
+import { resolveProviderCapabilitiesWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ProviderCapabilities = {
@@ -55,14 +56,6 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   openai: {
     providerFamily: "openai",
   },
-  "openai-codex": {
-    providerFamily: "openai",
-  },
-  openrouter: {
-    openAiCompatTurnValidation: false,
-    geminiThoughtSignatureSanitization: true,
-    geminiThoughtSignatureModelHints: ["gemini"],
-  },
   opencode: {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
@@ -77,16 +70,17 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     geminiThoughtSignatureSanitization: true,
     geminiThoughtSignatureModelHints: ["gemini"],
   },
-  "github-copilot": {
-    dropThinkingBlockModelHints: ["claude"],
-  },
 };
 
 export function resolveProviderCapabilities(provider?: string | null): ProviderCapabilities {
   const normalized = normalizeProviderId(provider ?? "");
+  const pluginCapabilities = normalized
+    ? resolveProviderCapabilitiesWithPlugin({ provider: normalized })
+    : undefined;
   return {
     ...DEFAULT_PROVIDER_CAPABILITIES,
     ...PROVIDER_CAPABILITIES[normalized],
+    ...pluginCapabilities,
   };
 }
 

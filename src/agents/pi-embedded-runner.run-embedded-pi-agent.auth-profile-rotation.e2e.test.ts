@@ -38,6 +38,30 @@ vi.mock("../providers/github-copilot-token.js", () => ({
   resolveCopilotApiToken: (...args: unknown[]) => resolveCopilotApiTokenMock(...args),
 }));
 
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  return {
+    ...actual,
+    prepareProviderRuntimeAuth: async (params: {
+      provider: string;
+      context: { apiKey: string; env: NodeJS.ProcessEnv };
+    }) => {
+      if (params.provider !== "github-copilot") {
+        return undefined;
+      }
+      const token = await resolveCopilotApiTokenMock({
+        githubToken: params.context.apiKey,
+        env: params.context.env,
+      });
+      return {
+        apiKey: token.token,
+        baseUrl: token.baseUrl,
+        expiresAt: token.expiresAt,
+      };
+    },
+  };
+});
+
 vi.mock("./pi-embedded-runner/compact.js", () => ({
   compactEmbeddedPiSessionDirect: vi.fn(async () => {
     throw new Error("compact should not run in auth profile rotation tests");

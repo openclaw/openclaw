@@ -212,11 +212,24 @@ export function normalizeRegisteredProvider(params: {
     wizard: params.provider.wizard,
     pushDiagnostic: params.pushDiagnostic,
   });
+  const catalog = params.provider.catalog;
+  const discovery = params.provider.discovery;
+  if (catalog && discovery) {
+    pushProviderDiagnostic({
+      level: "warn",
+      pluginId: params.pluginId,
+      source: params.source,
+      message: `provider "${id}" registered both catalog and discovery; using catalog`,
+      pushDiagnostic: params.pushDiagnostic,
+    });
+  }
   const {
     wizard: _ignoredWizard,
     docsPath: _ignoredDocsPath,
     aliases: _ignoredAliases,
     envVars: _ignoredEnvVars,
+    catalog: _ignoredCatalog,
+    discovery: _ignoredDiscovery,
     ...restProvider
   } = params.provider;
   return {
@@ -227,6 +240,8 @@ export function normalizeRegisteredProvider(params: {
     ...(aliases ? { aliases } : {}),
     ...(envVars ? { envVars } : {}),
     auth,
+    ...(catalog ? { catalog } : {}),
+    ...(!catalog && discovery ? { discovery } : {}),
     ...(wizard ? { wizard } : {}),
   };
 }
