@@ -31,6 +31,7 @@ import { resolveMarkdownTableMode } from "../../../../src/config/markdown-tables
 import { readSessionUpdatedAt, resolveStorePath } from "../../../../src/config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
 import { getFallbackGatewayContext } from "../../../../src/gateway/server-plugins.js";
+import { stripEnvelopeFromMessage } from "../../../../src/gateway/chat-sanitize.js";
 import { loadSessionEntry, readSessionMessages } from "../../../../src/gateway/session-utils.js";
 import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../../../src/utils/directive-tags.js";
 import { convertMarkdownTables } from "../../../../src/markdown/tables.js";
@@ -725,6 +726,22 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let dispatchResult: Awaited<ReturnType<typeof dispatchInboundMessage>> | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
+  let preDispatchAssistantCount = 0;
+  if (ctxPayload.SessionKey) {
+    try {
+      const { storePath, entry } = loadSessionEntry(ctxPayload.SessionKey);
+      const sessionId = entry?.sessionId;
+      if (sessionId) {
+        const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
+        preDispatchAssistantCount = messages.filter(
+          (m: unknown) =>
+            typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
+        ).length;
+      }
+    } catch {
+      preDispatchAssistantCount = 0;
+    }
+  }
   try {
     if (isProcessAborted(abortSignal)) {
       dispatchAborted = true;
@@ -868,17 +885,18 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       let message: Record<string, unknown> | undefined;
       if (sessionId) {
         const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
-        const lastMessage = messages
-          .filter(
-            (m: unknown) =>
-              typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
-          )
-          .pop();
-        message = lastMessage as Record<string, unknown> | undefined;
+        const assistantMessages = messages.filter(
+          (m: unknown) =>
+            typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
+        );
+        const newAssistantMessages = assistantMessages.slice(preDispatchAssistantCount);
+        message = newAssistantMessages.pop() as Record<string, unknown> | undefined;
       }
 
       const sanitizedMessage = message
-        ? stripInlineDirectiveTagsFromMessageForDisplay(message)
+        ? stripInlineDirectiveTagsFromMessageForDisplay(
+            stripEnvelopeFromMessage(message) as Record<string, unknown>,
+          )
         : undefined;
 
       const payload = {

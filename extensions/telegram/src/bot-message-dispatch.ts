@@ -28,6 +28,7 @@ import type {
 } from "../../../src/config/types.js";
 import { danger, logVerbose } from "../../../src/globals.js";
 import { getFallbackGatewayContext } from "../../../src/gateway/server-plugins.js";
+import { stripEnvelopeFromMessage } from "../../../src/gateway/chat-sanitize.js";
 import { loadSessionEntry, readSessionMessages } from "../../../src/gateway/session-utils.js";
 import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../../src/utils/directive-tags.js";
 import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
@@ -535,6 +536,22 @@ export const dispatchTelegramMessage = async ({
   });
 
   let dispatchError: unknown;
+  let preDispatchAssistantCount = 0;
+  if (ctxPayload.SessionKey) {
+    try {
+      const { storePath, entry } = loadSessionEntry(ctxPayload.SessionKey);
+      const sessionId = entry?.sessionId;
+      if (sessionId) {
+        const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
+        preDispatchAssistantCount = messages.filter(
+          (m: unknown) =>
+            typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
+        ).length;
+      }
+    } catch {
+      preDispatchAssistantCount = 0;
+    }
+  }
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -844,17 +861,18 @@ export const dispatchTelegramMessage = async ({
         let message: Record<string, unknown> | undefined;
         if (sessionId) {
           const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
-          const lastMessage = messages
-            .filter(
-              (m: unknown) =>
-                typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
-            )
-            .pop();
-          message = lastMessage as Record<string, unknown> | undefined;
+          const assistantMessages = messages.filter(
+            (m: unknown) =>
+              typeof m === "object" && m !== null && (m as Record<string, unknown>)?.role === "assistant",
+          );
+          const newAssistantMessages = assistantMessages.slice(preDispatchAssistantCount);
+          message = newAssistantMessages.pop() as Record<string, unknown> | undefined;
         }
 
         const sanitizedMessage = message
-          ? stripInlineDirectiveTagsFromMessageForDisplay(message)
+          ? stripInlineDirectiveTagsFromMessageForDisplay(
+              stripEnvelopeFromMessage(message) as Record<string, unknown>,
+            )
           : undefined;
 
         const payload = {
