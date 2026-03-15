@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import * as skillScanner from "../security/skill-scanner.js";
 import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
@@ -20,6 +21,7 @@ let installPluginFromDir: typeof import("./install.js").installPluginFromDir;
 let installPluginFromNpmSpec: typeof import("./install.js").installPluginFromNpmSpec;
 let installPluginFromPath: typeof import("./install.js").installPluginFromPath;
 let PLUGIN_INSTALL_ERROR_CODE: typeof import("./install.js").PLUGIN_INSTALL_ERROR_CODE;
+let resolvePluginInstallDir: typeof import("./install.js").resolvePluginInstallDir;
 let runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout;
 let suiteTempRoot = "";
 let suiteFixtureRoot = "";
@@ -157,7 +159,9 @@ async function setupVoiceCallArchiveInstall(params: { outName: string; version: 
 }
 
 function expectPluginFiles(result: { targetDir: string }, stateDir: string, pluginId: string) {
-  expect(result.targetDir).toBe(path.join(stateDir, "extensions", pluginId));
+  expect(result.targetDir).toBe(
+    resolvePluginInstallDir(pluginId, path.join(stateDir, "extensions")),
+  );
   expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
   expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
 }
@@ -331,6 +335,7 @@ beforeAll(async () => {
     installPluginFromNpmSpec,
     installPluginFromPath,
     PLUGIN_INSTALL_ERROR_CODE,
+    resolvePluginInstallDir,
   } = await import("./install.js"));
   ({ runCommandWithTimeout } = await import("../process/exec.js"));
 
@@ -394,7 +399,7 @@ beforeEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
-  it("installs into ~/.openclaw/extensions and uses unscoped id", async () => {
+  it("installs into ~/.openclaw/extensions and preserves scoped package ids", async () => {
     const { stateDir, archivePath, extensionsDir } = await setupVoiceCallArchiveInstall({
       outName: "plugin.tgz",
       version: "0.0.1",
@@ -404,7 +409,7 @@ describe("installPluginFromArchive", () => {
       archivePath,
       extensionsDir,
     });
-    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "voice-call" });
+    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/voice-call" });
   });
 
   it("rejects installing when plugin already exists", async () => {
@@ -443,7 +448,7 @@ describe("installPluginFromArchive", () => {
       archivePath,
       extensionsDir,
     });
-    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "zipper" });
+    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/zipper" });
   });
 
   it("allows updates when mode is update", async () => {
@@ -615,16 +620,17 @@ describe("installPluginFromArchive", () => {
 });
 
 describe("installPluginFromDir", () => {
-  function expectInstalledAsMemoryCognee(
+  function expectInstalledWithPluginId(
     result: Awaited<ReturnType<typeof installPluginFromDir>>,
     extensionsDir: string,
+    pluginId: string,
   ) {
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;
     }
-    expect(result.pluginId).toBe("memory-cognee");
-    expect(result.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
+    expect(result.pluginId).toBe(pluginId);
+    expect(result.targetDir).toBe(resolvePluginInstallDir(pluginId, extensionsDir));
   }
 
   it("uses --ignore-scripts for dependency install", async () => {
@@ -689,17 +695,17 @@ describe("installPluginFromDir", () => {
       logger: { info: (msg: string) => infoMessages.push(msg), warn: () => {} },
     });
 
-    expectInstalledAsMemoryCognee(res, extensionsDir);
+    expectInstalledWithPluginId(res, extensionsDir, "memory-cognee");
     expect(
       infoMessages.some((msg) =>
         msg.includes(
-          'Plugin manifest id "memory-cognee" differs from npm package name "cognee-openclaw"',
+          'Plugin manifest id "memory-cognee" differs from npm package name "@openclaw/cognee-openclaw"',
         ),
       ),
     ).toBe(true);
   });
 
-  it("normalizes scoped manifest ids to unscoped install keys", async () => {
+  it("preserves scoped manifest ids as install keys", async () => {
     const { pluginDir, extensionsDir } = setupManifestInstallFixture({
       manifestId: "@team/memory-cognee",
     });
@@ -707,11 +713,62 @@ describe("installPluginFromDir", () => {
     const res = await installPluginFromDir({
       dirPath: pluginDir,
       extensionsDir,
-      expectedPluginId: "memory-cognee",
+      expectedPluginId: "@team/memory-cognee",
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expectInstalledAsMemoryCognee(res, extensionsDir);
+    expectInstalledWithPluginId(res, extensionsDir, "@team/memory-cognee");
+  });
+
+  it("preserves scoped package names when no plugin manifest id is present", async () => {
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectInstalledWithPluginId(res, extensionsDir, "@openclaw/test-plugin");
+  });
+
+  it("accepts legacy unscoped expected ids for scoped package names without manifest ids", async () => {
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      expectedPluginId: "test-plugin",
+    });
+
+    expectInstalledWithPluginId(res, extensionsDir, "@openclaw/test-plugin");
+  });
+
+  it("rejects bare @ as an invalid scoped id", () => {
+    expect(() => resolvePluginInstallDir("@")).toThrow(
+      "invalid plugin name: scoped ids must use @scope/name format",
+    );
+  });
+
+  it("rejects empty scoped segments like @/name", () => {
+    expect(() => resolvePluginInstallDir("@/name")).toThrow(
+      "invalid plugin name: scoped ids must use @scope/name format",
+    );
+  });
+
+  it("rejects two-segment ids without a scope prefix", () => {
+    expect(() => resolvePluginInstallDir("team/name")).toThrow(
+      "invalid plugin name: scoped ids must use @scope/name format",
+    );
+  });
+
+  it("uses a unique hashed install dir for scoped ids", () => {
+    const extensionsDir = path.join(makeTempDir(), "extensions");
+    const scopedTarget = resolvePluginInstallDir("@scope/name", extensionsDir);
+    const hashedFlatId = safePathSegmentHashed("@scope/name");
+    const flatTarget = resolvePluginInstallDir(hashedFlatId, extensionsDir);
+
+    expect(path.basename(scopedTarget)).toBe(`@${hashedFlatId}`);
+    expect(scopedTarget).not.toBe(flatTarget);
   });
 });
 

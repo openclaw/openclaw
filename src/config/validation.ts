@@ -528,8 +528,17 @@ function validateConfigObjectWithPluginsBase(
     }
   }
 
+  // The default memory slot is inferred; only a user-configured slot should block startup.
+  const pluginSlots = pluginsConfig?.slots;
+  const hasExplicitMemorySlot =
+    pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, "memory");
   const memorySlot = normalizedPlugins.slots.memory;
-  if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
+  if (
+    hasExplicitMemorySlot &&
+    typeof memorySlot === "string" &&
+    memorySlot.trim() &&
+    !knownIds.has(memorySlot)
+  ) {
     pushMissingPluginIssue("plugins.slots.memory", memorySlot);
   }
 
