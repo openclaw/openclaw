@@ -155,6 +155,19 @@ describe("attachMobileViewportFixes", () => {
     controller.cleanup();
   });
 
+  it("does not enable the iOS mobile layout gate without visualViewport support", () => {
+    const { host } = createHost();
+    restoreProperty(window, "visualViewport", undefined);
+
+    const controller = attachMobileViewportFixes(host);
+
+    expect(document.documentElement.hasAttribute("data-ios-mobile")).toBe(false);
+    expect(document.body.hasAttribute("data-ios-mobile")).toBe(false);
+    expect(host.hasAttribute("data-ios-mobile")).toBe(false);
+
+    controller.cleanup();
+  });
+
   it("preserves the pre-keyboard layout height while a text field is focused", async () => {
     const { host, textarea } = createHost();
     const controller = attachMobileViewportFixes(host);
