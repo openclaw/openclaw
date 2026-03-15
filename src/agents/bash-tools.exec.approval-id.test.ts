@@ -746,6 +746,7 @@ describe("exec approvals", () => {
       ask: "off",
       security: "full",
       approvalRunningNoticeMs: 0,
+      rubberband: { enabled: false },
     });
 
     const result = await tool.execute("call6", {
