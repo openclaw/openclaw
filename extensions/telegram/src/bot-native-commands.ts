@@ -140,6 +140,7 @@ type RegisterTelegramNativeCommandsParams = {
   ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
   opts: { token: string };
+  telegramTransport?: TelegramTransport;
 };
 
 async function resolveTelegramCommandAuth(params: {
@@ -362,6 +363,7 @@ export const registerTelegramNativeCommands = ({
   resolveTelegramGroupConfig,
   shouldSkipUpdate,
   opts,
+  telegramTransport,
 }: RegisterTelegramNativeCommandsParams) => {
   const boundRoute =
     nativeEnabled && nativeSkillsEnabled
@@ -536,6 +538,7 @@ export const registerTelegramNativeCommands = ({
     runtime,
     bot,
     mediaLocalRoots: params.mediaLocalRoots,
+    telegramTransport,
     replyToMode,
     textLimit,
     thread: params.threadSpec,

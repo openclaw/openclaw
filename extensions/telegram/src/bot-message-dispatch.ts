@@ -35,6 +35,7 @@ import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
+import type { TelegramTransport } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
   type ArchivedPreview,
@@ -111,6 +112,7 @@ type DispatchTelegramMessageParams = {
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   opts: Pick<TelegramBotOptions, "token">;
+  telegramTransport?: TelegramTransport;
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
@@ -148,6 +150,7 @@ export const dispatchTelegramMessage = async ({
   textLimit,
   telegramCfg,
   opts,
+  telegramTransport,
 }: DispatchTelegramMessageParams) => {
   const {
     ctxPayload,
@@ -457,6 +460,7 @@ export const dispatchTelegramMessage = async ({
     runtime,
     bot,
     mediaLocalRoots,
+    telegramTransport,
     replyToMode,
     textLimit,
     thread: threadSpec,

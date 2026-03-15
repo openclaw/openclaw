@@ -3,9 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { logVerbose, shouldLogVerbose } from "../../../src/globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../../../src/infra/fs-safe.js";
-import type { SsrFPolicy } from "../../../src/infra/net/ssrf.js";
+import type { PinnedDispatcherPolicy, SsrFPolicy } from "../../../src/infra/net/ssrf.js";
 import { type MediaKind, maxBytesForKind } from "../../../src/media/constants.js";
-import { fetchRemoteMedia } from "../../../src/media/fetch.js";
+import { fetchRemoteMedia, type FetchLike } from "../../../src/media/fetch.js";
 import {
   convertHeicToJpeg,
   hasAlphaChannel,
@@ -27,6 +27,10 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: FetchLike;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  fallbackDispatcherPolicy?: PinnedDispatcherPolicy;
+  shouldRetryFetchError?: (error: unknown) => boolean;
   /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
   localRoots?: readonly string[] | "any";
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
@@ -36,7 +40,14 @@ type WebMediaOptions = {
 
 function resolveWebMediaOptions(params: {
   maxBytesOrOptions?: number | WebMediaOptions;
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" };
+  options?: {
+    ssrfPolicy?: SsrFPolicy;
+    fetchImpl?: FetchLike;
+    dispatcherPolicy?: PinnedDispatcherPolicy;
+    fallbackDispatcherPolicy?: PinnedDispatcherPolicy;
+    shouldRetryFetchError?: (error: unknown) => boolean;
+    localRoots?: readonly string[] | "any";
+  };
   optimizeImages: boolean;
 }): WebMediaOptions {
   if (typeof params.maxBytesOrOptions === "number" || params.maxBytesOrOptions === undefined) {
@@ -44,6 +55,10 @@ function resolveWebMediaOptions(params: {
       maxBytes: params.maxBytesOrOptions,
       optimizeImages: params.optimizeImages,
       ssrfPolicy: params.options?.ssrfPolicy,
+      fetchImpl: params.options?.fetchImpl,
+      dispatcherPolicy: params.options?.dispatcherPolicy,
+      fallbackDispatcherPolicy: params.options?.fallbackDispatcherPolicy,
+      shouldRetryFetchError: params.options?.shouldRetryFetchError,
       localRoots: params.options?.localRoots,
     };
   }
@@ -238,6 +253,10 @@ async function loadWebMediaInternal(
     maxBytes,
     optimizeImages = true,
     ssrfPolicy,
+    fetchImpl,
+    dispatcherPolicy,
+    fallbackDispatcherPolicy,
+    shouldRetryFetchError,
     localRoots,
     sandboxValidated = false,
     readFile: readFileOverride,
@@ -331,7 +350,15 @@ async function loadWebMediaInternal(
         : optimizeImages
           ? Math.max(maxBytes, defaultFetchCap)
           : maxBytes;
-    const fetched = await fetchRemoteMedia({ url: mediaUrl, maxBytes: fetchCap, ssrfPolicy });
+    const fetched = await fetchRemoteMedia({
+      url: mediaUrl,
+      fetchImpl,
+      maxBytes: fetchCap,
+      ssrfPolicy,
+      dispatcherPolicy,
+      fallbackDispatcherPolicy,
+      shouldRetryFetchError,
+    });
     const { buffer, contentType, fileName } = fetched;
     const kind = kindFromMime(contentType);
     return await clampAndFinalize({ buffer, contentType, kind, fileName });
@@ -404,7 +431,14 @@ async function loadWebMediaInternal(
 export async function loadWebMedia(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
+  options?: {
+    ssrfPolicy?: SsrFPolicy;
+    fetchImpl?: FetchLike;
+    dispatcherPolicy?: PinnedDispatcherPolicy;
+    fallbackDispatcherPolicy?: PinnedDispatcherPolicy;
+    shouldRetryFetchError?: (error: unknown) => boolean;
+    localRoots?: readonly string[] | "any";
+  },
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(
     mediaUrl,
@@ -415,7 +449,14 @@ export async function loadWebMedia(
 export async function loadWebMediaRaw(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
+  options?: {
+    ssrfPolicy?: SsrFPolicy;
+    fetchImpl?: FetchLike;
+    dispatcherPolicy?: PinnedDispatcherPolicy;
+    fallbackDispatcherPolicy?: PinnedDispatcherPolicy;
+    shouldRetryFetchError?: (error: unknown) => boolean;
+    localRoots?: readonly string[] | "any";
+  },
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(
     mediaUrl,

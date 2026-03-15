@@ -22,4 +22,25 @@ describe("media load options", () => {
       localRoots: ["/tmp/workspace"],
     });
   });
+
+  it("preserves custom fetch transport options", () => {
+    const fetchImpl = (() => Promise.resolve(new Response())) as typeof fetch;
+    const dispatcherPolicy = { mode: "direct" } as const;
+    const fallbackDispatcherPolicy = { mode: "env-proxy" } as const;
+    const shouldRetryFetchError = () => true;
+
+    expect(
+      buildOutboundMediaLoadOptions({
+        fetchImpl,
+        dispatcherPolicy,
+        fallbackDispatcherPolicy,
+        shouldRetryFetchError,
+      }),
+    ).toEqual({
+      fetchImpl,
+      dispatcherPolicy,
+      fallbackDispatcherPolicy,
+      shouldRetryFetchError,
+    });
+  });
 });

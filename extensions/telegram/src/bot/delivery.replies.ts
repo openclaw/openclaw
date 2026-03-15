@@ -23,6 +23,7 @@ import type { RuntimeEnv } from "../../../../src/runtime.js";
 import { loadWebMedia } from "../../../whatsapp/src/media.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
+import { shouldRetryTelegramIpv4Fallback, type TelegramTransport } from "../fetch.js";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
@@ -234,6 +235,7 @@ async function deliverMediaReply(params: {
   thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
   mediaLocalRoots?: readonly string[];
+  telegramTransport?: TelegramTransport;
   chunkText: ChunkTextFn;
   onVoiceRecording?: () => Promise<void> | void;
   linkPreview?: boolean;
@@ -250,7 +252,15 @@ async function deliverMediaReply(params: {
     const isFirstMedia = first;
     const media = await loadWebMedia(
       mediaUrl,
-      buildOutboundMediaLoadOptions({ mediaLocalRoots: params.mediaLocalRoots }),
+      buildOutboundMediaLoadOptions({
+        mediaLocalRoots: params.mediaLocalRoots,
+        fetchImpl: params.telegramTransport?.sourceFetch,
+        dispatcherPolicy: params.telegramTransport?.pinnedDispatcherPolicy,
+        fallbackDispatcherPolicy: params.telegramTransport?.fallbackPinnedDispatcherPolicy,
+        shouldRetryFetchError: params.telegramTransport
+          ? shouldRetryTelegramIpv4Fallback
+          : undefined,
+      }),
     );
     const kind = kindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
@@ -548,6 +558,7 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   bot: Bot;
   mediaLocalRoots?: readonly string[];
+  telegramTransport?: TelegramTransport;
   replyToMode: ReplyToMode;
   textLimit: number;
   thread?: TelegramThreadSpec | null;
@@ -651,6 +662,7 @@ export async function deliverReplies(params: {
           thread: params.thread,
           tableMode: params.tableMode,
           mediaLocalRoots: params.mediaLocalRoots,
+          telegramTransport: params.telegramTransport,
           chunkText,
           onVoiceRecording: params.onVoiceRecording,
           linkPreview: params.linkPreview,

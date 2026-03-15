@@ -471,6 +471,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     streamMode,
     textLimit,
     opts,
+    telegramTransport,
   });
 
   registerTelegramNativeCommands({
@@ -491,6 +492,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
     opts,
+    telegramTransport,
   });
 
   registerTelegramHandlers({

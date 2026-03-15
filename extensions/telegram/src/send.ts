@@ -25,7 +25,11 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
-import { resolveTelegramFetch } from "./fetch.js";
+import {
+  resolveTelegramTransport,
+  shouldRetryTelegramIpv4Fallback,
+  type TelegramTransport,
+} from "./fetch.js";
 import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
 import {
   isRecoverableTelegramNetworkError,
@@ -159,10 +163,12 @@ const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
 const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 const telegramClientOptionsCache = new Map<string, ApiClientOptions | undefined>();
+const telegramTransportCache = new Map<string, TelegramTransport>();
 const MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE = 64;
 
 export function resetTelegramClientOptionsCacheForTests(): void {
   telegramClientOptionsCache.clear();
+  telegramTransportCache.clear();
 }
 
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
@@ -183,18 +189,22 @@ function shouldUseTelegramClientOptionsCache(): boolean {
   return !process.env.VITEST && process.env.NODE_ENV !== "test";
 }
 
+function buildTelegramTransportCacheKey(account: ResolvedTelegramAccount): string {
+  const proxyKey = account.config.proxy?.trim() ?? "";
+  const autoSelectFamily = account.config.network?.autoSelectFamily;
+  const autoSelectFamilyKey =
+    typeof autoSelectFamily === "boolean" ? String(autoSelectFamily) : "default";
+  const dnsResultOrderKey = account.config.network?.dnsResultOrder ?? "default";
+  return `${account.accountId}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}`;
+}
+
 function buildTelegramClientOptionsCacheKey(params: {
   account: ResolvedTelegramAccount;
   timeoutSeconds?: number;
 }): string {
-  const proxyKey = params.account.config.proxy?.trim() ?? "";
-  const autoSelectFamily = params.account.config.network?.autoSelectFamily;
-  const autoSelectFamilyKey =
-    typeof autoSelectFamily === "boolean" ? String(autoSelectFamily) : "default";
-  const dnsResultOrderKey = params.account.config.network?.dnsResultOrder ?? "default";
   const timeoutSecondsKey =
     typeof params.timeoutSeconds === "number" ? String(params.timeoutSeconds) : "default";
-  return `${params.account.accountId}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${timeoutSecondsKey}`;
+  return `${buildTelegramTransportCacheKey(params.account)}::${timeoutSecondsKey}`;
 }
 
 function setCachedTelegramClientOptions(
@@ -211,8 +221,44 @@ function setCachedTelegramClientOptions(
   return clientOptions;
 }
 
+function setCachedTelegramTransport(
+  cacheKey: string,
+  transport: TelegramTransport,
+): TelegramTransport {
+  telegramTransportCache.set(cacheKey, transport);
+  if (telegramTransportCache.size > MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE) {
+    const oldestKey = telegramTransportCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      telegramTransportCache.delete(oldestKey);
+    }
+  }
+  return transport;
+}
+
+function resolveTelegramTransportForAccount(account: ResolvedTelegramAccount): TelegramTransport {
+  const cacheEnabled = shouldUseTelegramClientOptionsCache();
+  const cacheKey = cacheEnabled ? buildTelegramTransportCacheKey(account) : null;
+  if (cacheKey && telegramTransportCache.has(cacheKey)) {
+    const cached = telegramTransportCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+
+  const proxyUrl = account.config.proxy?.trim();
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+  const transport = resolveTelegramTransport(proxyFetch, {
+    network: account.config.network,
+  });
+  if (cacheKey) {
+    return setCachedTelegramTransport(cacheKey, transport);
+  }
+  return transport;
+}
+
 function resolveTelegramClientOptions(
   account: ResolvedTelegramAccount,
+  transport: TelegramTransport = resolveTelegramTransportForAccount(account),
 ): ApiClientOptions | undefined {
   const timeoutSeconds =
     typeof account.config.timeoutSeconds === "number" &&
@@ -231,15 +277,12 @@ function resolveTelegramClientOptions(
     return telegramClientOptionsCache.get(cacheKey);
   }
 
-  const proxyUrl = account.config.proxy?.trim();
-  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
-  const fetchImpl = resolveTelegramFetch(proxyFetch, {
-    network: account.config.network,
-  });
   const clientOptions =
-    fetchImpl || timeoutSeconds
+    transport.fetch || timeoutSeconds
       ? {
-          ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
+          ...(transport.fetch
+            ? { fetch: transport.fetch as unknown as ApiClientOptions["fetch"] }
+            : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;
@@ -426,6 +469,7 @@ type TelegramApiContext = {
   cfg: ReturnType<typeof loadConfig>;
   account: ResolvedTelegramAccount;
   api: TelegramApi;
+  telegramTransport: TelegramTransport;
 };
 
 function resolveTelegramApiContext(opts: {
@@ -440,9 +484,10 @@ function resolveTelegramApiContext(opts: {
     accountId: opts.accountId,
   });
   const token = resolveToken(opts.token, account);
-  const client = resolveTelegramClientOptions(account);
+  const telegramTransport = resolveTelegramTransportForAccount(account);
+  const client = resolveTelegramClientOptions(account, telegramTransport);
   const api = (opts.api ?? new Bot(token, client ? { client } : undefined).api) as TelegramApi;
-  return { cfg, account, api };
+  return { cfg, account, api, telegramTransport };
 }
 
 type TelegramRequestWithDiag = <T>(
@@ -592,7 +637,7 @@ export async function sendMessageTelegram(
   text: string,
   opts: TelegramSendOpts = {},
 ): Promise<TelegramSendResult> {
-  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const { cfg, account, api, telegramTransport } = resolveTelegramApiContext(opts);
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
     cfg,
@@ -766,6 +811,10 @@ export async function sendMessageTelegram(
         maxBytes: mediaMaxBytes,
         mediaLocalRoots: opts.mediaLocalRoots,
         optimizeImages: opts.forceDocument ? false : undefined,
+        fetchImpl: telegramTransport.sourceFetch,
+        dispatcherPolicy: telegramTransport.pinnedDispatcherPolicy,
+        fallbackDispatcherPolicy: telegramTransport.fallbackPinnedDispatcherPolicy,
+        shouldRetryFetchError: shouldRetryTelegramIpv4Fallback,
       }),
     );
     const kind = kindFromMime(media.contentType ?? undefined);

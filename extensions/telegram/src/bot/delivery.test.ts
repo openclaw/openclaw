@@ -392,6 +392,44 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("passes Telegram transport to remote media loading", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 13,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendPhoto });
+    const sourceFetch = vi.fn() as unknown as typeof fetch;
+    const telegramTransport = {
+      fetch: sourceFetch,
+      sourceFetch,
+      pinnedDispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.test:8080",
+      } as const,
+      fallbackPinnedDispatcherPolicy: { mode: "direct" } as const,
+    };
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/photo.jpg" }],
+      runtime,
+      bot,
+      telegramTransport,
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "https://example.com/photo.jpg",
+      expect.objectContaining({
+        fetchImpl: sourceFetch,
+        dispatcherPolicy: telegramTransport.pinnedDispatcherPolicy,
+        fallbackDispatcherPolicy: telegramTransport.fallbackPinnedDispatcherPolicy,
+        shouldRetryFetchError: expect.any(Function),
+      }),
+    );
+  });
+
   it("includes link_preview_options when linkPreview is false", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({

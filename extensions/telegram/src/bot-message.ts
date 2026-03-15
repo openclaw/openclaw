@@ -10,6 +10,7 @@ import {
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import type { TelegramTransport } from "./fetch.js";
 
 /** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
@@ -22,6 +23,7 @@ type TelegramMessageProcessorDeps = Omit<
   streamMode: TelegramStreamMode;
   textLimit: number;
   opts: Pick<TelegramBotOptions, "token">;
+  telegramTransport?: TelegramTransport;
 };
 
 export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
@@ -46,6 +48,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     streamMode,
     textLimit,
     opts,
+    telegramTransport,
   } = deps;
 
   return async (
@@ -90,6 +93,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         textLimit,
         telegramCfg,
         opts,
+        telegramTransport,
       });
     } catch (err) {
       runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
