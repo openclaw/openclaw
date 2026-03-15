@@ -56,6 +56,10 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
  * For providers that require "thinking as text", convert assistant thinking
  * blocks into a leading text block and remove the original thinking blocks.
  *
+ * Thinking blocks are intentionally collapsed regardless of their original
+ * position (for example `[thinking, text, thinking]` becomes
+ * `[combined-thinking-text, text]`) to match provider-compat replay behavior.
+ *
  * This avoids downstream adapter paths that assume `assistant.content` is an
  * array and call `unshift` on it, even when provider compat can force string
  * content in the outgoing payload.
@@ -82,6 +86,7 @@ export function convertThinkingBlocksToText(messages: AgentMessage[]): AgentMess
       nextContent.push(block);
     }
     if (thinkingTexts.length > 0) {
+      // Keep replay deterministic by emitting one canonical leading text block.
       nextContent.unshift({
         type: "text",
         text: thinkingTexts.join("\n\n"),

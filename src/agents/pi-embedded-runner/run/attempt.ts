@@ -484,7 +484,7 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
     });
 }
 
-function modelRequiresThinkingAsText(model: { api?: unknown; compat?: unknown }): boolean {
+export function modelRequiresThinkingAsText(model: { api?: unknown; compat?: unknown }): boolean {
   if (model.api !== "openai-completions") {
     return false;
   }

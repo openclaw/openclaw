@@ -9,6 +9,7 @@ import {
   composeSystemPromptWithHookContext,
   persistSessionsYieldContextMessage,
   isOllamaCompatProvider,
+  modelRequiresThinkingAsText,
   prependSystemPromptAddition,
   queueSessionsYieldInterruptMessage,
   resolveAttemptFsWorkspaceOnly,
@@ -1664,6 +1665,49 @@ describe("resolveOllamaBaseUrlForRun", () => {
 
   it("falls back to native default when neither baseUrl is configured", () => {
     expect(resolveOllamaBaseUrlForRun({})).toBe("http://127.0.0.1:11434");
+  });
+});
+
+describe("modelRequiresThinkingAsText", () => {
+  it("returns true only for openai-completions with strict boolean compat flag", () => {
+    expect(
+      modelRequiresThinkingAsText({
+        api: "openai-completions",
+        compat: { requiresThinkingAsText: true },
+      }),
+    ).toBe(true);
+    expect(
+      modelRequiresThinkingAsText({
+        api: "openai-completions",
+        compat: { requiresThinkingAsText: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      modelRequiresThinkingAsText({
+        api: "openai-completions",
+        compat: { requiresThinkingAsText: "true" },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for missing compat or non-openai-completions api", () => {
+    expect(
+      modelRequiresThinkingAsText({
+        api: "openai-completions",
+      }),
+    ).toBe(false);
+    expect(
+      modelRequiresThinkingAsText({
+        api: "openai-completions",
+        compat: null,
+      }),
+    ).toBe(false);
+    expect(
+      modelRequiresThinkingAsText({
+        api: "openai-responses",
+        compat: { requiresThinkingAsText: true },
+      }),
+    ).toBe(false);
   });
 });
 
