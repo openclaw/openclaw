@@ -50,45 +50,26 @@ export async function executeRevenueCommand(
 
   const contact =
     contactLookup ??
-      (deps.logger?.warn(
-        `[debug] createContact payload: ${JSON.stringify({
-          name: parsed.contactName,
-          email: parsed.email,
-          phone: parsed.phone,
-          locationId,
-        })}`,
-      ),
     await deps.ghl.createContact({
       name: parsed.contactName,
       email: parsed.email,
       phone: parsed.phone,
       locationId,
-    }));
+    });
 
-    let opportunityId: string | undefined;
-    let opportunityError: string | undefined;
-    try {
-      deps.logger?.warn(
-        `[debug] createOpportunity payload: ${JSON.stringify({
-          contactId: contact.id,
-          name: parsed.opportunityName,
-          amount: parsed.price,
-          locationId,
-          pipelineId: process.env.OPENCLAW_REVENUE_GHL_PIPELINE_ID,
-          pipelineStageId: process.env.OPENCLAW_REVENUE_GHL_PIPELINE_STAGE_ID,
-        })}`,
-      );
-      const opp = await deps.ghl.createOpportunity({
-        contactId: contact.id,
-        name: parsed.opportunityName,
-        amount: parsed.price,
-        locationId,
-      });
-      opportunityId = opp.id;
-    } catch (error) {
-      opportunityError = error instanceof Error ? error.message : String(error);
-      deps.logger?.warn(`[debug] createOpportunity error: ${opportunityError}`);
-    }
+  let opportunityId: string | undefined;
+  let opportunityError: string | undefined;
+  try {
+    const opp = await deps.ghl.createOpportunity({
+      contactId: contact.id,
+      name: parsed.opportunityName,
+      amount: parsed.price,
+      locationId,
+    });
+    opportunityId = opp.id;
+  } catch (error) {
+    opportunityError = error instanceof Error ? error.message : String(error);
+  }
 
   let paymentUrl: string | undefined;
   let paymentError: string | undefined;

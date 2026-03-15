@@ -123,26 +123,22 @@ export function createGhlClient(env: Env = process.env): GhlClient {
     },
 
     async createOpportunity({ contactId, name, amount, locationId }) {
-      const requestBody = {
-        contactId,
-        name,
-        monetaryValue: amount,
-        locationId,
-        pipelineId: requireEnv(env, "OPENCLAW_REVENUE_GHL_PIPELINE_ID"),
-        status: "open",
-        ...(env.OPENCLAW_REVENUE_GHL_PIPELINE_STAGE_ID
-          ? { pipelineStageId: env.OPENCLAW_REVENUE_GHL_PIPELINE_STAGE_ID }
-          : {}),
-      };
-      console.error(
-        `[debug] GHL opportunity request: POST ${baseUrl}${createOpportunityPath} body=${JSON.stringify(requestBody)}`,
-      );
       const payload = await requestJson({
         baseUrl,
         apiKey,
         path: createOpportunityPath,
         method: "POST",
-        body: requestBody,
+        body: {
+          contactId,
+          name,
+          monetaryValue: amount,
+          locationId,
+          pipelineId: requireEnv(env, "OPENCLAW_REVENUE_GHL_PIPELINE_ID"),
+          status: "open",
+          ...(env.OPENCLAW_REVENUE_GHL_PIPELINE_STAGE_ID
+            ? { pipelineStageId: env.OPENCLAW_REVENUE_GHL_PIPELINE_STAGE_ID }
+            : {}),
+        },
       });
 
       const id = (payload as { opportunity?: { id?: string }; id?: string }).opportunity?.id ||
