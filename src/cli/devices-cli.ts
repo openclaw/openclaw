@@ -168,9 +168,11 @@ async function approvePairingWithFallback(
         await updatePairedDeviceMetadata(approved.device.deviceId, { displayName });
         approved.device.displayName = displayName;
       } catch (err) {
-        defaultRuntime.log(
-          theme.warn(`device pairing approved but displayName update failed device=${approved.device.deviceId}: ${err}`),
-        );
+        if (!opts.json) {
+          defaultRuntime.log(
+            theme.warn(`device pairing approved but displayName update failed device=${approved.device.deviceId}: ${err}`),
+          );
+        }
       }
     }
     return {
