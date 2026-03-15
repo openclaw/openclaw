@@ -39,6 +39,23 @@ export function resolvePowerShellPath(): string {
   return "powershell.exe";
 }
 
+function resolvePosixShellArgs(shellPath: string): string[] {
+  const shellName = normalizeShellName(shellPath);
+
+  // Keep exec commands deterministic: avoid user startup files overriding inherited
+  // daemon environment variables (for example launchd-provided secrets on macOS).
+  if (shellName === "zsh") {
+    return ["-f", "-c"];
+  }
+  if (shellName === "bash") {
+    return ["--noprofile", "--norc", "-c"];
+  }
+  if (shellName === "fish") {
+    return ["--no-config", "-c"];
+  }
+  return ["-c"];
+}
+
 export function getShellConfig(): { shell: string; args: string[] } {
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
@@ -58,15 +75,15 @@ export function getShellConfig(): { shell: string; args: string[] } {
   if (shellName === "fish") {
     const bash = resolveShellFromPath("bash");
     if (bash) {
-      return { shell: bash, args: ["-c"] };
+      return { shell: bash, args: resolvePosixShellArgs(bash) };
     }
     const sh = resolveShellFromPath("sh");
     if (sh) {
-      return { shell: sh, args: ["-c"] };
+      return { shell: sh, args: resolvePosixShellArgs(sh) };
     }
   }
   const shell = envShell && envShell.length > 0 ? envShell : "sh";
-  return { shell, args: ["-c"] };
+  return { shell, args: resolvePosixShellArgs(shell) };
 }
 
 export function resolveShellFromPath(name: string): string | undefined {
