@@ -341,6 +341,12 @@ describe("resolveConfigEnvVars", () => {
       expect(containsEnvVarReference("$${ESCAPED} ${REAL}")).toBe(true);
       expect(containsEnvVarReference("${REAL} $${ESCAPED}")).toBe(true);
     });
+
+    it("returns false for non-string values without throwing", () => {
+      expect(containsEnvVarReference(42 as unknown as string)).toBe(false);
+      expect(containsEnvVarReference(true as unknown as string)).toBe(false);
+      expect(containsEnvVarReference(null as unknown as string)).toBe(false);
+    });
   });
 
   describe("real-world config patterns", () => {
