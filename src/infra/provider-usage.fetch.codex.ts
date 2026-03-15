@@ -1,3 +1,4 @@
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
@@ -50,8 +51,9 @@ export async function fetchCodexUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
+  const normalizedToken = normalizeSecretInput(token);
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
+    Authorization: `Bearer ${normalizedToken}`,
     "User-Agent": "CodexBar",
     Accept: "application/json",
   };
