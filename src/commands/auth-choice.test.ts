@@ -735,7 +735,8 @@ describe("applyAuthChoice", () => {
       },
     ] as never);
 
-    const prompter = createPrompter({});
+    const note = vi.fn(async () => {});
+    const prompter = createPrompter({ note });
     const runtime = createExitThrowingRuntime();
 
     const result = await applyAuthChoice({
@@ -758,6 +759,10 @@ describe("applyAuthChoice", () => {
       access: "access-token",
       email: "user@example.com",
     });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("native Codex web search"),
+      "Web search",
+    );
   });
 
   it("prompts and writes provider API key for common providers", async () => {
