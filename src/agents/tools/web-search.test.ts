@@ -24,6 +24,11 @@ const {
   extractKimiCitations,
   resolveBraveMode,
   mapBraveLlmContextResults,
+  resolveTavilyApiKey,
+  resolveTavilySearchDepth,
+  isRetriableSearchError,
+  classifySearchError,
+  resolveProviderRunParams,
 } = __testing;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
@@ -466,5 +471,147 @@ describe("mapBraveLlmContextResults", () => {
       },
     });
     expect(results[0].siteName).toBeUndefined();
+  });
+});
+
+const tavilyApiKeyEnv = ["TAVILY_API", "KEY"].join("_");
+
+describe("web_search tavily config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveTavilyApiKey({ apiKey: "tvly-test-key" })).toBe("tvly-test-key"); // pragma: allowlist secret
+  });
+
+  it("falls back to TAVILY_API_KEY env var", () => {
+    const envValue = "tvly-env-key"; // pragma: allowlist secret
+    withEnv({ [tavilyApiKeyEnv]: envValue }, () => {
+      expect(resolveTavilyApiKey({})).toBe(envValue);
+    });
+  });
+
+  it("returns undefined when no Tavily key is configured", () => {
+    withEnv({ [tavilyApiKeyEnv]: undefined }, () => {
+      expect(resolveTavilyApiKey({})).toBeUndefined();
+      expect(resolveTavilyApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("resolves searchDepth from config", () => {
+    expect(resolveTavilySearchDepth({ searchDepth: "advanced" })).toBe("advanced");
+    expect(resolveTavilySearchDepth({ searchDepth: "basic" })).toBe("basic");
+  });
+
+  it("defaults searchDepth to basic", () => {
+    expect(resolveTavilySearchDepth({})).toBe("basic");
+    expect(resolveTavilySearchDepth(undefined)).toBe("basic");
+  });
+});
+
+describe("isRetriableSearchError", () => {
+  it("returns true for rate limit (429)", () => {
+    expect(isRetriableSearchError(new Error("Brave API error (429): rate limited"))).toBe(true);
+  });
+
+  it("returns true for quota exceeded (402)", () => {
+    expect(isRetriableSearchError(new Error("Tavily API error (402): payment required"))).toBe(
+      true,
+    );
+  });
+
+  it("returns true for timeout (408)", () => {
+    expect(isRetriableSearchError(new Error("Gemini API error (408): timeout"))).toBe(true);
+  });
+
+  it("returns true for server errors (502, 503, 504)", () => {
+    expect(isRetriableSearchError(new Error("Brave API error (502): bad gateway"))).toBe(true);
+    expect(isRetriableSearchError(new Error("Brave API error (503): unavailable"))).toBe(true);
+    expect(isRetriableSearchError(new Error("Brave API error (504): gateway timeout"))).toBe(true);
+  });
+
+  it("returns false for auth errors (401, 403)", () => {
+    expect(isRetriableSearchError(new Error("Brave API error (401): unauthorized"))).toBe(false);
+    expect(isRetriableSearchError(new Error("Brave API error (403): forbidden"))).toBe(false);
+  });
+
+  it("returns false for client errors (400)", () => {
+    expect(isRetriableSearchError(new Error("Brave API error (400): bad request"))).toBe(false);
+  });
+
+  it("returns true for timeout messages without HTTP status", () => {
+    expect(isRetriableSearchError(new Error("Request timeout"))).toBe(true);
+  });
+
+  it("returns true for quota messages without HTTP status", () => {
+    expect(isRetriableSearchError(new Error("API quota exceeded limit"))).toBe(true);
+  });
+
+  it("returns false for non-Error values", () => {
+    expect(isRetriableSearchError("string error")).toBe(false);
+    expect(isRetriableSearchError(null)).toBe(false);
+    expect(isRetriableSearchError(undefined)).toBe(false);
+  });
+});
+
+describe("classifySearchError", () => {
+  it("classifies rate limit errors", () => {
+    expect(classifySearchError(new Error("Brave API error (429): rate limited"))).toBe(
+      "rate_limit",
+    );
+  });
+
+  it("classifies quota errors", () => {
+    expect(classifySearchError(new Error("Tavily API error (402): payment required"))).toBe(
+      "quota_exceeded",
+    );
+  });
+
+  it("classifies timeout errors from HTTP status", () => {
+    expect(classifySearchError(new Error("Gemini API error (408): timeout"))).toBe("timeout");
+  });
+
+  it("classifies timeout errors from message", () => {
+    expect(classifySearchError(new Error("Request timeout"))).toBe("timeout");
+  });
+
+  it("classifies other HTTP errors", () => {
+    expect(classifySearchError(new Error("Brave API error (503): unavailable"))).toBe("http_503");
+  });
+
+  it("returns unknown for non-Error values", () => {
+    expect(classifySearchError("not an error")).toBe("unknown");
+  });
+});
+
+const braveApiKeyEnv = ["BRAVE_API", "KEY"].join("_");
+
+describe("resolveProviderRunParams", () => {
+  it("returns undefined for provider with no API key", () => {
+    withEnv({ [braveApiKeyEnv]: undefined }, () => {
+      expect(resolveProviderRunParams("brave", {})).toBeUndefined();
+    });
+  });
+
+  it("resolves tavily params from config", () => {
+    const search = {
+      tavily: {
+        apiKey: "tvly-test-key", // pragma: allowlist secret
+        searchDepth: "advanced",
+      },
+    };
+    const result = resolveProviderRunParams(
+      "tavily",
+      search as Parameters<typeof resolveProviderRunParams>[1],
+    );
+    expect(result).toBeDefined();
+    expect(result?.apiKey).toBe("tvly-test-key"); // pragma: allowlist secret
+    expect(result?.tavilySearchDepth).toBe("advanced");
+  });
+
+  it("resolves brave params from env", () => {
+    withEnv({ [braveApiKeyEnv]: "test-brave-key" }, () => {
+      // pragma: allowlist secret
+      const result = resolveProviderRunParams("brave", {});
+      expect(result).toBeDefined();
+      expect(result?.apiKey).toBe("test-brave-key"); // pragma: allowlist secret
+    });
   });
 });

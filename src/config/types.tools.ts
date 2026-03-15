@@ -457,8 +457,10 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "gemini", "grok", "kimi", or "perplexity"). */
-      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+      /** Search provider ("brave", "gemini", "grok", "kimi", "perplexity", or "tavily"). */
+      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "tavily";
+      /** Ordered list of fallback providers to try when the primary provider fails. */
+      fallbacks?: Array<"brave" | "gemini" | "grok" | "kimi" | "perplexity" | "tavily">;
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */
@@ -505,6 +507,13 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
         model?: string;
+      };
+      /** Tavily-specific configuration (used when provider="tavily"). */
+      tavily?: {
+        /** Tavily API key (defaults to TAVILY_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** Search depth: "basic" (fast, 1 credit) or "advanced" (thorough, 2 credits). Default: "basic". */
+        searchDepth?: "basic" | "advanced";
       };
     };
     fetch?: {
