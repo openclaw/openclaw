@@ -492,7 +492,7 @@ export async function monitorWebInbox(options: {
       const chatJid = remoteJid;
 
       inboundConsoleLog.info(
-        `Reaction ${emoji} on message ${reactedMessageId ?? "unknown"} from ${from}`,
+        `Reaction ${emoji} on message ${reactedMessageId ?? "unknown"} from ${senderE164 ?? reactorJid ?? "unknown"}`,
       );
 
       const reactionMessage: WebInboundMessage = {
