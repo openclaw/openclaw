@@ -97,9 +97,9 @@ export const buildTelegramMessageContext = async ({
     candidate: ReturnType<typeof resolveTelegramConversationRoute>["route"],
   ): boolean => candidate.accountId !== DEFAULT_ACCOUNT_ID && candidate.matchedBy === "default";
   const isNamedAccountFallback = requiresExplicitAccountBinding(route);
-  // Named-account groups require an explicit binding; DMs get a
-  // per-account fallback session key below to preserve isolation.
-  if (isNamedAccountFallback && isGroup) {
+  // Named accounts require an explicit binding for both groups and DMs;
+  // without one the message is dropped to prevent unintended agent turns.
+  if (isNamedAccountFallback) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
