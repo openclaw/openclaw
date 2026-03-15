@@ -75,7 +75,7 @@ describe("markdownTableToBlockKit", () => {
 });
 
 describe("markdownTablesToBlockKitAttachment", () => {
-  it("wraps tables in a single attachment", () => {
+  it("wraps tables in a single attachment when under limit", () => {
     const tables: MarkdownTableData[] = [
       { headers: ["X"], rows: [["1"]], placeholderOffset: 0 },
       { headers: ["Y"], rows: [["2"]], placeholderOffset: 10 },
@@ -84,6 +84,19 @@ describe("markdownTablesToBlockKitAttachment", () => {
     const result = markdownTablesToBlockKitAttachment(tables);
     expect(result).toHaveLength(1);
     expect(result[0]?.blocks).toHaveLength(2);
+  });
+
+  it("splits tables across attachments when exceeding 50-block limit", () => {
+    const tables: MarkdownTableData[] = Array.from({ length: 75 }, (_, i) => ({
+      headers: [`Col${i}`],
+      rows: [[`val${i}`]],
+      placeholderOffset: i * 10,
+    }));
+
+    const result = markdownTablesToBlockKitAttachment(tables);
+    expect(result).toHaveLength(2);
+    expect(result[0]?.blocks).toHaveLength(50);
+    expect(result[1]?.blocks).toHaveLength(25);
   });
 
   it("returns empty array for no tables", () => {
