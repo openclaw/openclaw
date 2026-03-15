@@ -44,7 +44,7 @@ export function runPluginInit(dir: string | undefined, opts: PluginInitOptions) 
   const targetDir = resolveUserPath(dir || ".");
   const id = opts.id || (() => {
     const base = path.basename(path.resolve(targetDir));
-    return base && base !== "." && base !== ".." && base !== "/" ? base : null;
+    return base && base !== "." && base !== ".." ? base : null;
   })();
 
   if (!id) {
@@ -103,8 +103,14 @@ export function runPluginInit(dir: string | undefined, opts: PluginInitOptions) 
     }
   }
 
-  for (const [filePath, content] of files) {
-    fs.writeFileSync(filePath, content, "utf-8");
+  try {
+    for (const [filePath, content] of files) {
+      fs.writeFileSync(filePath, content, "utf-8");
+    }
+  } catch (err) {
+    defaultRuntime.error(`Failed to write plugin files: ${err instanceof Error ? err.message : String(err)}`);
+    defaultRuntime.exit(1);
+    return;
   }
 
   defaultRuntime.log(`Created plugin ${theme.command(id)} in ${targetDir}`);
