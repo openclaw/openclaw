@@ -1,4 +1,5 @@
 import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { ToolCallIdMode } from "../tool-call-id.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
@@ -6,6 +7,48 @@ import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
+type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+
+const log = createSubsystemLogger("agent/embedded");
+
+/**
+ * Normalize malformed assistant message content into a provider-safe array.
+ *
+ * Some third-party providers return `content` as a plain string, a single
+ * block-like object, or omit it entirely.  This helper coerces all shapes
+ * into the expected `AssistantMessage["content"]` array so that downstream
+ * iteration never encounters a non-iterable value.
+ */
+function normalizeAssistantContent(
+  content: unknown,
+  context?: { label?: string },
+): AssistantMessage["content"] {
+  if (Array.isArray(content)) {
+    return content as AssistantMessage["content"];
+  }
+  if (typeof content === "string") {
+    if (!content.trim()) {
+      return [] as AssistantMessage["content"];
+    }
+    return [{ type: "text", text: content }] as AssistantMessage["content"];
+  }
+  if (content && typeof content === "object") {
+    const record = content as { type?: unknown; text?: unknown };
+    if (typeof record.type === "string") {
+      return [content as AssistantMessage["content"][number]] as AssistantMessage["content"];
+    }
+    if (typeof record.text === "string") {
+      return [{ type: "text", text: record.text }] as AssistantMessage["content"];
+    }
+    log.warn("dropping unrecognized assistant replay content object during session sanitization", {
+      label: context?.label,
+      contentKeys: Object.keys(record).slice(0, 8),
+      typeType: typeof record.type,
+      textType: typeof record.text,
+    });
+  }
+  return [] as AssistantMessage["content"];
+}
 
 export function isEmptyAssistantMessageContent(
   message: Extract<AgentMessage, { role: "assistant" }>,
@@ -96,56 +139,55 @@ export async function sanitizeSessionMessagesImages(
 
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      if (assistantMsg.stopReason === "error") {
-        const content = assistantMsg.content;
-        if (Array.isArray(content)) {
-          const nextContent = (await sanitizeContentBlocksImages(
-            content as unknown as ContentBlock[],
-            label,
-            imageSanitization,
-          )) as unknown as typeof assistantMsg.content;
-          out.push({ ...assistantMsg, content: nextContent });
-        } else {
-          out.push(assistantMsg);
-        }
+      const normalizedContent = normalizeAssistantContent(assistantMsg.content, { label });
+      const normalizedAssistantMsg =
+        normalizedContent === assistantMsg.content
+          ? assistantMsg
+          : ({ ...assistantMsg, content: normalizedContent } as typeof assistantMsg);
+      if (normalizedAssistantMsg.stopReason === "error") {
+        const content = normalizedContent;
+        const nextContent = (await sanitizeContentBlocksImages(
+          content as unknown as ContentBlock[],
+          label,
+          imageSanitization,
+        )) as unknown as typeof normalizedAssistantMsg.content;
+        out.push({ ...normalizedAssistantMsg, content: nextContent });
         continue;
       }
-      const content = assistantMsg.content;
-      if (Array.isArray(content)) {
-        if (!allowNonImageSanitization) {
-          const nextContent = (await sanitizeContentBlocksImages(
-            content as unknown as ContentBlock[],
-            label,
-            imageSanitization,
-          )) as unknown as typeof assistantMsg.content;
-          out.push({ ...assistantMsg, content: nextContent });
-          continue;
-        }
-        const strippedContent = options?.preserveSignatures
-          ? content // Keep signatures for Antigravity Claude
-          : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
-
-        const filteredContent = strippedContent.filter((block) => {
-          if (!block || typeof block !== "object") {
-            return true;
-          }
-          const rec = block as { type?: unknown; text?: unknown };
-          if (rec.type !== "text" || typeof rec.text !== "string") {
-            return true;
-          }
-          return rec.text.trim().length > 0;
-        });
-        const finalContent = (await sanitizeContentBlocksImages(
-          filteredContent as unknown as ContentBlock[],
+      const content = normalizedContent;
+      if (!allowNonImageSanitization) {
+        const nextContent = (await sanitizeContentBlocksImages(
+          content as unknown as ContentBlock[],
           label,
           imageSanitization,
         )) as unknown as typeof assistantMsg.content;
-        if (finalContent.length === 0) {
-          continue;
-        }
-        out.push({ ...assistantMsg, content: finalContent });
+        out.push({ ...normalizedAssistantMsg, content: nextContent });
         continue;
       }
+      const strippedContent = options?.preserveSignatures
+        ? content // Keep signatures for Antigravity Claude
+        : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
+
+      const filteredContent = strippedContent.filter((block) => {
+        if (!block || typeof block !== "object") {
+          return true;
+        }
+        const rec = block as { type?: unknown; text?: unknown };
+        if (rec.type !== "text" || typeof rec.text !== "string") {
+          return true;
+        }
+        return rec.text.trim().length > 0;
+      });
+      const finalContent = (await sanitizeContentBlocksImages(
+        filteredContent as unknown as ContentBlock[],
+        label,
+        imageSanitization,
+      )) as unknown as typeof assistantMsg.content;
+      if (finalContent.length === 0) {
+        continue;
+      }
+      out.push({ ...normalizedAssistantMsg, content: finalContent });
+      continue;
     }
 
     out.push(msg);
