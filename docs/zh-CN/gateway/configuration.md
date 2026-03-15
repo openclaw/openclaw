@@ -735,7 +735,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 ### 多智能体路由（`agents.list` + `bindings`）
 
 在一个 Gateway 网关中运行多个隔离的智能体（独立的工作区、`agentDir`、会话）。
-入站消息通过绑定路由到智能体。
+入站消息根据 `bindings` 配置项路由到指定的智能体。
 
 - `agents.list[]`：每智能体覆盖。
   - `id`：稳定的智能体 id（必需）。
