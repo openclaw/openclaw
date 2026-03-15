@@ -1,6 +1,7 @@
-import { lookupContextTokens } from "../agents/context.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -18,6 +19,7 @@ import { buildChannelSummary } from "../infra/channel-summary.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
@@ -33,6 +35,9 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   const verbose = entry?.verboseLevel;
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);
+  }
+  if (typeof entry?.fastMode === "boolean") {
+    flags.push(entry.fastMode ? "fast" : "fast:off");
   }
   const reasoning = entry?.reasoningLevel;
   if (typeof reasoning === "string" && reasoning.length > 0) {
@@ -76,10 +81,14 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
 }
 
 export async function getStatusSummary(
-  options: { includeSensitive?: boolean } = {},
+  options: {
+    includeSensitive?: boolean;
+    config?: OpenClawConfig;
+    sourceConfig?: OpenClawConfig;
+  } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true } = options;
-  const cfg = loadConfig();
+  const cfg = options.config ?? loadConfig();
   const linkContext = await resolveLinkChannelContext(cfg);
   const agentList = listAgentsForGateway(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
@@ -94,6 +103,7 @@ export async function getStatusSummary(
   const channelSummary = await buildChannelSummary(cfg, {
     colorize: true,
     includeAllowFrom: true,
+    sourceConfig: options.sourceConfig,
   });
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
@@ -105,9 +115,13 @@ export async function getStatusSummary(
   });
   const configModel = resolved.model ?? DEFAULT_MODEL;
   const configContextTokens =
-    cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(configModel) ??
-    DEFAULT_CONTEXT_TOKENS;
+    resolveContextTokensForModel({
+      cfg,
+      provider: resolved.provider ?? DEFAULT_PROVIDER,
+      model: configModel,
+      contextTokensOverride: cfg.agents?.defaults?.contextTokens,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const now = Date.now();
   const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
@@ -132,7 +146,13 @@ export async function getStatusSummary(
         const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
         const model = resolvedModel.model ?? configModel ?? null;
         const contextTokens =
-          entry?.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null;
+          resolveContextTokensForModel({
+            cfg,
+            provider: resolvedModel.provider,
+            model,
+            contextTokensOverride: entry?.contextTokens,
+            fallbackContextTokens: configContextTokens ?? undefined,
+          }) ?? null;
         const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =
           typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
@@ -153,6 +173,7 @@ export async function getStatusSummary(
           updatedAt,
           age,
           thinkingLevel: entry?.thinkingLevel,
+          fastMode: entry?.fastMode,
           verboseLevel: entry?.verboseLevel,
           reasoningLevel: entry?.reasoningLevel,
           elevatedLevel: entry?.elevatedLevel,
@@ -160,6 +181,8 @@ export async function getStatusSummary(
           abortedLastRun: entry?.abortedLastRun,
           inputTokens: entry?.inputTokens,
           outputTokens: entry?.outputTokens,
+          cacheRead: entry?.cacheRead,
+          cacheWrite: entry?.cacheWrite,
           totalTokens: total ?? null,
           totalTokensFresh,
           remainingTokens: remaining,
@@ -192,6 +215,7 @@ export async function getStatusSummary(
   const totalSessions = allSessions.length;
 
   const summary: StatusSummary = {
+    runtimeVersion: resolveRuntimeServiceVersion(process.env),
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,

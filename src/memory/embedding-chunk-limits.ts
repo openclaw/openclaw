@@ -1,4 +1,5 @@
 import { estimateUtf8Bytes, splitTextToUtf8ByteLimit } from "./embedding-input-limits.js";
+import { hasNonTextEmbeddingParts } from "./embedding-inputs.js";
 import { resolveEmbeddingMaxInputTokens } from "./embedding-model-limits.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { hashText, type MemoryChunk } from "./internal.js";
@@ -6,11 +7,20 @@ import { hashText, type MemoryChunk } from "./internal.js";
 export function enforceEmbeddingMaxInputTokens(
   provider: EmbeddingProvider,
   chunks: MemoryChunk[],
+  hardMaxInputTokens?: number,
 ): MemoryChunk[] {
-  const maxInputTokens = resolveEmbeddingMaxInputTokens(provider);
+  const providerMaxInputTokens = resolveEmbeddingMaxInputTokens(provider);
+  const maxInputTokens =
+    typeof hardMaxInputTokens === "number" && hardMaxInputTokens > 0
+      ? Math.min(providerMaxInputTokens, hardMaxInputTokens)
+      : providerMaxInputTokens;
   const out: MemoryChunk[] = [];
 
   for (const chunk of chunks) {
+    if (hasNonTextEmbeddingParts(chunk.embeddingInput)) {
+      out.push(chunk);
+      continue;
+    }
     if (estimateUtf8Bytes(chunk.text) <= maxInputTokens) {
       out.push(chunk);
       continue;
@@ -22,6 +32,7 @@ export function enforceEmbeddingMaxInputTokens(
         endLine: chunk.endLine,
         text,
         hash: hashText(text),
+        embeddingInput: { text },
       });
     }
   }

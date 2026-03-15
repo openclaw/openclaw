@@ -27,6 +27,48 @@ require_cmd() {
   fi
 }
 
+is_writable_dir() {
+  local dir="$1"
+  [[ -n "$dir" && -d "$dir" && ! -L "$dir" && -w "$dir" && -x "$dir" ]]
+}
+
+is_safe_tmp_base() {
+  local dir="$1"
+  local mode=""
+  local owner=""
+  is_writable_dir "$dir" || return 1
+  mode="$(stat -Lc '%a' "$dir" 2>/dev/null || true)"
+  if [[ -n "$mode" ]]; then
+    local perm=$((8#$mode))
+    if (( (perm & 0022) != 0 && (perm & 01000) == 0 )); then
+      return 1
+    fi
+  fi
+  if is_root; then
+    owner="$(stat -Lc '%u' "$dir" 2>/dev/null || true)"
+    if [[ -n "$owner" && "$owner" != "0" ]]; then
+      return 1
+    fi
+  fi
+  return 0
+}
+
+resolve_image_tmp_dir() {
+  if ! is_root && is_safe_tmp_base "${TMPDIR:-}"; then
+    printf '%s' "$TMPDIR"
+    return 0
+  fi
+  if is_safe_tmp_base "/var/tmp"; then
+    printf '%s' "/var/tmp"
+    return 0
+  fi
+  if is_safe_tmp_base "/tmp"; then
+    printf '%s' "/tmp"
+    return 0
+  fi
+  printf '%s' "/tmp"
+}
+
 is_root() { [[ "$(id -u)" -eq 0 ]]; }
 
 run_root() {
@@ -38,12 +80,17 @@ run_root() {
 }
 
 run_as_user() {
+  # When switching users, the caller's cwd may be inaccessible to the target
+  # user (e.g. a private home dir). Wrap in a subshell that cd's to a
+  # world-traversable directory so sudo/runuser don't fail with "cannot chdir".
+  # TODO: replace with fully rootless podman build to eliminate the need for
+  # user-switching entirely.
   local user="$1"
   shift
   if command -v sudo >/dev/null 2>&1; then
-    sudo -u "$user" "$@"
+    ( cd /tmp 2>/dev/null || cd /; sudo -u "$user" "$@" )
   elif is_root && command -v runuser >/dev/null 2>&1; then
-    runuser -u "$user" -- "$@"
+    ( cd /tmp 2>/dev/null || cd /; runuser -u "$user" -- "$@" )
   else
     echo "Need sudo (or root+runuser) to run commands as $user." >&2
     exit 1
@@ -54,6 +101,11 @@ run_as_openclaw() {
   # Avoid root writes into $OPENCLAW_HOME (symlink/hardlink/TOCTOU footguns).
   # Anything under the target user's home should be created/modified as that user.
   run_as_user "$OPENCLAW_USER" env HOME="$OPENCLAW_HOME" "$@"
+}
+
+escape_sed_replacement_pipe_delim() {
+  # Escape replacement metacharacters for sed "s|...|...|g" replacement text.
+  printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
 }
 
 # Quadlet: opt-in via --quadlet or OPENCLAW_PODMAN_QUADLET=1
@@ -204,15 +256,24 @@ if ! run_as_openclaw test -f "$OPENCLAW_JSON"; then
 fi
 
 echo "Building image from $REPO_PATH..."
-podman build -t openclaw:local -f "$REPO_PATH/Dockerfile" "$REPO_PATH"
+BUILD_ARGS=()
+[[ -n "${OPENCLAW_DOCKER_APT_PACKAGES:-}" ]] && BUILD_ARGS+=(--build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}")
+[[ -n "${OPENCLAW_EXTENSIONS:-}" ]] && BUILD_ARGS+=(--build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}")
+podman build ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} -t openclaw:local -f "$REPO_PATH/Dockerfile" "$REPO_PATH"
 
 echo "Loading image into $OPENCLAW_USER's Podman store..."
-TMP_IMAGE="$(mktemp -p /tmp openclaw-image.XXXXXX.tar)"
-trap 'rm -f "$TMP_IMAGE"' EXIT
+TMP_IMAGE_DIR="$(resolve_image_tmp_dir)"
+echo "Using temporary image dir: $TMP_IMAGE_DIR"
+TMP_STAGE_DIR="$(mktemp -d -p "$TMP_IMAGE_DIR" openclaw-image.XXXXXX)"
+TMP_IMAGE="$TMP_STAGE_DIR/image.tar"
+chmod 700 "$TMP_STAGE_DIR"
+trap 'rm -rf "$TMP_STAGE_DIR"' EXIT
 podman save openclaw:local -o "$TMP_IMAGE"
-chmod 644 "$TMP_IMAGE"
-(cd /tmp && run_as_user "$OPENCLAW_USER" env HOME="$OPENCLAW_HOME" podman load -i "$TMP_IMAGE")
-rm -f "$TMP_IMAGE"
+chmod 600 "$TMP_IMAGE"
+# Stream the image into the target user's podman load so private temp directories
+# do not need to be traversable by $OPENCLAW_USER.
+cat "$TMP_IMAGE" | run_as_user "$OPENCLAW_USER" env HOME="$OPENCLAW_HOME" podman load
+rm -rf "$TMP_STAGE_DIR"
 trap - EXIT
 
 echo "Copying launch script to $LAUNCH_SCRIPT_DST..."
@@ -224,7 +285,7 @@ QUADLET_DIR="$OPENCLAW_HOME/.config/containers/systemd"
 if [[ "$INSTALL_QUADLET" == true && -f "$QUADLET_TEMPLATE" ]]; then
   echo "Installing systemd quadlet for $OPENCLAW_USER..."
   run_as_openclaw mkdir -p "$QUADLET_DIR"
-  OPENCLAW_HOME_SED="$(printf '%s' "$OPENCLAW_HOME" | sed -e 's/[\\/&|]/\\\\&/g')"
+  OPENCLAW_HOME_SED="$(escape_sed_replacement_pipe_delim "$OPENCLAW_HOME")"
   sed "s|{{OPENCLAW_HOME}}|$OPENCLAW_HOME_SED|g" "$QUADLET_TEMPLATE" | run_as_openclaw tee "$QUADLET_DIR/openclaw.container" >/dev/null
   run_as_openclaw chmod 700 "$OPENCLAW_HOME/.config" "$OPENCLAW_HOME/.config/containers" "$QUADLET_DIR" 2>/dev/null || true
   run_as_openclaw chmod 600 "$QUADLET_DIR/openclaw.container" 2>/dev/null || true

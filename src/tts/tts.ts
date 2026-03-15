@@ -9,12 +9,12 @@ import {
   renameSync,
   unlinkSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import type {
   TtsConfig,
   TtsAutoMode,
@@ -23,10 +23,12 @@ import type {
   TtsModelOverrideConfig,
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
+  DEFAULT_OPENAI_BASE_URL,
   edgeTTS,
   elevenLabsTTS,
   inferEdgeExtension,
@@ -35,6 +37,7 @@ import {
   isValidVoiceId,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  resolveOpenAITtsInstructions,
   openaiTTS,
   parseTtsDirectives,
   scheduleCleanup,
@@ -112,8 +115,11 @@ export type ResolvedTtsConfig = {
   };
   openai: {
     apiKey?: string;
+    baseUrl: string;
     model: string;
     voice: string;
+    speed?: number;
+    instructions?: string;
   };
   edge: {
     enabled: boolean;
@@ -238,11 +244,12 @@ function resolveModelOverridePolicy(
       allowSeed: false,
     };
   }
-  const allow = (value?: boolean) => value ?? true;
+  const allow = (value: boolean | undefined, defaultValue = true) => value ?? defaultValue;
   return {
     enabled: true,
     allowText: allow(overrides?.allowText),
-    allowProvider: allow(overrides?.allowProvider),
+    // Provider switching is higher-impact than voice/style tweaks; keep opt-in.
+    allowProvider: allow(overrides?.allowProvider, false),
     allowVoice: allow(overrides?.allowVoice),
     allowModelId: allow(overrides?.allowModelId),
     allowVoiceSettings: allow(overrides?.allowVoiceSettings),
@@ -264,7 +271,10 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     summaryModel: raw.summaryModel?.trim() || undefined,
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
     elevenlabs: {
-      apiKey: raw.elevenlabs?.apiKey,
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.elevenlabs?.apiKey,
+        path: "messages.tts.elevenlabs.apiKey",
+      }),
       baseUrl: raw.elevenlabs?.baseUrl?.trim() || DEFAULT_ELEVENLABS_BASE_URL,
       voiceId: raw.elevenlabs?.voiceId ?? DEFAULT_ELEVENLABS_VOICE_ID,
       modelId: raw.elevenlabs?.modelId ?? DEFAULT_ELEVENLABS_MODEL_ID,
@@ -285,9 +295,20 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       },
     },
     openai: {
-      apiKey: raw.openai?.apiKey,
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.openai?.apiKey,
+        path: "messages.tts.openai.apiKey",
+      }),
+      // Config > env var > default; strip trailing slashes for consistency.
+      baseUrl: (
+        raw.openai?.baseUrl?.trim() ||
+        process.env.OPENAI_TTS_BASE_URL?.trim() ||
+        DEFAULT_OPENAI_BASE_URL
+      ).replace(/\/+$/, ""),
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
+      speed: raw.openai?.speed,
+      instructions: raw.openai?.instructions?.trim() || undefined,
     },
     edge: {
       enabled: raw.edge?.enabled ?? true,
@@ -479,8 +500,11 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
+/** Channels that require opus audio and support voice-bubble playback */
+const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
+
 function resolveOutputFormat(channelId?: string | null) {
-  if (channelId === "telegram") {
+  if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
     return TELEGRAM_OUTPUT;
   }
   return DEFAULT_OUTPUT;
@@ -528,6 +552,42 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
   return `${provider}: ${error.message}`;
 }
 
+function buildTtsFailureResult(errors: string[]): { success: false; error: string } {
+  return {
+    success: false,
+    error: `TTS conversion failed: ${errors.join("; ") || "no providers available"}`,
+  };
+}
+
+function resolveTtsRequestSetup(params: {
+  text: string;
+  cfg: OpenClawConfig;
+  prefsPath?: string;
+  providerOverride?: TtsProvider;
+}):
+  | {
+      config: ResolvedTtsConfig;
+      providers: TtsProvider[];
+    }
+  | {
+      error: string;
+    } {
+  const config = resolveTtsConfig(params.cfg);
+  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
+  if (params.text.length > config.maxTextLength) {
+    return {
+      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
+    };
+  }
+
+  const userProvider = getTtsProvider(config, prefsPath);
+  const provider = params.providerOverride ?? userProvider;
+  return {
+    config,
+    providers: resolveTtsProviderOrder(provider),
+  };
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -535,22 +595,19 @@ export async function textToSpeech(params: {
   channel?: string;
   overrides?: TtsDirectiveOverrides;
 }): Promise<TtsResult> {
-  const config = resolveTtsConfig(params.cfg);
-  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
-  const channelId = resolveChannelId(params.channel);
-  const output = resolveOutputFormat(channelId);
-
-  if (params.text.length > config.maxTextLength) {
-    return {
-      success: false,
-      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
-    };
+  const setup = resolveTtsRequestSetup({
+    text: params.text,
+    cfg: params.cfg,
+    prefsPath: params.prefsPath,
+    providerOverride: params.overrides?.provider,
+  });
+  if ("error" in setup) {
+    return { success: false, error: setup.error };
   }
 
-  const userProvider = getTtsProvider(config, prefsPath);
-  const overrideProvider = params.overrides?.provider;
-  const provider = overrideProvider ?? userProvider;
-  const providers = resolveTtsProviderOrder(provider);
+  const { config, providers } = setup;
+  const channelId = resolveChannelId(params.channel);
+  const output = resolveOutputFormat(channelId);
 
   const errors: string[] = [];
 
@@ -563,7 +620,9 @@ export async function textToSpeech(params: {
           continue;
         }
 
-        const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
         let edgeOutputFormat = resolveEdgeOutputFormat(config);
         const fallbackEdgeOutputFormat =
           edgeOutputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
@@ -661,8 +720,11 @@ export async function textToSpeech(params: {
         audioBuffer = await openaiTTS({
           text: params.text,
           apiKey,
+          baseUrl: config.openai.baseUrl,
           model: openaiModelOverride ?? config.openai.model,
           voice: openaiVoiceOverride ?? config.openai.voice,
+          speed: config.openai.speed,
+          instructions: config.openai.instructions,
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
         });
@@ -670,7 +732,9 @@ export async function textToSpeech(params: {
 
       const latencyMs = Date.now() - providerStart;
 
-      const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+      const tempRoot = resolvePreferredOpenClawTmpDir();
+      mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+      const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
       const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
@@ -688,10 +752,7 @@ export async function textToSpeech(params: {
     }
   }
 
-  return {
-    success: false,
-    error: `TTS conversion failed: ${errors.join("; ") || "no providers available"}`,
-  };
+  return buildTtsFailureResult(errors);
 }
 
 export async function textToSpeechTelephony(params: {
@@ -699,18 +760,16 @@ export async function textToSpeechTelephony(params: {
   cfg: OpenClawConfig;
   prefsPath?: string;
 }): Promise<TtsTelephonyResult> {
-  const config = resolveTtsConfig(params.cfg);
-  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
-
-  if (params.text.length > config.maxTextLength) {
-    return {
-      success: false,
-      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
-    };
+  const setup = resolveTtsRequestSetup({
+    text: params.text,
+    cfg: params.cfg,
+    prefsPath: params.prefsPath,
+  });
+  if ("error" in setup) {
+    return { success: false, error: setup.error };
   }
 
-  const userProvider = getTtsProvider(config, prefsPath);
-  const providers = resolveTtsProviderOrder(userProvider);
+  const { config, providers } = setup;
 
   const errors: string[] = [];
 
@@ -758,8 +817,11 @@ export async function textToSpeechTelephony(params: {
       const audioBuffer = await openaiTTS({
         text: params.text,
         apiKey,
+        baseUrl: config.openai.baseUrl,
         model: config.openai.model,
         voice: config.openai.voice,
+        speed: config.openai.speed,
+        instructions: config.openai.instructions,
         responseFormat: output.format,
         timeoutMs: config.timeoutMs,
       });
@@ -777,10 +839,7 @@ export async function textToSpeechTelephony(params: {
     }
   }
 
-  return {
-    success: false,
-    error: `TTS conversion failed: ${errors.join("; ") || "no providers available"}`,
-  };
+  return buildTtsFailureResult(errors);
 }
 
 export async function maybeApplyTtsToPayload(params: {
@@ -803,7 +862,7 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   const text = params.payload.text ?? "";
-  const directives = parseTtsDirectives(text, config.modelOverrides);
+  const directives = parseTtsDirectives(text, config.modelOverrides, config.openai.baseUrl);
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
   }
@@ -906,7 +965,8 @@ export async function maybeApplyTtsToPayload(params: {
     };
 
     const channelId = resolveChannelId(params.channel);
-    const shouldVoice = channelId === "telegram" && result.voiceCompatible === true;
+    const shouldVoice =
+      channelId !== null && VOICE_BUBBLE_CHANNELS.has(channelId) && result.voiceCompatible === true;
     const finalPayload = {
       ...nextPayload,
       mediaUrl: result.audioPath,
@@ -934,6 +994,7 @@ export const _test = {
   isValidOpenAIModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  resolveOpenAITtsInstructions,
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,

@@ -40,6 +40,44 @@ export async function resolveChannelTarget(params: {
   return resolveMessagingTarget(params);
 }
 
+export async function maybeResolveIdLikeTarget(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  input: string;
+  accountId?: string | null;
+  preferredKind?: TargetResolveKind;
+}): Promise<ResolvedMessagingTarget | undefined> {
+  const raw = normalizeChannelTargetInput(params.input);
+  if (!raw) {
+    return undefined;
+  }
+  const plugin = getChannelPlugin(params.channel);
+  const resolver = plugin?.messaging?.targetResolver;
+  if (!resolver?.resolveTarget) {
+    return undefined;
+  }
+  const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
+  if (resolver.looksLikeId && !resolver.looksLikeId(raw, normalized)) {
+    return undefined;
+  }
+  const resolved = await resolver.resolveTarget({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    input: raw,
+    normalized,
+    preferredKind: params.preferredKind,
+  });
+  if (!resolved) {
+    return undefined;
+  }
+  return {
+    to: resolved.to,
+    kind: resolved.kind,
+    display: resolved.display,
+    source: resolved.source ?? "normalized",
+  };
+}
+
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
 
@@ -258,6 +296,14 @@ async function getDirectoryEntries(params: {
   preferLiveOnMiss?: boolean;
 }): Promise<ChannelDirectoryEntry[]> {
   const signature = buildTargetResolverSignature(params.channel);
+  const listParams = {
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    kind: params.kind,
+    query: params.query,
+    runtime: params.runtime,
+  };
   const cacheKey = buildDirectoryCacheKey({
     channel: params.channel,
     accountId: params.accountId,
@@ -270,12 +316,7 @@ async function getDirectoryEntries(params: {
     return cached;
   }
   const entries = await listDirectoryEntries({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    kind: params.kind,
-    query: params.query,
-    runtime: params.runtime,
+    ...listParams,
     source: "cache",
   });
   if (entries.length > 0 || !params.preferLiveOnMiss) {
@@ -290,17 +331,30 @@ async function getDirectoryEntries(params: {
     signature,
   });
   const liveEntries = await listDirectoryEntries({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    kind: params.kind,
-    query: params.query,
-    runtime: params.runtime,
+    ...listParams,
     source: "live",
   });
   directoryCache.set(liveKey, liveEntries, params.cfg);
   directoryCache.set(cacheKey, liveEntries, params.cfg);
   return liveEntries;
+}
+
+function buildNormalizedResolveResult(params: {
+  channel: ChannelId;
+  raw: string;
+  normalized: string;
+  kind: TargetResolveKind;
+}): ResolveMessagingTargetResult {
+  const directTarget = preserveTargetCase(params.channel, params.raw, params.normalized);
+  return {
+    ok: true,
+    target: {
+      to: directTarget,
+      kind: params.kind,
+      display: stripTargetPrefixes(params.raw),
+      source: "normalized",
+    },
+  };
 }
 
 function pickAmbiguousMatch(
@@ -372,16 +426,25 @@ export async function resolveMessagingTarget(params: {
     return false;
   };
   if (looksLikeTargetId()) {
-    const directTarget = preserveTargetCase(params.channel, raw, normalized);
-    return {
-      ok: true,
-      target: {
-        to: directTarget,
-        kind,
-        display: stripTargetPrefixes(raw),
-        source: "normalized",
-      },
-    };
+    const resolvedIdLikeTarget = await maybeResolveIdLikeTarget({
+      cfg: params.cfg,
+      channel: params.channel,
+      input: raw,
+      accountId: params.accountId,
+      preferredKind: params.preferredKind,
+    });
+    if (resolvedIdLikeTarget) {
+      return {
+        ok: true,
+        target: resolvedIdLikeTarget,
+      };
+    }
+    return buildNormalizedResolveResult({
+      channel: params.channel,
+      raw,
+      normalized,
+      kind,
+    });
   }
   const query = stripTargetPrefixes(raw);
   const entries = await getDirectoryEntries({
@@ -434,16 +497,12 @@ export async function resolveMessagingTarget(params: {
     (params.channel === "bluebubbles" || params.channel === "imessage") &&
     /^\+?\d{6,}$/.test(query)
   ) {
-    const directTarget = preserveTargetCase(params.channel, raw, normalized);
-    return {
-      ok: true,
-      target: {
-        to: directTarget,
-        kind,
-        display: stripTargetPrefixes(raw),
-        source: "normalized",
-      },
-    };
+    return buildNormalizedResolveResult({
+      channel: params.channel,
+      raw,
+      normalized,
+      kind,
+    });
   }
 
   return {

@@ -25,6 +25,81 @@ export const OPENAI_CODEX_TEMPLATE_MODEL = {
   maxTokens: 128000,
 };
 
+export function mockOpenAICodexTemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "openai-codex",
+    modelId: "gpt-5.2-codex",
+    templateModel: OPENAI_CODEX_TEMPLATE_MODEL,
+  });
+}
+
+export function buildOpenAICodexForwardCompatExpectation(
+  id: string = "gpt-5.3-codex",
+): Partial<ModelDefinitionConfig> & {
+  provider: string;
+  id: string;
+  api: string;
+  baseUrl: string;
+} {
+  const isGpt54 = id === "gpt-5.4";
+  const isSpark = id === "gpt-5.3-codex-spark";
+  return {
+    provider: "openai-codex",
+    id,
+    api: "openai-codex-responses",
+    baseUrl: "https://chatgpt.com/backend-api",
+    reasoning: true,
+    input: isSpark ? ["text"] : ["text", "image"],
+    cost: isSpark
+      ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+      : OPENAI_CODEX_TEMPLATE_MODEL.cost,
+    contextWindow: isGpt54 ? 1_050_000 : isSpark ? 128_000 : 272000,
+    maxTokens: 128000,
+  };
+}
+
+export const GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL = {
+  id: "gemini-3-pro-preview",
+  name: "Gemini 3 Pro Preview (Cloud Code Assist)",
+  provider: "google-gemini-cli",
+  api: "google-gemini-cli",
+  baseUrl: "https://cloudcode-pa.googleapis.com",
+  reasoning: true,
+  input: ["text", "image"] as const,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: 64000,
+};
+
+export const GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL = {
+  id: "gemini-3-flash-preview",
+  name: "Gemini 3 Flash Preview (Cloud Code Assist)",
+  provider: "google-gemini-cli",
+  api: "google-gemini-cli",
+  baseUrl: "https://cloudcode-pa.googleapis.com",
+  reasoning: false,
+  input: ["text", "image"] as const,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: 64000,
+};
+
+export function mockGoogleGeminiCliProTemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "google-gemini-cli",
+    modelId: "gemini-3-pro-preview",
+    templateModel: GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
+  });
+}
+
+export function mockGoogleGeminiCliFlashTemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "google-gemini-cli",
+    modelId: "gemini-3-flash-preview",
+    templateModel: GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
+  });
+}
+
 export function resetMockDiscoverModels(): void {
   vi.mocked(discoverModels).mockReturnValue({
     find: vi.fn(() => null),

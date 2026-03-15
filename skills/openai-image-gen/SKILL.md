@@ -6,7 +6,7 @@ metadata:
   {
     "openclaw":
       {
-        "emoji": "🖼️",
+        "emoji": "🎨",
         "requires": { "bins": ["python3"], "env": ["OPENAI_API_KEY"] },
         "primaryEnv": "OPENAI_API_KEY",
         "install":
@@ -28,6 +28,9 @@ metadata:
 Generate a handful of “random but structured” prompts and render them via the OpenAI Images API.
 
 ## Run
+
+Note: Image generation can take longer than common exec timeouts (for example 30 seconds).
+When invoking this skill via OpenClaw’s exec tool, set a higher timeout to avoid premature termination/retries (e.g., exec timeout=300).
 
 ```bash
 python3 {baseDir}/scripts/gen.py

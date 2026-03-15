@@ -1,5 +1,14 @@
 import type { ChannelStatusIssue } from "../channels/plugins/types.js";
 
+type RuntimeLifecycleSnapshot = {
+  running?: boolean | null;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  lastInboundAt?: number | null;
+  lastOutboundAt?: number | null;
+};
+
 export function createDefaultChannelRuntimeState<T extends Record<string, unknown>>(
   accountId: string,
   extra?: T,
@@ -33,6 +42,112 @@ export function buildBaseChannelStatusSummary(snapshot: {
     lastStartAt: snapshot.lastStartAt ?? null,
     lastStopAt: snapshot.lastStopAt ?? null,
     lastError: snapshot.lastError ?? null,
+  };
+}
+
+export function buildProbeChannelStatusSummary<TExtra extends Record<string, unknown>>(
+  snapshot: {
+    configured?: boolean | null;
+    running?: boolean | null;
+    lastStartAt?: number | null;
+    lastStopAt?: number | null;
+    lastError?: string | null;
+    probe?: unknown;
+    lastProbeAt?: number | null;
+  },
+  extra?: TExtra,
+) {
+  return {
+    ...buildBaseChannelStatusSummary(snapshot),
+    ...(extra ?? ({} as TExtra)),
+    probe: snapshot.probe,
+    lastProbeAt: snapshot.lastProbeAt ?? null,
+  };
+}
+
+export function buildBaseAccountStatusSnapshot(params: {
+  account: {
+    accountId: string;
+    name?: string;
+    enabled?: boolean;
+    configured?: boolean;
+  };
+  runtime?: RuntimeLifecycleSnapshot | null;
+  probe?: unknown;
+}) {
+  const { account, runtime, probe } = params;
+  return {
+    accountId: account.accountId,
+    name: account.name,
+    enabled: account.enabled,
+    configured: account.configured,
+    ...buildRuntimeAccountStatusSnapshot({ runtime, probe }),
+    lastInboundAt: runtime?.lastInboundAt ?? null,
+    lastOutboundAt: runtime?.lastOutboundAt ?? null,
+  };
+}
+
+export function buildComputedAccountStatusSnapshot(params: {
+  accountId: string;
+  name?: string;
+  enabled?: boolean;
+  configured?: boolean;
+  runtime?: RuntimeLifecycleSnapshot | null;
+  probe?: unknown;
+}) {
+  const { accountId, name, enabled, configured, runtime, probe } = params;
+  return buildBaseAccountStatusSnapshot({
+    account: {
+      accountId,
+      name,
+      enabled,
+      configured,
+    },
+    runtime,
+    probe,
+  });
+}
+
+export function buildRuntimeAccountStatusSnapshot(params: {
+  runtime?: RuntimeLifecycleSnapshot | null;
+  probe?: unknown;
+}) {
+  const { runtime, probe } = params;
+  return {
+    running: runtime?.running ?? false,
+    lastStartAt: runtime?.lastStartAt ?? null,
+    lastStopAt: runtime?.lastStopAt ?? null,
+    lastError: runtime?.lastError ?? null,
+    probe,
+  };
+}
+
+export function buildTokenChannelStatusSummary(
+  snapshot: {
+    configured?: boolean | null;
+    tokenSource?: string | null;
+    running?: boolean | null;
+    mode?: string | null;
+    lastStartAt?: number | null;
+    lastStopAt?: number | null;
+    lastError?: string | null;
+    probe?: unknown;
+    lastProbeAt?: number | null;
+  },
+  opts?: { includeMode?: boolean },
+) {
+  const base = {
+    ...buildBaseChannelStatusSummary(snapshot),
+    tokenSource: snapshot.tokenSource ?? "none",
+    probe: snapshot.probe,
+    lastProbeAt: snapshot.lastProbeAt ?? null,
+  };
+  if (opts?.includeMode === false) {
+    return base;
+  }
+  return {
+    ...base,
+    mode: snapshot.mode ?? null,
   };
 }
 

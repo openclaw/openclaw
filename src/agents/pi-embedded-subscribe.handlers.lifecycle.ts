@@ -1,6 +1,11 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
-import { formatAssistantErrorText } from "./pi-embedded-helpers.js";
+import {
+  buildApiErrorObservationFields,
+  buildTextObservationFields,
+  sanitizeForConsole,
+} from "./pi-embedded-error-observation.js";
+import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
@@ -29,8 +34,6 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
 
-  ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
-
   if (isError && lastAssistant) {
     const friendlyError = formatAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
@@ -38,12 +41,33 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       provider: lastAssistant.provider,
       model: lastAssistant.model,
     });
+    const rawError = lastAssistant.errorMessage?.trim();
+    const failoverReason = classifyFailoverReason(rawError ?? "");
+    const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
+    const observedError = buildApiErrorObservationFields(rawError);
+    const safeErrorText =
+      buildTextObservationFields(errorText).textPreview ?? "LLM request failed.";
+    const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
+    const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
+    const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
+    ctx.log.warn("embedded run agent end", {
+      event: "embedded_run_agent_end",
+      tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],
+      runId: ctx.params.runId,
+      isError: true,
+      error: safeErrorText,
+      failoverReason,
+      model: lastAssistant.model,
+      provider: lastAssistant.provider,
+      ...observedError,
+      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}`,
+    });
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: friendlyError || lastAssistant.errorMessage || "LLM request failed.",
+        error: safeErrorText,
         endedAt: Date.now(),
       },
     });
@@ -51,10 +75,11 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: friendlyError || lastAssistant.errorMessage || "LLM request failed.",
+        error: safeErrorText,
       },
     });
   } else {
+    ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
@@ -70,6 +95,11 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   }
 
   ctx.flushBlockReplyBuffer();
+  // Flush the reply pipeline so the response reaches the channel before
+  // compaction wait blocks the run.  This mirrors the pattern used by
+  // handleToolExecutionStart and ensures delivery is not held hostage to
+  // long-running compaction (#35074).
+  void ctx.params.onBlockReplyFlush?.();
 
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;

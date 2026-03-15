@@ -28,11 +28,90 @@ export type ToolStreamEntry = {
 type ToolStreamHost = {
   sessionKey: string;
   chatRunId: string | null;
+  chatStream: string | null;
+  chatStreamStartedAt: number | null;
+  chatStreamSegments: Array<{ text: string; ts: number }>;
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
 };
+
+function toTrimmedString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function resolveModelLabel(provider: unknown, model: unknown): string | null {
+  const modelValue = toTrimmedString(model);
+  if (!modelValue) {
+    return null;
+  }
+  const providerValue = toTrimmedString(provider);
+  if (providerValue) {
+    const prefix = `${providerValue}/`;
+    if (modelValue.toLowerCase().startsWith(prefix.toLowerCase())) {
+      const trimmedModel = modelValue.slice(prefix.length).trim();
+      if (trimmedModel) {
+        return `${providerValue}/${trimmedModel}`;
+      }
+    }
+    return `${providerValue}/${modelValue}`;
+  }
+  const slashIndex = modelValue.indexOf("/");
+  if (slashIndex > 0) {
+    const p = modelValue.slice(0, slashIndex).trim();
+    const m = modelValue.slice(slashIndex + 1).trim();
+    if (p && m) {
+      return `${p}/${m}`;
+    }
+  }
+  return modelValue;
+}
+
+type FallbackAttempt = {
+  provider: string;
+  model: string;
+  reason: string;
+};
+
+function parseFallbackAttemptSummaries(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => toTrimmedString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function parseFallbackAttempts(value: unknown): FallbackAttempt[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: FallbackAttempt[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const item = entry as Record<string, unknown>;
+    const provider = toTrimmedString(item.provider);
+    const model = toTrimmedString(item.model);
+    if (!provider || !model) {
+      continue;
+    }
+    const reason =
+      toTrimmedString(item.reason)?.replace(/_/g, " ") ??
+      toTrimmedString(item.code) ??
+      (typeof item.status === "number" ? `HTTP ${item.status}` : null) ??
+      toTrimmedString(item.error) ??
+      "error";
+    out.push({ provider, model, reason });
+  }
+  return out;
+}
 
 function extractToolOutputText(value: unknown): string | null {
   if (!value || typeof value !== "object") {
@@ -155,10 +234,14 @@ export function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
 }
 
 export function resetToolStream(host: ToolStreamHost) {
+  if (host.toolStreamSyncTimer != null) {
+    clearTimeout(host.toolStreamSyncTimer);
+    host.toolStreamSyncTimer = null;
+  }
   host.toolStreamById.clear();
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
-  flushToolStreamSync(host);
+  host.chatStreamSegments = [];
 }
 
 export type CompactionStatus = {
@@ -167,12 +250,25 @@ export type CompactionStatus = {
   completedAt: number | null;
 };
 
+export type FallbackStatus = {
+  phase?: "active" | "cleared";
+  selected: string;
+  active: string;
+  previous?: string;
+  reason?: string;
+  attempts: string[];
+  occurredAt: number;
+};
+
 type CompactionHost = ToolStreamHost & {
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: number | null;
+  fallbackStatus?: FallbackStatus | null;
+  fallbackClearTimer?: number | null;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
+const FALLBACK_TOAST_DURATION_MS = 8000;
 
 export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
   const data = payload.data ?? {};
@@ -204,6 +300,95 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
   }
 }
 
+function resolveAcceptedSession(
+  host: ToolStreamHost,
+  payload: AgentEventPayload,
+  options?: {
+    allowSessionScopedWhenIdle?: boolean;
+  },
+): { accepted: boolean; sessionKey?: string } {
+  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+  if (sessionKey && sessionKey !== host.sessionKey) {
+    return { accepted: false };
+  }
+  if (!host.chatRunId && options?.allowSessionScopedWhenIdle && sessionKey) {
+    return { accepted: true, sessionKey };
+  }
+  // Fallback: only accept session-less events for the active run.
+  if (!sessionKey && host.chatRunId && payload.runId !== host.chatRunId) {
+    return { accepted: false };
+  }
+  if (host.chatRunId && payload.runId !== host.chatRunId) {
+    return { accepted: false };
+  }
+  if (!host.chatRunId) {
+    return { accepted: false };
+  }
+  return { accepted: true, sessionKey };
+}
+
+function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventPayload) {
+  const data = payload.data ?? {};
+  const phase = payload.stream === "fallback" ? "fallback" : toTrimmedString(data.phase);
+  if (payload.stream === "lifecycle" && phase !== "fallback" && phase !== "fallback_cleared") {
+    return;
+  }
+
+  const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
+  if (!accepted.accepted) {
+    return;
+  }
+
+  const selected =
+    resolveModelLabel(data.selectedProvider, data.selectedModel) ??
+    resolveModelLabel(data.fromProvider, data.fromModel);
+  const active =
+    resolveModelLabel(data.activeProvider, data.activeModel) ??
+    resolveModelLabel(data.toProvider, data.toModel);
+  const previous =
+    resolveModelLabel(data.previousActiveProvider, data.previousActiveModel) ??
+    toTrimmedString(data.previousActiveModel);
+  if (!selected || !active) {
+    return;
+  }
+  if (phase === "fallback" && selected === active) {
+    return;
+  }
+
+  const reason = toTrimmedString(data.reasonSummary) ?? toTrimmedString(data.reason);
+  const attempts = (() => {
+    const summaries = parseFallbackAttemptSummaries(data.attemptSummaries);
+    if (summaries.length > 0) {
+      return summaries;
+    }
+    return parseFallbackAttempts(data.attempts).map((attempt) => {
+      const modelRef = resolveModelLabel(attempt.provider, attempt.model);
+      return `${modelRef ?? `${attempt.provider}/${attempt.model}`}: ${attempt.reason}`;
+    });
+  })();
+
+  if (host.fallbackClearTimer != null) {
+    window.clearTimeout(host.fallbackClearTimer);
+    host.fallbackClearTimer = null;
+  }
+  host.fallbackStatus = {
+    phase: phase === "fallback_cleared" ? "cleared" : "active",
+    selected,
+    active: phase === "fallback_cleared" ? selected : active,
+    previous:
+      phase === "fallback_cleared"
+        ? (previous ?? (active !== selected ? active : undefined))
+        : undefined,
+    reason: reason ?? undefined,
+    attempts,
+    occurredAt: Date.now(),
+  };
+  host.fallbackClearTimer = window.setTimeout(() => {
+    host.fallbackStatus = null;
+    host.fallbackClearTimer = null;
+  }, FALLBACK_TOAST_DURATION_MS);
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
   if (!payload) {
     return;
@@ -215,21 +400,20 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  if (payload.stream === "lifecycle" || payload.stream === "fallback") {
+    handleLifecycleFallbackEvent(host as CompactionHost, payload);
+    return;
+  }
+
   if (payload.stream !== "tool") {
     return;
   }
+
+  // Filter by session only. Don't check chatRunId because the client sets it
+  // to a client-generated UUID (via generateUUID in sendChatMessage), while
+  // tool events arrive with the server's engine runId — they can never match.
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && sessionKey !== host.sessionKey) {
-    return;
-  }
-  // Fallback: only accept session-less events for the active run.
-  if (!sessionKey && host.chatRunId && payload.runId !== host.chatRunId) {
-    return;
-  }
-  if (host.chatRunId && payload.runId !== host.chatRunId) {
-    return;
-  }
-  if (!host.chatRunId) {
     return;
   }
 
@@ -251,6 +435,13 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   const now = Date.now();
   let entry = host.toolStreamById.get(toolCallId);
   if (!entry) {
+    // Commit any in-progress streaming text as a segment so it renders
+    // above the tool card instead of below it.
+    if (host.chatStream && host.chatStream.trim().length > 0) {
+      host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
+      host.chatStream = null;
+      host.chatStreamStartedAt = null;
+    }
     entry = {
       toolCallId,
       runId: payload.runId,

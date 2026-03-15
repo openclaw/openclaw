@@ -1,4 +1,8 @@
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isReasoningModelHeuristic } from "./ollama-models.js";
+
+const log = createSubsystemLogger("huggingface-models");
 
 /** Hugging Face Inference Providers (router) — OpenAI-compatible chat completions. */
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
@@ -122,7 +126,7 @@ export function buildHuggingfaceModelDefinition(
  */
 function inferredMetaFromModelId(id: string): { name: string; reasoning: boolean } {
   const base = id.split("/").pop() ?? id;
-  const reasoning = /r1|reasoning|thinking|reason/i.test(id) || /-\d+[tb]?-thinking/i.test(base);
+  const reasoning = isReasoningModelHeuristic(id);
   const name = base.replace(/-/g, " ").replace(/\b(\w)/g, (c) => c.toUpperCase());
   return { name, reasoning };
 }
@@ -168,16 +172,14 @@ export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDe
     });
 
     if (!response.ok) {
-      console.warn(
-        `[huggingface-models] GET /v1/models failed: HTTP ${response.status}, using static catalog`,
-      );
+      log.warn(`GET /v1/models failed: HTTP ${response.status}, using static catalog`);
       return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
     }
 
     const body = (await response.json()) as OpenAIListModelsResponse;
     const data = body?.data;
     if (!Array.isArray(data) || data.length === 0) {
-      console.warn("[huggingface-models] No models in response, using static catalog");
+      log.warn("No models in response, using static catalog");
       return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
     }
 
@@ -223,7 +225,7 @@ export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDe
       ? models
       : HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
   } catch (error) {
-    console.warn(`[huggingface-models] Discovery failed: ${String(error)}, using static catalog`);
+    log.warn(`Discovery failed: ${String(error)}, using static catalog`);
     return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
   }
 }

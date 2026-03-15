@@ -3,7 +3,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
-import { applyConfigEnvVars } from "./env-vars.js";
+import {
+  applyConfigEnvVars,
+  collectConfigRuntimeEnvVars,
+  createConfigRuntimeEnv,
+} from "./env-vars.js";
 import { withEnvOverride, withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -26,6 +30,72 @@ describe("config env vars", () => {
     await withEnvOverride({ GROQ_API_KEY: undefined }, async () => {
       applyConfigEnvVars({ env: { vars: { GROQ_API_KEY: "gsk-config" } } } as OpenClawConfig);
       expect(process.env.GROQ_API_KEY).toBe("gsk-config");
+    });
+  });
+
+  it("can build a merged runtime env without mutating process.env", async () => {
+    await withEnvOverride({ OPENROUTER_API_KEY: undefined }, async () => {
+      const merged = createConfigRuntimeEnv({
+        env: { vars: { OPENROUTER_API_KEY: "config-key" } },
+      } as OpenClawConfig);
+      expect(merged.OPENROUTER_API_KEY).toBe("config-key");
+      expect(process.env.OPENROUTER_API_KEY).toBeUndefined();
+    });
+  });
+
+  it("blocks dangerous startup env vars from config env", async () => {
+    await withEnvOverride(
+      {
+        BASH_ENV: undefined,
+        SHELL: undefined,
+        HOME: undefined,
+        ZDOTDIR: undefined,
+        OPENROUTER_API_KEY: undefined,
+      },
+      async () => {
+        const config = {
+          env: {
+            vars: {
+              BASH_ENV: "/tmp/pwn.sh",
+              SHELL: "/tmp/evil-shell",
+              HOME: "/tmp/evil-home",
+              ZDOTDIR: "/tmp/evil-zdotdir",
+              OPENROUTER_API_KEY: "config-key",
+            },
+          },
+        };
+        const entries = collectConfigRuntimeEnvVars(config as OpenClawConfig);
+        expect(entries.BASH_ENV).toBeUndefined();
+        expect(entries.SHELL).toBeUndefined();
+        expect(entries.HOME).toBeUndefined();
+        expect(entries.ZDOTDIR).toBeUndefined();
+        expect(entries.OPENROUTER_API_KEY).toBe("config-key");
+
+        applyConfigEnvVars(config as OpenClawConfig);
+        expect(process.env.BASH_ENV).toBeUndefined();
+        expect(process.env.SHELL).toBeUndefined();
+        expect(process.env.HOME).toBeUndefined();
+        expect(process.env.ZDOTDIR).toBeUndefined();
+        expect(process.env.OPENROUTER_API_KEY).toBe("config-key");
+      },
+    );
+  });
+
+  it("drops non-portable env keys from config env", async () => {
+    await withEnvOverride({ OPENROUTER_API_KEY: undefined }, async () => {
+      const config = {
+        env: {
+          vars: {
+            " BAD KEY": "oops",
+            OPENROUTER_API_KEY: "config-key",
+          },
+          "NOT-PORTABLE": "bad",
+        },
+      };
+      const entries = collectConfigRuntimeEnvVars(config as OpenClawConfig);
+      expect(entries.OPENROUTER_API_KEY).toBe("config-key");
+      expect(entries[" BAD KEY"]).toBeUndefined();
+      expect(entries["NOT-PORTABLE"]).toBeUndefined();
     });
   });
 

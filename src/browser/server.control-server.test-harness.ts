@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 import { getFreePort } from "./test-port.js";
 
 export { getFreePort } from "./test-port.js";
@@ -13,6 +11,17 @@ type HarnessState = {
   reachable: boolean;
   cfgAttachOnly: boolean;
   cfgEvaluateEnabled: boolean;
+  cfgDefaultProfile: string;
+  cfgProfiles: Record<
+    string,
+    {
+      cdpPort?: number;
+      cdpUrl?: string;
+      color: string;
+      driver?: "openclaw" | "extension" | "existing-session";
+      attachOnly?: boolean;
+    }
+  >;
   createTargetId: string | null;
   prevGatewayPort: string | undefined;
   prevGatewayToken: string | undefined;
@@ -25,6 +34,8 @@ const state: HarnessState = {
   reachable: false,
   cfgAttachOnly: false,
   cfgEvaluateEnabled: true,
+  cfgDefaultProfile: "openclaw",
+  cfgProfiles: {},
   createTargetId: null,
   prevGatewayPort: undefined,
   prevGatewayToken: undefined,
@@ -37,6 +48,14 @@ export function getBrowserControlServerTestState(): HarnessState {
 
 export function getBrowserControlServerBaseUrl(): string {
   return `http://127.0.0.1:${state.testPort}`;
+}
+
+export function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void {
+  if (prevGatewayPort === undefined) {
+    delete process.env.OPENCLAW_GATEWAY_PORT;
+    return;
+  }
+  process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
 }
 
 export function setBrowserControlServerCreateTargetId(targetId: string | null): void {
@@ -55,6 +74,14 @@ export function setBrowserControlServerReachable(reachable: boolean): void {
   state.reachable = reachable;
 }
 
+export function setBrowserControlServerProfiles(
+  profiles: HarnessState["cfgProfiles"],
+  defaultProfile = Object.keys(profiles)[0] ?? "openclaw",
+): void {
+  state.cfgProfiles = profiles;
+  state.cfgDefaultProfile = defaultProfile;
+}
+
 const cdpMocks = vi.hoisted(() => ({
   createTargetViaCdp: vi.fn<() => Promise<{ targetId: string }>>(async () => {
     throw new Error("cdp disabled");
@@ -71,6 +98,7 @@ export function getCdpMocks(): { createTargetViaCdp: MockFn; snapshotAria: MockF
 const pwMocks = vi.hoisted(() => ({
   armDialogViaPlaywright: vi.fn(async () => {}),
   armFileUploadViaPlaywright: vi.fn(async () => {}),
+  batchViaPlaywright: vi.fn(async () => ({ results: [] })),
   clickViaPlaywright: vi.fn(async () => {}),
   closePageViaPlaywright: vi.fn(async () => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
@@ -115,15 +143,46 @@ export function getPwMocks(): Record<string, MockFn> {
   return pwMocks as unknown as Record<string, MockFn>;
 }
 
+const chromeMcpMocks = vi.hoisted(() => ({
+  clickChromeMcpElement: vi.fn(async () => {}),
+  closeChromeMcpSession: vi.fn(async () => true),
+  closeChromeMcpTab: vi.fn(async () => {}),
+  dragChromeMcpElement: vi.fn(async () => {}),
+  ensureChromeMcpAvailable: vi.fn(async () => {}),
+  evaluateChromeMcpScript: vi.fn(async () => true),
+  fillChromeMcpElement: vi.fn(async () => {}),
+  fillChromeMcpForm: vi.fn(async () => {}),
+  focusChromeMcpTab: vi.fn(async () => {}),
+  getChromeMcpPid: vi.fn(() => 4321),
+  hoverChromeMcpElement: vi.fn(async () => {}),
+  listChromeMcpTabs: vi.fn(async () => [
+    { targetId: "7", title: "", url: "https://example.com", type: "page" },
+  ]),
+  navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
+  openChromeMcpTab: vi.fn(async (_profile: string, url: string) => ({
+    targetId: "8",
+    title: "",
+    url,
+    type: "page",
+  })),
+  pressChromeMcpKey: vi.fn(async () => {}),
+  resizeChromeMcpPage: vi.fn(async () => {}),
+  takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
+  takeChromeMcpSnapshot: vi.fn(async () => ({
+    id: "root",
+    role: "document",
+    name: "Example",
+    children: [{ id: "btn-1", role: "button", name: "Continue" }],
+  })),
+  uploadChromeMcpFile: vi.fn(async () => {}),
+}));
+
+export function getChromeMcpMocks(): Record<string, MockFn> {
+  return chromeMcpMocks as unknown as Record<string, MockFn>;
+}
+
 const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));
-
-beforeAll(async () => {
-  chromeUserDataDir.dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-user-data-"));
-});
-
-afterAll(async () => {
-  await fs.rm(chromeUserDataDir.dir, { recursive: true, force: true });
-});
+installChromeUserDataDirHooks(chromeUserDataDir);
 
 function makeProc(pid = 123) {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
@@ -148,24 +207,40 @@ function makeProc(pid = 123) {
 
 const proc = makeProc();
 
+function defaultProfilesForState(testPort: number): HarnessState["cfgProfiles"] {
+  return {
+    openclaw: { cdpPort: testPort + 9, color: "#FF4500" },
+  };
+}
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => ({
+  const loadConfig = () => {
+    return {
       browser: {
         enabled: true,
         evaluateEnabled: state.cfgEvaluateEnabled,
         color: "#FF4500",
         attachOnly: state.cfgAttachOnly,
         headless: true,
-        defaultProfile: "openclaw",
-        profiles: {
-          openclaw: { cdpPort: state.testPort + 1, color: "#FF4500" },
-        },
+        defaultProfile: state.cfgDefaultProfile,
+        profiles:
+          Object.keys(state.cfgProfiles).length > 0
+            ? state.cfgProfiles
+            : defaultProfilesForState(state.testPort),
       },
-    }),
-    writeConfigFile: vi.fn(async () => {}),
+    };
+  };
+  const writeConfigFile = vi.fn(async () => {});
+  return {
+    ...actual,
+    createConfigIO: vi.fn(() => ({
+      loadConfig,
+      writeConfigFile,
+    })),
+    getRuntimeConfigSnapshot: vi.fn(() => null),
+    loadConfig,
+    writeConfigFile,
   };
 });
 
@@ -210,8 +285,12 @@ vi.mock("./cdp.js", () => ({
 
 vi.mock("./pw-ai.js", () => pwMocks);
 
+vi.mock("./chrome-mcp.js", () => chromeMcpMocks);
+
 vi.mock("../media/store.js", () => ({
+  MEDIA_MAX_BYTES: 5 * 1024 * 1024,
   ensureMediaDir: vi.fn(async () => {}),
+  getMediaDir: vi.fn(() => "/tmp"),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
 
@@ -249,12 +328,57 @@ function mockClearAll(obj: Record<string, { mockClear: () => unknown }>) {
   }
 }
 
+export async function resetBrowserControlServerTestContext(): Promise<void> {
+  state.reachable = false;
+  state.cfgAttachOnly = false;
+  state.cfgEvaluateEnabled = true;
+  state.cfgDefaultProfile = "openclaw";
+  state.cfgProfiles = defaultProfilesForState(state.testPort);
+  state.createTargetId = null;
+
+  mockClearAll(pwMocks);
+  mockClearAll(cdpMocks);
+  mockClearAll(chromeMcpMocks);
+
+  state.testPort = await getFreePort();
+  state.cdpBaseUrl = `http://127.0.0.1:${state.testPort + 9}`;
+  state.cfgProfiles = defaultProfilesForState(state.testPort);
+  state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
+  process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
+  // Avoid flaky auth coupling: some suites temporarily set gateway env auth
+  // which would make the browser control server require auth.
+  state.prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+  state.prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+  delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+}
+
+export function restoreGatewayAuthEnv(
+  prevGatewayToken: string | undefined,
+  prevGatewayPassword: string | undefined,
+): void {
+  if (prevGatewayToken === undefined) {
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  } else {
+    process.env.OPENCLAW_GATEWAY_TOKEN = prevGatewayToken;
+  }
+  if (prevGatewayPassword === undefined) {
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+  } else {
+    process.env.OPENCLAW_GATEWAY_PASSWORD = prevGatewayPassword;
+  }
+}
+
+export async function cleanupBrowserControlServerTestContext(): Promise<void> {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  restoreGatewayPortEnv(state.prevGatewayPort);
+  restoreGatewayAuthEnv(state.prevGatewayToken, state.prevGatewayPassword);
+  await stopBrowserControlServer();
+}
+
 export function installBrowserControlServerHooks() {
   beforeEach(async () => {
-    state.reachable = false;
-    state.cfgAttachOnly = false;
-    state.createTargetId = null;
-
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
       if (state.createTargetId) {
         return { targetId: state.createTargetId };
@@ -262,19 +386,7 @@ export function installBrowserControlServerHooks() {
       throw new Error("cdp disabled");
     });
 
-    mockClearAll(pwMocks);
-    mockClearAll(cdpMocks);
-
-    state.testPort = await getFreePort();
-    state.cdpBaseUrl = `http://127.0.0.1:${state.testPort + 1}`;
-    state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
-    process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
-    // Avoid flaky auth coupling: some suites temporarily set gateway env auth
-    // which would make the browser control server require auth.
-    state.prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    state.prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    await resetBrowserControlServerTestContext();
 
     // Minimal CDP JSON endpoints used by the server.
     let putNewCalls = 0;
@@ -330,23 +442,6 @@ export function installBrowserControlServerHooks() {
   });
 
   afterEach(async () => {
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-    if (state.prevGatewayPort === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_PORT;
-    } else {
-      process.env.OPENCLAW_GATEWAY_PORT = state.prevGatewayPort;
-    }
-    if (state.prevGatewayToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = state.prevGatewayToken;
-    }
-    if (state.prevGatewayPassword === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    } else {
-      process.env.OPENCLAW_GATEWAY_PASSWORD = state.prevGatewayPassword;
-    }
-    await stopBrowserControlServer();
+    await cleanupBrowserControlServerTestContext();
   });
 }

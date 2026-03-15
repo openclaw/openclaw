@@ -76,6 +76,10 @@ Put under `plugins.entries.voice-call.config`:
   streaming: {
     enabled: true,
     streamPath: "/voice/stream",
+    preStartTimeoutMs: 5000,
+    maxPendingConnections: 32,
+    maxPendingConnectionsPerIp: 4,
+    maxConnections: 128,
   },
 }
 ```
@@ -85,49 +89,18 @@ Notes:
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
-- `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
+- advanced webhook, streaming, and tunnel notes: `https://docs.openclaw.ai/plugins/voice-call`
 
 ## Stale call reaper
 
-Use `staleCallReaperSeconds` to end calls that never receive a terminal webhook
-(for example, notify-mode calls that never complete). The default is `0`
-(disabled).
-
-Recommended ranges:
-
-- **Production:** `120`–`300` seconds for notify-style flows.
-- Keep this value **higher than `maxDurationSeconds`** so normal calls can
-  finish. A good starting point is `maxDurationSeconds + 30–60` seconds.
-
-Example:
-
-```json5
-{
-  staleCallReaperSeconds: 360,
-}
-```
+See the plugin docs for recommended ranges and production examples:
+`https://docs.openclaw.ai/plugins/voice-call#stale-call-reaper`
 
 ## TTS for calls
 
 Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
-streaming speech on calls. You can override it under the plugin config with the
-same shape — overrides deep-merge with `messages.tts`.
-
-```json5
-{
-  tts: {
-    provider: "openai",
-    openai: {
-      voice: "alloy",
-    },
-  },
-}
-```
-
-Notes:
-
-- Edge TTS is ignored for voice calls (telephony audio needs PCM; Edge output is unreliable).
-- Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
+streaming speech on calls. Override examples and provider caveats live here:
+`https://docs.openclaw.ai/plugins/voice-call#tts-for-calls`
 
 ## CLI
 
@@ -164,5 +137,7 @@ Actions:
 ## Notes
 
 - Uses webhook signature verification for Twilio/Telnyx/Plivo.
+- Adds replay protection for Twilio and Plivo webhooks (valid duplicate callbacks are ignored safely).
+- Twilio speech turns include a per-turn token so stale/replayed callbacks cannot complete a newer turn.
 - `responseModel` / `responseSystemPrompt` control AI auto-responses.
 - Media streaming requires `ws` and OpenAI Realtime API key.

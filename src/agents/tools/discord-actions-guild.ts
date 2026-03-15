@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { DiscordActionConfig } from "../../config/config.js";
-import { getPresence } from "../../discord/monitor/presence-cache.js";
+import { getPresence } from "../../../extensions/discord/src/monitor/presence-cache.js";
 import {
   addRoleDiscord,
   createChannelDiscord,
@@ -20,24 +19,17 @@ import {
   setChannelPermissionDiscord,
   uploadEmojiDiscord,
   uploadStickerDiscord,
-} from "../../discord/send.js";
+} from "../../../extensions/discord/src/send.js";
+import type { DiscordActionConfig } from "../../config/config.js";
 import {
   type ActionGate,
   jsonResult,
+  parseAvailableTags,
   readNumberParam,
   readStringArrayParam,
   readStringParam,
 } from "./common.js";
-
-function readParentIdParam(params: Record<string, unknown>): string | null | undefined {
-  if (params.clearParent === true) {
-    return null;
-  }
-  if (params.parentId === null) {
-    return null;
-  }
-  return readStringParam(params, "parentId");
-}
+import { readDiscordParentIdParam } from "./discord-actions-shared.js";
 
 type DiscordRoleMutation = (params: {
   guildId: string;
@@ -66,6 +58,13 @@ async function runRoleMutation(params: {
     return;
   }
   await params.mutate({ guildId, userId, roleId });
+}
+
+function readChannelPermissionTarget(params: Record<string, unknown>) {
+  return {
+    channelId: readStringParam(params, "channelId", { required: true }),
+    targetId: readStringParam(params, "targetId", { required: true }),
+  };
 }
 
 export async function handleDiscordGuildAction(
@@ -286,7 +285,7 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", { required: true });
       const name = readStringParam(params, "name", { required: true });
       const type = readNumberParam(params, "type", { integer: true });
-      const parentId = readParentIdParam(params);
+      const parentId = readDiscordParentIdParam(params);
       const topic = readStringParam(params, "topic");
       const position = readNumberParam(params, "position", { integer: true });
       const nsfw = params.nsfw as boolean | undefined;
@@ -324,7 +323,7 @@ export async function handleDiscordGuildAction(
       const name = readStringParam(params, "name");
       const topic = readStringParam(params, "topic");
       const position = readNumberParam(params, "position", { integer: true });
-      const parentId = readParentIdParam(params);
+      const parentId = readDiscordParentIdParam(params);
       const nsfw = params.nsfw as boolean | undefined;
       const rateLimitPerUser = readNumberParam(params, "rateLimitPerUser", {
         integer: true,
@@ -334,34 +333,23 @@ export async function handleDiscordGuildAction(
       const autoArchiveDuration = readNumberParam(params, "autoArchiveDuration", {
         integer: true,
       });
+      const availableTags = parseAvailableTags(params.availableTags);
+      const editPayload = {
+        channelId,
+        name: name ?? undefined,
+        topic: topic ?? undefined,
+        position: position ?? undefined,
+        parentId,
+        nsfw,
+        rateLimitPerUser: rateLimitPerUser ?? undefined,
+        archived,
+        locked,
+        autoArchiveDuration: autoArchiveDuration ?? undefined,
+        availableTags,
+      };
       const channel = accountId
-        ? await editChannelDiscord(
-            {
-              channelId,
-              name: name ?? undefined,
-              topic: topic ?? undefined,
-              position: position ?? undefined,
-              parentId,
-              nsfw,
-              rateLimitPerUser: rateLimitPerUser ?? undefined,
-              archived,
-              locked,
-              autoArchiveDuration: autoArchiveDuration ?? undefined,
-            },
-            { accountId },
-          )
-        : await editChannelDiscord({
-            channelId,
-            name: name ?? undefined,
-            topic: topic ?? undefined,
-            position: position ?? undefined,
-            parentId,
-            nsfw,
-            rateLimitPerUser: rateLimitPerUser ?? undefined,
-            archived,
-            locked,
-            autoArchiveDuration: autoArchiveDuration ?? undefined,
-          });
+        ? await editChannelDiscord(editPayload, { accountId })
+        : await editChannelDiscord(editPayload);
       return jsonResult({ ok: true, channel });
     }
     case "channelDelete": {
@@ -384,7 +372,7 @@ export async function handleDiscordGuildAction(
       const channelId = readStringParam(params, "channelId", {
         required: true,
       });
-      const parentId = readParentIdParam(params);
+      const parentId = readDiscordParentIdParam(params);
       const position = readNumberParam(params, "position", { integer: true });
       if (accountId) {
         await moveChannelDiscord(
@@ -472,10 +460,7 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("channels")) {
         throw new Error("Discord channel management is disabled.");
       }
-      const channelId = readStringParam(params, "channelId", {
-        required: true,
-      });
-      const targetId = readStringParam(params, "targetId", { required: true });
+      const { channelId, targetId } = readChannelPermissionTarget(params);
       const targetTypeRaw = readStringParam(params, "targetType", {
         required: true,
       });
@@ -508,10 +493,7 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("channels")) {
         throw new Error("Discord channel management is disabled.");
       }
-      const channelId = readStringParam(params, "channelId", {
-        required: true,
-      });
-      const targetId = readStringParam(params, "targetId", { required: true });
+      const { channelId, targetId } = readChannelPermissionTarget(params);
       if (accountId) {
         await removeChannelPermissionDiscord(channelId, targetId, { accountId });
       } else {

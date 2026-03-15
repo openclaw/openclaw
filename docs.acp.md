@@ -17,6 +17,51 @@ Key goals:
 - Works with existing Gateway session store (list/resolve/reset).
 - Safe defaults (isolated ACP session keys by default).
 
+## Bridge Scope
+
+`openclaw acp` is a Gateway-backed ACP bridge, not a full ACP-native editor
+runtime. It is designed to route IDE prompts into an existing OpenClaw Gateway
+session with predictable session mapping and basic streaming updates.
+
+## Compatibility Matrix
+
+| ACP area                                                              | Status      | Notes                                                                                                                                                                                                                                            |
+| --------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `initialize`, `newSession`, `prompt`, `cancel`                        | Implemented | Core bridge flow over stdio to Gateway chat/send + abort.                                                                                                                                                                                        |
+| `listSessions`, slash commands                                        | Implemented | Session list works against Gateway session state; commands are advertised via `available_commands_update`.                                                                                                                                       |
+| `loadSession`                                                         | Partial     | Rebinds the ACP session to a Gateway session key and replays stored user/assistant text history. Tool/system history is not reconstructed yet.                                                                                                   |
+| Prompt content (`text`, embedded `resource`, images)                  | Partial     | Text/resources are flattened into chat input; images become Gateway attachments.                                                                                                                                                                 |
+| Session modes                                                         | Partial     | `session/set_mode` is supported and the bridge exposes initial Gateway-backed session controls for thought level, tool verbosity, reasoning, usage detail, and elevated actions. Broader ACP-native mode/config surfaces are still out of scope. |
+| Session info and usage updates                                        | Partial     | The bridge emits `session_info_update` and best-effort `usage_update` notifications from cached Gateway session snapshots. Usage is approximate and only sent when Gateway token totals are marked fresh.                                        |
+| Tool streaming                                                        | Partial     | `tool_call` / `tool_call_update` events include raw I/O, text content, and best-effort file locations when Gateway tool args/results expose them. Embedded terminals and richer diff-native output are still not exposed.                        |
+| Per-session MCP servers (`mcpServers`)                                | Unsupported | Bridge mode rejects per-session MCP server requests. Configure MCP on the OpenClaw gateway or agent instead.                                                                                                                                     |
+| Client filesystem methods (`fs/read_text_file`, `fs/write_text_file`) | Unsupported | The bridge does not call ACP client filesystem methods.                                                                                                                                                                                          |
+| Client terminal methods (`terminal/*`)                                | Unsupported | The bridge does not create ACP client terminals or stream terminal ids through tool calls.                                                                                                                                                       |
+| Session plans / thought streaming                                     | Unsupported | The bridge currently emits output text and tool status, not ACP plan or thought updates.                                                                                                                                                         |
+
+## Known Limitations
+
+- `loadSession` replays stored user and assistant text history, but it does not
+  reconstruct historic tool calls, system notices, or richer ACP-native event
+  types.
+- If multiple ACP clients share the same Gateway session key, event and cancel
+  routing are best-effort rather than strictly isolated per client. Prefer the
+  default isolated `acp:<uuid>` sessions when you need clean editor-local
+  turns.
+- Gateway stop states are translated into ACP stop reasons, but that mapping is
+  less expressive than a fully ACP-native runtime.
+- Initial session controls currently surface a focused subset of Gateway knobs:
+  thought level, tool verbosity, reasoning, usage detail, and elevated
+  actions. Model selection and exec-host controls are not yet exposed as ACP
+  config options.
+- `session_info_update` and `usage_update` are derived from Gateway session
+  snapshots, not live ACP-native runtime accounting. Usage is approximate,
+  carries no cost data, and is only emitted when the Gateway marks total token
+  data as fresh.
+- Tool follow-along data is best-effort. The bridge can surface file paths that
+  appear in known tool args/results, but it does not yet emit ACP terminals or
+  structured file diffs.
+
 ## How can I use this
 
 Use ACP when an IDE or tooling speaks Agent Client Protocol and you want it to
@@ -181,9 +226,11 @@ updates. Terminal Gateway states map to ACP `done` with stop reasons:
 
 ## Compatibility
 
-- ACP bridge uses `@agentclientprotocol/sdk` (currently 0.13.x).
+- ACP bridge uses `@agentclientprotocol/sdk` (currently 0.15.x).
 - Works with ACP clients that implement `initialize`, `newSession`,
   `loadSession`, `prompt`, `cancel`, and `listSessions`.
+- Bridge mode rejects per-session `mcpServers` instead of silently ignoring
+  them. Configure MCP at the Gateway or agent layer.
 
 ## Testing
 

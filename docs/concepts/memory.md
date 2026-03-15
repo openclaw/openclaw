@@ -23,10 +23,25 @@ The default workspace layout uses two memory layers:
   - Read today + yesterday at session start.
 - `MEMORY.md` (optional)
   - Curated long-term memory.
+  - If both `MEMORY.md` and `memory.md` exist at the workspace root, OpenClaw only loads `MEMORY.md`.
+  - Lowercase `memory.md` is only used as a fallback when `MEMORY.md` is absent.
   - **Only load in the main, private session** (never in group contexts).
 
 These files live under the workspace (`agents.defaults.workspace`, default
 `~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
+
+## Memory tools
+
+OpenClaw exposes two agent-facing tools for these Markdown files:
+
+- `memory_search` — semantic recall over indexed snippets.
+- `memory_get` — targeted read of a specific Markdown file/line range.
+
+`memory_get` now **degrades gracefully when a file doesn't exist** (for example,
+today's daily log before the first write). Both the builtin manager and the QMD
+backend return `{ text: "", path }` instead of throwing `ENOENT`, so agents can
+handle "nothing recorded yet" and continue their workflow without wrapping the
+tool call in try/catch logic.
 
 ## When to write memory
 
@@ -92,16 +107,23 @@ Defaults:
   2. `openai` if an OpenAI key can be resolved.
   3. `gemini` if a Gemini key can be resolved.
   4. `voyage` if a Voyage key can be resolved.
-  5. Otherwise memory search stays disabled until configured.
+  5. `mistral` if a Mistral key can be resolved.
+  6. Otherwise memory search stays disabled until configured.
 - Local mode uses node-llama-cpp and may require `pnpm approve-builds`.
 - Uses sqlite-vec (when available) to accelerate vector search inside SQLite.
+- `memorySearch.provider = "ollama"` is also supported for local/self-hosted
+  Ollama embeddings (`/api/embeddings`), but it is not auto-selected.
 
 Remote embeddings **require** an API key for the embedding provider. OpenClaw
 resolves keys from auth profiles, `models.providers.*.apiKey`, or environment
 variables. Codex OAuth only covers chat/completions and does **not** satisfy
 embeddings for memory search. For Gemini, use `GEMINI_API_KEY` or
 `models.providers.google.apiKey`. For Voyage, use `VOYAGE_API_KEY` or
-`models.providers.voyage.apiKey`. When using a custom OpenAI-compatible endpoint,
+`models.providers.voyage.apiKey`. For Mistral, use `MISTRAL_API_KEY` or
+`models.providers.mistral.apiKey`. Ollama typically does not require a real API
+key (a placeholder like `OLLAMA_API_KEY=ollama-local` is enough when needed by
+local policy).
+When using a custom OpenAI-compatible endpoint,
 set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
 ### QMD backend (experimental)
@@ -264,8 +286,45 @@ Notes:
 
 - Paths can be absolute or workspace-relative.
 - Directories are scanned recursively for `.md` files.
-- Only Markdown files are indexed.
+- By default, only Markdown files are indexed.
+- If `memorySearch.multimodal.enabled = true`, OpenClaw also indexes supported image/audio files under `extraPaths` only. Default memory roots (`MEMORY.md`, `memory.md`, `memory/**/*.md`) stay Markdown-only.
 - Symlinks are ignored (files or directories).
+
+### Multimodal memory files (Gemini image + audio)
+
+OpenClaw can index image and audio files from `memorySearch.extraPaths` when using Gemini embedding 2:
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: ["assets/reference", "voice-notes"],
+      multimodal: {
+        enabled: true,
+        modalities: ["image", "audio"], // or ["all"]
+        maxFileBytes: 10000000
+      },
+      remote: {
+        apiKey: "YOUR_GEMINI_API_KEY"
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- Multimodal memory is currently supported only for `gemini-embedding-2-preview`.
+- Multimodal indexing applies only to files discovered through `memorySearch.extraPaths`.
+- Supported modalities in this phase: image and audio.
+- `memorySearch.fallback` must stay `"none"` while multimodal memory is enabled.
+- Matching image/audio file bytes are uploaded to the configured Gemini embedding endpoint during indexing.
+- Supported image extensions: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif`.
+- Supported audio extensions: `.mp3`, `.wav`, `.ogg`, `.opus`, `.m4a`, `.aac`, `.flac`.
+- Search queries remain text, but Gemini can compare those text queries against indexed image/audio embeddings.
+- `memory_get` still reads Markdown only; binary files are searchable but not returned as raw file contents.
 
 ### Gemini embeddings (native)
 
@@ -290,6 +349,29 @@ Notes:
 - `remote.baseUrl` is optional (defaults to the Gemini API base URL).
 - `remote.headers` lets you add extra headers if needed.
 - Default model: `gemini-embedding-001`.
+- `gemini-embedding-2-preview` is also supported: 8192 token limit and configurable dimensions (768 / 1536 / 3072, default 3072).
+
+#### Gemini Embedding 2 (preview)
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      outputDimensionality: 3072,  // optional: 768, 1536, or 3072 (default)
+      remote: {
+        apiKey: "YOUR_GEMINI_API_KEY"
+      }
+    }
+  }
+}
+```
+
+> **⚠️ Re-index required:** Switching from `gemini-embedding-001` (768 dimensions)
+> to `gemini-embedding-2-preview` (3072 dimensions) changes the vector size. The same is true if you
+> change `outputDimensionality` between 768, 1536, and 3072.
+> OpenClaw will automatically reindex when it detects a model or dimension change.
 
 If you want to use a **custom OpenAI-compatible endpoint** (OpenRouter, vLLM, or a proxy),
 you can use the `remote` configuration with the OpenAI provider:
@@ -315,7 +397,7 @@ If you don't want to set an API key, use `memorySearch.provider = "local"` or se
 
 Fallbacks:
 
-- `memorySearch.fallback` can be `openai`, `gemini`, `local`, or `none`.
+- `memorySearch.fallback` can be `openai`, `gemini`, `voyage`, `mistral`, `ollama`, `local`, or `none`.
 - The fallback provider is only used when the primary embedding provider fails.
 
 Batch indexing (OpenAI + Gemini + Voyage):

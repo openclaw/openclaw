@@ -1,18 +1,29 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import {
+  clearPluginManifestRegistryCache,
+  loadPluginManifestRegistry,
+} from "./manifest-registry.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
-function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-manifest-registry-${randomUUID()}`);
+function chmodSafeDir(dir: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  fs.chmodSync(dir, 0o755);
+}
+
+function mkdirSafe(dir: string) {
   fs.mkdirSync(dir, { recursive: true });
-  tempDirs.push(dir);
-  return dir;
+  chmodSafeDir(dir);
+}
+
+function makeTempDir() {
+  return makeTrackedTempDir("openclaw-manifest-registry", tempDirs);
 }
 
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
@@ -47,18 +58,77 @@ function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRe
   ).length;
 }
 
-afterEach(() => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (!dir) {
-      break;
+function prepareLinkedManifestFixture(params: { id: string; mode: "symlink" | "hardlink" }): {
+  rootDir: string;
+  linked: boolean;
+} {
+  const rootDir = makeTempDir();
+  const outsideDir = makeTempDir();
+  const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
+  const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
+  fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
+  fs.writeFileSync(
+    outsideManifest,
+    JSON.stringify({ id: params.id, configSchema: { type: "object" } }),
+    "utf-8",
+  );
+
+  try {
+    if (params.mode === "symlink") {
+      fs.symlinkSync(outsideManifest, linkedManifest);
+    } else {
+      fs.linkSync(outsideManifest, linkedManifest);
     }
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures
+    return { rootDir, linked: true };
+  } catch (err) {
+    if (params.mode === "symlink") {
+      return { rootDir, linked: false };
     }
+    if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+      return { rootDir, linked: false };
+    }
+    throw err;
   }
+}
+
+function loadSingleCandidateRegistry(params: {
+  idHint: string;
+  rootDir: string;
+  origin: "bundled" | "global" | "workspace" | "config";
+}) {
+  return loadRegistry([
+    createPluginCandidate({
+      idHint: params.idHint,
+      rootDir: params.rootDir,
+      origin: params.origin,
+    }),
+  ]);
+}
+
+function hasUnsafeManifestDiagnostic(registry: ReturnType<typeof loadPluginManifestRegistry>) {
+  return registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path"));
+}
+
+function expectUnsafeWorkspaceManifestRejected(params: {
+  id: string;
+  mode: "symlink" | "hardlink";
+}) {
+  const fixture = prepareLinkedManifestFixture({ id: params.id, mode: params.mode });
+  if (!fixture.linked) {
+    return;
+  }
+  const registry = loadSingleCandidateRegistry({
+    idHint: params.id,
+    rootDir: fixture.rootDir,
+    origin: "workspace",
+  });
+  expect(registry.plugins).toHaveLength(0);
+  expect(hasUnsafeManifestDiagnostic(registry)).toBe(true);
+}
+
+afterEach(() => {
+  clearPluginManifestRegistryCache();
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("loadPluginManifestRegistry", () => {
@@ -83,6 +153,76 @@ describe("loadPluginManifestRegistry", () => {
     ];
 
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+  });
+
+  it("reports explicit installed globals as the effective duplicate winner", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "zalouser", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      config: {
+        plugins: {
+          installs: {
+            zalouser: {
+              source: "npm",
+              installPath: globalDir,
+            },
+          },
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "zalouser",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "zalouser",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("bundled plugin will be overridden by global plugin"),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      candidates: [
+        createPluginCandidate({
+          idHint: "feishu",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "feishu",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("global plugin will be overridden by bundled plugin"),
+      ),
+    ).toBe(true);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
@@ -142,7 +282,7 @@ describe("loadPluginManifestRegistry", () => {
 
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
     const dir = makeTempDir();
-    fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
+    mkdirSafe(path.join(dir, "sub"));
     const manifest = { id: "precedence-plugin", configSchema: { type: "object" } };
     writeManifest(dir, manifest);
 
@@ -166,5 +306,134 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(registry)).toBe(0);
     expect(registry.plugins.length).toBe(1);
     expect(registry.plugins[0]?.origin).toBe("config");
+  });
+
+  it("rejects manifest paths that escape plugin root via symlink", () => {
+    expectUnsafeWorkspaceManifestRejected({ id: "unsafe-symlink", mode: "symlink" });
+  });
+
+  it("rejects manifest paths that escape plugin root via hardlink", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    expectUnsafeWorkspaceManifestRejected({ id: "unsafe-hardlink", mode: "hardlink" });
+  });
+
+  it("allows bundled manifest paths that are hardlinked aliases", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const fixture = prepareLinkedManifestFixture({ id: "bundled-hardlink", mode: "hardlink" });
+    if (!fixture.linked) {
+      return;
+    }
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "bundled-hardlink",
+      rootDir: fixture.rootDir,
+      origin: "bundled",
+    });
+    expect(registry.plugins.some((entry) => entry.id === "bundled-hardlink")).toBe(true);
+    expect(hasUnsafeManifestDiagnostic(registry)).toBe(false);
+  });
+
+  it("does not reuse cached bundled plugin roots across env changes", () => {
+    const bundledA = makeTempDir();
+    const bundledB = makeTempDir();
+    const matrixA = path.join(bundledA, "matrix");
+    const matrixB = path.join(bundledB, "matrix");
+    mkdirSafe(matrixA);
+    mkdirSafe(matrixB);
+    writeManifest(matrixA, {
+      id: "matrix",
+      name: "Matrix A",
+      configSchema: { type: "object" },
+    });
+    writeManifest(matrixB, {
+      id: "matrix",
+      name: "Matrix B",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(matrixA, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(matrixB, "index.ts"), "export default {}", "utf-8");
+
+    const first = loadPluginManifestRegistry({
+      cache: true,
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledA,
+      },
+    });
+    const second = loadPluginManifestRegistry({
+      cache: true,
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledB,
+      },
+    });
+
+    expect(
+      fs.realpathSync(first.plugins.find((plugin) => plugin.id === "matrix")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(matrixA));
+    expect(
+      fs.realpathSync(second.plugins.find((plugin) => plugin.id === "matrix")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(matrixB));
+  });
+
+  it("does not reuse cached load-path manifests across env home changes", () => {
+    const homeA = makeTempDir();
+    const homeB = makeTempDir();
+    const demoA = path.join(homeA, "plugins", "demo");
+    const demoB = path.join(homeB, "plugins", "demo");
+    mkdirSafe(demoA);
+    mkdirSafe(demoB);
+    writeManifest(demoA, {
+      id: "demo",
+      name: "Demo A",
+      configSchema: { type: "object" },
+    });
+    writeManifest(demoB, {
+      id: "demo",
+      name: "Demo B",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(demoA, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(demoB, "index.ts"), "export default {}", "utf-8");
+
+    const config = {
+      plugins: {
+        load: {
+          paths: ["~/plugins/demo"],
+        },
+      },
+    };
+
+    const first = loadPluginManifestRegistry({
+      cache: true,
+      config,
+      env: {
+        ...process.env,
+        HOME: homeA,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: path.join(homeA, ".state"),
+      },
+    });
+    const second = loadPluginManifestRegistry({
+      cache: true,
+      config,
+      env: {
+        ...process.env,
+        HOME: homeB,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: path.join(homeB, ".state"),
+      },
+    });
+
+    expect(
+      fs.realpathSync(first.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(demoA));
+    expect(
+      fs.realpathSync(second.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(demoB));
   });
 });

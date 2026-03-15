@@ -60,6 +60,42 @@ describe("wrapFetchWithAbortSignal", () => {
     expect((seenInit as (RequestInit & { duplex?: string }) | undefined)?.duplex).toBe("half");
   });
 
+  it("adds duplex when the input Request already carries the body", async () => {
+    let seenInit: RequestInit | undefined;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seenInit = init;
+        return {} as Response;
+      }),
+    );
+
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+
+    await wrapped(new Request("https://example.com", { method: "POST", body: "hi" }));
+
+    expect((seenInit as (RequestInit & { duplex?: string }) | undefined)?.duplex).toBe("half");
+  });
+
+  it("preserves an existing duplex init field", async () => {
+    let seenInit: RequestInit | undefined;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seenInit = init;
+        return {} as Response;
+      }),
+    );
+
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+
+    await wrapped("https://example.com", {
+      method: "POST",
+      body: "hi",
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+
+    expect(seenInit).toMatchObject({ duplex: "half" });
+  });
+
   it("converts foreign abort signals to native controllers", async () => {
     let seenSignal: AbortSignal | undefined;
     const fetchImpl = withFetchPreconnect(
@@ -111,21 +147,6 @@ describe("wrapFetchWithAbortSignal", () => {
     }
   });
 
-  it("cleans up listener and rethrows when fetch throws synchronously", () => {
-    const syncError = new TypeError("sync fetch failure");
-    const fetchImpl = withFetchPreconnect(
-      vi.fn(() => {
-        throw syncError;
-      }),
-    );
-    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
-
-    const { fakeSignal, removeEventListener } = createForeignSignalHarness();
-
-    expect(() => wrapped("https://example.com", { signal: fakeSignal })).toThrow(syncError);
-    expect(removeEventListener).toHaveBeenCalledOnce();
-  });
-
   it("preserves original rejection when listener cleanup throws", async () => {
     const fetchError = new TypeError("fetch failed");
     const cleanupError = new TypeError("cleanup failed");
@@ -140,9 +161,17 @@ describe("wrapFetchWithAbortSignal", () => {
     expect(removeEventListener).toHaveBeenCalledOnce();
   });
 
-  it("preserves original sync throw when listener cleanup throws", () => {
+  it.each([
+    {
+      name: "cleans up listener and rethrows when fetch throws synchronously",
+      makeSignalHarness: () => createForeignSignalHarness(),
+    },
+    {
+      name: "preserves original sync throw when listener cleanup throws",
+      makeSignalHarness: () => createThrowingCleanupSignalHarness(new TypeError("cleanup failed")),
+    },
+  ])("$name", ({ makeSignalHarness }) => {
     const syncError = new TypeError("sync fetch failure");
-    const cleanupError = new TypeError("cleanup failed");
     const fetchImpl = withFetchPreconnect(
       vi.fn(() => {
         throw syncError;
@@ -150,7 +179,7 @@ describe("wrapFetchWithAbortSignal", () => {
     );
     const wrapped = wrapFetchWithAbortSignal(fetchImpl);
 
-    const { fakeSignal, removeEventListener } = createThrowingCleanupSignalHarness(cleanupError);
+    const { fakeSignal, removeEventListener } = makeSignalHarness();
 
     expect(() => wrapped("https://example.com", { signal: fakeSignal })).toThrow(syncError);
     expect(removeEventListener).toHaveBeenCalledOnce();
@@ -172,6 +201,68 @@ describe("wrapFetchWithAbortSignal", () => {
 
     expect(addEventListener).not.toHaveBeenCalled();
     expect(removeEventListener).not.toHaveBeenCalled();
+  });
+
+  it("passes through foreign signal-like objects without addEventListener", async () => {
+    let seenSignal: AbortSignal | undefined;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seenSignal = init?.signal as AbortSignal | undefined;
+        return {} as Response;
+      }),
+    );
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+
+    const fakeSignal = {
+      aborted: false,
+      removeEventListener: vi.fn(),
+    } as unknown as AbortSignal;
+
+    await wrapped("https://example.com", { signal: fakeSignal });
+
+    expect(seenSignal).toBe(fakeSignal);
+  });
+
+  it("passes through native AbortSignal instances unchanged", async () => {
+    let seenSignal: AbortSignal | undefined;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seenSignal = init?.signal as AbortSignal | undefined;
+        return {} as Response;
+      }),
+    );
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+    const controller = new AbortController();
+
+    await wrapped("https://example.com", { signal: controller.signal });
+
+    expect(seenSignal).toBe(controller.signal);
+  });
+
+  it("passes through foreign signals unchanged when AbortController is unavailable", async () => {
+    let seenSignal: AbortSignal | undefined;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seenSignal = init?.signal as AbortSignal | undefined;
+        return {} as Response;
+      }),
+    );
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+    const fakeSignal = {
+      aborted: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as AbortSignal;
+    const previousAbortController = globalThis.AbortController;
+    vi.stubGlobal("AbortController", undefined);
+
+    try {
+      await wrapped("https://example.com", { signal: fakeSignal });
+    } finally {
+      vi.stubGlobal("AbortController", previousAbortController);
+    }
+
+    expect(seenSignal).toBe(fakeSignal);
   });
 
   it("returns the same function when called with an already wrapped fetch", () => {
@@ -199,5 +290,26 @@ describe("wrapFetchWithAbortSignal", () => {
 
     expect(preconnectSpy).toHaveBeenCalledOnce();
     expect(seenThis).toBe(fetchImpl);
+  });
+
+  it("exposes a no-op preconnect when the source fetch has none", () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true }) as Response) as typeof fetch;
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl) as typeof fetch & {
+      preconnect: (url: string, init?: { credentials?: RequestCredentials }) => unknown;
+    };
+
+    expect(() => wrapped.preconnect("https://example.com")).not.toThrow();
+  });
+});
+
+describe("resolveFetch", () => {
+  it("returns undefined when neither an explicit nor global fetch exists", () => {
+    const previousFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", undefined);
+    try {
+      expect(resolveFetch(undefined)).toBeUndefined();
+    } finally {
+      vi.stubGlobal("fetch", previousFetch);
+    }
   });
 });

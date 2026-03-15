@@ -7,6 +7,7 @@ import {
   type Skill,
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
@@ -175,6 +176,76 @@ function listChildDirectories(dir: string): string[] {
   }
 }
 
+function tryRealpath(filePath: string): string | null {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return null;
+  }
+}
+
+function warnEscapedSkillPath(params: {
+  source: string;
+  rootDir: string;
+  candidatePath: string;
+  candidateRealPath: string;
+}) {
+  skillsLogger.warn("Skipping skill path that resolves outside its configured root.", {
+    source: params.source,
+    rootDir: params.rootDir,
+    path: params.candidatePath,
+    realPath: params.candidateRealPath,
+  });
+}
+
+function resolveContainedSkillPath(params: {
+  source: string;
+  rootDir: string;
+  rootRealPath: string;
+  candidatePath: string;
+}): string | null {
+  const candidateRealPath = tryRealpath(params.candidatePath);
+  if (!candidateRealPath) {
+    return null;
+  }
+  if (isPathInside(params.rootRealPath, candidateRealPath)) {
+    return candidateRealPath;
+  }
+  warnEscapedSkillPath({
+    source: params.source,
+    rootDir: params.rootDir,
+    candidatePath: path.resolve(params.candidatePath),
+    candidateRealPath,
+  });
+  return null;
+}
+
+function filterLoadedSkillsInsideRoot(params: {
+  skills: Skill[];
+  source: string;
+  rootDir: string;
+  rootRealPath: string;
+}): Skill[] {
+  return params.skills.filter((skill) => {
+    const baseDirRealPath = resolveContainedSkillPath({
+      source: params.source,
+      rootDir: params.rootDir,
+      rootRealPath: params.rootRealPath,
+      candidatePath: skill.baseDir,
+    });
+    if (!baseDirRealPath) {
+      return false;
+    }
+    const skillFileRealPath = resolveContainedSkillPath({
+      source: params.source,
+      rootDir: params.rootDir,
+      rootRealPath: params.rootRealPath,
+      candidatePath: skill.filePath,
+    });
+    return Boolean(skillFileRealPath);
+  });
+}
+
 function resolveNestedSkillsRoot(
   dir: string,
   opts?: {
@@ -229,16 +300,36 @@ function loadSkillEntries(
   const limits = resolveSkillsLimits(opts?.config);
 
   const loadSkills = (params: { dir: string; source: string }): Skill[] => {
+    const rootDir = path.resolve(params.dir);
+    const rootRealPath = tryRealpath(rootDir) ?? rootDir;
     const resolved = resolveNestedSkillsRoot(params.dir, {
       maxEntriesToScan: limits.maxCandidatesPerRoot,
     });
     const baseDir = resolved.baseDir;
+    const baseDirRealPath = resolveContainedSkillPath({
+      source: params.source,
+      rootDir,
+      rootRealPath,
+      candidatePath: baseDir,
+    });
+    if (!baseDirRealPath) {
+      return [];
+    }
 
     // If the root itself is a skill directory, just load it directly (but enforce size cap).
     const rootSkillMd = path.join(baseDir, "SKILL.md");
     if (fs.existsSync(rootSkillMd)) {
+      const rootSkillRealPath = resolveContainedSkillPath({
+        source: params.source,
+        rootDir,
+        rootRealPath: baseDirRealPath,
+        candidatePath: rootSkillMd,
+      });
+      if (!rootSkillRealPath) {
+        return [];
+      }
       try {
-        const size = fs.statSync(rootSkillMd).size;
+        const size = fs.statSync(rootSkillRealPath).size;
         if (size > limits.maxSkillFileBytes) {
           skillsLogger.warn("Skipping skills root due to oversized SKILL.md.", {
             dir: baseDir,
@@ -253,7 +344,12 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
-      return unwrapLoadedSkills(loaded);
+      return filterLoadedSkillsInsideRoot({
+        skills: unwrapLoadedSkills(loaded),
+        source: params.source,
+        rootDir,
+        rootRealPath: baseDirRealPath,
+      });
     }
 
     const childDirs = listChildDirectories(baseDir);
@@ -284,12 +380,30 @@ function loadSkillEntries(
     // Only consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
     for (const name of limitedChildren) {
       const skillDir = path.join(baseDir, name);
+      const skillDirRealPath = resolveContainedSkillPath({
+        source: params.source,
+        rootDir,
+        rootRealPath: baseDirRealPath,
+        candidatePath: skillDir,
+      });
+      if (!skillDirRealPath) {
+        continue;
+      }
       const skillMd = path.join(skillDir, "SKILL.md");
       if (!fs.existsSync(skillMd)) {
         continue;
       }
+      const skillMdRealPath = resolveContainedSkillPath({
+        source: params.source,
+        rootDir,
+        rootRealPath: baseDirRealPath,
+        candidatePath: skillMd,
+      });
+      if (!skillMdRealPath) {
+        continue;
+      }
       try {
-        const size = fs.statSync(skillMd).size;
+        const size = fs.statSync(skillMdRealPath).size;
         if (size > limits.maxSkillFileBytes) {
           skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
             skill: name,
@@ -304,7 +418,14 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
-      loadedSkills.push(...unwrapLoadedSkills(loaded));
+      loadedSkills.push(
+        ...filterLoadedSkillsInsideRoot({
+          skills: unwrapLoadedSkills(loaded),
+          source: params.source,
+          rootDir,
+          rootRealPath: baseDirRealPath,
+        }),
+      );
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
         break;
@@ -445,51 +566,16 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
 
 export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    managedSkillsDir?: string;
-    bundledSkillsDir?: string;
-    entries?: SkillEntry[];
-    /** If provided, only include skills with these names */
-    skillFilter?: string[];
-    eligibility?: SkillEligibilityContext;
-    snapshotVersion?: number;
-  },
+  opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
-  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
-  const eligible = filterSkillEntries(
-    skillEntries,
-    opts?.config,
-    opts?.skillFilter,
-    opts?.eligibility,
-  );
-  const promptEntries = eligible.filter(
-    (entry) => entry.invocation?.disableModelInvocation !== true,
-  );
-  const resolvedSkills = promptEntries.map((entry) => entry.skill);
-  const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const { skillsForPrompt, truncated } = applySkillsPromptLimits({
-    skills: resolvedSkills,
-    config: opts?.config,
-  });
-
-  const truncationNote = truncated
-    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
-    : "";
-
-  const prompt = [
-    remoteNote,
-    truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
   const skillFilter = normalizeSkillFilter(opts?.skillFilter);
   return {
     prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
       primaryEnv: entry.metadata?.primaryEnv,
+      requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
     resolvedSkills,
@@ -499,16 +585,29 @@ export function buildWorkspaceSkillSnapshot(
 
 export function buildWorkspaceSkillsPrompt(
   workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    managedSkillsDir?: string;
-    bundledSkillsDir?: string;
-    entries?: SkillEntry[];
-    /** If provided, only include skills with these names */
-    skillFilter?: string[];
-    eligibility?: SkillEligibilityContext;
-  },
+  opts?: WorkspaceSkillBuildOptions,
 ): string {
+  return resolveWorkspaceSkillPromptState(workspaceDir, opts).prompt;
+}
+
+type WorkspaceSkillBuildOptions = {
+  config?: OpenClawConfig;
+  managedSkillsDir?: string;
+  bundledSkillsDir?: string;
+  entries?: SkillEntry[];
+  /** If provided, only include skills with these names */
+  skillFilter?: string[];
+  eligibility?: SkillEligibilityContext;
+};
+
+function resolveWorkspaceSkillPromptState(
+  workspaceDir: string,
+  opts?: WorkspaceSkillBuildOptions,
+): {
+  eligible: SkillEntry[];
+  prompt: string;
+  resolvedSkills: Skill[];
+} {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
   const eligible = filterSkillEntries(
     skillEntries,
@@ -528,9 +627,14 @@ export function buildWorkspaceSkillsPrompt(
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
-  return [remoteNote, truncationNote, formatSkillsForPrompt(compactSkillPaths(skillsForPrompt))]
+  const prompt = [
+    remoteNote,
+    truncationNote,
+    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
+  ]
     .filter(Boolean)
     .join("\n");
+  return { eligible, prompt, resolvedSkills };
 }
 
 export function resolveSkillsPromptForRun(params: {
@@ -639,14 +743,12 @@ export async function syncSkillsToWorkspace(params: {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
-        console.warn(
-          `[skills] Failed to resolve safe destination for ${entry.skill.name}: ${message}`,
-        );
+        skillsLogger.warn(`Failed to resolve safe destination for ${entry.skill.name}: ${message}`);
         continue;
       }
       if (!dest) {
-        console.warn(
-          `[skills] Failed to resolve safe destination for ${entry.skill.name}: invalid source directory name`,
+        skillsLogger.warn(
+          `Failed to resolve safe destination for ${entry.skill.name}: invalid source directory name`,
         );
         continue;
       }
@@ -657,7 +759,7 @@ export async function syncSkillsToWorkspace(params: {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
-        console.warn(`[skills] Failed to copy ${entry.skill.name} to sandbox: ${message}`);
+        skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
       }
     }
   });

@@ -74,9 +74,13 @@ export type EndReason = z.infer<typeof EndReasonSchema>;
 
 const BaseEventSchema = z.object({
   id: z.string(),
+  // Stable provider-derived key for idempotency/replay dedupe.
+  dedupeKey: z.string().optional(),
   callId: z.string(),
   providerCallId: z.string().optional(),
   timestamp: z.number(),
+  // Optional per-turn nonce for speech events (Twilio <Gather> replay hardening).
+  turnToken: z.string().optional(),
   // Optional fields for inbound call detection
   direction: z.enum(["inbound", "outbound"]).optional(),
   from: z.string().optional(),
@@ -171,6 +175,15 @@ export type CallRecord = z.infer<typeof CallRecordSchema>;
 export type WebhookVerificationResult = {
   ok: boolean;
   reason?: string;
+  /** Signature is valid, but request was seen before within replay window. */
+  isReplay?: boolean;
+  /** Stable key derived from authenticated request material. */
+  verifiedRequestKey?: string;
+};
+
+export type WebhookParseOptions = {
+  /** Stable request key from verifyWebhook. */
+  verifiedRequestKey?: string;
 };
 
 export type WebhookContext = {
@@ -226,11 +239,30 @@ export type StartListeningInput = {
   callId: CallId;
   providerCallId: ProviderCallId;
   language?: string;
+  /** Optional per-turn nonce for provider callbacks (replay hardening). */
+  turnToken?: string;
 };
 
 export type StopListeningInput = {
   callId: CallId;
   providerCallId: ProviderCallId;
+};
+
+// -----------------------------------------------------------------------------
+// Call Status Verification (used on restart to verify persisted calls)
+// -----------------------------------------------------------------------------
+
+export type GetCallStatusInput = {
+  providerCallId: ProviderCallId;
+};
+
+export type GetCallStatusResult = {
+  /** Provider-specific status string (e.g. "completed", "in-progress") */
+  status: string;
+  /** True when the provider confirms the call has ended */
+  isTerminal: boolean;
+  /** True when the status could not be determined (transient error) */
+  isUnknown?: boolean;
 };
 
 // -----------------------------------------------------------------------------

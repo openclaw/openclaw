@@ -1,11 +1,12 @@
 import type { OpenClawConfig, SkillConfig } from "../../config/config.js";
 import {
-  evaluateRuntimeRequires,
+  evaluateRuntimeEligibility,
   hasBinary,
   isConfigPathTruthyWithDefaults,
   resolveConfigPath,
   resolveRuntimePlatform,
 } from "../../shared/config-eval.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 
@@ -42,7 +43,7 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
   if (!Array.isArray(input)) {
     return undefined;
   }
-  const normalized = input.map((entry) => String(entry).trim()).filter(Boolean);
+  const normalized = normalizeStringEntries(input);
   return normalized.length > 0 ? normalized : undefined;
 }
 
@@ -76,8 +77,6 @@ export function shouldIncludeSkill(params: {
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
   const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
-  const osList = entry.metadata?.os ?? [];
-  const remotePlatforms = eligibility?.remote?.platforms ?? [];
 
   if (skillConfig?.enabled === false) {
     return false;
@@ -85,18 +84,10 @@ export function shouldIncludeSkill(params: {
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
-  if (
-    osList.length > 0 &&
-    !osList.includes(resolveRuntimePlatform()) &&
-    !remotePlatforms.some((platform) => osList.includes(platform))
-  ) {
-    return false;
-  }
-  if (entry.metadata?.always === true) {
-    return true;
-  }
-
-  return evaluateRuntimeRequires({
+  return evaluateRuntimeEligibility({
+    os: entry.metadata?.os,
+    remotePlatforms: eligibility?.remote?.platforms,
+    always: entry.metadata?.always,
     requires: entry.metadata?.requires,
     hasBin: hasBinary,
     hasRemoteBin: eligibility?.remote?.hasBin,

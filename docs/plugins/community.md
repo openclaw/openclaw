@@ -47,3 +47,9 @@ Use this format when adding entries:
   npm: `@cognee/cognee-openclaw`
   repo: `https://github.com/hande-k/cognee-integrations`
   install: `openclaw plugins install @cognee/cognee-openclaw`
+## Listed plugins
+
+- **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
+  npm: `@icesword760/openclaw-wechat`
+  repo: `https://github.com/icesword0760/openclaw-wechat`
+  install: `openclaw plugins install @icesword760/openclaw-wechat`

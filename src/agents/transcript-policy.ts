@@ -1,5 +1,14 @@
 import { normalizeProviderId } from "./model-selection.js";
-import { isAntigravityClaude, isGoogleModelApi } from "./pi-embedded-helpers/google.js";
+import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
+import {
+  isAnthropicProviderFamily,
+  isOpenAiProviderFamily,
+  preservesAnthropicThinkingSignatures,
+  resolveTranscriptToolCallIdMode,
+  shouldDropThinkingBlocksForModel,
+  shouldSanitizeGeminiThoughtSignaturesForModel,
+  supportsOpenAiCompatTurnValidation,
+} from "./provider-capabilities.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
 
 export type TranscriptSanitizeMode = "full" | "images-only";
@@ -14,29 +23,20 @@ export type TranscriptPolicy = {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;
   };
-  normalizeAntigravityThinkingBlocks: boolean;
+  sanitizeThinkingSignatures: boolean;
+  dropThinkingBlocks: boolean;
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
   allowSyntheticToolResults: boolean;
 };
 
-const MISTRAL_MODEL_HINTS = [
-  "mistral",
-  "mixtral",
-  "codestral",
-  "pixtral",
-  "devstral",
-  "ministral",
-  "mistralai",
-];
 const OPENAI_MODEL_APIS = new Set([
   "openai",
   "openai-completions",
   "openai-responses",
   "openai-codex-responses",
 ]);
-const OPENAI_PROVIDERS = new Set(["openai", "openai-codex"]);
 
 function isOpenAiApi(modelApi?: string | null): boolean {
   if (!modelApi) {
@@ -46,31 +46,15 @@ function isOpenAiApi(modelApi?: string | null): boolean {
 }
 
 function isOpenAiProvider(provider?: string | null): boolean {
-  if (!provider) {
-    return false;
-  }
-  return OPENAI_PROVIDERS.has(normalizeProviderId(provider));
+  return isOpenAiProviderFamily(provider);
 }
 
 function isAnthropicApi(modelApi?: string | null, provider?: string | null): boolean {
-  if (modelApi === "anthropic-messages") {
+  if (modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream") {
     return true;
   }
-  const normalized = normalizeProviderId(provider ?? "");
   // MiniMax now uses openai-completions API, not anthropic-messages
-  return normalized === "anthropic";
-}
-
-function isMistralModel(params: { provider?: string | null; modelId?: string | null }): boolean {
-  const provider = normalizeProviderId(params.provider ?? "");
-  if (provider === "mistral") {
-    return true;
-  }
-  const modelId = (params.modelId ?? "").toLowerCase();
-  if (!modelId) {
-    return false;
-  }
-  return MISTRAL_MODEL_HINTS.some((hint) => modelId.includes(hint));
+  return isAnthropicProviderFamily(provider);
 }
 
 export function resolveTranscriptPolicy(params: {
@@ -83,41 +67,61 @@ export function resolveTranscriptPolicy(params: {
   const isGoogle = isGoogleModelApi(params.modelApi);
   const isAnthropic = isAnthropicApi(params.modelApi, provider);
   const isOpenAi = isOpenAiProvider(provider) || (!provider && isOpenAiApi(params.modelApi));
-  const isMistral = isMistralModel({ provider, modelId });
-  const isOpenRouterGemini =
-    (provider === "openrouter" || provider === "opencode") &&
-    modelId.toLowerCase().includes("gemini");
-  const isAntigravityClaudeModel = isAntigravityClaude({
-    api: params.modelApi,
-    provider,
-    modelId,
-  });
+  const isStrictOpenAiCompatible =
+    params.modelApi === "openai-completions" &&
+    !isOpenAi &&
+    supportsOpenAiCompatTurnValidation(provider);
+  const providerToolCallIdMode = resolveTranscriptToolCallIdMode(provider, modelId);
+  const isMistral = providerToolCallIdMode === "strict9";
+  const shouldSanitizeGeminiThoughtSignaturesForProvider =
+    shouldSanitizeGeminiThoughtSignaturesForModel({
+      provider,
+      modelId,
+    });
+  const requiresOpenAiCompatibleToolIdSanitization =
+    params.modelApi === "openai-completions" ||
+    (!isOpenAi &&
+      (params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses"));
 
-  const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
+  // Anthropic Claude endpoints can reject replayed `thinking` blocks unless the
+  // original signatures are preserved byte-for-byte. Drop them at send-time to
+  // keep persisted sessions usable across follow-up turns.
+  const dropThinkingBlocks = shouldDropThinkingBlocksForModel({ provider, modelId });
 
-  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic;
-  const toolCallIdMode: ToolCallIdMode | undefined = isMistral
-    ? "strict9"
-    : sanitizeToolCallIds
-      ? "strict"
+  const needsNonImageSanitize =
+    isGoogle || isAnthropic || isMistral || shouldSanitizeGeminiThoughtSignaturesForProvider;
+
+  const sanitizeToolCallIds =
+    isGoogle || isMistral || isAnthropic || requiresOpenAiCompatibleToolIdSanitization;
+  const toolCallIdMode: ToolCallIdMode | undefined = providerToolCallIdMode
+    ? providerToolCallIdMode
+    : isMistral
+      ? "strict9"
+      : sanitizeToolCallIds
+        ? "strict"
+        : undefined;
+  // All providers need orphaned tool_result repair after history truncation.
+  // OpenAI rejects function_call_output items whose call_id has no matching
+  // function_call in the conversation, so the repair must run universally.
+  const repairToolUseResultPairing = true;
+  const sanitizeThoughtSignatures =
+    shouldSanitizeGeminiThoughtSignaturesForProvider || isGoogle
+      ? { allowBase64Only: true, includeCamelCase: true }
       : undefined;
-  const repairToolUseResultPairing = isGoogle || isAnthropic;
-  const sanitizeThoughtSignatures = isOpenRouterGemini
-    ? { allowBase64Only: true, includeCamelCase: true }
-    : undefined;
-  const normalizeAntigravityThinkingBlocks = isAntigravityClaudeModel;
 
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
-    sanitizeToolCallIds: !isOpenAi && sanitizeToolCallIds,
+    sanitizeToolCallIds:
+      (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
     toolCallIdMode,
-    repairToolUseResultPairing: !isOpenAi && repairToolUseResultPairing,
-    preserveSignatures: isAntigravityClaudeModel,
+    repairToolUseResultPairing,
+    preserveSignatures: isAnthropic && preservesAnthropicThinkingSignatures(provider),
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
-    normalizeAntigravityThinkingBlocks,
-    applyGoogleTurnOrdering: !isOpenAi && isGoogle,
-    validateGeminiTurns: !isOpenAi && isGoogle,
-    validateAnthropicTurns: !isOpenAi && isAnthropic,
+    sanitizeThinkingSignatures: false,
+    dropThinkingBlocks,
+    applyGoogleTurnOrdering: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
+    validateGeminiTurns: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
+    validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };
 }

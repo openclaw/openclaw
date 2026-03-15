@@ -3,8 +3,9 @@ import {
   TtsConfigSchema,
   TtsModeSchema,
   TtsProviderSchema,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/voice-call";
 import { z } from "zod";
+import { deepMergeDefined } from "./deep-merge.js";
 
 // -----------------------------------------------------------------------------
 // Phone Number Validation
@@ -219,6 +220,17 @@ export const VoiceCallStreamingConfigSchema = z
     vadThreshold: z.number().min(0).max(1).default(0.5),
     /** WebSocket path for media stream connections */
     streamPath: z.string().min(1).default("/voice/stream"),
+    /**
+     * Close unauthenticated media stream sockets if no valid `start` frame arrives in time.
+     * Protects against pre-auth idle connection hold attacks.
+     */
+    preStartTimeoutMs: z.number().int().positive().default(5000),
+    /** Maximum number of concurrently pending (pre-start) media stream sockets. */
+    maxPendingConnections: z.number().int().positive().default(32),
+    /** Maximum pending media stream sockets per source IP. */
+    maxPendingConnectionsPerIp: z.number().int().positive().default(4),
+    /** Hard cap for all open media stream sockets (pending + active). */
+    maxConnections: z.number().int().positive().default(128),
   })
   .strict()
   .default({
@@ -228,6 +240,10 @@ export const VoiceCallStreamingConfigSchema = z
     silenceDurationMs: 800,
     vadThreshold: 0.5,
     streamPath: "/voice/stream",
+    preStartTimeoutMs: 5000,
+    maxPendingConnections: 32,
+    maxPendingConnectionsPerIp: 4,
+    maxConnections: 128,
   });
 export type VoiceCallStreamingConfig = z.infer<typeof VoiceCallStreamingConfigSchema>;
 
@@ -335,17 +351,64 @@ export const VoiceCallConfigSchema = z
   .strict();
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
+type DeepPartial<T> =
+  T extends Array<infer U>
+    ? DeepPartial<U>[]
+    : T extends object
+      ? { [K in keyof T]?: DeepPartial<T[K]> }
+      : T;
+export type VoiceCallConfigInput = DeepPartial<VoiceCallConfig>;
 
 // -----------------------------------------------------------------------------
 // Configuration Helpers
 // -----------------------------------------------------------------------------
 
+const DEFAULT_VOICE_CALL_CONFIG = VoiceCallConfigSchema.parse({});
+
+function cloneDefaultVoiceCallConfig(): VoiceCallConfig {
+  return structuredClone(DEFAULT_VOICE_CALL_CONFIG);
+}
+
+function normalizeVoiceCallTtsConfig(
+  defaults: VoiceCallTtsConfig,
+  overrides: DeepPartial<NonNullable<VoiceCallTtsConfig>> | undefined,
+): VoiceCallTtsConfig {
+  if (!defaults && !overrides) {
+    return undefined;
+  }
+
+  return TtsConfigSchema.parse(deepMergeDefined(defaults ?? {}, overrides ?? {}));
+}
+
+export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
+  const defaults = cloneDefaultVoiceCallConfig();
+  return {
+    ...defaults,
+    ...config,
+    allowFrom: config.allowFrom ?? defaults.allowFrom,
+    outbound: { ...defaults.outbound, ...config.outbound },
+    serve: { ...defaults.serve, ...config.serve },
+    tailscale: { ...defaults.tailscale, ...config.tailscale },
+    tunnel: { ...defaults.tunnel, ...config.tunnel },
+    webhookSecurity: {
+      ...defaults.webhookSecurity,
+      ...config.webhookSecurity,
+      allowedHosts: config.webhookSecurity?.allowedHosts ?? defaults.webhookSecurity.allowedHosts,
+      trustedProxyIPs:
+        config.webhookSecurity?.trustedProxyIPs ?? defaults.webhookSecurity.trustedProxyIPs,
+    },
+    streaming: { ...defaults.streaming, ...config.streaming },
+    stt: { ...defaults.stt, ...config.stt },
+    tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
+  };
+}
+
 /**
  * Resolves the configuration by merging environment variables into missing fields.
  * Returns a new configuration object with environment variables applied.
  */
-export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig {
-  const resolved = JSON.parse(JSON.stringify(config)) as VoiceCallConfig;
+export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
+  const resolved = normalizeVoiceCallConfig(config);
 
   // Telnyx
   if (resolved.provider === "telnyx") {
@@ -390,7 +453,7 @@ export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig
     resolved.webhookSecurity.trustForwardingHeaders ?? false;
   resolved.webhookSecurity.trustedProxyIPs = resolved.webhookSecurity.trustedProxyIPs ?? [];
 
-  return resolved;
+  return normalizeVoiceCallConfig(resolved);
 }
 
 /**

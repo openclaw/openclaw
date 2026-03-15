@@ -28,26 +28,35 @@ const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
 // Flattened schema: runtime validates per-action requirements.
-const CronToolSchema = Type.Object({
-  action: stringEnum(CRON_ACTIONS),
-  gatewayUrl: Type.Optional(Type.String()),
-  gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-  includeDisabled: Type.Optional(Type.Boolean()),
-  job: Type.Optional(Type.Object({}, { additionalProperties: true })),
-  jobId: Type.Optional(Type.String()),
-  id: Type.Optional(Type.String()),
-  patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
-  text: Type.Optional(Type.String()),
-  mode: optionalStringEnum(CRON_WAKE_MODES),
-  runMode: optionalStringEnum(CRON_RUN_MODES),
-  contextMessages: Type.Optional(
-    Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
-  ),
-});
+const CronToolSchema = Type.Object(
+  {
+    action: stringEnum(CRON_ACTIONS),
+    gatewayUrl: Type.Optional(Type.String()),
+    gatewayToken: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Number()),
+    includeDisabled: Type.Optional(Type.Boolean()),
+    job: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    jobId: Type.Optional(Type.String()),
+    id: Type.Optional(Type.String()),
+    patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    text: Type.Optional(Type.String()),
+    mode: optionalStringEnum(CRON_WAKE_MODES),
+    runMode: optionalStringEnum(CRON_RUN_MODES),
+    contextMessages: Type.Optional(
+      Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
+    ),
+  },
+  { additionalProperties: true },
+);
 
 type CronToolOptions = {
   agentSessionKey?: string;
+};
+
+type GatewayToolCaller = typeof callGatewayTool;
+
+type CronToolDeps = {
+  callGatewayTool?: GatewayToolCaller;
 };
 
 type ChatMessage = {
@@ -84,6 +93,7 @@ async function buildReminderContextLines(params: {
   agentSessionKey?: string;
   gatewayOpts: GatewayCallOptions;
   contextMessages: number;
+  callGatewayTool: GatewayToolCaller;
 }) {
   const maxMessages = Math.min(
     REMINDER_CONTEXT_MESSAGES_MAX,
@@ -100,7 +110,7 @@ async function buildReminderContextLines(params: {
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
   try {
-    const res = await callGatewayTool<{ messages: Array<unknown> }>(
+    const res = await params.callGatewayTool<{ messages: Array<unknown> }>(
       "chat.history",
       params.gatewayOpts,
       {
@@ -197,7 +207,8 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   return delivery;
 }
 
-export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
+export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
+  const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   return {
     label: "Cron",
     name: "cron",
@@ -219,10 +230,21 @@ JOB SCHEMA (for add action):
   "name": "string (optional)",
   "schedule": { ... },      // Required: when to run
   "payload": { ... },       // Required: what to execute
-  "delivery": { ... },      // Optional: announce summary or webhook POST
-  "sessionTarget": "main" | "isolated",  // Required
+  "delivery": { ... },      // Optional: announce summary (isolated/current/session:xxx only) or webhook POST
+  "sessionTarget": "main" | "isolated" | "current" | "session:<custom-id>",  // Optional, defaults based on context
   "enabled": true | false   // Optional, default true
 }
+
+SESSION TARGET OPTIONS:
+- "main": Run in the main session (requires payload.kind="systemEvent")
+- "isolated": Run in an ephemeral isolated session (requires payload.kind="agentTurn")
+- "current": Bind to the current session where the cron is created (resolved at creation time)
+- "session:<custom-id>": Run in a persistent named session (e.g., "session:project-alpha-daily")
+
+DEFAULT BEHAVIOR (unchanged for backward compatibility):
+- payload.kind="systemEvent" → defaults to "main"
+- payload.kind="agentTurn" → defaults to "isolated"
+To use current session binding, explicitly set sessionTarget="current".
 
 SCHEDULE TYPES (schedule.kind):
 - "at": One-shot at absolute time
@@ -249,9 +271,9 @@ DELIVERY (top-level):
 
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
-- sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
+- sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn"
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
-Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
+Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
@@ -272,10 +294,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
 
       switch (action) {
         case "status":
-          return jsonResult(await callGatewayTool("cron.status", gatewayOpts, {}));
+          return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
         case "list":
           return jsonResult(
-            await callGatewayTool("cron.list", gatewayOpts, {
+            await callGateway("cron.list", gatewayOpts, {
               includeDisabled: Boolean(params.includeDisabled),
             }),
           );
@@ -335,7 +357,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!params.job || typeof params.job !== "object") {
             throw new Error("job required");
           }
-          const job = normalizeCronJobCreate(params.job) ?? params.job;
+          const job =
+            normalizeCronJobCreate(params.job, {
+              sessionContext: { sessionKey: opts?.agentSessionKey },
+            }) ?? params.job;
           if (job && typeof job === "object") {
             const cfg = loadConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -412,6 +437,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 agentSessionKey: opts?.agentSessionKey,
                 gatewayOpts,
                 contextMessages,
+                callGatewayTool: callGateway,
               });
               if (contextLines.length > 0) {
                 const baseText = stripExistingContext(payload.text);
@@ -419,19 +445,55 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               }
             }
           }
-          return jsonResult(await callGatewayTool("cron.add", gatewayOpts, job));
+          return jsonResult(await callGateway("cron.add", gatewayOpts, job));
         }
         case "update": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
+
+          // Flat-params recovery for patch
+          if (
+            !params.patch ||
+            (typeof params.patch === "object" &&
+              params.patch !== null &&
+              Object.keys(params.patch as Record<string, unknown>).length === 0)
+          ) {
+            const PATCH_KEYS: ReadonlySet<string> = new Set([
+              "name",
+              "schedule",
+              "payload",
+              "delivery",
+              "enabled",
+              "description",
+              "deleteAfterRun",
+              "agentId",
+              "sessionKey",
+              "sessionTarget",
+              "wakeMode",
+              "failureAlert",
+              "allowUnsafeExternalContent",
+            ]);
+            const synthetic: Record<string, unknown> = {};
+            let found = false;
+            for (const key of Object.keys(params)) {
+              if (PATCH_KEYS.has(key) && params[key] !== undefined) {
+                synthetic[key] = params[key];
+                found = true;
+              }
+            }
+            if (found) {
+              params.patch = synthetic;
+            }
+          }
+
           if (!params.patch || typeof params.patch !== "object") {
             throw new Error("patch required");
           }
           const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
           return jsonResult(
-            await callGatewayTool("cron.update", gatewayOpts, {
+            await callGateway("cron.update", gatewayOpts, {
               id,
               patch,
             }),
@@ -442,7 +504,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGatewayTool("cron.remove", gatewayOpts, { id }));
+          return jsonResult(await callGateway("cron.remove", gatewayOpts, { id }));
         }
         case "run": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
@@ -451,14 +513,14 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
           const runMode =
             params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
-          return jsonResult(await callGatewayTool("cron.run", gatewayOpts, { id, mode: runMode }));
+          return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
         }
         case "runs": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGatewayTool("cron.runs", gatewayOpts, { id }));
+          return jsonResult(await callGateway("cron.runs", gatewayOpts, { id }));
         }
         case "wake": {
           const text = readStringParam(params, "text", { required: true });
@@ -467,7 +529,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               ? params.mode
               : "next-heartbeat";
           return jsonResult(
-            await callGatewayTool("wake", gatewayOpts, { mode, text }, { expectFinal: false }),
+            await callGateway("wake", gatewayOpts, { mode, text }, { expectFinal: false }),
           );
         }
         default:

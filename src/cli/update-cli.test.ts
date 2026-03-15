@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -17,6 +16,14 @@ const resolveGlobalManager = vi.fn();
 const serviceLoaded = vi.fn();
 const prepareRestartScript = vi.fn();
 const runRestartScript = vi.fn();
+const mockedRunDaemonInstall = vi.fn();
+const serviceReadRuntime = vi.fn();
+const inspectPortUsage = vi.fn();
+const classifyPortListener = vi.fn();
+const formatPortDiagnostics = vi.fn();
+const pathExists = vi.fn();
+const syncPluginsForUpdateChannel = vi.fn();
+const updateNpmInstalledPlugins = vi.fn();
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -36,6 +43,7 @@ vi.mock("../infra/openclaw-root.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: vi.fn(),
+  resolveGatewayPort: vi.fn(() => 18789),
   writeConfigFile: vi.fn(),
 }));
 
@@ -68,6 +76,19 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
+vi.mock("../utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils.js")>();
+  return {
+    ...actual,
+    pathExists: (...args: unknown[]) => pathExists(...args),
+  };
+});
+
+vi.mock("../plugins/update.js", () => ({
+  syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
+  updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
+}));
+
 vi.mock("./update-cli/shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./update-cli/shared.js")>();
   return {
@@ -81,7 +102,14 @@ vi.mock("./update-cli/shared.js", async (importOriginal) => {
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: vi.fn(() => ({
     isLoaded: (...args: unknown[]) => serviceLoaded(...args),
+    readRuntime: (...args: unknown[]) => serviceReadRuntime(...args),
   })),
+}));
+
+vi.mock("../infra/ports.js", () => ({
+  inspectPortUsage: (...args: unknown[]) => inspectPortUsage(...args),
+  classifyPortListener: (...args: unknown[]) => classifyPortListener(...args),
+  formatPortDiagnostics: (...args: unknown[]) => formatPortDiagnostics(...args),
 }));
 
 vi.mock("./update-cli/restart-helper.js", () => ({
@@ -95,6 +123,7 @@ vi.mock("../commands/doctor.js", () => ({
 }));
 // Mock the daemon-cli module
 vi.mock("./daemon-cli.js", () => ({
+  runDaemonInstall: mockedRunDaemonInstall,
   runDaemonRestart: vi.fn(),
 }));
 
@@ -113,29 +142,20 @@ const { readConfigFileSnapshot, writeConfigFile } = await import("../config/conf
 const { checkUpdateStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
   await import("../infra/update-check.js");
 const { runCommandWithTimeout } = await import("../process/exec.js");
-const { runDaemonRestart } = await import("./daemon-cli.js");
+const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
 const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime } = await import("../runtime.js");
-const { updateCommand, registerUpdateCli, updateStatusCommand, updateWizardCommand } =
-  await import("./update-cli.js");
+const { updateCommand, updateStatusCommand, updateWizardCommand } = await import("./update-cli.js");
 
 describe("update-cli", () => {
-  let fixtureRoot = "";
+  const fixtureRoot = "/tmp/openclaw-update-tests";
   let fixtureCount = 0;
 
-  const createCaseDir = async (prefix: string) => {
+  const createCaseDir = (prefix: string) => {
     const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
     // Tests only need a stable path; the directory does not have to exist because all I/O is mocked.
     return dir;
   };
-
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-tests-"));
-  });
-
-  afterAll(async () => {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  });
 
   const baseConfig = {} as OpenClawConfig;
   const baseSnapshot: ConfigFileSnapshot = {
@@ -186,8 +206,37 @@ describe("update-cli", () => {
     return call;
   };
 
+  const makeOkUpdateResult = (overrides: Partial<UpdateRunResult> = {}): UpdateRunResult =>
+    ({
+      status: "ok",
+      mode: "git",
+      steps: [],
+      durationMs: 100,
+      ...overrides,
+    }) as UpdateRunResult;
+
+  const runRestartFallbackScenario = async (params: { daemonInstall: "ok" | "fail" }) => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    if (params.daemonInstall === "fail") {
+      vi.mocked(runDaemonInstall).mockRejectedValueOnce(new Error("refresh failed"));
+    } else {
+      vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
+    }
+    prepareRestartScript.mockResolvedValue(null);
+    serviceLoaded.mockResolvedValue(true);
+    vi.mocked(runDaemonRestart).mockResolvedValue(true);
+
+    await updateCommand({});
+
+    expect(runDaemonInstall).toHaveBeenCalledWith({
+      force: true,
+      json: undefined,
+    });
+    expect(runDaemonRestart).toHaveBeenCalled();
+  };
+
   const setupNonInteractiveDowngrade = async () => {
-    const tempDir = await createCaseDir("openclaw-update");
+    const tempDir = createCaseDir("openclaw-update");
     setTty(false);
     readPackageVersion.mockResolvedValue("2.0.0");
 
@@ -209,27 +258,7 @@ describe("update-cli", () => {
   };
 
   beforeEach(() => {
-    confirm.mockReset();
-    select.mockReset();
-    vi.mocked(runGatewayUpdate).mockReset();
-    vi.mocked(resolveOpenClawPackageRoot).mockReset();
-    vi.mocked(readConfigFileSnapshot).mockReset();
-    vi.mocked(writeConfigFile).mockReset();
-    vi.mocked(checkUpdateStatus).mockReset();
-    vi.mocked(fetchNpmTagVersion).mockReset();
-    vi.mocked(resolveNpmChannelTag).mockReset();
-    vi.mocked(runCommandWithTimeout).mockReset();
-    vi.mocked(runDaemonRestart).mockReset();
-    vi.mocked(doctorCommand).mockReset();
-    vi.mocked(defaultRuntime.log).mockReset();
-    vi.mocked(defaultRuntime.error).mockReset();
-    vi.mocked(defaultRuntime.exit).mockReset();
-    readPackageName.mockReset();
-    readPackageVersion.mockReset();
-    resolveGlobalManager.mockReset();
-    serviceLoaded.mockReset();
-    prepareRestartScript.mockReset();
-    runRestartScript.mockReset();
+    vi.clearAllMocks();
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
@@ -277,43 +306,62 @@ describe("update-cli", () => {
     readPackageVersion.mockResolvedValue("1.0.0");
     resolveGlobalManager.mockResolvedValue("npm");
     serviceLoaded.mockResolvedValue(false);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
     prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
     runRestartScript.mockResolvedValue(undefined);
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4242, command: "openclaw-gateway" }],
+      hints: [],
+    });
+    classifyPortListener.mockReturnValue("gateway");
+    formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
+    pathExists.mockResolvedValue(false);
+    syncPluginsForUpdateChannel.mockResolvedValue({
+      changed: false,
+      config: baseConfig,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    });
+    updateNpmInstalledPlugins.mockResolvedValue({
+      changed: false,
+      config: baseConfig,
+      outcomes: [],
+    });
+    vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
+    vi.mocked(runDaemonRestart).mockResolvedValue(true);
+    vi.mocked(doctorCommand).mockResolvedValue(undefined);
+    confirm.mockResolvedValue(false);
+    select.mockResolvedValue("stable");
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
     setTty(false);
     setStdoutTty(false);
   });
 
-  it("exports updateCommand and registerUpdateCli", async () => {
-    expect(typeof updateCommand).toBe("function");
-    expect(typeof registerUpdateCli).toBe("function");
-    expect(typeof updateWizardCommand).toBe("function");
-  }, 20_000);
+  it("updateCommand --dry-run previews without mutating", async () => {
+    vi.mocked(defaultRuntime.log).mockClear();
+    serviceLoaded.mockResolvedValue(true);
 
-  it("updateCommand runs update and outputs result", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      root: "/test/path",
-      before: { sha: "abc123", version: "1.0.0" },
-      after: { sha: "def456", version: "1.0.1" },
-      steps: [
-        {
-          name: "git fetch",
-          command: "git fetch",
-          cwd: "/test/path",
-          durationMs: 100,
-          exitCode: 0,
-        },
-      ],
-      durationMs: 500,
-    };
+    await updateCommand({ dryRun: true, channel: "beta" });
 
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
 
-    await updateCommand({ json: false });
-
-    expect(runGatewayUpdate).toHaveBeenCalled();
-    expect(defaultRuntime.log).toHaveBeenCalled();
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.join("\n")).toContain("Update dry-run");
+    expect(logs.join("\n")).toContain("No changes were applied.");
   });
 
   it("updateStatusCommand prints table output", async () => {
@@ -332,55 +380,63 @@ describe("update-cli", () => {
     expect(parsed.channel.value).toBe("stable");
   });
 
-  it("defaults to dev channel for git installs when unset", async () => {
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    });
+  it.each([
+    {
+      name: "defaults to dev channel for git installs when unset",
+      mode: "git" as const,
+      options: {},
+      prepare: async () => {},
+      expectedChannel: "dev" as const,
+      expectedTag: undefined as string | undefined,
+    },
+    {
+      name: "defaults to stable channel for package installs when unset",
+      options: { yes: true },
+      prepare: async () => {
+        const tempDir = createCaseDir("openclaw-update");
+        mockPackageInstallStatus(tempDir);
+      },
+      expectedChannel: undefined as "stable" | undefined,
+      expectedTag: undefined as string | undefined,
+    },
+    {
+      name: "uses stored beta channel when configured",
+      mode: "git" as const,
+      options: {},
+      prepare: async () => {
+        vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+          ...baseSnapshot,
+          config: { update: { channel: "beta" } } as OpenClawConfig,
+        });
+      },
+      expectedChannel: "beta" as const,
+      expectedTag: undefined as string | undefined,
+    },
+  ])("$name", async ({ mode, options, prepare, expectedChannel, expectedTag }) => {
+    await prepare();
+    if (mode) {
+      vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult({ mode }));
+    }
 
-    await updateCommand({});
+    await updateCommand(options);
 
-    expectUpdateCallChannel("dev");
-  });
+    if (expectedChannel !== undefined) {
+      const call = expectUpdateCallChannel(expectedChannel);
+      if (expectedTag !== undefined) {
+        expect(call?.tag).toBe(expectedTag);
+      }
+      return;
+    }
 
-  it("defaults to stable channel for package installs when unset", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
-
-    mockPackageInstallStatus(tempDir);
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "npm",
-      steps: [],
-      durationMs: 100,
-    });
-
-    await updateCommand({ yes: true });
-
-    const call = expectUpdateCallChannel("stable");
-    expect(call?.tag).toBe("latest");
-  });
-
-  it("uses stored beta channel when configured", async () => {
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      config: { update: { channel: "beta" } } as OpenClawConfig,
-    });
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    });
-
-    await updateCommand({});
-
-    expectUpdateCallChannel("beta");
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
   });
 
   it("falls back to latest when beta tag is older than release", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
+    const tempDir = createCaseDir("openclaw-update");
 
     mockPackageInstallStatus(tempDir);
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
@@ -391,45 +447,110 @@ describe("update-cli", () => {
       tag: "latest",
       version: "1.2.3-1",
     });
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "npm",
-      steps: [],
-      durationMs: 100,
-    });
-
     await updateCommand({});
 
-    const call = expectUpdateCallChannel("beta");
-    expect(call?.tag).toBe("latest");
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
   });
 
   it("honors --tag override", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
+    const tempDir = createCaseDir("openclaw-update");
 
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "npm",
-      steps: [],
-      durationMs: 100,
-    });
+    mockPackageInstallStatus(tempDir);
 
     await updateCommand({ tag: "next" });
 
-    const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
-    expect(call?.tag).toBe("next");
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@next", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+  });
+
+  it("prepends portable Git PATH for package updates on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const tempDir = createCaseDir("openclaw-update");
+    const localAppData = createCaseDir("openclaw-localappdata");
+    const portableGitMingw = path.join(
+      localAppData,
+      "OpenClaw",
+      "deps",
+      "portable-git",
+      "mingw64",
+      "bin",
+    );
+    const portableGitUsr = path.join(
+      localAppData,
+      "OpenClaw",
+      "deps",
+      "portable-git",
+      "usr",
+      "bin",
+    );
+    await fs.mkdir(portableGitMingw, { recursive: true });
+    await fs.mkdir(portableGitUsr, { recursive: true });
+    mockPackageInstallStatus(tempDir);
+    pathExists.mockImplementation(
+      async (candidate: string) => candidate === portableGitMingw || candidate === portableGitUsr,
+    );
+
+    await withEnvAsync({ LOCALAPPDATA: localAppData }, async () => {
+      await updateCommand({ yes: true });
+    });
+
+    platformSpy.mockRestore();
+
+    const updateCall = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.find(
+        (call) =>
+          Array.isArray(call[0]) &&
+          call[0][0] === "npm" &&
+          call[0][1] === "i" &&
+          call[0][2] === "-g",
+      );
+    const updateOptions =
+      typeof updateCall?.[1] === "object" && updateCall[1] !== null ? updateCall[1] : undefined;
+    const mergedPath = updateOptions?.env?.Path ?? updateOptions?.env?.PATH ?? "";
+    expect(mergedPath.split(path.delimiter).slice(0, 2)).toEqual([
+      portableGitMingw,
+      portableGitUsr,
+    ]);
+    expect(updateOptions?.env?.NPM_CONFIG_SCRIPT_SHELL).toBe("cmd.exe");
+    expect(updateOptions?.env?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
+  });
+
+  it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for package updates", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+
+    await withEnvAsync(
+      { OPENCLAW_UPDATE_PACKAGE_SPEC: "http://10.211.55.2:8138/openclaw-next.tgz" },
+      async () => {
+        await updateCommand({ yes: true, tag: "latest" });
+      },
+    );
+
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [
+        "npm",
+        "i",
+        "-g",
+        "http://10.211.55.2:8138/openclaw-next.tgz",
+        "--no-fund",
+        "--no-audit",
+        "--loglevel=error",
+      ],
+      expect.any(Object),
+    );
   });
 
   it("updateCommand outputs JSON when --json is set", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    };
-
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
     vi.mocked(defaultRuntime.log).mockClear();
 
     await updateCommand({ json: true });
@@ -463,7 +584,7 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("updateCommand restarts daemon by default", async () => {
+  it("updateCommand refreshes gateway service env when service is already installed", async () => {
     const mockResult: UpdateRunResult = {
       status: "ok",
       mode: "git",
@@ -472,72 +593,179 @@ describe("update-cli", () => {
     };
 
     vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-    vi.mocked(runDaemonRestart).mockResolvedValue(true);
+    vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
+    serviceLoaded.mockResolvedValue(true);
 
     await updateCommand({});
 
-    expect(runDaemonRestart).toHaveBeenCalled();
-  });
-
-  it("updateCommand continues after doctor sub-step and clears update flag", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    };
-
-    const envSnapshot = captureEnv(["OPENCLAW_UPDATE_IN_PROGRESS"]);
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
-    try {
-      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-      vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-      vi.mocked(runDaemonRestart).mockResolvedValue(true);
-      vi.mocked(doctorCommand).mockResolvedValue(undefined);
-      vi.mocked(defaultRuntime.log).mockClear();
-
-      await updateCommand({});
-
-      expect(doctorCommand).toHaveBeenCalledWith(
-        defaultRuntime,
-        expect.objectContaining({ nonInteractive: true }),
-      );
-      expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
-
-      const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
-      expect(
-        logLines.some((line) => line.includes("Leveled up! New skills unlocked. You're welcome.")),
-      ).toBe(true);
-    } finally {
-      randomSpy.mockRestore();
-      envSnapshot.restore();
-    }
-  });
-
-  it("updateCommand skips restart when --no-restart is set", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    };
-
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-
-    await updateCommand({ restart: false });
-
+    expect(runDaemonInstall).toHaveBeenCalledWith({
+      force: true,
+      json: undefined,
+    });
+    expect(runRestartScript).toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
-  it("updateCommand skips success message when restart does not run", async () => {
-    const mockResult: UpdateRunResult = {
+  it("updateCommand refreshes service env from updated install root when available", async () => {
+    const root = createCaseDir("openclaw-updated-root");
+    const entryPath = path.join(root, "dist", "entry.js");
+    pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
+
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
       status: "ok",
-      mode: "git",
+      mode: "npm",
+      root,
       steps: [],
       durationMs: 100,
-    };
+    });
+    serviceLoaded.mockResolvedValue(true);
 
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+    await updateCommand({});
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), entryPath, "gateway", "install", "--force"],
+      expect.objectContaining({ cwd: root, timeoutMs: 60_000 }),
+    );
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+    expect(runRestartScript).toHaveBeenCalled();
+  });
+
+  it("updateCommand preserves invocation-relative service env overrides during refresh", async () => {
+    const root = createCaseDir("openclaw-updated-root");
+    const entryPath = path.join(root, "dist", "entry.js");
+    pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
+
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "ok",
+      mode: "npm",
+      root,
+      steps: [],
+      durationMs: 100,
+    });
+    serviceLoaded.mockResolvedValue(true);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_STATE_DIR: "./state",
+        OPENCLAW_CONFIG_PATH: "./config/openclaw.json",
+      },
+      async () => {
+        await updateCommand({});
+      },
+    );
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), entryPath, "gateway", "install", "--force"],
+      expect.objectContaining({
+        cwd: root,
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: path.resolve("./state"),
+          OPENCLAW_CONFIG_PATH: path.resolve("./config/openclaw.json"),
+        }),
+        timeoutMs: 60_000,
+      }),
+    );
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+  });
+
+  it("updateCommand reuses the captured invocation cwd when process.cwd later fails", async () => {
+    const root = createCaseDir("openclaw-updated-root");
+    const entryPath = path.join(root, "dist", "entry.js");
+    pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
+
+    const originalCwd = process.cwd();
+    let restoreCwd: (() => void) | undefined;
+    vi.mocked(runGatewayUpdate).mockImplementation(async () => {
+      const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+        throw new Error("ENOENT: current working directory is gone");
+      });
+      restoreCwd = () => cwdSpy.mockRestore();
+      return {
+        status: "ok",
+        mode: "npm",
+        root,
+        steps: [],
+        durationMs: 100,
+      };
+    });
+    serviceLoaded.mockResolvedValue(true);
+
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: "./state",
+        },
+        async () => {
+          await updateCommand({});
+        },
+      );
+    } finally {
+      restoreCwd?.();
+    }
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), entryPath, "gateway", "install", "--force"],
+      expect.objectContaining({
+        cwd: root,
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: path.resolve(originalCwd, "./state"),
+        }),
+        timeoutMs: 60_000,
+      }),
+    );
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+  });
+
+  it("updateCommand falls back to restart when env refresh install fails", async () => {
+    await runRestartFallbackScenario({ daemonInstall: "fail" });
+  });
+
+  it("updateCommand falls back to restart when no detached restart script is available", async () => {
+    await runRestartFallbackScenario({ daemonInstall: "ok" });
+  });
+
+  it("updateCommand does not refresh service env when --no-restart is set", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    serviceLoaded.mockResolvedValue(true);
+
+    await updateCommand({ restart: false });
+
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("updateCommand continues after doctor sub-step and clears update flag", async () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: undefined }, async () => {
+        vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+        vi.mocked(runDaemonRestart).mockResolvedValue(true);
+        vi.mocked(doctorCommand).mockResolvedValue(undefined);
+        vi.mocked(defaultRuntime.log).mockClear();
+
+        await updateCommand({});
+
+        expect(doctorCommand).toHaveBeenCalledWith(
+          defaultRuntime,
+          expect.objectContaining({ nonInteractive: true }),
+        );
+        expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
+
+        const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+        expect(
+          logLines.some((line) =>
+            line.includes("Leveled up! New skills unlocked. You're welcome."),
+          ),
+        ).toBe(true);
+      });
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it("updateCommand skips success message when restart does not run", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
     vi.mocked(runDaemonRestart).mockResolvedValue(false);
     vi.mocked(defaultRuntime.log).mockClear();
 
@@ -547,35 +775,35 @@ describe("update-cli", () => {
     expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(false);
   });
 
-  it("updateCommand validates timeout option", async () => {
+  it.each([
+    {
+      name: "update command",
+      run: async () => await updateCommand({ timeout: "invalid" }),
+      requireTty: false,
+    },
+    {
+      name: "update status command",
+      run: async () => await updateStatusCommand({ timeout: "invalid" }),
+      requireTty: false,
+    },
+    {
+      name: "update wizard command",
+      run: async () => await updateWizardCommand({ timeout: "invalid" }),
+      requireTty: true,
+    },
+  ])("validates timeout option for $name", async ({ run, requireTty }) => {
+    setTty(requireTty);
     vi.mocked(defaultRuntime.error).mockClear();
     vi.mocked(defaultRuntime.exit).mockClear();
 
-    await updateCommand({ timeout: "invalid" });
-
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("timeout"));
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("updateStatusCommand validates timeout option", async () => {
-    vi.mocked(defaultRuntime.error).mockClear();
-    vi.mocked(defaultRuntime.exit).mockClear();
-
-    await updateStatusCommand({ timeout: "invalid" });
+    await run();
 
     expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("timeout"));
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("persists update channel when --channel is set", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    };
-
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
 
     await updateCommand({ channel: "beta" });
 
@@ -586,26 +814,46 @@ describe("update-cli", () => {
     expect(call?.update?.channel).toBe("beta");
   });
 
-  it("requires confirmation on downgrade when non-interactive", async () => {
+  it.each([
+    {
+      name: "requires confirmation without --yes",
+      options: {},
+      shouldExit: true,
+      shouldRunPackageUpdate: false,
+    },
+    {
+      name: "allows downgrade with --yes",
+      options: { yes: true },
+      shouldExit: false,
+      shouldRunPackageUpdate: true,
+    },
+  ])("$name in non-interactive mode", async ({ options, shouldExit, shouldRunPackageUpdate }) => {
     await setupNonInteractiveDowngrade();
+    await updateCommand(options);
 
-    await updateCommand({});
-
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Downgrade confirmation required."),
+    const downgradeMessageSeen = vi
+      .mocked(defaultRuntime.error)
+      .mock.calls.some((call) => String(call[0]).includes("Downgrade confirmation required."));
+    expect(downgradeMessageSeen).toBe(shouldExit);
+    expect(vi.mocked(defaultRuntime.exit).mock.calls.some((call) => call[0] === 1)).toBe(
+      shouldExit,
     );
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(vi.mocked(runGatewayUpdate).mock.calls.length > 0).toBe(false);
+    expect(
+      vi
+        .mocked(runCommandWithTimeout)
+        .mock.calls.some((call) => Array.isArray(call[0]) && call[0][0] === "npm"),
+    ).toBe(shouldRunPackageUpdate);
   });
 
-  it("allows downgrade with --yes in non-interactive mode", async () => {
+  it("dry-run bypasses downgrade confirmation checks in non-interactive mode", async () => {
     await setupNonInteractiveDowngrade();
+    vi.mocked(defaultRuntime.exit).mockClear();
 
-    await updateCommand({ yes: true });
+    await updateCommand({ dryRun: true });
 
-    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("Downgrade confirmation required."),
-    );
-    expect(runGatewayUpdate).toHaveBeenCalled();
+    expect(vi.mocked(defaultRuntime.exit).mock.calls.some((call) => call[0] === 1)).toBe(false);
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
   });
 
   it("updateWizardCommand requires a TTY", async () => {
@@ -621,23 +869,10 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("updateWizardCommand validates timeout option", async () => {
-    setTty(true);
-    vi.mocked(defaultRuntime.error).mockClear();
-    vi.mocked(defaultRuntime.exit).mockClear();
-
-    await updateWizardCommand({ timeout: "invalid" });
-
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("timeout"));
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
-    const tempDir = await createCaseDir("openclaw-update-wizard");
-    const envSnapshot = captureEnv(["OPENCLAW_GIT_DIR"]);
-    try {
+    const tempDir = createCaseDir("openclaw-update-wizard");
+    await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
       setTty(true);
-      process.env.OPENCLAW_GIT_DIR = tempDir;
 
       vi.mocked(checkUpdateStatus).mockResolvedValue({
         root: "/test/path",
@@ -663,8 +898,6 @@ describe("update-cli", () => {
 
       const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
       expect(call?.channel).toBe("dev");
-    } finally {
-      envSnapshot.restore();
-    }
+    });
   });
 });

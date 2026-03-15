@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { useFastShortTimeouts } from "../../test/helpers/fast-short-timeouts.js";
 import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness.js";
 
 const fx = installEmbeddingManagerFixture({
   fixturePrefix: "openclaw-mem-",
-  largeTokens: 1250,
+  largeTokens: 4000,
   smallTokens: 200,
   createCfg: ({ workspaceDir, indexPath, tokens }) => ({
     agents: {
@@ -27,6 +28,17 @@ const fx = installEmbeddingManagerFixture({
 const { embedBatch } = fx;
 
 describe("memory embedding batches", () => {
+  async function expectSyncWithFastTimeouts(manager: {
+    sync: (params: { reason: string }) => Promise<void>;
+  }) {
+    const restoreFastTimeouts = useFastShortTimeouts();
+    try {
+      await manager.sync({ reason: "test" });
+    } finally {
+      restoreFastTimeouts();
+    }
+  }
+
   it("splits large files across multiple embedding batches", async () => {
     const memoryDir = fx.getMemoryDir();
     const managerLarge = fx.getManagerLarge();
@@ -49,6 +61,10 @@ describe("memory embedding batches", () => {
     );
     expect(totalTexts).toBe(status.chunks);
     expect(embedBatch.mock.calls.length).toBeGreaterThan(1);
+    const inputs: string[] = embedBatch.mock.calls.flatMap(
+      (call: unknown[]) => (call[0] as string[] | undefined) ?? [],
+    );
+    expect(inputs.every((text) => Buffer.byteLength(text, "utf8") <= 8000)).toBe(true);
     expect(updates.length).toBeGreaterThan(0);
     expect(updates.some((update) => update.label?.includes("/"))).toBe(true);
     const last = updates[updates.length - 1];
@@ -88,25 +104,30 @@ describe("memory embedding batches", () => {
       return texts.map(() => [0, 1, 0]);
     });
 
-    const realSetTimeout = setTimeout;
-    const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((
-      handler: TimerHandler,
-      timeout?: number,
-      ...args: unknown[]
-    ) => {
-      const delay = typeof timeout === "number" ? timeout : 0;
-      if (delay > 0 && delay <= 2000) {
-        return realSetTimeout(handler, 0, ...args);
-      }
-      return realSetTimeout(handler, delay, ...args);
-    }) as typeof setTimeout);
-    try {
-      await managerSmall.sync({ reason: "test" });
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
+    await expectSyncWithFastTimeouts(managerSmall);
 
     expect(calls).toBe(3);
+  }, 10000);
+
+  it("retries embeddings on too-many-tokens-per-day rate limits", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const managerSmall = fx.getManagerSmall();
+    const line = "e".repeat(120);
+    const content = Array.from({ length: 4 }, () => line).join("\n");
+    await fs.writeFile(path.join(memoryDir, "2026-01-08.md"), content);
+
+    let calls = 0;
+    embedBatch.mockImplementation(async (texts: string[]) => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("AWS Bedrock embeddings failed: Too many tokens per day");
+      }
+      return texts.map(() => [0, 1, 0]);
+    });
+
+    await expectSyncWithFastTimeouts(managerSmall);
+
+    expect(calls).toBe(2);
   }, 10000);
 
   it("skips empty chunks so embeddings input stays valid", async () => {

@@ -9,7 +9,7 @@ read_when:
 
 # Release Checklist (npm + macOS)
 
-Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tagging/publishing.
+Use `pnpm` from the repo root with Node 24 by default. Node 22 LTS, currently `22.16+`, remains supported for compatibility. Keep the working tree clean before tagging/publishing.
 
 ## Operator trigger
 
@@ -19,11 +19,41 @@ When the operator says “release”, immediately do this preflight (no extra qu
 - Load env from `~/.profile` and confirm `SPARKLE_PRIVATE_KEY_FILE` + App Store Connect vars are set (SPARKLE_PRIVATE_KEY_FILE should live in `~/.profile`).
 - Use Sparkle keys from `~/Library/CloudStorage/Dropbox/Backup/Sparkle` if needed.
 
+## Versioning
+
+Current OpenClaw releases use date-based versioning.
+
+- Stable release version: `YYYY.M.D`
+  - Git tag: `vYYYY.M.D`
+  - Examples from repo history: `v2026.2.26`, `v2026.3.8`
+- Beta prerelease version: `YYYY.M.D-beta.N`
+  - Git tag: `vYYYY.M.D-beta.N`
+  - Examples from repo history: `v2026.2.15-beta.1`, `v2026.3.8-beta.1`
+- Fallback correction tag: `vYYYY.M.D-N`
+  - Use only as a last-resort recovery tag when a published immutable release burned the original stable tag and you cannot reuse it.
+  - The npm package version stays `YYYY.M.D`; the `-N` suffix is only for the git tag and GitHub release.
+  - Prefer betas for normal pre-release iteration, then cut a clean stable tag once ready.
+- Use the same version string everywhere, minus the leading `v` where Git tags are not used:
+  - `package.json`: `2026.3.8`
+  - Git tag: `v2026.3.8`
+  - GitHub release title: `openclaw 2026.3.8`
+- Do not zero-pad month or day. Use `2026.3.8`, not `2026.03.08`.
+- Stable and beta are npm dist-tags, not separate release lines:
+  - `latest` = stable
+  - `beta` = prerelease/testing
+- Dev is the moving head of `main`, not a normal git-tagged release.
+- The tag-triggered preview run accepts stable, beta, and fallback correction tags, and rejects versions whose CalVer date is more than 2 UTC calendar days away from the release date.
+
+Historical note:
+
+- Older tags such as `v2026.1.11-1`, `v2026.2.6-3`, and `v2.0.0-beta2` exist in repo history.
+- Treat correction tags as a fallback-only escape hatch. New releases should still use `vYYYY.M.D` for stable and `vYYYY.M.D-beta.N` for beta.
+
 1. **Version & metadata**
 
 - [ ] Bump `package.json` version (e.g., `2026.1.29`).
 - [ ] Run `pnpm plugins:sync` to align extension package versions + changelogs.
-- [ ] Update CLI/version strings: [`src/cli/program.ts`](https://github.com/openclaw/openclaw/blob/main/src/cli/program.ts) and the Baileys user agent in [`src/provider-web.ts`](https://github.com/openclaw/openclaw/blob/main/src/provider-web.ts).
+- [ ] Update CLI/version strings in [`src/version.ts`](https://github.com/openclaw/openclaw/blob/main/src/version.ts) and the Baileys user agent in [`src/web/session.ts`](https://github.com/openclaw/openclaw/blob/main/src/web/session.ts).
 - [ ] Confirm package metadata (name, description, repository, keywords, license) and `bin` map points to [`openclaw.mjs`](https://github.com/openclaw/openclaw/blob/main/openclaw.mjs) for `openclaw`.
 - [ ] If dependencies changed, run `pnpm install` so `pnpm-lock.yaml` is current.
 
@@ -46,6 +76,7 @@ When the operator says “release”, immediately do this preflight (no extra qu
 - [ ] `pnpm check`
 - [ ] `pnpm test` (or `pnpm test:coverage` if you need coverage output)
 - [ ] `pnpm release:check` (verifies npm pack contents)
+- [ ] If `pnpm config:docs:check` fails as part of release validation and the config-surface change is intentional, run `pnpm config:docs:gen`, review `docs/.generated/config-baseline.json` and `docs/.generated/config-baseline.jsonl`, commit the updated baselines, then rerun `pnpm release:check`.
 - [ ] `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` (Docker install smoke test, fast path; required before release)
   - If the immediate previous npm release is known broken, set `OPENCLAW_INSTALL_SMOKE_PREVIOUS=<last-good-version>` or `OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS=1` for the preinstall step.
 - [ ] (Optional) Full installer smoke (adds non-root + CLI coverage): `pnpm test:install:smoke`
@@ -67,8 +98,15 @@ When the operator says “release”, immediately do this preflight (no extra qu
 6. **Publish (npm)**
 
 - [ ] Confirm git status is clean; commit and push as needed.
-- [ ] `npm login` (verify 2FA) if needed.
-- [ ] `npm publish --access public` (use `--tag beta` for pre-releases).
+- [ ] Confirm npm trusted publishing is configured for the `openclaw` package.
+- [ ] Do not rely on an `NPM_TOKEN` secret for this workflow; the publish job uses GitHub OIDC trusted publishing.
+- [ ] Push the matching git tag to trigger the preview run in `.github/workflows/openclaw-npm-release.yml`.
+- [ ] Run `OpenClaw NPM Release` manually with the same tag to publish after `npm-release` environment approval.
+  - Stable tags publish to npm `latest`.
+  - Beta tags publish to npm `beta`.
+  - Fallback correction tags like `v2026.3.13-1` map to npm version `2026.3.13`.
+  - Both the preview run and the manual publish run reject tags that do not map back to `package.json`, are not on `main`, or whose CalVer date is more than 2 UTC calendar days away from the release date.
+  - If `openclaw@YYYY.M.D` is already published, a fallback correction tag is still useful for GitHub release and Docker recovery, but npm publish will not republish that version.
 - [ ] Verify the registry: `npm view openclaw version`, `npm view openclaw dist-tags`, and `npx -y openclaw@X.Y.Z --version` (or `--help`).
 
 ### Troubleshooting (notes from 2.0.0-beta2 release)
@@ -78,12 +116,14 @@ When the operator says “release”, immediately do this preflight (no extra qu
   - `NPM_CONFIG_AUTH_TYPE=legacy npm dist-tag add openclaw@X.Y.Z latest`
 - **`npx` verification fails with `ECOMPROMISED: Lock compromised`**: retry with a fresh cache:
   - `NPM_CONFIG_CACHE=/tmp/npm-cache-$(date +%s) npx -y openclaw@X.Y.Z --version`
-- **Tag needs repointing after a late fix**: force-update and push the tag, then ensure the GitHub release assets still match:
-  - `git tag -f vX.Y.Z && git push -f origin vX.Y.Z`
+- **Tag needs recovery after a late fix**: if the original stable tag is tied to an immutable GitHub release, mint a fallback correction tag like `vX.Y.Z-1` instead of trying to force-update `vX.Y.Z`.
+  - Keep the npm package version at `X.Y.Z`; the correction suffix is for the git tag and GitHub release only.
+  - Use this only as a last resort. For normal iteration, prefer beta tags and then cut a clean stable release.
 
 7. **GitHub release + appcast**
 
 - [ ] Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z` (or `git push --tags`).
+  - Pushing the tag also triggers the npm release workflow.
 - [ ] Create/refresh the GitHub release for `vX.Y.Z` with **title `openclaw X.Y.Z`** (not just the tag); body should include the **full** changelog section for that version (Highlights + Changes + Fixes), inline (no bare links), and **must not repeat the title inside the body**.
 - [ ] Attach artifacts: `npm pack` tarball (optional), `OpenClaw-X.Y.Z.zip`, and `OpenClaw-X.Y.Z.dSYM.zip` (if generated).
 - [ ] Commit the updated `appcast.xml` and push it (Sparkle feeds from main).

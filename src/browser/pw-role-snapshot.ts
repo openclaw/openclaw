@@ -1,3 +1,5 @@
+import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
+
 export type RoleRef = {
   role: string;
   name?: string;
@@ -22,60 +24,6 @@ export type RoleSnapshotOptions = {
   /** Remove unnamed structural elements and empty branches. */
   compact?: boolean;
 };
-
-const INTERACTIVE_ROLES = new Set([
-  "button",
-  "link",
-  "textbox",
-  "checkbox",
-  "radio",
-  "combobox",
-  "listbox",
-  "menuitem",
-  "menuitemcheckbox",
-  "menuitemradio",
-  "option",
-  "searchbox",
-  "slider",
-  "spinbutton",
-  "switch",
-  "tab",
-  "treeitem",
-]);
-
-const CONTENT_ROLES = new Set([
-  "heading",
-  "cell",
-  "gridcell",
-  "columnheader",
-  "rowheader",
-  "listitem",
-  "article",
-  "region",
-  "main",
-  "navigation",
-]);
-
-const STRUCTURAL_ROLES = new Set([
-  "generic",
-  "group",
-  "list",
-  "table",
-  "row",
-  "rowgroup",
-  "grid",
-  "treegrid",
-  "menu",
-  "menubar",
-  "toolbar",
-  "tablist",
-  "tree",
-  "directory",
-  "document",
-  "application",
-  "presentation",
-  "none",
-]);
 
 export function getRoleSnapshotStats(snapshot: string, refs: RoleRefMap): RoleSnapshotStats {
   const interactive = Object.values(refs).filter((r) => INTERACTIVE_ROLES.has(r.role)).length;
@@ -266,6 +214,46 @@ function processLine(
   return enhanced;
 }
 
+type InteractiveSnapshotLine = NonNullable<ReturnType<typeof matchInteractiveSnapshotLine>>;
+
+function buildInteractiveSnapshotLines(params: {
+  lines: string[];
+  options: RoleSnapshotOptions;
+  resolveRef: (parsed: InteractiveSnapshotLine) => { ref: string; nth?: number } | null;
+  recordRef: (parsed: InteractiveSnapshotLine, ref: string, nth?: number) => void;
+  includeSuffix: (suffix: string) => boolean;
+}): string[] {
+  const out: string[] = [];
+  for (const line of params.lines) {
+    const parsed = matchInteractiveSnapshotLine(line, params.options);
+    if (!parsed) {
+      continue;
+    }
+    if (!INTERACTIVE_ROLES.has(parsed.role)) {
+      continue;
+    }
+    const resolved = params.resolveRef(parsed);
+    if (!resolved?.ref) {
+      continue;
+    }
+    params.recordRef(parsed, resolved.ref, resolved.nth);
+
+    let enhanced = `- ${parsed.roleRaw}`;
+    if (parsed.name) {
+      enhanced += ` "${parsed.name}"`;
+    }
+    enhanced += ` [ref=${resolved.ref}]`;
+    if ((resolved.nth ?? 0) > 0) {
+      enhanced += ` [nth=${resolved.nth}]`;
+    }
+    if (params.includeSuffix(parsed.suffix)) {
+      enhanced += parsed.suffix;
+    }
+    out.push(enhanced);
+  }
+  return out;
+}
+
 export function parseRoleRef(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -294,39 +282,24 @@ export function buildRoleSnapshotFromAriaSnapshot(
   };
 
   if (options.interactive) {
-    const result: string[] = [];
-    for (const line of lines) {
-      const parsed = matchInteractiveSnapshotLine(line, options);
-      if (!parsed) {
-        continue;
-      }
-      const { roleRaw, role, name, suffix } = parsed;
-      if (!INTERACTIVE_ROLES.has(role)) {
-        continue;
-      }
-
-      const ref = nextRef();
-      const nth = tracker.getNextIndex(role, name);
-      tracker.trackRef(role, name, ref);
-      refs[ref] = {
-        role,
-        name,
-        nth,
-      };
-
-      let enhanced = `- ${roleRaw}`;
-      if (name) {
-        enhanced += ` "${name}"`;
-      }
-      enhanced += ` [ref=${ref}]`;
-      if (nth > 0) {
-        enhanced += ` [nth=${nth}]`;
-      }
-      if (suffix.includes("[")) {
-        enhanced += suffix;
-      }
-      result.push(enhanced);
-    }
+    const result = buildInteractiveSnapshotLines({
+      lines,
+      options,
+      resolveRef: ({ role, name }) => {
+        const ref = nextRef();
+        const nth = tracker.getNextIndex(role, name);
+        tracker.trackRef(role, name, ref);
+        return { ref, nth };
+      },
+      recordRef: ({ role, name }, ref, nth) => {
+        refs[ref] = {
+          role,
+          name,
+          nth,
+        };
+      },
+      includeSuffix: (suffix) => suffix.includes("["),
+    });
 
     removeNthFromNonDuplicates(refs, tracker);
 
@@ -370,23 +343,18 @@ export function buildRoleSnapshotFromAiSnapshot(
   const refs: RoleRefMap = {};
 
   if (options.interactive) {
-    const out: string[] = [];
-    for (const line of lines) {
-      const parsed = matchInteractiveSnapshotLine(line, options);
-      if (!parsed) {
-        continue;
-      }
-      const { roleRaw, role, name, suffix } = parsed;
-      if (!INTERACTIVE_ROLES.has(role)) {
-        continue;
-      }
-      const ref = parseAiSnapshotRef(suffix);
-      if (!ref) {
-        continue;
-      }
-      refs[ref] = { role, ...(name ? { name } : {}) };
-      out.push(`- ${roleRaw}${name ? ` "${name}"` : ""}${suffix}`);
-    }
+    const out = buildInteractiveSnapshotLines({
+      lines,
+      options,
+      resolveRef: ({ suffix }) => {
+        const ref = parseAiSnapshotRef(suffix);
+        return ref ? { ref } : null;
+      },
+      recordRef: ({ role, name }, ref) => {
+        refs[ref] = { role, ...(name ? { name } : {}) };
+      },
+      includeSuffix: () => true,
+    });
     return {
       snapshot: out.join("\n") || "(no interactive elements)",
       refs,

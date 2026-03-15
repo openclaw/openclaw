@@ -1,12 +1,12 @@
+import { fetchChannelPermissionsDiscord } from "../../../extensions/discord/src/send.js";
+import { parseDiscordTarget } from "../../../extensions/discord/src/targets.js";
+import { fetchSlackScopes, type SlackScopesResult } from "../../../extensions/slack/src/scopes.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelCapabilities, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { fetchChannelPermissionsDiscord } from "../../discord/send.js";
-import { parseDiscordTarget } from "../../discord/targets.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { fetchSlackScopes, type SlackScopesResult } from "../../slack/scopes.js";
 import { theme } from "../../terminal/theme.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
@@ -381,9 +381,7 @@ async function resolveChannelReports(params: {
     let slackScopes: ChannelCapabilitiesReport["slackScopes"];
     if (plugin.id === "slack" && configured && enabled) {
       const botToken = (resolvedAccount as { botToken?: string }).botToken?.trim();
-      const userToken = (
-        resolvedAccount as { config?: { userToken?: string } }
-      ).config?.userToken?.trim();
+      const userToken = (resolvedAccount as { userToken?: string }).userToken?.trim();
       const scopeReports: NonNullable<ChannelCapabilitiesReport["slackScopes"]> = [];
       if (botToken) {
         scopeReports.push({
