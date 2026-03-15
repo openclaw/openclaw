@@ -13,6 +13,7 @@ import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
+import { registerPluginInteractiveHandler } from "./interactive.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -47,17 +48,21 @@ import type {
 
 export type PluginToolRegistration = {
   pluginId: string;
+  pluginName?: string;
   factory: OpenClawPluginToolFactory;
   names: string[];
   optional: boolean;
   source: string;
+  rootDir?: string;
 };
 
 export type PluginCliRegistration = {
   pluginId: string;
+  pluginName?: string;
   register: OpenClawPluginCliRegistrar;
   commands: string[];
   source: string;
+  rootDir?: string;
 };
 
 export type PluginHttpRouteRegistration = {
@@ -71,15 +76,19 @@ export type PluginHttpRouteRegistration = {
 
 export type PluginChannelRegistration = {
   pluginId: string;
+  pluginName?: string;
   plugin: ChannelPlugin;
   dock?: ChannelDock;
   source: string;
+  rootDir?: string;
 };
 
 export type PluginProviderRegistration = {
   pluginId: string;
+  pluginName?: string;
   provider: ProviderPlugin;
   source: string;
+  rootDir?: string;
 };
 
 export type PluginHookRegistration = {
@@ -87,18 +96,23 @@ export type PluginHookRegistration = {
   entry: HookEntry;
   events: string[];
   source: string;
+  rootDir?: string;
 };
 
 export type PluginServiceRegistration = {
   pluginId: string;
+  pluginName?: string;
   service: OpenClawPluginService;
   source: string;
+  rootDir?: string;
 };
 
 export type PluginCommandRegistration = {
   pluginId: string;
+  pluginName?: string;
   command: OpenClawPluginCommandDefinition;
   source: string;
+  rootDir?: string;
 };
 
 export type PluginRecord = {
@@ -108,6 +122,7 @@ export type PluginRecord = {
   description?: string;
   kind?: PluginKind;
   source: string;
+  rootDir?: string;
   origin: PluginOrigin;
   workspaceDir?: string;
   enabled: boolean;
@@ -212,10 +227,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     registry.tools.push({
       pluginId: record.id,
+      pluginName: record.name,
       factory,
       names: normalized,
       optional,
       source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -443,9 +460,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.channelIds.push(id);
     registry.channels.push({
       pluginId: record.id,
+      pluginName: record.name,
       plugin,
       dock: normalized.dock,
       source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -473,8 +492,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.providerIds.push(id);
     registry.providers.push({
       pluginId: record.id,
+      pluginName: record.name,
       provider: normalizedProvider,
       source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -509,9 +530,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.cliCommands.push(...commands);
     registry.cliRegistrars.push({
       pluginId: record.id,
+      pluginName: record.name,
       register: registrar,
       commands,
       source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -533,8 +556,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.services.push(id);
     registry.services.push({
       pluginId: record.id,
+      pluginName: record.name,
       service,
       source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -551,7 +576,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
 
     // Register with the plugin command system (validates name and checks for duplicates)
-    const result = registerPluginCommand(record.id, command);
+    const result = registerPluginCommand(record.id, command, {
+      pluginName: record.name,
+      pluginRoot: record.rootDir,
+    });
     if (!result.ok) {
       pushDiagnostic({
         level: "error",
@@ -565,8 +593,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.commands.push(name);
     registry.commands.push({
       pluginId: record.id,
+      pluginName: record.name,
       command,
       source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -640,6 +670,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       version: record.version,
       description: record.description,
       source: record.source,
+      rootDir: record.rootDir,
       config: params.config,
       pluginConfig: params.pluginConfig,
       runtime: registryParams.runtime,
@@ -653,6 +684,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerGatewayMethod: (method, handler) => registerGatewayMethod(record, method, handler),
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       registerService: (service) => registerService(record, service),
+      registerInteractiveHandler: (registration) => {
+        const result = registerPluginInteractiveHandler(record.id, registration, {
+          pluginName: record.name,
+          pluginRoot: record.rootDir,
+        });
+        if (!result.ok) {
+          pushDiagnostic({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message: result.error ?? "interactive handler registration failed",
+          });
+        }
+      },
       registerCommand: (command) => registerCommand(record, command),
       registerContextEngine: (id, factory) => {
         if (id === defaultSlotIdForKey("contextEngine")) {

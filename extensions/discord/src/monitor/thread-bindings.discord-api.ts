@@ -17,7 +17,7 @@ import {
 } from "./thread-bindings.types.js";
 
 function buildThreadTarget(threadId: string): string {
-  return `channel:${threadId}`;
+  return /^(channel:|user:)/i.test(threadId) ? threadId : `channel:${threadId}`;
 }
 
 export function isThreadArchived(raw: unknown): boolean {
