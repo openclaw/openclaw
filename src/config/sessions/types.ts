@@ -76,6 +76,12 @@ export type SessionEntry = {
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
+  /**
+   * Active named session for DM routing (ETH-608).
+   * When set, DM messages from this peer route to the named session instead of main.
+   * Format: "valorant", "work", etc. (session name only, not full key).
+   */
+  activeNamedSession?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
   /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
