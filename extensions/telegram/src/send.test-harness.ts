@@ -4,7 +4,10 @@ import type { MockFn } from "../../../src/test-utils/vitest-mock-fn.js";
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
     deleteMessage: vi.fn(),
+    editForumTopic: vi.fn(),
     editMessageText: vi.fn(),
+    editMessageReplyMarkup: vi.fn(),
+    pinChatMessage: vi.fn(),
     sendChatAction: vi.fn(),
     sendMessage: vi.fn(),
     sendPoll: vi.fn(),
@@ -16,6 +19,7 @@ const { botApi, botCtorSpy } = vi.hoisted(() => ({
     sendAnimation: vi.fn(),
     setMessageReaction: vi.fn(),
     sendSticker: vi.fn(),
+    unpinChatMessage: vi.fn(),
   },
   botCtorSpy: vi.fn(),
 }));
