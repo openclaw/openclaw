@@ -124,5 +124,21 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey };
+  /** Drop any buffered items for `key` without flushing them. */
+  const dropKey = (key: string) => {
+    const buffer = buffers.get(key);
+    if (!buffer) {
+      return;
+    }
+    buffers.delete(key);
+    if (buffer.timeout) {
+      clearTimeout(buffer.timeout);
+      buffer.timeout = null;
+    }
+    // Clear items so a racing timer callback (already queued in the event
+    // loop) hits the length === 0 guard in flushBuffer and becomes a no-op.
+    buffer.items.length = 0;
+  };
+
+  return { enqueue, flushKey, dropKey };
 }
