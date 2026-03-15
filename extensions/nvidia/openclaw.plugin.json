@@ -1,0 +1,9 @@
+{
+  "id": "nvidia",
+  "providers": ["nvidia"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

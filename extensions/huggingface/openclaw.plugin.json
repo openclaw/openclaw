@@ -1,0 +1,9 @@
+{
+  "id": "huggingface",
+  "providers": ["huggingface"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "synthetic",
+  "providers": ["synthetic"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

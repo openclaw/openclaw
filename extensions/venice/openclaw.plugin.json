@@ -1,0 +1,9 @@
+{
+  "id": "venice",
+  "providers": ["venice"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "minimax",
+  "providers": ["minimax"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

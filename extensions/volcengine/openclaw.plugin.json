@@ -1,0 +1,9 @@
+{
+  "id": "volcengine",
+  "providers": ["volcengine", "volcengine-plan"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

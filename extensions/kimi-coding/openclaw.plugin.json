@@ -1,0 +1,9 @@
+{
+  "id": "kimi-coding",
+  "providers": ["kimi-coding"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

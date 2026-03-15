@@ -1,0 +1,9 @@
+{
+  "id": "kilocode",
+  "providers": ["kilocode"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
