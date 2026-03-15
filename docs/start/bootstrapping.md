@@ -24,6 +24,12 @@ On the first agent run, OpenClaw bootstraps the workspace (default
 - Writes identity + preferences to `IDENTITY.md`, `USER.md`, `SOUL.md`.
 - Removes `BOOTSTRAP.md` when finished so it only runs once.
 
+<Tip>
+Smaller or local models may struggle with the bootstrapping ritual. If the agent
+stalls or skips steps, give all the details upfront in a single conversational
+message and explicitly ask it to consult the `BOOTSTRAP.md`, write the files and delete `BOOTSTRAP.md`.
+</Tip>
+
 ## Where it runs
 
 Bootstrapping always runs on the **gateway host**. If the macOS app connects to
