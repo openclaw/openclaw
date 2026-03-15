@@ -53,13 +53,17 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       return { updated: false };
     }
     note("Running update…", "Update");
-    const { progress, stop } = createUpdateProgress(true);
-    const result = await runGatewayUpdate({
-      cwd: params.root,
-      argv1: process.argv[1],
-      progress,
-    });
-    stop();
+    const { progress, stop } = createUpdateProgress(Boolean(process.stdout.isTTY));
+    let result;
+    try {
+      result = await runGatewayUpdate({
+        cwd: params.root,
+        argv1: process.argv[1],
+        progress,
+      });
+    } finally {
+      stop();
+    }
     note(
       [
         `Status: ${result.status}`,
