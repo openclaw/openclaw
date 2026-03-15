@@ -1818,7 +1818,9 @@ async function runWebSearch(params: {
   if (params.search_lang || params.language) {
     url.searchParams.set("search_lang", (params.search_lang || params.language)!);
   }
-  if (params.ui_lang) {
+  if (params.ui_lang && params.ui_lang.includes("-")) {
+    // Brave requires full locale codes (e.g. "en-US"), not bare language
+    // codes (e.g. "en"). Skip invalid values and let the API use its default.
     url.searchParams.set("ui_lang", params.ui_lang);
   }
   if (params.freshness) {
