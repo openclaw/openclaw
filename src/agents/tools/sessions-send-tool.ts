@@ -343,6 +343,23 @@ export function createSessionsSendTool(opts?: {
         return start.result;
       }
       runId = start.runId;
+      const immediateDecision = resolveParsedAnnounceTargetDecision(resolvedKey);
+      const immediatePlan = immediateDecision ? resolveAnnouncePlan(immediateDecision) : null;
+      let settledAnnouncePlan: SessionsSendAnnouncePlan | undefined;
+      const announcePlanPromise =
+        !immediatePlan || immediatePlan.shouldRunAnnounceFlow
+          ? resolveAnnounceTarget({
+              sessionKey: resolvedKey,
+              displayKey,
+            })
+              .catch(() => ({ kind: "unknown", reason: "error" }) satisfies AnnounceTargetDecision)
+              .then(resolveAnnouncePlan)
+          : null;
+      if (announcePlanPromise) {
+        void announcePlanPromise.then((plan) => {
+          settledAnnouncePlan = plan;
+        });
+      }
 
       let waitStatus: string | undefined;
       let waitError: string | undefined;
@@ -392,13 +409,10 @@ export function createSessionsSendTool(opts?: {
       const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
       const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
       const reply = last ? extractAssistantText(last) : undefined;
-      const announceTargetDecision = await resolveAnnounceTarget({
-        sessionKey: resolvedKey,
-        displayKey,
-      }).catch(() => ({ kind: "unknown", reason: "error" }) satisfies AnnounceTargetDecision);
-      const announcePlan = resolveAnnouncePlan(announceTargetDecision);
-      if (announcePlan.shouldRunAnnounceFlow) {
-        startA2AFlow(announcePlan, reply ?? undefined);
+      await Promise.resolve();
+      const announcePlan = settledAnnouncePlan ?? immediatePlan;
+      if (announcePlanPromise && (settledAnnouncePlan?.shouldRunAnnounceFlow ?? true)) {
+        startA2AFlow(settledAnnouncePlan ?? announcePlanPromise, reply ?? undefined);
       }
 
       return jsonResult({
@@ -406,7 +420,7 @@ export function createSessionsSendTool(opts?: {
         status: "ok",
         reply,
         sessionKey: displayKey,
-        delivery: announcePlan.delivery,
+        delivery: announcePlan?.delivery ?? pendingAnnounceDelivery,
       });
     },
   };

@@ -7,7 +7,18 @@ import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 export type AnnounceTargetDecision =
   | { kind: "external_target"; target: AnnounceTarget }
   | { kind: "no_external_target" }
-  | { kind: "unknown"; reason: "miss" | "partial" | "error" };
+  | { kind: "unknown"; reason: "miss" | "partial" | "missing_delivery" | "error" };
+
+function prefersSessionLookupForAnnounceTarget(sessionKey: string) {
+  const parsed = resolveAnnounceTargetFromKey(sessionKey);
+  if (!parsed) {
+    return false;
+  }
+  const normalized = normalizeChannelId(parsed.channel);
+  return Boolean(
+    normalized && getChannelPlugin(normalized)?.meta?.preferSessionLookupForAnnounceTarget,
+  );
+}
 
 export function resolveParsedAnnounceTargetDecision(
   sessionKey: string,
@@ -15,9 +26,7 @@ export function resolveParsedAnnounceTargetDecision(
   const parsed = resolveAnnounceTargetFromKey(sessionKey);
 
   if (parsed) {
-    const normalized = normalizeChannelId(parsed.channel);
-    const plugin = normalized ? getChannelPlugin(normalized) : null;
-    if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
+    if (!prefersSessionLookupForAnnounceTarget(sessionKey)) {
       return { kind: "external_target", target: parsed };
     }
   }
@@ -68,6 +77,12 @@ export async function resolveAnnounceTarget(params: {
       return { kind: "unknown", reason: "partial" };
     }
     if (match) {
+      if (
+        prefersSessionLookupForAnnounceTarget(params.sessionKey) ||
+        prefersSessionLookupForAnnounceTarget(params.displayKey)
+      ) {
+        return { kind: "unknown", reason: "missing_delivery" };
+      }
       return { kind: "no_external_target" };
     }
   } catch {

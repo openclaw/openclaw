@@ -141,6 +141,20 @@ describe("resolveAnnounceTarget fail-closed classification", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
+  it("classifies lookup-preferred channel hits without delivery metadata as unknown", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [{ key: "agent:main:whatsapp:group:123@g.us", displayName: "wa target" }],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      displayKey: "agent:main:whatsapp:group:123@g.us",
+    });
+
+    expect(target).toEqual({ kind: "unknown", reason: "missing_delivery" });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
   it("returns unknown when lookup misses and only the display key looks channel-bound", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [],
@@ -295,6 +309,81 @@ describe("sessions_send fail-closed announce flow", () => {
     await flushBackgroundTasks();
     expect(calls.filter((call) => call.method === "sessions.list")).toHaveLength(1);
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(2);
+  });
+
+  it("fails closed for lookup-preferred channel sessions missing delivery metadata", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        const reply = params?.extraSystemPrompt?.includes("Agent-to-agent announce step")
+          ? "announce now"
+          : "done";
+        replyByRunId.set(runId, reply);
+        return { runId, status: "accepted" };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [{ key: "agent:main:whatsapp:group:123@g.us", displayName: "wa target" }],
+        };
+      }
+      if (request.method === "send") {
+        throw new Error(
+          "send should not be called when lookup-preferred delivery metadata is missing",
+        );
+      }
+      return {};
+    });
+
+    const tool = createSessionsSendTool({
+      agentSessionKey: "main",
+      agentChannel: "discord",
+      config: testConfig,
+    });
+
+    const result = await tool.execute("call-lookup-preferred-missing-delivery", {
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      reply: "done",
+    });
+
+    await flushBackgroundTasks();
+    expect(calls.filter((call) => call.method === "sessions.list")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
   });
 
   it("preserves internal announce flow when target lookup misses and keys are not channel-shaped", async () => {
@@ -456,7 +545,95 @@ describe("sessions_send fail-closed announce flow", () => {
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(2);
   });
 
-  it("skips announce flow when target resolution is partial", async () => {
+  it("does not block wait-mode response on announce precheck and resolves announce later", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    const sessionsList = createDeferred<{
+      sessions: Array<{ key: string; displayName: string }>;
+    }>();
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        const reply = params?.extraSystemPrompt?.includes("Agent-to-agent announce step")
+          ? "announce now"
+          : "done";
+        replyByRunId.set(runId, reply);
+        return { runId, status: "accepted" };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return sessionsList.promise;
+      }
+      if (request.method === "send") {
+        throw new Error("send should not be called for deferred wait-mode announce flow");
+      }
+      return {};
+    });
+
+    const tool = createSessionsSendTool({
+      agentSessionKey: "main",
+      agentChannel: "discord",
+      config: testConfig,
+    });
+
+    let resolved = false;
+    let resultValue: Awaited<ReturnType<typeof tool.execute>> | undefined;
+    const resultPromise = tool.execute("call-wait-mode-precheck", {
+      sessionKey: "main",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    void resultPromise.then((result) => {
+      resolved = true;
+      resultValue = result;
+    });
+
+    await flushBackgroundTasks(2);
+
+    expect(resolved).toBe(true);
+    expect(resultValue?.details).toMatchObject({
+      status: "ok",
+      reply: "done",
+      delivery: { status: "pending", mode: "announce" },
+    });
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+
+    sessionsList.resolve({ sessions: [{ key: "main", displayName: "main" }] });
+    await resultPromise;
+    await flushBackgroundTasks(2);
+
+    expect(calls.filter((call) => call.method === "sessions.list")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(2);
+  });
+
+  it("fails closed when target resolution is partial", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
     let lastWaitedRunId: string | undefined;
@@ -522,7 +699,6 @@ describe("sessions_send fail-closed announce flow", () => {
     expect(result.details).toMatchObject({
       status: "ok",
       reply: "done",
-      delivery: { status: "skipped", mode: "none" },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
