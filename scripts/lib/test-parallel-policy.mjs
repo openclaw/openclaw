@@ -7,3 +7,12 @@ export function shouldEnableTopLevelParallel({ isCI, testProfile }) {
   }
   return testProfile !== "low" && testProfile !== "serial";
 }
+
+export function resolveVitestPoolForWorkerClamp({ pool, maxWorkers }) {
+  // vmForks + a single worker has shown cross-file leakage in CI (notably macOS).
+  // When we intentionally clamp a lane to one worker, force process forks.
+  if (maxWorkers === 1 && pool === "vmForks") {
+    return "forks";
+  }
+  return pool;
+}
