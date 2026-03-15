@@ -39,6 +39,9 @@ export type CronServiceDeps = {
   nowMs?: () => number;
   log: Logger;
   storePath: string;
+  /** OC home directory — used to resolve relative script paths. Explicit is preferred over
+   *  inferring from storePath, which breaks when cron.store is set to a custom path. */
+  ocHomeDir?: string;
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;

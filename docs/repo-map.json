@@ -364,7 +364,8 @@
         "src/infra/system-events.js",
         "src/logging.js",
         "src/routing/session-key.js",
-        "src/runtime.js"
+        "src/runtime.js",
+        "src/utils.js"
       ]
     },
     "src/hooks/": {

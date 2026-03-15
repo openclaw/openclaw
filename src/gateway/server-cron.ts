@@ -29,6 +29,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { CONFIG_DIR } from "../utils.js";
 
 export type GatewayCronState = {
   cron: CronService;
@@ -230,6 +231,7 @@ export function buildGatewayCronService(params: {
 
   const cron = new CronService({
     storePath,
+    ocHomeDir: CONFIG_DIR,
     cronEnabled,
     cronConfig: params.cfg.cron,
     defaultAgentId,
