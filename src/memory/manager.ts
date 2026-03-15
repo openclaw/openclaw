@@ -334,11 +334,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
     }
 
+    // Hybrid scoring combines vector + keyword results using weights. When one
+    // side is unavailable (e.g. query embedding is all zeros, vector search
+    // returns nothing, or FTS is unavailable), renormalize weights to avoid
+    // capping scores (and accidentally filtering everything by minScore).
+    const effectiveVectorWeight = vectorResults.length > 0 ? hybrid.vectorWeight : 0;
+    const effectiveTextWeight = keywordResults.length > 0 ? hybrid.textWeight : 0;
+    const weightSum = effectiveVectorWeight + effectiveTextWeight;
+    const normalizedVectorWeight =
+      weightSum > 0 ? effectiveVectorWeight / weightSum : hybrid.vectorWeight;
+    const normalizedTextWeight =
+      weightSum > 0 ? effectiveTextWeight / weightSum : hybrid.textWeight;
+
     const merged = await this.mergeHybridResults({
       vector: vectorResults,
       keyword: keywordResults,
-      vectorWeight: hybrid.vectorWeight,
-      textWeight: hybrid.textWeight,
+      vectorWeight: normalizedVectorWeight,
+      textWeight: normalizedTextWeight,
       mmr: hybrid.mmr,
       temporalDecay: hybrid.temporalDecay,
     });
