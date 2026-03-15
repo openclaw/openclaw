@@ -545,6 +545,10 @@ export async function runOnboardingWizard(
   const { setupInternalHooks } = await import("../commands/onboard-hooks.js");
   nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
 
+  // Memory optimization (hybrid search, caching, compaction flush)
+  const { setupMemoryOptimization } = await import("../commands/onboard-memory.js");
+  nextConfig = await setupMemoryOptimization(nextConfig, runtime, prompter);
+
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
 
