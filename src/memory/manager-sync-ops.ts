@@ -279,21 +279,15 @@ export abstract class MemoryManagerSyncOps {
     if (!this.cache.enabled) {
       return;
     }
+    // Process in batches to avoid loading all embedding JSON into V8 heap at once.
+    // Each cached embedding can be ~50KB+ of JSON; loading thousands at once causes heap spikes.
+    const SEED_BATCH_SIZE = 50;
     try {
-      const rows = sourceDb
-        .prepare(
-          `SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM ${EMBEDDING_CACHE_TABLE}`,
-        )
-        .all() as Array<{
-        provider: string;
-        model: string;
-        provider_key: string;
-        hash: string;
-        embedding: string;
-        dims: number | null;
-        updated_at: number;
-      }>;
-      if (!rows.length) {
+      const countRow = sourceDb
+        .prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`)
+        .get() as { c: number } | undefined;
+      const total = countRow?.c ?? 0;
+      if (total === 0) {
         return;
       }
       const insert = this.db.prepare(
@@ -304,19 +298,34 @@ export abstract class MemoryManagerSyncOps {
            dims=excluded.dims,
            updated_at=excluded.updated_at`,
       );
-      this.db.exec("BEGIN");
-      for (const row of rows) {
-        insert.run(
-          row.provider,
-          row.model,
-          row.provider_key,
-          row.hash,
-          row.embedding,
-          row.dims,
-          row.updated_at,
-        );
+      for (let offset = 0; offset < total; offset += SEED_BATCH_SIZE) {
+        const rows = sourceDb
+          .prepare(
+            `SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM ${EMBEDDING_CACHE_TABLE} LIMIT ? OFFSET ?`,
+          )
+          .all(SEED_BATCH_SIZE, offset) as Array<{
+          provider: string;
+          model: string;
+          provider_key: string;
+          hash: string;
+          embedding: string;
+          dims: number | null;
+          updated_at: number;
+        }>;
+        this.db.exec("BEGIN");
+        for (const row of rows) {
+          insert.run(
+            row.provider,
+            row.model,
+            row.provider_key,
+            row.hash,
+            row.embedding,
+            row.dims,
+            row.updated_at,
+          );
+        }
+        this.db.exec("COMMIT");
       }
-      this.db.exec("COMMIT");
     } catch (err) {
       try {
         this.db.exec("ROLLBACK");
