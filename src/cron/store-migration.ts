@@ -43,6 +43,13 @@ function normalizePayloadKind(payload: Record<string, unknown>) {
     }
     return false;
   }
+  if (raw === "exec") {
+    if (payload.kind !== "exec") {
+      payload.kind = "exec";
+      return true;
+    }
+    return false;
+  }
   return false;
 }
 
@@ -59,7 +66,7 @@ function inferPayloadIfMissing(raw: Record<string, unknown>) {
     return true;
   }
   if (command) {
-    raw.payload = { kind: "systemEvent", text: command };
+    raw.payload = { kind: "exec", command };
     return true;
   }
   return false;
@@ -137,6 +144,35 @@ function copyTopLevelAgentTurnFields(
   return mutated;
 }
 
+function copyTopLevelExecFields(raw: Record<string, unknown>, payload: Record<string, unknown>) {
+  let mutated = false;
+
+  if (
+    typeof payload.command !== "string" &&
+    typeof raw.command === "string" &&
+    raw.command.trim()
+  ) {
+    payload.command = raw.command.trim();
+    mutated = true;
+  }
+
+  if (typeof payload.shell !== "boolean" && typeof raw.shell === "boolean") {
+    payload.shell = raw.shell;
+    mutated = true;
+  }
+
+  if (
+    typeof payload.timeout !== "number" &&
+    typeof raw.timeout === "number" &&
+    Number.isFinite(raw.timeout)
+  ) {
+    payload.timeout = Math.max(0, Math.floor(raw.timeout));
+    mutated = true;
+  }
+
+  return mutated;
+}
+
 function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   if ("model" in raw) {
     delete raw.model;
@@ -176,6 +212,9 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   }
   if ("timeout" in raw) {
     delete raw.timeout;
+  }
+  if ("shell" in raw) {
+    delete raw.shell;
   }
 }
 
@@ -295,6 +334,10 @@ export function normalizeStoredCronJobs(
           payloadRecord.kind = "agentTurn";
           mutated = true;
           trackIssue("legacyPayloadKind");
+        } else if (typeof payloadRecord.command === "string" && payloadRecord.command.trim()) {
+          payloadRecord.kind = "exec";
+          mutated = true;
+          trackIssue("legacyPayloadKind");
         } else if (typeof payloadRecord.text === "string" && payloadRecord.text.trim()) {
           payloadRecord.kind = "systemEvent";
           mutated = true;
@@ -302,6 +345,9 @@ export function normalizeStoredCronJobs(
         }
       }
       if (payloadRecord.kind === "agentTurn" && copyTopLevelAgentTurnFields(raw, payloadRecord)) {
+        mutated = true;
+      }
+      if (payloadRecord.kind === "exec" && copyTopLevelExecFields(raw, payloadRecord)) {
         mutated = true;
       }
     }
@@ -314,7 +360,8 @@ export function normalizeStoredCronJobs(
       "message" in raw ||
       "text" in raw ||
       "command" in raw ||
-      "timeout" in raw;
+      "timeout" in raw ||
+      "shell" in raw;
     const hadLegacyTopLevelDeliveryFields =
       "deliver" in raw ||
       "channel" in raw ||
@@ -473,7 +520,8 @@ export function normalizeStoredCronJobs(
         mutated = true;
       }
     } else {
-      const inferredSessionTarget = payloadKind === "agentTurn" ? "isolated" : "main";
+      const inferredSessionTarget =
+        payloadKind === "agentTurn" || payloadKind === "exec" ? "isolated" : "main";
       if (raw.sessionTarget !== inferredSessionTarget) {
         raw.sessionTarget = inferredSessionTarget;
         mutated = true;

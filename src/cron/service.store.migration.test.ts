@@ -226,11 +226,12 @@ describe("cron store migration", () => {
           expr: "0 */2 * * *",
         }),
       );
-      expect(migrated.sessionTarget).toBe("main");
+      expect(migrated.sessionTarget).toBe("isolated");
       expect(migrated.wakeMode).toBe("now");
       expect(migrated.payload).toEqual({
-        kind: "systemEvent",
-        text: "bash /tmp/imessage-refresh.sh",
+        kind: "exec",
+        command: "bash /tmp/imessage-refresh.sh",
+        timeout: 120,
       });
       expect("command" in migrated).toBe(false);
       expect("timeout" in migrated).toBe(false);
