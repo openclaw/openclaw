@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import type { HookRunner } from "../plugins/hooks.js";
 import {
   THINKING_TAG_CASES,
   createStubSessionHarness,
@@ -12,7 +13,11 @@ import {
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
+  function createAgentEventHarness(options?: {
+    runId?: string;
+    sessionKey?: string;
+    hookRunner?: Pick<HookRunner, "runOutboundTransforms">;
+  }) {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
 
@@ -21,6 +26,7 @@ describe("subscribeEmbeddedPiSession", () => {
       runId: options?.runId ?? "run",
       onAgentEvent,
       sessionKey: options?.sessionKey,
+      hookRunner: options?.hookRunner as HookRunner | undefined,
     });
 
     return { emit, onAgentEvent };
@@ -106,7 +112,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
   it.each(THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",
-    ({ open, close }) => {
+    async ({ open, close }) => {
       const onReasoningStream = vi.fn();
       const onBlockReply = vi.fn();
 
@@ -132,6 +138,7 @@ describe("subscribeEmbeddedPiSession", () => {
       } as AssistantMessage;
 
       emit({ type: "message_end", message: assistantMessage });
+      await Promise.resolve();
 
       expect(onBlockReply).toHaveBeenCalledTimes(1);
       expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
@@ -149,7 +156,7 @@ describe("subscribeEmbeddedPiSession", () => {
   );
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
-    ({ open, close }) => {
+    async ({ open, close }) => {
       const onBlockReply = vi.fn();
 
       const { emit } = createSubscribedHarness({
@@ -174,6 +181,7 @@ describe("subscribeEmbeddedPiSession", () => {
         message: { role: "assistant" },
         assistantMessageEvent: { type: "text_end" },
       });
+      await Promise.resolve();
 
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
@@ -279,6 +287,32 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads[1]?.delta).toBe(" world");
   });
 
+  it("applies outbound transforms to streaming assistant agent events", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness({
+      hookRunner: {
+        runOutboundTransforms: (text: string) => text.replaceAll("secret", "public"),
+      },
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "secret" },
+    });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: " answer" },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads[0]?.text).toBe("public");
+    expect(payloads[0]?.delta).toBe("public");
+    expect(payloads[1]?.text).toBe("public answer");
+    expect(payloads[1]?.delta).toBe(" answer");
+  });
+
   it("emits agent events on message_end for non-streaming assistant text", () => {
     const { session, emit } = createStubSessionHarness();
 
@@ -291,6 +325,23 @@ describe("subscribeEmbeddedPiSession", () => {
     });
     emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
     expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
+  });
+
+  it("applies outbound transforms to non-streaming assistant agent events", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+      hookRunner: {
+        runOutboundTransforms: (text: string) => text.replaceAll("secret", "public"),
+      } as HookRunner,
+    });
+    emitMessageStartAndEndForAssistantText({ emit, text: "secret world" });
+
+    expectSingleAgentEventText(onAgentEvent.mock.calls, "public world");
   });
 
   it("does not emit duplicate agent events when message_end repeats", () => {

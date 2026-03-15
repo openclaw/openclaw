@@ -41,6 +41,13 @@ function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   void ctx.params.onReasoningEnd?.();
 }
 
+function applyOutboundTransformsToAssistantText(
+  ctx: EmbeddedPiSubscribeContext,
+  text: string,
+): string {
+  return ctx.hookRunner ? ctx.hookRunner.runOutboundTransforms(text) : text;
+}
+
 export function resolveSilentReplyFallbackText(params: {
   text: string;
   messagingToolSentTexts: string[];
@@ -216,20 +223,29 @@ export function handleMessageUpdate(
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
     if (shouldEmit) {
+      const transformedText = cleanedText
+        ? applyOutboundTransformsToAssistantText(ctx, cleanedText)
+        : cleanedText;
+      const previousEventText = ctx.state.lastStreamedAssistantEventText ?? "";
+      const transformedDelta =
+        transformedText && previousEventText && transformedText.startsWith(previousEventText)
+          ? transformedText.slice(previousEventText.length)
+          : transformedText;
+      ctx.state.lastStreamedAssistantEventText = transformedText;
       emitAgentEvent({
         runId: ctx.params.runId,
         stream: "assistant",
         data: {
-          text: cleanedText,
-          delta: deltaText,
+          text: transformedText,
+          delta: transformedDelta,
           mediaUrls: hasMedia ? mediaUrls : undefined,
         },
       });
       void ctx.params.onAgentEvent?.({
         stream: "assistant",
         data: {
-          text: cleanedText,
-          delta: deltaText,
+          text: transformedText,
+          delta: transformedDelta,
           mediaUrls: hasMedia ? mediaUrls : undefined,
         },
       });
@@ -307,20 +323,24 @@ export function handleMessageEnd(
   }
 
   if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+    const transformedText = cleanedText
+      ? applyOutboundTransformsToAssistantText(ctx, cleanedText)
+      : cleanedText;
+    ctx.state.lastStreamedAssistantEventText = transformedText;
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "assistant",
       data: {
-        text: cleanedText,
-        delta: cleanedText,
+        text: transformedText,
+        delta: transformedText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
       },
     });
     void ctx.params.onAgentEvent?.({
       stream: "assistant",
       data: {
-        text: cleanedText,
-        delta: cleanedText,
+        text: transformedText,
+        delta: transformedText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
       },
     });
