@@ -9,11 +9,10 @@ export type AnnounceTargetDecision =
   | { kind: "no_external_target" }
   | { kind: "unknown"; reason: "miss" | "partial" | "error" };
 
-export async function resolveAnnounceTarget(params: {
-  sessionKey: string;
-  displayKey: string;
-}): Promise<AnnounceTargetDecision> {
-  const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
+export function resolveParsedAnnounceTargetDecision(
+  sessionKey: string,
+): AnnounceTargetDecision | null {
+  const parsed = resolveAnnounceTargetFromKey(sessionKey);
 
   if (parsed) {
     const normalized = normalizeChannelId(parsed.channel);
@@ -21,6 +20,18 @@ export async function resolveAnnounceTarget(params: {
     if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
       return { kind: "external_target", target: parsed };
     }
+  }
+
+  return null;
+}
+
+export async function resolveAnnounceTarget(params: {
+  sessionKey: string;
+  displayKey: string;
+}): Promise<AnnounceTargetDecision> {
+  const parsedDecision = resolveParsedAnnounceTargetDecision(params.sessionKey);
+  if (parsedDecision) {
+    return parsedDecision;
   }
 
   try {

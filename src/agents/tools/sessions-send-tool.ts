@@ -11,7 +11,11 @@ import {
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
-import { type AnnounceTargetDecision, resolveAnnounceTarget } from "./sessions-announce-target.js";
+import {
+  type AnnounceTargetDecision,
+  resolveAnnounceTarget,
+  resolveParsedAnnounceTargetDecision,
+} from "./sessions-announce-target.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -23,7 +27,7 @@ import {
   stripToolMessages,
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
-import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+import { type SessionsSendAnnouncePlan, runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -262,22 +266,29 @@ export function createSessionsSendTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
-      const resolveAnnounceDelivery = (decision: AnnounceTargetDecision) => {
+      const pendingAnnounceDelivery = { status: "pending" as const, mode: "announce" as const };
+      const resolveAnnouncePlan = (decision: AnnounceTargetDecision): SessionsSendAnnouncePlan => {
         const shouldRunAnnounceFlow = decision.kind === "no_external_target";
         return {
           shouldRunAnnounceFlow,
           delivery: shouldRunAnnounceFlow
-            ? ({ status: "pending", mode: "announce" as const } as const)
+            ? pendingAnnounceDelivery
             : ({ status: "skipped", mode: "none" as const } as const),
+          announceTarget: null,
         };
       };
-      const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
+      const startA2AFlow = (
+        announcePlan: SessionsSendAnnouncePlan | Promise<SessionsSendAnnouncePlan>,
+        roundOneReply?: string,
+        waitRunId?: string,
+      ) => {
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
           displayKey,
           message,
           announceTimeoutMs,
           maxPingPongTurns,
+          announcePlan,
           requesterSessionKey,
           requesterChannel,
           roundOneReply,
@@ -295,19 +306,22 @@ export function createSessionsSendTool(opts?: {
           return start.result;
         }
         runId = start.runId;
-        const announceTargetDecision = await resolveAnnounceTarget({
-          sessionKey: resolvedKey,
-          displayKey,
-        }).catch(() => ({ kind: "unknown", reason: "error" }) satisfies AnnounceTargetDecision);
-        const delivery = resolveAnnounceDelivery(announceTargetDecision).delivery;
-        if (resolveAnnounceDelivery(announceTargetDecision).shouldRunAnnounceFlow) {
-          startA2AFlow(undefined, runId);
+        const immediateDecision = resolveParsedAnnounceTargetDecision(resolvedKey);
+        const immediatePlan = immediateDecision ? resolveAnnouncePlan(immediateDecision) : null;
+        if (!immediatePlan || immediatePlan.shouldRunAnnounceFlow) {
+          const announcePlanPromise = resolveAnnounceTarget({
+            sessionKey: resolvedKey,
+            displayKey,
+          })
+            .catch(() => ({ kind: "unknown", reason: "error" }) satisfies AnnounceTargetDecision)
+            .then(resolveAnnouncePlan);
+          startA2AFlow(announcePlanPromise, undefined, runId);
         }
         return jsonResult({
           runId,
           status: "accepted",
           sessionKey: displayKey,
-          delivery,
+          delivery: immediatePlan?.delivery ?? pendingAnnounceDelivery,
         });
       }
 
@@ -373,9 +387,9 @@ export function createSessionsSendTool(opts?: {
         sessionKey: resolvedKey,
         displayKey,
       }).catch(() => ({ kind: "unknown", reason: "error" }) satisfies AnnounceTargetDecision);
-      const announceDelivery = resolveAnnounceDelivery(announceTargetDecision);
-      if (announceDelivery.shouldRunAnnounceFlow) {
-        startA2AFlow(reply ?? undefined);
+      const announcePlan = resolveAnnouncePlan(announceTargetDecision);
+      if (announcePlan.shouldRunAnnounceFlow) {
+        startA2AFlow(announcePlan, reply ?? undefined);
       }
 
       return jsonResult({
@@ -383,7 +397,7 @@ export function createSessionsSendTool(opts?: {
         status: "ok",
         reply,
         sessionKey: displayKey,
-        delivery: announceDelivery.delivery,
+        delivery: announcePlan.delivery,
       });
     },
   };
