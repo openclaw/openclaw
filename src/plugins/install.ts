@@ -12,6 +12,7 @@ import {
   resolveSafeInstallDir,
   safeDirName,
   safePathSegmentHashed,
+  unscopedPackageName,
 } from "../infra/install-safe-path.js";
 import {
   type NpmIntegrityDrift,
@@ -122,6 +123,28 @@ function validatePluginId(pluginId: string): string | null {
     return "invalid plugin name: scoped ids must use @scope/name format";
   }
   return null;
+}
+
+function matchesExpectedPluginId(params: {
+  expectedPluginId?: string;
+  pluginId: string;
+  manifestPluginId?: string;
+  npmPluginId: string;
+}): boolean {
+  if (!params.expectedPluginId) {
+    return true;
+  }
+  if (params.expectedPluginId === params.pluginId) {
+    return true;
+  }
+  // Backward compatibility: older install records keyed scoped npm packages by
+  // their unscoped package name. Preserve update-in-place for those records
+  // unless the package declares an explicit manifest id override.
+  return (
+    !params.manifestPluginId &&
+    params.pluginId === params.npmPluginId &&
+    params.expectedPluginId === unscopedPackageName(params.npmPluginId)
+  );
 }
 
 function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
@@ -279,7 +302,14 @@ async function installPluginFromPackageDir(
   if (pluginIdError) {
     return { ok: false, error: pluginIdError };
   }
-  if (params.expectedPluginId && params.expectedPluginId !== pluginId) {
+  if (
+    !matchesExpectedPluginId({
+      expectedPluginId: params.expectedPluginId,
+      pluginId,
+      manifestPluginId,
+      npmPluginId,
+    })
+  ) {
     return {
       ok: false,
       error: `plugin id mismatch: expected ${params.expectedPluginId}, got ${pluginId}`,

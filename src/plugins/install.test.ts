@@ -731,6 +731,18 @@ describe("installPluginFromDir", () => {
     expectInstalledWithPluginId(res, extensionsDir, "@openclaw/test-plugin");
   });
 
+  it("accepts legacy unscoped expected ids for scoped package names without manifest ids", async () => {
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      expectedPluginId: "test-plugin",
+    });
+
+    expectInstalledWithPluginId(res, extensionsDir, "@openclaw/test-plugin");
+  });
+
   it("rejects bare @ as an invalid scoped id", () => {
     expect(() => resolvePluginInstallDir("@")).toThrow(
       "invalid plugin name: scoped ids must use @scope/name format",
