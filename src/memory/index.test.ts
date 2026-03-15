@@ -274,6 +274,17 @@ describe("memory index", () => {
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
+
+    // Regression guard: busy_timeout is per-connection; ensure we set it on open.
+    const pragmaRows = (
+      manager as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+    ).db
+      .prepare("PRAGMA busy_timeout")
+      .all();
+    const first = pragmaRows[0] as Record<string, unknown> | undefined;
+    const busyTimeout = first ? Number(Object.values(first)[0]) : NaN;
+    expect(busyTimeout).toBe(5000);
+
     expect(embedBatchCalls).toBeGreaterThan(0);
     const results = await manager.search("alpha");
     expect(results.length).toBeGreaterThan(0);
