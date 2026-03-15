@@ -348,6 +348,28 @@ describe("resolveFeishuAccount", () => {
     ).toThrow(/unresolved SecretRef/i);
   });
 
+  it("supports read-only account inspection with unresolved refs allowed", () => {
+    const account = resolveFeishuAccount({
+      cfg: {
+        channels: {
+          feishu: {
+            accounts: {
+              main: {
+                appId: "cli_123",
+                appSecret: { source: "file", provider: "default", id: "path/to/secret" },
+              } as never,
+            },
+          },
+        },
+      } as never,
+      accountId: "main",
+      allowUnresolvedSecretRef: true,
+    });
+
+    expect(account.accountId).toBe("main");
+    expect(account.configured).toBe(false);
+  });
+
   it("does not throw when account name is non-string", () => {
     expect(() =>
       resolveFeishuAccount({
