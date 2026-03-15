@@ -152,6 +152,14 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(new Error("tlsv1 alert protocol version"))).toBe(true);
   });
 
+  it("returns true for wrapped fetch-failed with preserved cause chain (#37375)", () => {
+    const cause = new TypeError("fetch failed");
+    const error = new Error("Failed to get gateway information from Discord: fetch failed", {
+      cause,
+    });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns false for regular errors without network codes", () => {
     expect(isTransientNetworkError(new Error("Something went wrong"))).toBe(false);
     expect(isTransientNetworkError(new TypeError("Cannot read property"))).toBe(false);
