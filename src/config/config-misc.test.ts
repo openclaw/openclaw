@@ -430,9 +430,23 @@ describe("config paths", () => {
 });
 
 describe("config strict validation", () => {
-  it("rejects unknown fields", async () => {
+  it("strips unknown fields with warnings instead of rejecting", async () => {
     const res = validateConfigObject({
       agents: { list: [{ id: "pi" }] },
+      customUnknownField: { nested: "value" },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect((res.config as Record<string, unknown>).customUnknownField).toBeUndefined();
+      expect(res.warnings).toBeDefined();
+      expect(res.warnings!.length).toBe(1);
+      expect(res.warnings![0].path).toBe("customUnknownField");
+    }
+  });
+
+  it("still rejects configs with structural errors alongside unknown fields", async () => {
+    const res = validateConfigObject({
+      gateway: { port: "not-a-number" },
       customUnknownField: { nested: "value" },
     });
     expect(res.ok).toBe(false);
