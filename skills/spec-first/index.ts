@@ -634,13 +634,17 @@ export async function spec_draft(): Promise<string> {
   await writeSessionFile(session, "spec.md", spec);
 
   let output = `📝 **Draft Spec Generated**\n\n`;
-  output += "─".repeat(50) + "\n";
+  output += "─".repeat(60) + "\n";
   output += spec + "\n";
-  output += "─".repeat(50) + "\n\n";
+  output += "─".repeat(60) + "\n\n";
   output += `📁 **Saved to**: \`${getSessionDir(session)}/spec.md\`\n\n`;
   output += `**Next**: \`/spec approve\` - Approve spec\n`;
 
-  return output;
+  // Also send as file attachment for channels without UI panel
+  // This ensures Telegram/WhatsApp/Discord users can see the spec
+  const fileOutput = `\`\`\`markdown\n${spec}\n\`\`\``;
+
+  return output + `\n📄 **Spec Content**:\n\n${fileOutput}`;
 }
 
 /**
@@ -695,7 +699,10 @@ export async function spec_design(): Promise<string> {
   output += `📁 **Saved to**: \`${getSessionDir(session)}/design.md\`\n\n`;
   output += `**Next**: \`/spec tasks\` - Generate task checklist\n`;
 
-  return output;
+  // Also send as code block for channels without UI panel
+  const fileOutput = `\`\`\`markdown\n${design}\n\`\`\``;
+
+  return output + `\n📄 **Design Content**:\n\n${fileOutput}`;
 }
 
 /**
@@ -726,7 +733,10 @@ export async function spec_tasks(): Promise<string> {
   output += `**Next**: \`/spec execute\` - Start execution\n\n`;
   output += `💡 **Tip**: Open \`${getSessionDir(session)}/tasks.md\` and check off [x] as you complete tasks!\n`;
 
-  return output;
+  // Also send as code block for channels without UI panel
+  const fileOutput = `\`\`\`markdown\n${tasks}\n\`\`\``;
+
+  return output + `\n📄 **Tasks Content**:\n\n${fileOutput}`;
 }
 
 /**
