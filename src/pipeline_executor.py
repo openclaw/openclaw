@@ -209,9 +209,16 @@ class PipelineExecutor:
                     "\n- Каждое предложение = конкретный ВЕРИФИЦИРОВАННЫЙ факт или вывод."
                     "\n- Пиши на РУССКОМ ЯЗЫКЕ."
                     "\n- Формат: прямой ответ на вопрос пользователя, без мета-комментариев."
+                    "\n"
+                    "\nФАЗА 3 — ОЦЕНКА УВЕРЕННОСТИ:"
+                    "\n- В САМОМ КОНЦЕ ответа добавь тег: [УВЕРЕННОСТЬ: X/10]"
+                    "\n  где X — твоя оценка достоверности финального ответа (10 = абсолютно уверен, подтверждено данными; 1 = полная догадка)."
+                    "\n- Если X < 7, ПЕРЕД основным ответом добавь: '⚠️ Ответ может содержать неточности — данные частично не подтверждены.'"
+                    "\n- Оценивай честно: непроверенные факты = низкая оценка."
                 )
             elif is_planner:
                 # Planner: STAR for internal reasoning, but final output must be clean
+                os_name = "Windows" if os.name == "nt" else "Linux"
                 system_prompt += (
                     "\n\n[AGENT PROTOCOL: STAR-STRATEGY — INTERNAL ONLY]"
                     "\n1. Memory Bank: Use .memory-bank for persistence."
@@ -225,6 +232,7 @@ class PipelineExecutor:
                     "\n5. ЗАПРЕЩЁННЫЕ конструкции: 'Представляет собой...', 'Является эффективной...', 'Для конкретных рекомендаций необходимо...'"
                     "\n6. SCOPE LIMITATION: Объясняй только четко установленные факты из контекста и доступных данных. Если ты НЕ УВЕРЕН — скажи 'недостаточно данных' вместо домысливания. Пропускай спорные или непроверенные области."
                     "\n7. ВАЖНО: Весь ответ на РУССКОМ ЯЗЫКЕ."
+                    f"\n8. СИСТЕМНАЯ СРЕДА: Бот работает на {os_name}. Инструменты доступны через MCP. НЕ предлагай прямые shell-команды (grep, tree, cat) — вызывай MCP-инструменты: list_directory, read_file, search_memory."
                 )
             else:
                 # Executors and other roles: minimal protocol
@@ -242,6 +250,7 @@ class PipelineExecutor:
                     try:
                         with open(brain_path, "r", encoding="utf-8") as f:
                             brain_content = f.read()
+                        brain_content = self._sanitize_file_content(brain_content)
                         system_prompt += f"\n\n[LATEST BRAIN.md CONTEXT]\n{brain_content}"
                     except Exception as e:
                         logger.warning(f"Failed to read BRAIN.md: {e}")
@@ -735,7 +744,7 @@ class PipelineExecutor:
 
     @staticmethod
     def _clean_response_for_user(text: str) -> str:
-        """Strip internal STAR markup, <think> blocks, and MCP artifacts from the final response."""
+        """Strip internal STAR markup, <think> blocks, MCP artifacts, and process confidence tags."""
         # Remove <think>...</think> blocks
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
         # Remove STAR labels (SITUATION:, TASK:, ACTION:, RESULT: at line start)
@@ -747,19 +756,79 @@ class PipelineExecutor:
         text = re.sub(r"\[PIPELINE CONTEXT[^\]]*\][^\n]*\n?", "", text)
         # Remove [AGENT PROTOCOL...] remnants
         text = re.sub(r"\[AGENT PROTOCOL[^\]]*\][^\n]*\n?", "", text)
+        # Remove [ARCHIVIST PROTOCOL...] remnants
+        text = re.sub(r"\[ARCHIVIST PROTOCOL[^\]]*\][^\n]*\n?", "", text)
+        # Remove [EXECUTOR PROTOCOL...] remnants
+        text = re.sub(r"\[EXECUTOR PROTOCOL[^\]]*\][^\n]*\n?", "", text)
+        # Remove [RAG_CONFIDENCE: ...] tags (used internally by memory search)
+        text = re.sub(r"\[RAG_CONFIDENCE:\s*\w+\]\s*", "", text)
+        # Remove stray JSON tool-call artifacts outside code blocks (e.g. {"name": "...", "arguments": ...})
+        text = re.sub(r'(?<!`)\{"name"\s*:.*?"arguments"\s*:.*?\}(?!`)', '', text, flags=re.DOTALL)
+        # Remove repeated consecutive paragraphs (dedup)
+        paragraphs = text.split('\n\n')
+        seen = set()
+        deduped = []
+        for p in paragraphs:
+            p_key = p.strip().lower()
+            if p_key and p_key not in seen:
+                seen.add(p_key)
+                deduped.append(p)
+            elif not p_key:
+                deduped.append(p)
+        text = '\n\n'.join(deduped)
+        # Process confidence tag: [УВЕРЕННОСТЬ: X/10]
+        confidence_match = re.search(r'\[УВЕРЕННОСТЬ:\s*(\d+)/10\]', text)
+        if confidence_match:
+            score = int(confidence_match.group(1))
+            text = re.sub(r'\s*\[УВЕРЕННОСТЬ:\s*\d+/10\]\s*', '', text)
+            if score < 7:
+                text = '⚠️ Ответ может содержать неточности — данные частично не подтверждены.\n\n' + text
         # Collapse excessive blank lines
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
 
     def _compress_for_next_step(self, role_name: str, response: str) -> str:
         """
-        Creates a lightweight context briefing for the next pipeline step.
-        This is a simple rule-based compression (no LLM call needed).
-        For cost: truncate to ~500 chars to keep context lean.
+        Smart context compression: preserves JSON blocks, MCP results,
+        and respects sentence boundaries instead of blind truncation.
         """
-        # Take the first 500 chars of the response as briefing
-        truncated = response[:500]
-        if len(response) > 500:
-            truncated += "..."
+        # 1. Extract and preserve JSON code blocks (instructions for Executor)
+        json_blocks = re.findall(r'```json\s*(.*?)\s*```', response, re.DOTALL)
+        json_section = ""
+        if json_blocks:
+            json_section = "\n```json\n" + json_blocks[0][:800] + "\n```"
 
-        return f"[{role_name} Output]: {truncated}"
+        # 2. Extract MCP execution results
+        mcp_results = re.findall(r'\[MCP Execution Result\]:\n(.*?)(?:\n\n|\Z)', response, re.DOTALL)
+        mcp_section = ""
+        if mcp_results:
+            mcp_section = "\n[MCP Result]: " + mcp_results[0][:500]
+
+        # 3. Clean text: remove <think>, STAR labels, code blocks, MCP markers
+        clean = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+        clean = re.sub(r'```json.*?```', '', clean, flags=re.DOTALL)
+        clean = re.sub(r'\[MCP[^\]]*\].*?\n', '', clean)
+        clean = re.sub(r'\[Proof of Work[^\]]*\].*?\n', '', clean)
+        clean = re.sub(r'\n{2,}', '\n', clean).strip()
+
+        # 4. Smart truncation: up to 1500 chars, respecting sentence boundaries
+        max_chars = 1500
+        if len(clean) > max_chars:
+            cut = clean[:max_chars]
+            last_boundary = max(cut.rfind('. '), cut.rfind('! '), cut.rfind('? '), cut.rfind('\n'))
+            if last_boundary > max_chars // 2:
+                cut = cut[:last_boundary + 1]
+            clean = cut + "..."
+
+        return f"[{role_name} Output]: {clean}{json_section}{mcp_section}"
+
+    @staticmethod
+    def _sanitize_file_content(content: str) -> str:
+        """Strip potential prompt injection markers from file content before prompt injection."""
+        # Remove system/user/assistant role markers that could override the LLM prompt
+        content = re.sub(r'(?i)\[?(system|user|assistant)\s*(prompt|message|role)\]?\s*:', '', content)
+        # Neutralize instruction override attempts
+        content = re.sub(r'(?i)(ignore previous instructions|forget your instructions|new instructions:)', '[FILTERED]', content)
+        # Neutralize <|im_start|> / <|im_end|> chat template injection
+        content = re.sub(r'<\|im_(start|end)\|>', '', content)
+        return content
