@@ -136,6 +136,10 @@
       "types": "./dist/plugin-sdk/mattermost.d.ts",
       "default": "./dist/plugin-sdk/mattermost.js"
     },
+    "./plugin-sdk/identity-memory": {
+      "types": "./dist/plugin-sdk/identity-memory.d.ts",
+      "default": "./dist/plugin-sdk/identity-memory.js"
+    },
     "./plugin-sdk/memory-core": {
       "types": "./dist/plugin-sdk/memory-core.d.ts",
       "default": "./dist/plugin-sdk/memory-core.js"

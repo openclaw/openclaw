@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/identity-memory",
+  "version": "2026.3.14",
+  "description": "Cross-platform identity linking and multi-layer memory for OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
