@@ -433,6 +433,24 @@ export async function applyNonInteractiveAuthChoice(params: {
     }
   }
 
+  const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
+    nextConfig,
+    authChoice,
+    opts,
+    runtime,
+    baseConfig,
+    resolveApiKey: (input) =>
+      resolveApiKey({
+        ...input,
+        cfg: baseConfig,
+        runtime,
+      }),
+    toApiKeyCredential,
+  });
+  if (pluginProviderChoice !== undefined) {
+    return pluginProviderChoice;
+  }
+
   if (
     authChoice === "oauth" ||
     authChoice === "chutes" ||
