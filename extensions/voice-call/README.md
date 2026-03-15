@@ -134,6 +134,63 @@ Actions:
 - `voicecall.end` (callId)
 - `voicecall.status` (callId)
 
+## Realtime voice mode (OpenAI Realtime API)
+
+Realtime mode routes inbound calls directly to the [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime) for voice-to-voice conversation (~200–400 ms latency vs ~2–3 s for the STT/TTS pipeline). It is disabled by default and mutually exclusive with `streaming.enabled`.
+
+### Requirements
+
+- `OPENAI_API_KEY` set in your environment (or `streaming.openaiApiKey` in config).
+- A **publicly reachable HTTPS endpoint with WebSocket support** — the webhook server must accept both POST requests (Twilio webhook) and WebSocket upgrades (Twilio Media Stream). A plain HTTP tunnel is not sufficient; Twilio requires WSS.
+- `inboundPolicy` set to `"open"` or `"allowlist"` (not `"disabled"`) so the plugin accepts inbound calls.
+
+### Config
+
+```json5
+{
+  inboundPolicy: "open", // required: realtime needs inbound calls enabled
+
+  realtime: {
+    enabled: true,
+    voice: "alloy", // Realtime API voices: alloy, ash, ballad, cedar, coral,
+    //                     echo, marin, sage, shimmer, verse
+    instructions: "You are a helpful assistant.",
+    model: "gpt-4o-mini-realtime-preview", // optional, this is the default
+    temperature: 0.8, // 0–2, optional
+    vadThreshold: 0.5, // voice activity detection sensitivity, 0–1, optional
+    silenceDurationMs: 500, // ms of silence before end-of-turn, optional
+  },
+}
+```
+
+### Environment variable overrides
+
+All `realtime.*` fields can be set via environment variables (config takes precedence):
+
+| Env var                       | Config field                 |
+| ----------------------------- | ---------------------------- |
+| `REALTIME_VOICE_ENABLED=true` | `realtime.enabled`           |
+| `REALTIME_VOICE_MODEL`        | `realtime.model`             |
+| `REALTIME_VOICE_VOICE`        | `realtime.voice`             |
+| `REALTIME_VOICE_INSTRUCTIONS` | `realtime.instructions`      |
+| `REALTIME_VOICE_TEMPERATURE`  | `realtime.temperature`       |
+| `VAD_THRESHOLD`               | `realtime.vadThreshold`      |
+| `SILENCE_DURATION_MS`         | `realtime.silenceDurationMs` |
+
+### How it works
+
+1. Twilio sends a POST webhook to `serve.path` (default `/voice/webhook`).
+2. The plugin responds with TwiML `<Connect><Stream>` pointing to `wss://<host>/voice/stream/realtime`.
+3. Twilio opens a WebSocket to that path carrying the caller's audio in μ-law format.
+4. The plugin bridges the WebSocket to the OpenAI Realtime API — audio flows in both directions in real time.
+5. The call is registered with CallManager and appears in `openclaw voice status` / `openclaw voice history`.
+
+### Networking notes
+
+- `serve.bind` defaults to `127.0.0.1`. If running inside Docker with an external port mapping, set `serve.bind: "0.0.0.0"` so the container's port is reachable from the host.
+- The WebSocket upgrade path (`/voice/stream/realtime`) must be reachable on the same host and port as the webhook. Reverse proxies must pass `Upgrade: websocket` headers through.
+- When using Tailscale Funnel on the host (outside Docker), configure Funnel to route `/voice/` to the plugin's local port. The gateway itself does not need to be exposed via Tailscale Funnel.
+
 ## Notes
 
 - Uses webhook signature verification for Twilio/Telnyx/Plivo.

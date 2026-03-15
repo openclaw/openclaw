@@ -40,6 +40,7 @@ export function createVoiceCallBaseConfig(params?: {
       maxPendingConnectionsPerIp: 4,
       maxConnections: 128,
     },
+    realtime: { enabled: false, tools: [] },
     skipSignatureVerification: false,
     stt: { provider: "openai", model: "whisper-1" },
     tts: {

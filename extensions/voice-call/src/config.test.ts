@@ -3,6 +3,7 @@ import {
   validateProviderConfig,
   normalizeVoiceCallConfig,
   resolveVoiceCallConfig,
+  VoiceCallRealtimeConfigSchema,
   type VoiceCallConfig,
 } from "./config.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
@@ -214,5 +215,128 @@ describe("normalizeVoiceCallConfig", () => {
       id: "ELEVENLABS_API_KEY",
     });
     expect(normalized.tts?.elevenlabs?.voiceSettings).toEqual({ speed: 1.1 });
+  });
+});
+
+describe("VoiceCallRealtimeConfigSchema", () => {
+  it("defaults to disabled with empty tools array", () => {
+    const config = VoiceCallRealtimeConfigSchema.parse({});
+    expect(config.enabled).toBe(false);
+    expect(config.tools).toEqual([]);
+  });
+
+  it("accepts all valid Realtime API voice names", () => {
+    const voices = [
+      "alloy",
+      "ash",
+      "ballad",
+      "cedar",
+      "coral",
+      "echo",
+      "marin",
+      "sage",
+      "shimmer",
+      "verse",
+    ];
+    for (const voice of voices) {
+      expect(() => VoiceCallRealtimeConfigSchema.parse({ voice })).not.toThrow();
+    }
+  });
+
+  it("rejects voice names that are not in the Realtime API (e.g. nova, fable, onyx)", () => {
+    for (const voice of ["nova", "fable", "onyx"]) {
+      expect(() => VoiceCallRealtimeConfigSchema.parse({ voice })).toThrow();
+    }
+  });
+
+  it("normalizeVoiceCallConfig propagates realtime sub-config", () => {
+    const normalized = normalizeVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      realtime: { enabled: true, voice: "marin", instructions: "Be helpful." },
+    });
+    expect(normalized.realtime.enabled).toBe(true);
+    expect(normalized.realtime.voice).toBe("marin");
+    expect(normalized.realtime.instructions).toBe("Be helpful.");
+    expect(normalized.realtime.tools).toEqual([]);
+  });
+});
+
+describe("resolveVoiceCallConfig — realtime env vars", () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it("auto-enables realtime from REALTIME_VOICE_ENABLED=true", () => {
+    process.env.REALTIME_VOICE_ENABLED = "true";
+    const resolved = resolveVoiceCallConfig(createVoiceCallBaseConfig());
+    expect(resolved.realtime.enabled).toBe(true);
+  });
+
+  it("does not auto-enable when REALTIME_VOICE_ENABLED is absent or not 'true'", () => {
+    delete process.env.REALTIME_VOICE_ENABLED;
+    expect(resolveVoiceCallConfig(createVoiceCallBaseConfig()).realtime.enabled).toBe(false);
+
+    process.env.REALTIME_VOICE_ENABLED = "false";
+    expect(resolveVoiceCallConfig(createVoiceCallBaseConfig()).realtime.enabled).toBe(false);
+  });
+
+  it("resolves model, voice, instructions, temperature from env vars", () => {
+    process.env.REALTIME_VOICE_MODEL = "gpt-4o-realtime-preview";
+    process.env.REALTIME_VOICE_VOICE = "ash";
+    process.env.REALTIME_VOICE_INSTRUCTIONS = "You are helpful.";
+    process.env.REALTIME_VOICE_TEMPERATURE = "0.8";
+    const resolved = resolveVoiceCallConfig(createVoiceCallBaseConfig());
+    expect(resolved.realtime.model).toBe("gpt-4o-realtime-preview");
+    expect(resolved.realtime.voice).toBe("ash");
+    expect(resolved.realtime.instructions).toBe("You are helpful.");
+    expect(resolved.realtime.temperature).toBeCloseTo(0.8);
+  });
+
+  it("resolves vadThreshold and silenceDurationMs from env vars", () => {
+    process.env.VAD_THRESHOLD = "0.7";
+    process.env.SILENCE_DURATION_MS = "1200";
+    const resolved = resolveVoiceCallConfig(createVoiceCallBaseConfig());
+    expect(resolved.realtime.vadThreshold).toBeCloseTo(0.7);
+    expect(resolved.realtime.silenceDurationMs).toBe(1200);
+  });
+
+  it("config values take precedence over env vars", () => {
+    process.env.REALTIME_VOICE_VOICE = "ash";
+    const base = createVoiceCallBaseConfig();
+    base.realtime = { enabled: false, voice: "coral", tools: [] };
+    const resolved = resolveVoiceCallConfig(base);
+    expect(resolved.realtime.voice).toBe("coral");
+  });
+});
+
+describe("validateProviderConfig — realtime mode", () => {
+  it("rejects realtime.enabled when inboundPolicy is 'disabled'", () => {
+    const config = createVoiceCallBaseConfig({ provider: "mock" });
+    config.realtime = { enabled: true, tools: [] };
+    // inboundPolicy defaults to "disabled" in createVoiceCallBaseConfig
+    const result = validateProviderConfig(config);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes("inboundPolicy"))).toBe(true);
+  });
+
+  it("passes when realtime.enabled with inboundPolicy 'open'", () => {
+    const config = createVoiceCallBaseConfig({ provider: "mock" });
+    config.inboundPolicy = "open";
+    config.realtime = { enabled: true, tools: [] };
+    const result = validateProviderConfig(config);
+    expect(result.errors.some((e) => e.includes("inboundPolicy"))).toBe(false);
+  });
+
+  it("rejects when both realtime.enabled and streaming.enabled are true", () => {
+    const config = createVoiceCallBaseConfig({ provider: "mock" });
+    config.inboundPolicy = "open";
+    config.realtime = { enabled: true, tools: [] };
+    config.streaming = { ...config.streaming, enabled: true };
+    const result = validateProviderConfig(config);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes("streaming"))).toBe(true);
   });
 });

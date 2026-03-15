@@ -134,6 +134,36 @@
       "label": "ElevenLabs Base URL",
       "advanced": true
     },
+    "realtime.enabled": {
+      "label": "Enable Realtime Voice (OpenAI)",
+      "help": "Full voice-to-voice mode via OpenAI Realtime API. Requires inboundPolicy open or allowlist."
+    },
+    "realtime.model": {
+      "label": "Realtime Model",
+      "advanced": true
+    },
+    "realtime.voice": {
+      "label": "Realtime Voice"
+    },
+    "realtime.instructions": {
+      "label": "Realtime Instructions"
+    },
+    "realtime.temperature": {
+      "label": "Realtime Temperature",
+      "advanced": true
+    },
+    "realtime.vadThreshold": {
+      "label": "VAD Sensitivity",
+      "advanced": true
+    },
+    "realtime.silenceDurationMs": {
+      "label": "Silence Timeout (ms)",
+      "advanced": true
+    },
+    "realtime.prefixPaddingMs": {
+      "label": "Prefix Padding (ms)",
+      "advanced": true
+    },
     "publicUrl": {
       "label": "Public Webhook URL",
       "advanced": true
@@ -382,6 +412,60 @@
           "maxConnections": {
             "type": "integer",
             "minimum": 1
+          }
+        }
+      },
+      "realtime": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "voice": {
+            "type": "string",
+            "enum": [
+              "alloy",
+              "ash",
+              "ballad",
+              "cedar",
+              "coral",
+              "echo",
+              "marin",
+              "sage",
+              "shimmer",
+              "verse"
+            ]
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "vadThreshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "silenceDurationMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "prefixPaddingMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
           }
         }
       },
