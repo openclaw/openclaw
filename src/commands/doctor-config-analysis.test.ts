@@ -31,4 +31,34 @@ describe("doctor config analysis helpers", () => {
     expect((result.config as Record<string, unknown>).unexpected).toBeUndefined();
     expect((result.config as Record<string, unknown>).hooks).toEqual({});
   });
+
+  it("preserves params on models.providers.*.models[] entries", () => {
+    const config = {
+      models: {
+        providers: {
+          customProvider: {
+            baseUrl: "https://api.example.com",
+            models: [
+              {
+                id: "my-model",
+                name: "My Model",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 4096,
+                maxTokens: 2048,
+                params: { temperature: 0.8 },
+              },
+            ],
+          },
+        },
+      },
+    } as never;
+    const result = stripUnknownConfigKeys(config);
+    expect(result.removed).not.toContain("models.providers.customProvider.models[0].params");
+    const models = (
+      result.config as { models?: { providers?: Record<string, { models?: unknown[] }> } }
+    ).models?.providers?.customProvider?.models;
+    expect(models?.[0]).toMatchObject({ params: { temperature: 0.8 } });
+  });
 });

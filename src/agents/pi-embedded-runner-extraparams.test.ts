@@ -116,6 +116,78 @@ describe("resolveExtraParams", () => {
     });
   });
 
+  it("uses provider model params as base, overridden by agents.defaults.models and agent params", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        models: {
+          providers: {
+            customProvider: {
+              baseUrl: "https://api.example.com",
+              models: [
+                {
+                  id: "my-model",
+                  name: "My Model",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 4096,
+                  maxTokens: 2048,
+                  params: { temperature: 0.8 },
+                },
+              ],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "customProvider/my-model": {
+                params: { temperature: 0.5 },
+              },
+            },
+          },
+          list: [{ id: "main", params: { temperature: 0.3 } }],
+        },
+      },
+      provider: "customProvider",
+      modelId: "my-model",
+      agentId: "main",
+    });
+
+    expect(result).toEqual({
+      temperature: 0.3,
+    });
+  });
+
+  it("resolves provider model params via alias when config uses canonical key (e.g. bedrock -> amazon-bedrock)", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock.us-east-1.amazonaws.com",
+              models: [
+                {
+                  id: "us.anthropic.claude-opus-4-6-v1",
+                  name: "Claude Opus",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200000,
+                  maxTokens: 8192,
+                  params: { temperature: 0.7 },
+                },
+              ],
+            },
+          },
+        },
+      },
+      provider: "bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+    });
+    expect(result).toEqual({ temperature: 0.7 });
+  });
+
   it("preserves higher-precedence agent parallelToolCalls override across alias styles", () => {
     const result = resolveExtraParams({
       cfg: {
