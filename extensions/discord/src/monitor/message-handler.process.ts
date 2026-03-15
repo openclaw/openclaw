@@ -1,41 +1,44 @@
 import { ChannelType, type RequestClient } from "@buape/carbon";
 import { randomUUID } from "node:crypto";
-import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
-import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js";
-import { resolveChunkMode } from "../../auto-reply/chunk.js";
-import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
+import { resolveAckReaction, resolveHumanDelayConfig } from "../../../../src/agents/identity.js";
+import { EmbeddedBlockChunker } from "../../../../src/agents/pi-embedded-block-chunker.js";
+import { resolveChunkMode } from "../../../../src/auto-reply/chunk.js";
+import { dispatchInboundMessage } from "../../../../src/auto-reply/dispatch.js";
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "../../../../src/auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
-} from "../../auto-reply/reply/history.js";
-import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import { shouldAckReaction as shouldAckReactionGate } from "../../channels/ack-reactions.js";
-import { logTypingFailure, logAckFailure } from "../../channels/logging.js";
-import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
-import { recordInboundSession } from "../../channels/session.js";
+} from "../../../../src/auto-reply/reply/history.js";
+import { finalizeInboundContext } from "../../../../src/auto-reply/reply/inbound-context.js";
+import { createReplyDispatcherWithTyping } from "../../../../src/auto-reply/reply/reply-dispatcher.js";
+import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
+import { shouldAckReaction as shouldAckReactionGate } from "../../../../src/channels/ack-reactions.js";
+import { logTypingFailure, logAckFailure } from "../../../../src/channels/logging.js";
+import { createReplyPrefixOptions } from "../../../../src/channels/reply-prefix.js";
+import { recordInboundSession } from "../../../../src/channels/session.js";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
   type StatusReactionAdapter,
-} from "../../channels/status-reactions.js";
-import { createTypingCallbacks } from "../../channels/typing.js";
-import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
-import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-streaming.js";
-import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
-import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
-import { getFallbackGatewayContext } from "../../gateway/server-plugins.js";
-import { loadSessionEntry, readSessionMessages } from "../../gateway/session-utils.js";
-import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../utils/directive-tags.js";
-import { convertMarkdownTables } from "../../markdown/tables.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { buildAgentSessionKey } from "../../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../routing/session-key.js";
-import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
-import { truncateUtf16Safe } from "../../utils.js";
+} from "../../../../src/channels/status-reactions.js";
+import { createTypingCallbacks } from "../../../../src/channels/typing.js";
+import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
+import { resolveDiscordPreviewStreamMode } from "../../../../src/config/discord-preview-streaming.js";
+import { resolveMarkdownTableMode } from "../../../../src/config/markdown-tables.js";
+import { readSessionUpdatedAt, resolveStorePath } from "../../../../src/config/sessions.js";
+import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
+import { getFallbackGatewayContext } from "../../../../src/gateway/server-plugins.js";
+import { loadSessionEntry, readSessionMessages } from "../../../../src/gateway/session-utils.js";
+import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../../../src/utils/directive-tags.js";
+import { convertMarkdownTables } from "../../../../src/markdown/tables.js";
+import { getAgentScopedMediaLocalRoots } from "../../../../src/media/local-roots.js";
+import { buildAgentSessionKey } from "../../../../src/routing/resolve-route.js";
+import { resolveThreadSessionKeys } from "../../../../src/routing/session-key.js";
+import { stripReasoningTagsFromText } from "../../../../src/shared/text/reasoning-tags.js";
+import { truncateUtf16Safe } from "../../../../src/utils.js";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
@@ -772,6 +775,19 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
             return;
           }
           await statusReactions.setTool(payload.name);
+        },
+        onCompactionStart: async () => {
+          if (isProcessAborted(abortSignal)) {
+            return;
+          }
+          await statusReactions.setCompacting();
+        },
+        onCompactionEnd: async () => {
+          if (isProcessAborted(abortSignal)) {
+            return;
+          }
+          statusReactions.cancelPending();
+          await statusReactions.setThinking();
         },
       },
     });

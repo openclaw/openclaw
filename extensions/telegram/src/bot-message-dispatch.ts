@@ -1,33 +1,37 @@
-import { randomUUID } from "node:crypto";
 import type { Bot } from "grammy";
-import { resolveAgentDir } from "../agents/agent-scope.js";
+import { randomUUID } from "node:crypto";
+import { resolveAgentDir } from "../../../src/agents/agent-scope.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
-} from "../agents/model-catalog.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { resolveChunkMode } from "../auto-reply/chunk.js";
-import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
-import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
-import { logAckFailure, logTypingFailure } from "../channels/logging.js";
-import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
-import { createTypingCallbacks } from "../channels/typing.js";
-import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
+} from "../../../src/agents/model-catalog.js";
+import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
+import { resolveChunkMode } from "../../../src/auto-reply/chunk.js";
+import { clearHistoryEntriesIfEnabled } from "../../../src/auto-reply/reply/history.js";
+import { dispatchReplyWithBufferedBlockDispatcher } from "../../../src/auto-reply/reply/provider-dispatcher.js";
+import type { ReplyPayload } from "../../../src/auto-reply/types.js";
+import { removeAckReactionAfterReply } from "../../../src/channels/ack-reactions.js";
+import { logAckFailure, logTypingFailure } from "../../../src/channels/logging.js";
+import { createReplyPrefixOptions } from "../../../src/channels/reply-prefix.js";
+import { createTypingCallbacks } from "../../../src/channels/typing.js";
+import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
   resolveStorePath,
-} from "../config/sessions.js";
-import { loadSessionEntry, readSessionMessages } from "../gateway/session-utils.js";
-import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
-import { danger, logVerbose } from "../globals.js";
-import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { getFallbackGatewayContext } from "../gateway/server-plugins.js";
-import { stripInlineDirectiveTagsFromMessageForDisplay } from "../utils/directive-tags.js";
+} from "../../../src/config/sessions.js";
+import type {
+  OpenClawConfig,
+  ReplyToMode,
+  TelegramAccountConfig,
+} from "../../../src/config/types.js";
+import { danger, logVerbose } from "../../../src/globals.js";
+import { getFallbackGatewayContext } from "../../../src/gateway/server-plugins.js";
+import { loadSessionEntry, readSessionMessages } from "../../../src/gateway/session-utils.js";
+import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../../src/utils/directive-tags.js";
+import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
+import type { RuntimeEnv } from "../../../src/runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -717,6 +721,15 @@ export const dispatchTelegramMessage = async ({
               await statusReactionController.setTool(payload.name);
             }
           : undefined,
+        onCompactionStart: statusReactionController
+          ? () => statusReactionController.setCompacting()
+          : undefined,
+        onCompactionEnd: statusReactionController
+          ? async () => {
+              statusReactionController.cancelPending();
+              await statusReactionController.setThinking();
+            }
+          : undefined,
         onModelSelected,
       },
     }));
@@ -817,7 +830,6 @@ export const dispatchTelegramMessage = async ({
     return;
   }
 
-  // Only broadcast when there's an actual agent response, not just fallback
   if (queuedFinal) {
     const ctx = getFallbackGatewayContext();
     if (ctx && ctxPayload.SessionKey) {
