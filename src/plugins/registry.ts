@@ -85,6 +85,15 @@ export type PluginChannelRegistration = {
   rootDir?: string;
 };
 
+export type PluginChannelSetupRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  plugin: ChannelPlugin;
+  source: string;
+  enabled: boolean;
+  rootDir?: string;
+};
+
 export type PluginProviderRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -154,6 +163,7 @@ export type PluginRegistry = {
   hooks: PluginHookRegistration[];
   typedHooks: TypedPluginHookRegistration[];
   channels: PluginChannelRegistration[];
+  channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpRoutes: PluginHttpRouteRegistration[];
@@ -172,6 +182,8 @@ export type PluginRegistryParams = {
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
 };
+
+type PluginRegistrationMode = "full" | "setup-only";
 
 const constrainLegacyPromptInjectionHook = (
   handler: PluginHookHandlerMap["before_agent_start"],
@@ -194,6 +206,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     hooks: [],
     typedHooks: [],
     channels: [],
+    channelSetups: [],
     providers: [],
     gatewayHandlers: {},
     httpRoutes: [],
@@ -436,6 +449,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerChannel = (
     record: PluginRecord,
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
+    mode: PluginRegistrationMode = "full",
   ) => {
     const normalized =
       typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
@@ -452,17 +466,38 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = registry.channels.find((entry) => entry.plugin.id === id);
-    if (existing) {
+    const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
+    if (mode === "full" && existingRuntime) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: `channel already registered: ${id} (${existing.pluginId})`,
+        message: `channel already registered: ${id} (${existingRuntime.pluginId})`,
+      });
+      return;
+    }
+    const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
+    if (existingSetup) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `channel setup already registered: ${id} (${existingSetup.pluginId})`,
       });
       return;
     }
     record.channelIds.push(id);
+    registry.channelSetups.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      plugin,
+      source: record.source,
+      enabled: record.enabled,
+      rootDir: record.rootDir,
+    });
+    if (mode === "setup-only") {
+      return;
+    }
     registry.channels.push({
       pluginId: record.id,
       pluginName: record.name,
@@ -667,8 +702,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       config: OpenClawPluginApi["config"];
       pluginConfig?: Record<string, unknown>;
       hookPolicy?: PluginTypedHookPolicy;
+      registrationMode?: PluginRegistrationMode;
     },
   ): OpenClawPluginApi => {
+    const registrationMode = params.registrationMode ?? "full";
     return {
       id: record.id,
       name: record.name,
@@ -680,31 +717,50 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginConfig: params.pluginConfig,
       runtime: registryParams.runtime,
       logger: normalizeLogger(registryParams.logger),
-      registerTool: (tool, opts) => registerTool(record, tool, opts),
-      registerHook: (events, handler, opts) =>
-        registerHook(record, events, handler, opts, params.config),
-      registerHttpRoute: (params) => registerHttpRoute(record, params),
-      registerChannel: (registration) => registerChannel(record, registration),
-      registerProvider: (provider) => registerProvider(record, provider),
-      registerGatewayMethod: (method, handler) => registerGatewayMethod(record, method, handler),
-      registerCli: (registrar, opts) => registerCli(record, registrar, opts),
-      registerService: (service) => registerService(record, service),
-      registerInteractiveHandler: (registration) => {
-        const result = registerPluginInteractiveHandler(record.id, registration, {
-          pluginName: record.name,
-          pluginRoot: record.rootDir,
-        });
-        if (!result.ok) {
-          pushDiagnostic({
-            level: "warn",
-            pluginId: record.id,
-            source: record.source,
-            message: result.error ?? "interactive handler registration failed",
-          });
-        }
-      },
-      registerCommand: (command) => registerCommand(record, command),
+      registerTool:
+        registrationMode === "full" ? (tool, opts) => registerTool(record, tool, opts) : () => {},
+      registerHook:
+        registrationMode === "full"
+          ? (events, handler, opts) => registerHook(record, events, handler, opts, params.config)
+          : () => {},
+      registerHttpRoute:
+        registrationMode === "full" ? (params) => registerHttpRoute(record, params) : () => {},
+      registerChannel: (registration) => registerChannel(record, registration, registrationMode),
+      registerProvider:
+        registrationMode === "full" ? (provider) => registerProvider(record, provider) : () => {},
+      registerGatewayMethod:
+        registrationMode === "full"
+          ? (method, handler) => registerGatewayMethod(record, method, handler)
+          : () => {},
+      registerCli:
+        registrationMode === "full"
+          ? (registrar, opts) => registerCli(record, registrar, opts)
+          : () => {},
+      registerService:
+        registrationMode === "full" ? (service) => registerService(record, service) : () => {},
+      registerInteractiveHandler:
+        registrationMode === "full"
+          ? (registration) => {
+              const result = registerPluginInteractiveHandler(record.id, registration, {
+                pluginName: record.name,
+                pluginRoot: record.rootDir,
+              });
+              if (!result.ok) {
+                pushDiagnostic({
+                  level: "warn",
+                  pluginId: record.id,
+                  source: record.source,
+                  message: result.error ?? "interactive handler registration failed",
+                });
+              }
+            }
+          : () => {},
+      registerCommand:
+        registrationMode === "full" ? (command) => registerCommand(record, command) : () => {},
       registerContextEngine: (id, factory) => {
+        if (registrationMode !== "full") {
+          return;
+        }
         if (id === defaultSlotIdForKey("contextEngine")) {
           pushDiagnostic({
             level: "error",
@@ -728,7 +784,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
-        registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
+        registrationMode === "full"
+          ? registerTypedHook(record, hookName, handler, opts, params.hookPolicy)
+          : undefined,
     };
   };
 
