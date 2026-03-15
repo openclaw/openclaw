@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
@@ -341,6 +342,62 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   }
 }
 
+export async function runConfigRestore(opts: { runtime?: RuntimeEnv } = {}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  const configPath = CONFIG_PATH ?? "openclaw.json";
+  const backupPath = `${configPath}.bak`;
+  const shortBackupPath = shortenHomePath(backupPath);
+
+  try {
+    // Check if backup file exists
+    try {
+      await fs.access(backupPath);
+    } catch {
+      runtime.error(danger(`Backup file not found: ${shortBackupPath}`));
+      runtime.exit(1);
+      return;
+    }
+
+    // Validate backup file before overwriting
+    const backupContent = await fs.readFile(backupPath, "utf-8");
+    try {
+      JSON.parse(backupContent);
+    } catch {
+      runtime.error(danger(`Backup file is corrupted or invalid. Restore aborted.`));
+      runtime.exit(1);
+      return;
+    }
+
+    // Copy backup to main config after validation
+    await fs.copyFile(backupPath, configPath);
+
+    // Verify restored config
+    const snapshot = await readConfigFileSnapshot();
+    if (!snapshot.valid) {
+      const issues = normalizeConfigIssues(snapshot.issues);
+      runtime.error(danger(`Restored config is invalid:`));
+      for (const line of formatConfigIssueLines(issues, danger("×"), { normalizeRoot: true })) {
+        runtime.error(`  ${line}`);
+      }
+      runtime.error("");
+      runtime.error(formatDoctorHint("to repair the restored config."));
+      runtime.exit(1);
+      return;
+    }
+
+    runtime.log(success(`Config restored from backup: ${shortBackupPath}`));
+    runtime.log("");
+    runtime.log(
+      info(
+        `Please run ${formatCliCommand("openclaw doctor --fix")} to verify, then run ${formatCliCommand("openclaw gateway restart")}.`,
+      ),
+    );
+  } catch (err) {
+    runtime.error(danger(`Config restore failed: ${String(err)}`));
+    runtime.exit(1);
+  }
+}
+
 export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
@@ -472,5 +529,12 @@ export function registerConfigCli(program: Command) {
     .option("--json", "Output validation result as JSON", false)
     .action(async (opts) => {
       await runConfigValidate({ json: Boolean(opts.json) });
+    });
+
+  cmd
+    .command("restore")
+    .description("Restore config from the latest backup (.bak file)")
+    .action(async () => {
+      await runConfigRestore();
     });
 }

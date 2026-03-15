@@ -13,10 +13,22 @@ const mockWriteConfigFile = vi.fn<
   (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) => Promise<void>
 >(async () => {});
 
+const mockFsAccess = vi.fn();
+const mockFsReadFile = vi.fn();
+const mockFsCopyFile = vi.fn();
+
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
   writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
     mockWriteConfigFile(cfg, options),
+}));
+
+vi.mock("node:fs/promises", () => ({
+  default: {
+    access: (...args: unknown[]) => mockFsAccess(...args),
+    readFile: (...args: unknown[]) => mockFsReadFile(...args),
+    copyFile: (...args: unknown[]) => mockFsCopyFile(...args),
+  },
 }));
 
 const mockLog = vi.fn();
@@ -123,6 +135,9 @@ describe("config cli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFsAccess.mockResolvedValue(undefined);
+    mockFsReadFile.mockResolvedValue(JSON.stringify({ gateway: { port: 18789 } }));
+    mockFsCopyFile.mockResolvedValue(undefined);
   });
 
   describe("config set - issue #6070", () => {
@@ -440,6 +455,22 @@ describe("config cli", () => {
       await runConfigCommand(["config", "file"]);
 
       expect(mockLog).toHaveBeenCalledWith("/home/user/.openclaw/openclaw.json");
+    });
+  });
+
+  describe("config restore", () => {
+    it("restores config from backup file", async () => {
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "restore"]);
+
+      expect(mockFsAccess).toHaveBeenCalledWith(expect.stringContaining(".bak"));
+      expect(mockFsReadFile).toHaveBeenCalledWith(expect.stringContaining(".bak"), "utf-8");
+      expect(mockFsCopyFile).toHaveBeenCalledWith(
+        expect.stringContaining(".bak"),
+        expect.stringContaining("openclaw.json"),
+      );
     });
   });
 });
