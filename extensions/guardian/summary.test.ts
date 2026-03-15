@@ -1,19 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import {
-  shouldUpdateSummary,
-  generateSummary,
-  extractStandingInstructions,
-  extractAvailableSkills,
-  __testing,
-} from "./summary.js";
+import { shouldUpdateSummary, generateSummary, __testing } from "./summary.js";
 
 const {
   buildInitialSummaryPrompt,
   buildUpdateSummaryPrompt,
-  buildInstructionsExtractionPrompt,
   formatTurnsForSummary,
   filterMeaningfulTurns,
-  MAX_SYSTEM_PROMPT_FOR_EXTRACTION,
 } = __testing;
 
 // Mock the guardian-client module
@@ -235,150 +227,6 @@ describe("summary", () => {
       });
 
       expect(result).toBeUndefined();
-    });
-  });
-
-  describe("buildInstructionsExtractionPrompt", () => {
-    it("includes the system prompt content", () => {
-      const prompt = buildInstructionsExtractionPrompt("You are a helpful assistant.");
-      expect(prompt).toContain("Extract the user's standing instructions");
-      expect(prompt).toContain("You are a helpful assistant.");
-    });
-
-    it("truncates very long system prompts", () => {
-      const longPrompt = "x".repeat(MAX_SYSTEM_PROMPT_FOR_EXTRACTION + 1000);
-      const prompt = buildInstructionsExtractionPrompt(longPrompt);
-      expect(prompt).toContain("...(truncated)");
-      expect(prompt.length).toBeLessThan(longPrompt.length);
-    });
-  });
-
-  describe("extractStandingInstructions", () => {
-    const testModel = {
-      provider: "test",
-      modelId: "test-model",
-      baseUrl: "https://api.example.com",
-      apiKey: "key",
-      api: "openai-completions",
-    };
-
-    it("extracts instructions from system prompt", async () => {
-      vi.mocked(callForText).mockResolvedValue(
-        "- Always copy reports to Google Drive\n- Run tests before committing",
-      );
-
-      const result = await extractStandingInstructions({
-        model: testModel,
-        systemPrompt: "You are a helpful assistant. Memory: always copy reports to Google Drive.",
-        timeoutMs: 20000,
-      });
-
-      expect(result).toContain("Always copy reports to Google Drive");
-      expect(callForText).toHaveBeenCalledOnce();
-    });
-
-    it("returns undefined when LLM responds with NONE", async () => {
-      vi.mocked(callForText).mockResolvedValue("NONE");
-
-      const result = await extractStandingInstructions({
-        model: testModel,
-        systemPrompt: "You are a helpful assistant.",
-        timeoutMs: 20000,
-      });
-
-      expect(result).toBeUndefined();
-    });
-
-    it("returns undefined for empty system prompt", async () => {
-      const result = await extractStandingInstructions({
-        model: testModel,
-        systemPrompt: "",
-        timeoutMs: 20000,
-      });
-
-      expect(result).toBeUndefined();
-      expect(callForText).not.toHaveBeenCalled();
-    });
-
-    it("returns undefined when callForText fails", async () => {
-      vi.mocked(callForText).mockResolvedValue(undefined);
-
-      const result = await extractStandingInstructions({
-        model: testModel,
-        systemPrompt: "Some system prompt",
-        timeoutMs: 20000,
-      });
-
-      expect(result).toBeUndefined();
-    });
-  });
-
-  describe("extractAvailableSkills", () => {
-    it("extracts skills with name attribute and description element", () => {
-      const systemPrompt = `You are a helpful assistant.
-<available_skills>
-  <skill name="deploy" location="/skills/deploy/SKILL.md">
-    <description>Deploy the project to production</description>
-  </skill>
-  <skill name="review-pr" location="/skills/review-pr/SKILL.md">
-    <description>Review a pull request</description>
-  </skill>
-</available_skills>`;
-
-      const result = extractAvailableSkills(systemPrompt);
-      expect(result).toBe(
-        "- deploy: Deploy the project to production\n- review-pr: Review a pull request",
-      );
-    });
-
-    it("extracts skills with nested name elements", () => {
-      const systemPrompt = `<available_skills>
-  <skill>
-    <name>demo</name>
-    <description>A demo skill</description>
-  </skill>
-</available_skills>`;
-
-      const result = extractAvailableSkills(systemPrompt);
-      expect(result).toBe("- demo: A demo skill");
-    });
-
-    it("returns undefined when no available_skills block", () => {
-      const result = extractAvailableSkills("You are a helpful assistant.");
-      expect(result).toBeUndefined();
-    });
-
-    it("returns undefined for empty system prompt", () => {
-      expect(extractAvailableSkills("")).toBeUndefined();
-    });
-
-    it("returns undefined when available_skills block is empty", () => {
-      const result = extractAvailableSkills("<available_skills></available_skills>");
-      expect(result).toBeUndefined();
-    });
-
-    it("uses only the first line of multi-line descriptions", () => {
-      const systemPrompt = `<available_skills>
-  <skill name="complex" location="/skills/complex/SKILL.md">
-    <description>Do something complex
-This is a long description that spans multiple lines
-And has more detail here</description>
-  </skill>
-</available_skills>`;
-
-      const result = extractAvailableSkills(systemPrompt);
-      expect(result).toBe("- complex: Do something complex");
-    });
-
-    it("handles skills without description", () => {
-      const systemPrompt = `<available_skills>
-  <skill>
-    <name>no-desc</name>
-  </skill>
-</available_skills>`;
-
-      const result = extractAvailableSkills(systemPrompt);
-      expect(result).toBe("- no-desc");
     });
   });
 });

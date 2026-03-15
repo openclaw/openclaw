@@ -3,30 +3,23 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { callGuardian } from "./guardian-client.js";
 import {
   getAllTurns,
-  getAvailableSkills,
+  getAgentSystemPrompt,
   getLastSummarizedTurnCount,
   getRecentTurns,
-  getStandingInstructions,
   getSummary,
   getTotalTurns,
-  isStandingInstructionsResolved,
+  hasSession,
   isSystemTrigger as isSystemTriggerForSession,
   isSummaryInProgress,
   markSummaryComplete,
   markSummaryInProgress,
+  setAgentSystemPrompt,
   setLastSummarizedTurnCount,
-  updateAvailableSkills,
   updateCache,
-  updateStandingInstructions,
   updateSummary,
 } from "./message-cache.js";
 import { buildGuardianSystemPrompt, buildGuardianUserPrompt } from "./prompt.js";
-import {
-  extractAvailableSkills,
-  extractStandingInstructions,
-  generateSummary,
-  shouldUpdateSummary,
-} from "./summary.js";
+import { generateSummary, shouldUpdateSummary } from "./summary.js";
 import type { ConversationTurn, GuardianConfig, ResolvedGuardianModel } from "./types.js";
 import { parseModelRef, resolveConfig, resolveGuardianModelRef } from "./types.js";
 
@@ -240,6 +233,13 @@ const guardianPlugin = {
               }
               // Only update when we got a genuinely new/changed summary
               if (newSummary && newSummary !== existingSummary) {
+                // Check if session was evicted during async summary generation
+                if (!hasSession(sessionKey)) {
+                  api.logger.warn(
+                    `[guardian] Summary discarded: session=${sessionKey} was evicted during generation`,
+                  );
+                  return;
+                }
                 updateSummary(sessionKey, newSummary);
                 setLastSummarizedTurnCount(sessionKey, totalTurns);
                 if (config.log_decisions) {
@@ -262,58 +262,10 @@ const guardianPlugin = {
         }
       }
 
-      // Extract standing instructions from the system prompt (once per session)
+      // Cache the agent's system prompt (once per session, on first llm_input)
       const agentSystemPrompt = (event as Record<string, unknown>).systemPrompt;
-      if (
-        typeof agentSystemPrompt === "string" &&
-        agentSystemPrompt.length > 0 &&
-        !isStandingInstructionsResolved(sessionKey)
-      ) {
-        // Mark as resolved immediately to prevent duplicate extraction
-        updateStandingInstructions(sessionKey, undefined);
-
-        ensureProviderResolved()
-          .then((resolved) => {
-            if (!resolved) return;
-            return extractStandingInstructions({
-              model: resolvedModel,
-              systemPrompt: agentSystemPrompt,
-              timeoutMs: config.timeout_ms,
-              logger: config.log_decisions ? api.logger : undefined,
-            });
-          })
-          .then((instructions) => {
-            if (instructions) {
-              updateStandingInstructions(sessionKey, instructions);
-              if (config.log_decisions) {
-                api.logger.info(
-                  `[guardian] Standing instructions extracted for session=${sessionKey}: "${instructions.slice(0, 150)}..."`,
-                );
-              }
-            }
-          })
-          .catch((err) => {
-            api.logger.warn(
-              `[guardian] Standing instructions extraction failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          });
-      }
-
-      // Extract available skills from the system prompt (once per session, sync — no LLM call)
-      if (
-        typeof agentSystemPrompt === "string" &&
-        agentSystemPrompt.length > 0 &&
-        !getAvailableSkills(sessionKey)
-      ) {
-        const skills = extractAvailableSkills(agentSystemPrompt);
-        if (skills) {
-          updateAvailableSkills(sessionKey, skills);
-          if (config.log_decisions) {
-            api.logger.info(
-              `[guardian] Available skills extracted for session=${sessionKey}: "${skills.slice(0, 150)}..."`,
-            );
-          }
-        }
+      if (typeof agentSystemPrompt === "string" && agentSystemPrompt.length > 0) {
+        setAgentSystemPrompt(sessionKey, agentSystemPrompt);
       }
     });
 
@@ -364,6 +316,25 @@ const guardianPlugin = {
  * the SDK reads from the authoritative models.json written by OpenClaw's
  * startup pipeline, which includes all built-in and implicit providers.
  */
+
+/** Extract only plain-string header values, skipping SecretRef objects. */
+function extractStringHeaders(
+  ...sources: (Record<string, unknown> | undefined)[]
+): Record<string, string> | undefined {
+  const merged: Record<string, string> = {};
+  let hasAny = false;
+  for (const src of sources) {
+    if (!src) continue;
+    for (const [key, value] of Object.entries(src)) {
+      if (typeof value === "string") {
+        merged[key] = value;
+        hasAny = true;
+      }
+    }
+  }
+  return hasAny ? merged : undefined;
+}
+
 function resolveModelFromConfig(
   provider: string,
   modelId: string,
@@ -380,9 +351,9 @@ function resolveModelFromConfig(
       provider,
       modelId,
       baseUrl: providerConfig.baseUrl,
-      apiKey: providerConfig.apiKey || undefined,
+      apiKey: typeof providerConfig.apiKey === "string" ? providerConfig.apiKey : undefined,
       api: modelDef?.api || providerConfig.api || "openai-completions",
-      headers: { ...providerConfig.headers, ...modelDef?.headers },
+      headers: extractStringHeaders(providerConfig.headers, modelDef?.headers),
     };
   }
 
@@ -392,7 +363,7 @@ function resolveModelFromConfig(
     provider,
     modelId,
     api: providerConfig?.api || "openai-completions",
-    headers: providerConfig?.headers,
+    headers: extractStringHeaders(providerConfig?.headers),
   };
 }
 
@@ -423,6 +394,9 @@ function getCachedDecision(key: string): CachedDecision | undefined {
 function setCachedDecision(key: string, action: "allow" | "block", reason?: string): void {
   decisionCache.set(key, { action, reason, cachedAt: Date.now() });
 
+  // Evict oldest entries using FIFO (insertion order) when cache exceeds max size.
+  // Not true LRU — Map iterates in insertion order, not access order.
+  // Acceptable since the 5s TTL + 256 max entries bounds memory growth.
   while (decisionCache.size > MAX_DECISION_CACHE_SIZE) {
     const oldest = decisionCache.keys().next().value;
     if (oldest) {
@@ -512,8 +486,7 @@ async function reviewToolCall(
   // 4. Retrieve cached conversation context
   const turns = getRecentTurns(sessionKey);
   const summary = getSummary(sessionKey);
-  const standingInstructions = getStandingInstructions(sessionKey);
-  const availableSkills = getAvailableSkills(sessionKey);
+  const agentSystemPrompt = getAgentSystemPrompt(sessionKey);
 
   if (turns.length === 0 && !summary && sessionKey === "unknown") {
     if (config.log_decisions) {
@@ -530,8 +503,7 @@ async function reviewToolCall(
 
   // 5. Build the guardian prompt
   const userPrompt = buildGuardianUserPrompt(
-    standingInstructions,
-    availableSkills,
+    agentSystemPrompt,
     summary,
     turns,
     event.toolName,
@@ -575,8 +547,7 @@ async function reviewToolCall(
         sessionKey,
         turns,
         summary,
-        standingInstructions,
-        availableSkills,
+        agentSystemPrompt,
         config.mode,
       );
     } else {
@@ -608,17 +579,15 @@ function logBlockDecision(
   sessionKey: string,
   turns: ConversationTurn[],
   summary: string | undefined,
-  standingInstructions: string | undefined,
-  availableSkills: string | undefined,
+  agentSystemPrompt: string | undefined,
   mode: "enforce" | "audit",
 ): void {
   const modeLabel = mode === "enforce" ? "BLOCKED" : "AUDIT-ONLY (would block)";
 
-  // Format standing instructions section
-  const instructionsBlock = standingInstructions ? `  ${standingInstructions}` : "  (none)";
-
-  // Format available skills section
-  const skillsBlock = availableSkills ? `  ${availableSkills}` : "  (none)";
+  // Format agent context section (truncated for log readability)
+  const contextBlock = agentSystemPrompt
+    ? `  ${agentSystemPrompt.slice(0, 500)}${agentSystemPrompt.length > 500 ? "...(truncated in log)" : ""}`
+    : "  (none)";
 
   // Format summary section
   const summaryBlock = summary ? `  ${summary}` : "  (no summary yet)";
@@ -652,11 +621,8 @@ function logBlockDecision(
     `[guardian]   Session: ${sessionKey}`,
     `[guardian]   Reason:  ${decision.reason || "blocked"}`,
     `[guardian]`,
-    `[guardian]   ── Standing instructions ──`,
-    ...instructionsBlock.split("\n").map((l) => `[guardian] ${l}`),
-    `[guardian]`,
-    `[guardian]   ── Available skills ──`,
-    ...skillsBlock.split("\n").map((l) => `[guardian] ${l}`),
+    `[guardian]   ── Agent context ──`,
+    ...contextBlock.split("\n").map((l) => `[guardian] ${l}`),
     `[guardian]`,
     `[guardian]   ── Session summary ──`,
     ...summaryBlock.split("\n").map((l) => `[guardian] ${l}`),

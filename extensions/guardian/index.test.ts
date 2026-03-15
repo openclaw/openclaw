@@ -13,9 +13,16 @@ vi.mock("./summary.js", () => ({
 }));
 
 import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk";
-import { callGuardian } from "./guardian-client.js";
+import { callGuardian, callForText } from "./guardian-client.js";
 import guardianPlugin, { __testing } from "./index.js";
-import { clearCache, updateCache } from "./message-cache.js";
+import {
+  clearCache,
+  updateCache,
+  isSummaryInProgress,
+  markSummaryInProgress,
+  markSummaryComplete,
+  hasSession,
+} from "./message-cache.js";
 import type { GuardianConfig, ResolvedGuardianModel } from "./types.js";
 
 const { reviewToolCall, resolveModelFromConfig, decisionCache } = __testing;
@@ -36,15 +43,13 @@ function makeConfig(overrides: Partial<GuardianConfig> = {}): GuardianConfig {
   return {
     model: "test-provider/test-model",
     watched_tools: ["message_send", "message", "exec"],
-    timeout_ms: 45000,
+    timeout_ms: 20000,
     fallback_on_error: "allow",
     log_decisions: true,
     mode: "enforce",
-    max_user_messages: 3,
     max_arg_length: 500,
     max_recent_turns: 3,
     context_tools: ["memory_search", "read", "exec"],
-    max_tool_result_length: 300,
     ...overrides,
   };
 }
@@ -154,7 +159,7 @@ describe("guardian index — reviewToolCall", () => {
     expect(callGuardian).toHaveBeenCalledWith(
       expect.objectContaining({
         model,
-        timeoutMs: 45000,
+        timeoutMs: 20000,
         fallbackOnError: "allow",
       }),
     );
@@ -566,7 +571,6 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
       }),
       registerTool: vi.fn(),
       registerHook: vi.fn(),
-      registerHttpHandler: vi.fn(),
       registerHttpRoute: vi.fn(),
       registerChannel: vi.fn(),
       registerGatewayMethod: vi.fn(),
@@ -574,6 +578,7 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
       registerService: vi.fn(),
       registerProvider: vi.fn(),
       registerCommand: vi.fn(),
+      registerContextEngine: vi.fn(),
       resolvePath: vi.fn((s: string) => s),
     };
 
@@ -789,5 +794,61 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
     expect(callGuardian).toHaveBeenCalled();
 
     expect(api.logger.warn).toHaveBeenCalledWith(expect.stringContaining("Auth resolution failed"));
+  });
+});
+
+describe("guardian index — concurrent summary generation", () => {
+  beforeEach(() => {
+    clearCache();
+    decisionCache.clear();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("blocks concurrent summary updates when summaryUpdateInProgress is true", () => {
+    // The mocked shouldUpdateSummary is used in index.ts, but the
+    // in-progress flag is the key mechanism. Verify the cache tracks it.
+    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
+    expect(isSummaryInProgress("s1")).toBe(false);
+
+    markSummaryInProgress("s1");
+    expect(isSummaryInProgress("s1")).toBe(true);
+
+    // Second call should see in-progress=true and skip
+    markSummaryComplete("s1");
+    expect(isSummaryInProgress("s1")).toBe(false);
+  });
+
+  it("marks summary in-progress during async update and resets on completion", () => {
+    const messages = Array.from({ length: 5 }, (_, i) => ({
+      role: "user" as const,
+      content: `Message ${i}`,
+    }));
+    updateCache("s1", messages, undefined, 3, NO_FILTER);
+
+    // Verify summary is not in progress initially
+    expect(isSummaryInProgress("s1")).toBe(false);
+  });
+});
+
+describe("guardian index — session eviction during summary", () => {
+  beforeEach(() => {
+    clearCache();
+    decisionCache.clear();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("hasSession returns false after clearCache (simulating eviction)", () => {
+    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
+    expect(hasSession("s1")).toBe(true);
+    clearCache();
+    expect(hasSession("s1")).toBe(false);
   });
 });

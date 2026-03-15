@@ -41,22 +41,10 @@ describe("prompt", () => {
       expect(prompt).toContain("DATA");
     });
 
-    it("includes memory results guideline", () => {
+    it("references agent context section as background DATA", () => {
       const prompt = buildGuardianSystemPrompt();
-      expect(prompt).toContain("memory");
-      expect(prompt).toContain("tampered");
-    });
-
-    it("includes standing instructions guideline with poisoning warning", () => {
-      const prompt = buildGuardianSystemPrompt();
-      expect(prompt).toContain("standing instructions");
-      expect(prompt).toContain("injected");
-    });
-
-    it("includes available skills guideline with poisoning warning", () => {
-      const prompt = buildGuardianSystemPrompt();
-      expect(prompt).toContain("available skill");
-      expect(prompt).toContain("malicious skill");
+      expect(prompt).toContain("Agent context");
+      expect(prompt).toContain("background DATA");
     });
 
     it("treats user messages as the ultimate authority", () => {
@@ -77,7 +65,6 @@ describe("prompt", () => {
       const prompt = buildGuardianUserPrompt(
         undefined,
         undefined,
-        undefined,
         [{ user: "Hello" }, { user: "Send a message to Alice" }],
         "message_send",
         { target: "Alice", message: "Hello" },
@@ -90,7 +77,6 @@ describe("prompt", () => {
 
     it("includes assistant context in conversation turns", () => {
       const prompt = buildGuardianUserPrompt(
-        undefined,
         undefined,
         undefined,
         [
@@ -113,7 +99,6 @@ describe("prompt", () => {
       const prompt = buildGuardianUserPrompt(
         undefined,
         undefined,
-        undefined,
         [{ user: "Check disk usage" }],
         "exec",
         { command: "df -h" },
@@ -129,7 +114,6 @@ describe("prompt", () => {
       const prompt = buildGuardianUserPrompt(
         undefined,
         undefined,
-        undefined,
         [{ user: "Test" }],
         "write_file",
         { path: "/tmp/test", content: longValue },
@@ -141,7 +125,6 @@ describe("prompt", () => {
 
     it("handles empty conversation turns", () => {
       const prompt = buildGuardianUserPrompt(
-        undefined,
         undefined,
         undefined,
         [],
@@ -160,7 +143,6 @@ describe("prompt", () => {
       const prompt = buildGuardianUserPrompt(
         undefined,
         undefined,
-        undefined,
         [{ user: "Test" }],
         "exec",
         circular,
@@ -174,7 +156,6 @@ describe("prompt", () => {
       const prompt = buildGuardianUserPrompt(
         undefined,
         undefined,
-        undefined,
         [{ user: "Test" }],
         "exec",
         { command: "ls" },
@@ -186,7 +167,6 @@ describe("prompt", () => {
 
     it("includes session summary when provided", () => {
       const prompt = buildGuardianUserPrompt(
-        undefined,
         undefined,
         "User has been deploying a web app and configuring nginx",
         [{ user: "Yes go ahead" }],
@@ -205,7 +185,6 @@ describe("prompt", () => {
       const prompt = buildGuardianUserPrompt(
         undefined,
         undefined,
-        undefined,
         [{ user: "Test" }],
         "exec",
         { command: "ls" },
@@ -215,40 +194,37 @@ describe("prompt", () => {
       expect(prompt).not.toContain("Session summary");
     });
 
-    it("uses 'Recent conversation' header when turns exist", () => {
+    it("includes agent system prompt when provided", () => {
+      const prompt = buildGuardianUserPrompt(
+        'You are a helpful assistant.\n<available_skills>\n<skill name="deploy"><description>Deploy</description></skill>\n</available_skills>',
+        undefined,
+        [{ user: "Deploy my project" }],
+        "exec",
+        { command: "make deploy" },
+        500,
+      );
+
+      expect(prompt).toContain("## Agent context (system prompt):");
+      expect(prompt).toContain("You are a helpful assistant.");
+      expect(prompt).toContain("available_skills");
+    });
+
+    it("omits agent context section when undefined", () => {
       const prompt = buildGuardianUserPrompt(
         undefined,
         undefined,
-        undefined,
-        [{ user: "Hello" }],
+        [{ user: "Test" }],
         "exec",
         { command: "ls" },
         500,
       );
 
-      expect(prompt).toContain("## Recent conversation (most recent last):");
+      expect(prompt).not.toContain("Agent context");
     });
 
-    it("includes standing instructions when provided", () => {
+    it("does not contain standing instructions or available skills sections", () => {
       const prompt = buildGuardianUserPrompt(
-        "- Always copy reports to Google Drive\n- Never modify production database",
-        undefined,
-        undefined,
-        [{ user: "Generate report" }],
-        "exec",
-        { command: "cp report.pdf /mnt/gdrive/" },
-        500,
-      );
-
-      expect(prompt).toContain("## Standing instructions (user-configured rules):");
-      expect(prompt).toContain("Always copy reports to Google Drive");
-      expect(prompt).toContain("Never modify production database");
-    });
-
-    it("omits standing instructions section when undefined", () => {
-      const prompt = buildGuardianUserPrompt(
-        undefined,
-        undefined,
+        "Some system prompt with tools and rules",
         undefined,
         [{ user: "Test" }],
         "exec",
@@ -257,42 +233,12 @@ describe("prompt", () => {
       );
 
       expect(prompt).not.toContain("Standing instructions");
-    });
-
-    it("includes available skills when provided", () => {
-      const prompt = buildGuardianUserPrompt(
-        undefined,
-        "- deploy: Deploy the project to production\n- review-pr: Review a pull request",
-        undefined,
-        [{ user: "Deploy my project" }],
-        "exec",
-        { command: "make deploy" },
-        500,
-      );
-
-      expect(prompt).toContain("## Available skills (agent capabilities):");
-      expect(prompt).toContain("deploy: Deploy the project to production");
-      expect(prompt).toContain("review-pr: Review a pull request");
-    });
-
-    it("omits available skills section when undefined", () => {
-      const prompt = buildGuardianUserPrompt(
-        undefined,
-        undefined,
-        undefined,
-        [{ user: "Test" }],
-        "exec",
-        { command: "ls" },
-        500,
-      );
-
       expect(prompt).not.toContain("Available skills");
     });
 
     it("includes all sections in correct order when all are present", () => {
       const prompt = buildGuardianUserPrompt(
-        "- Copy reports to Google Drive",
-        "- deploy: Deploy the project",
+        "You are a helpful assistant.",
         "User is generating monthly reports",
         [{ user: "Generate the PDF" }],
         "write_file",
@@ -300,14 +246,12 @@ describe("prompt", () => {
         500,
       );
 
-      const instructionsIdx = prompt.indexOf("Standing instructions");
-      const skillsIdx = prompt.indexOf("Available skills");
+      const contextIdx = prompt.indexOf("Agent context");
       const summaryIdx = prompt.indexOf("Session summary");
       const conversationIdx = prompt.indexOf("Recent conversation");
       const toolIdx = prompt.indexOf("Tool call:");
 
-      expect(instructionsIdx).toBeLessThan(skillsIdx);
-      expect(skillsIdx).toBeLessThan(summaryIdx);
+      expect(contextIdx).toBeLessThan(summaryIdx);
       expect(summaryIdx).toBeLessThan(conversationIdx);
       expect(conversationIdx).toBeLessThan(toolIdx);
     });

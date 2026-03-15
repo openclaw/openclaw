@@ -67,13 +67,11 @@ smart, it needs to **follow instructions precisely**. Use a model with strong
 instruction following. Coding-specific models (e.g. `kimi-coding/*`) tend to
 ignore the strict output format and echo conversation content instead.
 
-| Model                                | Notes                                   |
-| ------------------------------------ | --------------------------------------- |
-| `anthropic/claude-sonnet-4-20250514` | Reliable, good instruction following    |
-| `anthropic/claude-haiku-4-5`         | Fast, cheap, good format compliance     |
-| `openai/gpt-4o-mini`                 | Fast (~200ms), low cost                 |
-| `kimi/moonshot-v1-8k`                | Good for Chinese-language conversations |
-| `ollama/llama3.1:8b`                 | Free, runs locally                      |
+| Model                                | Notes                                |
+| ------------------------------------ | ------------------------------------ |
+| `anthropic/claude-sonnet-4-20250514` | Reliable, good instruction following |
+| `anthropic/claude-haiku-4-5`         | Fast, cheap, good format compliance  |
+| `openai/gpt-4o-mini`                 | Fast (~200ms), low cost              |
 
 Avoid coding-focused models — they prioritize code generation over strict
 format compliance.

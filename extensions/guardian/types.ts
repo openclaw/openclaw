@@ -28,16 +28,12 @@ export type GuardianConfig = {
   log_decisions: boolean;
   /** enforce = block disallowed calls; audit = log only */
   mode: "enforce" | "audit";
-  /** Number of conversation turns fed to the summarizer (history window) */
-  max_user_messages: number;
   /** Max characters of tool arguments to include (truncated) */
   max_arg_length: number;
   /** Number of recent raw turns to keep in the guardian prompt (alongside the summary) */
   max_recent_turns: number;
   /** Tool names whose results are included in the guardian's conversation context */
   context_tools: string[];
-  /** Max characters per tool result snippet */
-  max_tool_result_length: number;
 };
 
 /**
@@ -96,12 +92,8 @@ export type CachedMessages = {
   lastSummarizedTurnCount: number;
   /** Whether the current invocation was triggered by a system event (heartbeat, cron, etc.). */
   isSystemTrigger: boolean;
-  /** Standing instructions extracted from the main agent's system prompt (once per session). */
-  standingInstructions?: string;
-  /** Whether standing instructions extraction has been attempted. */
-  standingInstructionsResolved: boolean;
-  /** Available skills extracted from the agent's system prompt (once per session). */
-  availableSkills?: string;
+  /** The main agent's full system prompt, cached on first llm_input for the session. */
+  agentSystemPrompt?: string;
   updatedAt: number;
 };
 
@@ -119,11 +111,10 @@ export const GUARDIAN_DEFAULTS = {
     "cron",
     "cron_add",
   ],
-  timeout_ms: 45000,
+  timeout_ms: 20000,
   fallback_on_error: "allow" as const,
   log_decisions: true,
   mode: "enforce" as const,
-  max_user_messages: 10,
   max_arg_length: 500,
   max_recent_turns: 3,
   context_tools: [
@@ -135,7 +126,6 @@ export const GUARDIAN_DEFAULTS = {
     "web_fetch",
     "web_search",
   ],
-  max_tool_result_length: 300,
 };
 
 /**
@@ -156,10 +146,6 @@ export function resolveConfig(raw: Record<string, unknown> | undefined): Guardia
     log_decisions:
       typeof raw.log_decisions === "boolean" ? raw.log_decisions : GUARDIAN_DEFAULTS.log_decisions,
     mode: raw.mode === "audit" ? "audit" : GUARDIAN_DEFAULTS.mode,
-    max_user_messages:
-      typeof raw.max_user_messages === "number"
-        ? raw.max_user_messages
-        : GUARDIAN_DEFAULTS.max_user_messages,
     max_arg_length:
       typeof raw.max_arg_length === "number"
         ? raw.max_arg_length
@@ -171,10 +157,6 @@ export function resolveConfig(raw: Record<string, unknown> | undefined): Guardia
     context_tools: Array.isArray(raw.context_tools)
       ? (raw.context_tools as string[])
       : GUARDIAN_DEFAULTS.context_tools,
-    max_tool_result_length:
-      typeof raw.max_tool_result_length === "number"
-        ? raw.max_tool_result_length
-        : GUARDIAN_DEFAULTS.max_tool_result_length,
   };
 }
 
