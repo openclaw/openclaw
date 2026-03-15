@@ -5,6 +5,7 @@ import {
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
+  isLikelyContextOverflowError,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
@@ -35,6 +36,18 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
+
+  it("does not misclassify jinja template errors when payload contains noisy context fields", () => {
+    const raw =
+      '400 {"type":"error","error":{"type":"invalid_request_error","message":"Error rendering prompt with jinja template: \\\"No user query found in messages.\\\""},"details":{"hint":"context window 262144"}}';
+    const msg = makeAssistantError(raw);
+    expect(isLikelyContextOverflowError(raw)).toBe(false);
+    expect(formatAssistantErrorText(msg)).toContain(
+      "LLM request rejected: Error rendering prompt with jinja template",
+    );
+    expect(formatAssistantErrorText(msg)).not.toContain("Context overflow");
+  });
+
   it("returns a reasoning-required message for mandatory reasoning endpoint errors", () => {
     const msg = makeAssistantError(
       "400 Reasoning is mandatory for this endpoint and cannot be disabled.",

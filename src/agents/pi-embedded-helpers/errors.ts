@@ -71,18 +71,59 @@ function hasRateLimitTpmHint(raw: string): boolean {
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
 }
 
+function resolveContextOverflowCandidate(errorMessage: string): {
+  text: string;
+  type?: string;
+  code?: string;
+} {
+  const parsed = parseApiErrorInfo(errorMessage);
+  const candidateParts = [
+    parsed?.httpCode?.trim(),
+    parsed?.type?.trim(),
+    parsed?.code?.trim(),
+    parsed?.message?.trim(),
+  ].filter((value): value is string => Boolean(value && value.length > 0));
+  const candidate = candidateParts.join(" ").trim();
+  return {
+    text: candidate && candidate.length > 0 ? candidate : errorMessage,
+    type: parsed?.type,
+    code: parsed?.code,
+  };
+}
+
+function isExplicitContextOverflowType(type?: string): boolean {
+  if (!type) {
+    return false;
+  }
+  const lower = type.toLowerCase();
+  return (
+    lower.includes("request_too_large") ||
+    lower.includes("context_length_exceeded") ||
+    lower.includes("context_window_exceeded") ||
+    lower.includes("context_overflow")
+  );
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
-  const lower = errorMessage.toLowerCase();
+  const candidate = resolveContextOverflowCandidate(errorMessage);
+  if (
+    isExplicitContextOverflowType(candidate.type) ||
+    isExplicitContextOverflowType(candidate.code)
+  ) {
+    return true;
+  }
+
+  const lower = candidate.text.toLowerCase();
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  if (hasRateLimitTpmHint(errorMessage)) {
+  if (hasRateLimitTpmHint(candidate.text)) {
     return false;
   }
 
-  if (isReasoningConstraintErrorMessage(errorMessage)) {
+  if (isReasoningConstraintErrorMessage(candidate.text)) {
     return false;
   }
 
@@ -110,11 +151,11 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     // when the context window is exceeded. pi-ai surfaces it as "Unhandled stop reason: model_context_window_exceeded".
     lower.includes("context_window_exceeded") ||
     // Chinese proxy error messages for context overflow
-    errorMessage.includes("上下文过长") ||
-    errorMessage.includes("上下文超出") ||
-    errorMessage.includes("上下文长度超") ||
-    errorMessage.includes("超出最大上下文") ||
-    errorMessage.includes("请压缩上下文")
+    candidate.text.includes("上下文过长") ||
+    candidate.text.includes("上下文超出") ||
+    candidate.text.includes("上下文长度超") ||
+    candidate.text.includes("超出最大上下文") ||
+    candidate.text.includes("请压缩上下文")
   );
 }
 
@@ -128,13 +169,14 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
+  const candidate = resolveContextOverflowCandidate(errorMessage);
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  if (hasRateLimitTpmHint(errorMessage)) {
+  if (hasRateLimitTpmHint(candidate.text)) {
     return false;
   }
 
-  if (isReasoningConstraintErrorMessage(errorMessage)) {
+  if (isReasoningConstraintErrorMessage(candidate.text)) {
     return false;
   }
 
@@ -145,22 +187,22 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
     return false;
   }
 
-  if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
+  if (CONTEXT_WINDOW_TOO_SMALL_RE.test(candidate.text)) {
     return false;
   }
   // Rate limit errors can match the broad CONTEXT_OVERFLOW_HINT_RE pattern
   // (e.g., "request reached organization TPD rate limit" matches request.*limit).
   // Exclude them before checking context overflow heuristics.
-  if (isRateLimitErrorMessage(errorMessage)) {
+  if (isRateLimitErrorMessage(candidate.text)) {
     return false;
   }
   if (isContextOverflowError(errorMessage)) {
     return true;
   }
-  if (RATE_LIMIT_HINT_RE.test(errorMessage)) {
+  if (RATE_LIMIT_HINT_RE.test(candidate.text)) {
     return false;
   }
-  return CONTEXT_OVERFLOW_HINT_RE.test(errorMessage);
+  return CONTEXT_OVERFLOW_HINT_RE.test(candidate.text);
 }
 
 export function isCompactionFailureError(errorMessage?: string): boolean {
@@ -581,6 +623,7 @@ export function isRawApiErrorPayload(raw?: string): boolean {
 export type ApiErrorInfo = {
   httpCode?: string;
   type?: string;
+  code?: string;
   message?: string;
   requestId?: string;
 };
@@ -619,14 +662,18 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   const topMessage = typeof payload.message === "string" ? payload.message : undefined;
 
   let errType: string | undefined;
+  let errCode: string | undefined;
   let errMessage: string | undefined;
   if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
     const err = payload.error as Record<string, unknown>;
     if (typeof err.type === "string") {
       errType = err.type;
     }
-    if (typeof err.code === "string" && !errType) {
-      errType = err.code;
+    if (typeof err.code === "string") {
+      errCode = err.code;
+      if (!errType) {
+        errType = err.code;
+      }
     }
     if (typeof err.message === "string") {
       errMessage = err.message;
@@ -636,6 +683,7 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   return {
     httpCode,
     type: errType ?? topType,
+    code: errCode,
     message: errMessage ?? topMessage,
     requestId,
   };
