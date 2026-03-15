@@ -239,6 +239,7 @@ function onRelayClosed(reason) {
   }
 
   reattachPending.clear()
+  tabOperationLocks.clear()
 
   for (const [tabId, tab] of tabs.entries()) {
     if (tab.state === 'connected') {
