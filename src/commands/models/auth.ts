@@ -494,3 +494,77 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     await prompter.note(result.notes.join("\n"), "Provider notes");
   }
 }
+
+/**
+ * Set up Ollama usage cookie for fetching usage limits from ollama.com/settings.
+ *
+ * This cookie is a browser session cookie used to scrape usage limits
+ * (session/weekly percentages). It's separate from Ollama API keys.
+ */
+export async function modelsAuthOllamaCookieCommand(
+  opts: { clear?: boolean },
+  runtime: RuntimeEnv,
+) {
+  if (!process.stdin.isTTY) {
+    throw new Error("ollama-cookie requires an interactive TTY.");
+  }
+
+  // Handle --clear flag
+  if (opts.clear) {
+    const { clearOllamaCookie } = await import("../../infra/provider-usage.auth.js");
+    clearOllamaCookie();
+    runtime.log("✓ Ollama usage cookie cleared.");
+    return;
+  }
+
+  runtime.log("");
+  runtime.log("🦞 Ollama Usage Cookie Setup");
+  runtime.log("");
+  runtime.log("To fetch your Ollama usage limits (session/weekly), you need to provide");
+  runtime.log("your browser session cookie from ollama.com.");
+  runtime.log("");
+
+  // Open browser
+  runtime.log("Opening ollama.com in your browser...");
+  try {
+    await openUrl("https://ollama.com/settings");
+  } catch {
+    runtime.log("Could not open browser. Please navigate to: https://ollama.com/settings");
+  }
+
+  runtime.log("");
+  runtime.log("Instructions:");
+  runtime.log("  1. Log into your Ollama account in the browser");
+  runtime.log("  2. Open DevTools (F12 or right-click → Inspect)");
+  runtime.log("  3. Go to Application → Cookies → ollama.com");
+  runtime.log("  4. Find the session cookie (usually '__Secure-session' or 'session')");
+  runtime.log("  5. Copy the cookie value");
+  runtime.log("");
+
+  const cookieInput = await text({
+    message: "Paste the cookie value (e.g., 'abc123' or '__Secure-session=abc123')",
+    validate: (value) => (value?.trim() ? undefined : "Required"),
+  });
+  const rawCookie = String(cookieInput ?? "").trim();
+
+  // Parse cookie - if it looks like a name=value pair, use as-is
+  // Otherwise, prepend the common session cookie name
+  let cookie: string;
+  if (rawCookie.includes("=")) {
+    cookie = rawCookie;
+  } else {
+    cookie = `__Secure-session=${rawCookie}`;
+  }
+
+  // Save the cookie
+  const { saveOllamaCookie } = await import("../../infra/provider-usage.auth.js");
+  saveOllamaCookie(cookie);
+
+  runtime.log("");
+  runtime.log("✓ Ollama usage cookie saved!");
+  runtime.log("");
+  runtime.log("Your /status command will now show Ollama usage limits:");
+  runtime.log("  📊 Usage: Session 97% left ⏱4h · Weekly 98% left ⏱6d");
+  runtime.log("");
+  runtime.log("Note: The cookie may expire. Re-run this command if usage stops showing.");
+}

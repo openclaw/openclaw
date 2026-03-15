@@ -95,6 +95,45 @@ function resolveXiaomiApiKey(): string | undefined {
   });
 }
 
+/**
+ * Resolve Ollama session cookie.
+ *
+ * Ollama doesn't have a public API for usage. We need the browser session cookie
+ * to fetch usage data from ollama.com/settings.
+ *
+ * Priority:
+ * 1. OLLAMA_COOKIE environment variable (explicit override)
+ * 2. ~/.openclaw/ollama-usage-cookie file (set via `openclaw models auth ollama-cookie`)
+ *
+ * SECURITY: We use a separate file from auth profiles because:
+ * - Auth profiles are also used for Ollama API authentication
+ * - Using an API token as a cookie would leak secrets to ollama.com
+ * - This file is specifically for browser session cookies only
+ *
+ * The cookie string should be in format: "name1=value1; name2=value2"
+ * Common session cookie names: __Secure-session, session, next-auth.session-token
+ */
+async function resolveOllamaCookie(): Promise<string | undefined> {
+  // Priority 1: Environment variable override
+  const envCookie = normalizeSecretInput(process.env.OLLAMA_COOKIE);
+  if (envCookie) {
+    return envCookie;
+  }
+
+  // Priority 2: Cookie file (~/.openclaw/ollama-usage-cookie)
+  // Uses resolveOllamaCookiePath() which honors OPENCLAW_HOME
+  try {
+    const cookiePath = resolveOllamaCookiePath();
+    if (fs.existsSync(cookiePath)) {
+      const cookie = fs.readFileSync(cookiePath, "utf-8").trim();
+      return normalizeSecretInput(cookie) || undefined;
+    }
+  } catch {
+    // Ignore errors reading the file
+  }
+
+  return undefined;
+}
 function resolveProviderApiKeyFromConfigAndStore(params: {
   providerId: UsageProviderId;
   envDirect: Array<string | undefined>;
@@ -256,6 +295,13 @@ export async function resolveProviderAuths(params: {
       }
       continue;
     }
+    if (provider === "ollama") {
+      const cookie = await resolveOllamaCookie();
+      if (cookie) {
+        auths.push({ provider, token: cookie });
+      }
+      continue;
+    }
 
     if (!oauthProviders.includes(provider)) {
       continue;
@@ -270,4 +316,40 @@ export async function resolveProviderAuths(params: {
   }
 
   return auths;
+}
+
+/**
+ * Path to the Ollama cookie file.
+ */
+export function resolveOllamaCookiePath(): string {
+  return path.join(
+    resolveRequiredHomeDir(process.env, os.homedir),
+    ".openclaw",
+    "ollama-usage-cookie",
+  );
+}
+
+/**
+ * Save the Ollama cookie to the dedicated file.
+ */
+export function saveOllamaCookie(cookie: string): void {
+  const cookiePath = resolveOllamaCookiePath();
+  const dir = path.dirname(cookiePath);
+
+  // Ensure directory exists
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  fs.writeFileSync(cookiePath, cookie, "utf-8");
+}
+
+/**
+ * Clear the saved Ollama cookie.
+ */
+export function clearOllamaCookie(): void {
+  const cookiePath = resolveOllamaCookiePath();
+  if (fs.existsSync(cookiePath)) {
+    fs.unlinkSync(cookiePath);
+  }
 }
