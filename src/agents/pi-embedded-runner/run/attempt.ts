@@ -2428,9 +2428,11 @@ export async function runEmbeddedAttempt(
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
 
         try {
-          // Idempotent cleanup for legacy sessions with persisted image payloads.
-          // Called each run; only mutates already-answered user turns that still carry image blocks.
-          const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
+          // Strip image blocks from history to prevent poison-turn loops.
+          // When model lacks vision support, strips ALL image turns (#29290).
+          const didPruneImages = pruneProcessedHistoryImages(activeSession.messages, {
+            modelHasVision,
+          });
           if (didPruneImages) {
             activeSession.agent.replaceMessages(activeSession.messages);
           }

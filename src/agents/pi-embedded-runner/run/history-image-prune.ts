@@ -1,25 +1,44 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 export const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
+export const NO_VISION_IMAGE_MARKER = "[image data removed - model does not support vision]";
 
 /**
- * Idempotent cleanup for legacy sessions that persisted image blocks in history.
- * Called each run; mutates only user turns that already have an assistant reply.
+ * Idempotent cleanup for sessions that contain image blocks in history.
+ *
+ * When `modelHasVision` is false, strips images from ALL turns to prevent
+ * poison-turn loops where a failed image turn has no assistant reply and
+ * is never pruned by the legacy heuristic (see #29290).
+ *
+ * When `modelHasVision` is true (or omitted), only strips images from
+ * turns before the last assistant reply (legacy behavior).
  */
-export function pruneProcessedHistoryImages(messages: AgentMessage[]): boolean {
-  let lastAssistantIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "assistant") {
-      lastAssistantIndex = i;
-      break;
+export function pruneProcessedHistoryImages(
+  messages: AgentMessage[],
+  options?: { modelHasVision?: boolean },
+): boolean {
+  const modelHasVision = options?.modelHasVision ?? true;
+
+  let upperBound: number;
+  if (modelHasVision) {
+    let lastAssistantIndex = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]?.role === "assistant") {
+        lastAssistantIndex = i;
+        break;
+      }
     }
-  }
-  if (lastAssistantIndex < 0) {
-    return false;
+    if (lastAssistantIndex < 0) {
+      return false;
+    }
+    upperBound = lastAssistantIndex;
+  } else {
+    upperBound = messages.length;
   }
 
+  const marker = modelHasVision ? PRUNED_HISTORY_IMAGE_MARKER : NO_VISION_IMAGE_MARKER;
   let didMutate = false;
-  for (let i = 0; i < lastAssistantIndex; i++) {
+  for (let i = 0; i < upperBound; i++) {
     const message = messages[i];
     if (
       !message ||
@@ -38,7 +57,7 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): boolean {
       }
       message.content[j] = {
         type: "text",
-        text: PRUNED_HISTORY_IMAGE_MARKER,
+        text: marker,
       } as (typeof message.content)[number];
       didMutate = true;
     }
