@@ -87,6 +87,12 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
+  /** Enable cross-channel shared memory for direct chats.
+   * When true, all channels bound to this agent share the same MEMORY.md and session context.
+   * Group/channel chats remain isolated (per-group context is still meaningful).
+   * @default false
+   */
+  crossChannelMemory?: boolean;
 };
 
 export type AgentsConfig = {

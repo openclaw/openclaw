@@ -23,11 +23,34 @@ vi.mock("../channels/plugins/index.js", async (importOriginal) => {
           },
         };
       }
+      // Support test-only channels for crossChannelMemory tests
+      if (["webchat", "dingtalk"].includes(channel)) {
+        return {
+          id: channel,
+          meta: {
+            id: channel,
+            label: channel,
+            selectionLabel: channel,
+            docsPath: `/channels/${channel}`,
+            blurb: "test channel",
+          },
+          capabilities: { chatTypes: ["direct"] as const },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        };
+      }
       return actual.getChannelPlugin(channel);
     },
     normalizeChannelId: (channel: string) => {
-      if (channel.trim().toLowerCase() === "matrix-js") {
+      const normalized = channel.trim().toLowerCase();
+      if (normalized === "matrix-js") {
         return "matrix-js";
+      }
+      // Support test-only channels for crossChannelMemory tests
+      if (normalized === "webchat" || normalized === "dingtalk") {
+        return normalized;
       }
       return actual.normalizeChannelId(channel);
     },
@@ -195,6 +218,113 @@ describe("agents bind/unbind commands", () => {
         ],
       }),
     );
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("enables crossChannelMemory when --share-memory flag is provided", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        agents: {
+          defaults: { agent: "main" },
+          list: [{ id: "main" }],
+        },
+      },
+    });
+
+    await agentsBindCommand({ bind: ["webchat", "dingtalk"], shareMemory: true }, runtime);
+
+    expect(writeConfigFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: {
+          defaults: { agent: "main" },
+          list: [
+            expect.objectContaining({
+              id: "main",
+              crossChannelMemory: true,
+            }),
+          ],
+        },
+        bindings: expect.arrayContaining([
+          expect.objectContaining({ match: { channel: "webchat" } }),
+          expect.objectContaining({ match: { channel: "dingtalk" } }),
+        ]),
+      }),
+    );
+    expect(runtime.log).toHaveBeenCalledWith("Enabled cross-channel shared memory.");
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not enable crossChannelMemory when --share-memory flag is omitted", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        agents: {
+          defaults: { agent: "main" },
+          list: [{ id: "main" }],
+        },
+      },
+    });
+
+    await agentsBindCommand({ bind: ["webchat"] }, runtime);
+
+    const callArg = writeConfigFileMock.mock.calls[0]?.[0];
+    expect(callArg?.agents?.list?.[0]?.crossChannelMemory).toBeUndefined();
+    expect(runtime.log).not.toHaveBeenCalledWith("Enabled cross-channel shared memory.");
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("preserves existing agent config when enabling crossChannelMemory", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        agents: {
+          defaults: { agent: "main" },
+          list: [
+            {
+              id: "main",
+              name: "My Assistant",
+              model: { primary: "gpt-4" },
+            },
+          ],
+        },
+      },
+    });
+
+    await agentsBindCommand({ bind: ["webchat"], shareMemory: true }, runtime);
+
+    expect(writeConfigFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: {
+          defaults: { agent: "main" },
+          list: [
+            expect.objectContaining({
+              id: "main",
+              name: "My Assistant",
+              model: { primary: "gpt-4" },
+              crossChannelMemory: true,
+            }),
+          ],
+        },
+      }),
+    );
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("includes crossChannelMemory in JSON output", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        agents: {
+          defaults: { agent: "main" },
+          list: [{ id: "main" }],
+        },
+      },
+    });
+
+    await agentsBindCommand({ bind: ["webchat"], shareMemory: true, json: true }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"crossChannelMemory": true'));
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 });

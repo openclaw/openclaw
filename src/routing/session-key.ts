@@ -134,13 +134,18 @@ export function buildAgentPeerSessionKey(params: {
   identityLinks?: Record<string, string[]>;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  /** Use unified channel identifier for cross-channel memory sharing.
+   * When true, direct chats use a simplified sessionKey format that enables
+   * cross-channel context sharing.
+   */
+  useUnifiedChannel?: boolean;
 }): string {
   const peerKind = params.peerKind ?? "direct";
   if (peerKind === "direct") {
     const dmScope = params.dmScope ?? "main";
     let peerId = (params.peerId ?? "").trim();
     const linkedPeerId =
-      dmScope === "main"
+      dmScope === "main" || params.useUnifiedChannel
         ? null
         : resolveLinkedPeerId({
             identityLinks: params.identityLinks,
@@ -151,6 +156,24 @@ export function buildAgentPeerSessionKey(params: {
       peerId = linkedPeerId;
     }
     peerId = peerId.toLowerCase();
+
+    // When useUnifiedChannel is true, use simplified format that enables cross-channel sharing
+    if (params.useUnifiedChannel) {
+      const channel = (params.channel ?? "").trim().toLowerCase() || "shared";
+      const accountId = normalizeAccountId(params.accountId);
+      if (dmScope === "per-account-channel-peer" && peerId) {
+        return `agent:${normalizeAgentId(params.agentId)}:${channel}:${accountId}:direct:${peerId}`;
+      }
+      if (dmScope === "per-channel-peer" && peerId) {
+        return `agent:${normalizeAgentId(params.agentId)}:${channel}:direct:${peerId}`;
+      }
+      if (dmScope === "per-peer" && peerId) {
+        return `agent:${normalizeAgentId(params.agentId)}:direct:${peerId}`;
+      }
+      // Default to main session key with unified channel
+      return `agent:${normalizeAgentId(params.agentId)}:${channel}`;
+    }
+
     if (dmScope === "per-account-channel-peer" && peerId) {
       const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
       const accountId = normalizeAccountId(params.accountId);

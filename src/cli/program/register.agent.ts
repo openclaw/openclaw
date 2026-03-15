@@ -132,6 +132,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       collectOption,
       [],
     )
+    .option("--share-memory", "Enable cross-channel shared memory for this agent", false)
     .option("--json", "Output JSON summary", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -140,6 +141,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
             agent: opts.agent as string | undefined,
             bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
             json: Boolean(opts.json),
+            shareMemory: Boolean(opts.shareMemory),
           },
           defaultRuntime,
         );

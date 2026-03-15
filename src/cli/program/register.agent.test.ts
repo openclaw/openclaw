@@ -184,6 +184,7 @@ describe("registerAgentCommands", () => {
         agent: "ops",
         bind: ["matrix-js:ops", "telegram"],
         json: true,
+        shareMemory: false,
       },
       runtime,
     );
