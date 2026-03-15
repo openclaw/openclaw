@@ -34,6 +34,15 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn
 
+# Revisit tracker — optional import (bodhi_vault may not be on sys.path)
+try:
+    _vault_pkg = Path(__file__).parent.parent / "bodhi_vault" / "src"
+    if _vault_pkg.exists() and str(_vault_pkg) not in sys.path:
+        sys.path.insert(0, str(_vault_pkg))
+    from bodhi_vault.revisit_tracker import log_revisit as _log_revisit
+except ImportError:
+    _log_revisit = None  # type: ignore[assignment]
+
 VIZ_DIR = Path(os.path.expanduser("~/.openclaw/viz"))
 TOKEN_PATH = Path(os.path.expanduser("~/.openclaw/viz-token"))
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -366,6 +375,17 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+
+        # Log revisit for nudge energy model — fire-and-forget, never blocks response
+        if _log_revisit is not None:
+            try:
+                _log_revisit(
+                    safe,
+                    cluster_id=found.get("cluster_id"),
+                    domain=found.get("domain"),
+                )
+            except Exception:
+                pass
 
         body = json.dumps(found, ensure_ascii=False).encode("utf-8")
         self._ok_json(body)

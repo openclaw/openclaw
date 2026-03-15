@@ -167,7 +167,37 @@
       "maxAttempts": 3,
       "backoffMs": [30000, 60000, 300000],
       "retryOn": ["rate_limit", "overloaded", "network", "server_error"]
-    }
+    },
+    "jobs": [
+      {
+        "id": "nudge-daily",
+        "schedule": "0 10 * * *",
+        "agent": "bo",
+        "prompt": "Run /nudge — check vault clusters for criticality and deliver any pending nudges.",
+        "recurring": true
+      },
+      {
+        "id": "viz-export-hourly",
+        "schedule": "0 * * * *",
+        "agent": "bo",
+        "prompt": "Run: cd ~/openbodhi && python3 -m bodhi_viz.export — refresh visualization data from latest vault nodes. No message needed, just confirm success.",
+        "recurring": true
+      },
+      {
+        "id": "morning-checkin",
+        "schedule": "7 8 * * *",
+        "agent": "bo",
+        "prompt": "Send the morning check-in ritual. Run /morning",
+        "recurring": true
+      },
+      {
+        "id": "evening-checkin",
+        "schedule": "3 21 * * *",
+        "agent": "bo",
+        "prompt": "Send the evening check-in ritual. Run /evening",
+        "recurring": true
+      }
+    ]
   },
 
   "session": {

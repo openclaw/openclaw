@@ -60,39 +60,18 @@ Do not list all tasks. Just the count. The intention question is the center.
 ### After they respond:
 
 1. Parse energy level (number or descriptive language → infer 1-5 scale)
-2. Write vault node:
+2. Write vault node via write_cli (handles schema, path, and atomic write correctly):
 
 ```bash
-python3 -c "
-import json, pathlib, os, uuid, hashlib, tempfile
-from datetime import datetime
-
-vault_dir = pathlib.Path(os.path.expanduser('~/.openclaw/vault'))
-vault_dir.mkdir(parents=True, exist_ok=True)
-schema_path = pathlib.Path(os.path.expanduser('~/.openclaw/vault')).parent / 'schema' / 'nodes.json'
-
-content = os.environ.get('CHECKIN_CONTENT', '')
-energy = int(os.environ.get('CHECKIN_ENERGY', '3'))
-intention = os.environ.get('CHECKIN_INTENTION', '')
-
-full_content = f'Morning check-in. Energy: {energy}. Intention: {intention}'
-node = {
-    'id': str(uuid.uuid4()),
-    'content': full_content,
-    'domain': 'wellness',
-    'energy': energy,
-    'tags': ['check-in', 'morning', 'intention'],
-    'media_type': 'text',
-    'created_at': datetime.now().isoformat(),
-    'sha256': hashlib.sha256(full_content.encode()).hexdigest()
-}
-node_path = vault_dir / f\"{node['id']}.json\"
-tmp = tempfile.NamedTemporaryFile(mode='w', dir=vault_dir, suffix='.tmp', delete=False)
-json.dump(node, tmp)
-tmp.close()
-os.replace(tmp.name, str(node_path))
-print(f'wrote:{node[\"id\"]}')
-" 2>&1
+cd ~/openbodhi && python3 -m bodhi_vault.write_cli \
+  "Morning check-in. Energy: ${CHECKIN_ENERGY}. Intention: ${CHECKIN_INTENTION}" \
+  --type Idea \
+  --energy "${CHECKIN_ENERGY}" \
+  --source telegram \
+  --tags check-in,morning,intention \
+  --domain wellness \
+  --vault ~/openbodhi/vault \
+  --schema ~/openbodhi/vault/schema/nodes.json 2>&1
 ```
 
 3. Reply: acknowledge energy level, reflect back the intention in one short sentence, say nothing more.

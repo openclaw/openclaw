@@ -378,35 +378,15 @@ User responds yes/no → call `/commit check [id]` or `/commit miss [id]` accord
 After 7 consecutive days on any habit commitment, write a vault node:
 
 ```bash
-python3 -c "
-import json, pathlib, os, uuid, hashlib, tempfile
-from datetime import datetime
-
-vault_dir = pathlib.Path(os.path.expanduser('~/.openclaw/vault'))
-vault_dir.mkdir(parents=True, exist_ok=True)
-
-commitment_text = os.environ.get('COMMITMENT_TEXT', '')
-streak = int(os.environ.get('COMMITMENT_STREAK', '7'))
-domain = os.environ.get('COMMITMENT_DOMAIN', 'wellness')
-
-content = f'7-day streak on commitment: {commitment_text}. Streak: {streak} days.'
-node = {
-    'id': str(uuid.uuid4()),
-    'content': content,
-    'domain': domain,
-    'energy': 4,
-    'tags': ['accountability', 'streak', 'habit', f'streak-{streak}'],
-    'media_type': 'text',
-    'created_at': datetime.now().isoformat(),
-    'sha256': hashlib.sha256(content.encode()).hexdigest()
-}
-node_path = vault_dir / f\"{node['id']}.json\"
-tmp = tempfile.NamedTemporaryFile(mode='w', dir=vault_dir, suffix='.tmp', delete=False)
-json.dump(node, tmp)
-tmp.close()
-os.replace(tmp.name, str(node_path))
-print(f'vault_wrote:{node[\"id\"]}')
-" 2>&1
+cd ~/openbodhi && python3 -m bodhi_vault.write_cli \
+  "7-day streak on commitment: ${COMMITMENT_TEXT}. Streak: ${COMMITMENT_STREAK} days." \
+  --type Pattern \
+  --energy 4 \
+  --source telegram \
+  --tags "accountability,streak,habit,streak-${COMMITMENT_STREAK}" \
+  --domain "${COMMITMENT_DOMAIN}" \
+  --vault ~/openbodhi/vault \
+  --schema ~/openbodhi/vault/schema/nodes.json 2>&1
 ```
 
 This makes sustained habits visible to Bo's nudge system — the pattern becomes part of the criticality graph.

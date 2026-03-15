@@ -32,152 +32,97 @@ Full reference: `docs/bodhi/soc-wellness-science.md`
 
 ## On `/nudge`
 
-Check for ripe clusters and surface one question:
+Check for ripe clusters and surface one question. Uses the nudge_scheduler engine.
 
 ```bash
-python3 -c "
-import json, pathlib, os, glob
-from datetime import datetime, timedelta
+cd ~/openbodhi && python3 -c "
+import sys
+sys.path.insert(0, 'packages/bodhi_vault/src')
+from pathlib import Path
+from bodhi_vault.nudge_scheduler import generate_nudges, nudge_status
 
-vault_dir = pathlib.Path(os.path.expanduser('~/.openclaw/vault'))
-nudge_state = pathlib.Path(os.path.expanduser('~/.openclaw/nudge-state.json'))
-
-# Load nudge state (dismissed clusters, cooldowns)
-state = json.loads(nudge_state.read_text()) if nudge_state.exists() else {'dismissed': {}, 'last_nudge': None}
-
-# Scan vault nodes for domain frequency
-nodes = []
-for f in sorted(vault_dir.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True):
-    try:
-        nodes.append(json.loads(f.read_text()))
-    except:
-        pass
-
-if not nodes:
-    print('NO_NODES')
-    exit()
-
-# Count domain frequency in last 14 days
-cutoff = (datetime.now() - timedelta(days=14)).isoformat()
-recent = [n for n in nodes if n.get('created_at', '') > cutoff]
-domains = {}
-for n in recent:
-    d = n.get('domain', 'unknown')
-    domains[d] = domains.get(d, 0) + 1
-
-# Find most revisited domain
-if domains:
-    top = max(domains, key=domains.get)
-    count = domains[top]
-    # Check if dismissed recently
-    dismissed_until = state['dismissed'].get(top, '')
-    if dismissed_until and dismissed_until > datetime.now().isoformat():
-        print(f'COOLDOWN:{top}:{count}')
-    else:
-        print(f'RIPE:{top}:{count}')
+vault = Path.home() / 'openbodhi/vault'
+nudges = generate_nudges(vault_path=vault)
+if nudges:
+    n = nudges[0]
+    domains = '+'.join(n['domains']) if n['domains'] else 'unknown'
+    print(f'RIPE:{n[\"cluster_id\"]}:{n[\"node_count\"]}:{domains}:{n[\"question\"]}')
 else:
-    print('NO_PATTERNS')
+    status = nudge_status(vault_path=vault)
+    print(f'NONE:{status}')
 "
 ```
 
-If `RIPE:<domain>:<count>`:
+If `RIPE:<id>:<count>:<domains>:<question>`:
 
-Surface ONE question related to that domain. Not advice. Not coaching. A mirror.
+Surface the question exactly as returned. Do not rephrase it. Do not add context.
+Then wait. One question. That's the whole nudge.
 
-Example questions by domain:
-- **wellness**: "You have returned to rest and recovery {count} times in two weeks. What is that pattern telling you?"
-- **fitness**: "Movement has been on your mind. {count} observations. Is there something your body is asking for?"
-- **health**: "Nutrition keeps surfacing. {count} entries. What would change if you trusted what you already know about this?"
-- **mental-health**: "You have been sitting with something emotional. {count} touches in two weeks. Does it have a shape yet?"
-- **cognitive**: "Your attention keeps circling back to learning and focus. {count} times. What is the thought that has not fully formed?"
+If `NONE:<status>`: relay the status string as-is. "Nothing ripe yet." or cooldown info.
 
-After surfacing, update nudge state:
+## On `/nudge dismiss [cluster_id]`
+
+Dismiss and start the expanding cooldown for that cluster.
 
 ```bash
-python3 -c "
-import json, pathlib, os
-from datetime import datetime, timedelta
-state_path = pathlib.Path(os.path.expanduser('~/.openclaw/nudge-state.json'))
-state = json.loads(state_path.read_text()) if state_path.exists() else {'dismissed': {}, 'last_nudge': None}
-state['last_nudge'] = datetime.now().isoformat()
-import tempfile
-tmp = tempfile.NamedTemporaryFile(mode='w', dir=state_path.parent, suffix='.tmp', delete=False)
-json.dump(state, tmp)
-tmp.close()
-os.replace(tmp.name, str(state_path))
-print('logged')
-"
+cd ~/openbodhi && python3 -c "
+import sys
+sys.path.insert(0, 'packages/bodhi_vault/src')
+from pathlib import Path
+from bodhi_vault.nudge_scheduler import dismiss_nudge
+
+cluster_id = sys.argv[1] if len(sys.argv) > 1 else ''
+if cluster_id:
+    dismiss_nudge(cluster_id)
+    print(f'dismissed:{cluster_id}')
+else:
+    print('no cluster id given')
+" \$1
 ```
 
-If `COOLDOWN`: reply "That pattern is on cooldown. It will resurface when the interval expands."
-
-If `NO_PATTERNS`: reply "Nothing ripe yet. Keep observing."
-
-## On `/nudge dismiss`
-
-Dismiss the current nudge. Set cooldown (expanding interval: 3 days, then 7, then 14, then 30):
-
-```bash
-python3 -c "
-import json, pathlib, os, sys
-from datetime import datetime, timedelta
-domain = sys.argv[1] if len(sys.argv) > 1 else ''
-state_path = pathlib.Path(os.path.expanduser('~/.openclaw/nudge-state.json'))
-state = json.loads(state_path.read_text()) if state_path.exists() else {'dismissed': {}, 'intervals': {}}
-prev = state.get('intervals', {}).get(domain, 3)
-next_days = min(prev * 2, 30)
-state['dismissed'][domain] = (datetime.now() + timedelta(days=next_days)).isoformat()
-state['intervals'] = state.get('intervals', {})
-state['intervals'][domain] = next_days
-import tempfile
-tmp = tempfile.NamedTemporaryFile(mode='w', dir=state_path.parent, suffix='.tmp', delete=False)
-json.dump(state, tmp)
-tmp.close()
-os.replace(tmp.name, str(state_path))
-print(f'dismissed:{next_days}')
-" <domain>
-```
-
-Reply: "Dismissed. Will resurface in {next_days} days."
+Reply: "Dismissed. Will resurface when the interval expands."
 
 ## On `/patterns`
 
-Show all domain frequencies without nudging:
+Show cluster energy ranked by domain — without generating a nudge.
 
 ```bash
-python3 -c "
-import json, pathlib, os, glob
-from datetime import datetime, timedelta
-vault_dir = pathlib.Path(os.path.expanduser('~/.openclaw/vault'))
-nodes = []
-for f in sorted(vault_dir.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)[:200]:
-    try:
-        nodes.append(json.loads(f.read_text()))
-    except:
-        pass
-cutoff = (datetime.now() - timedelta(days=14)).isoformat()
-recent = [n for n in nodes if n.get('created_at', '') > cutoff]
-domains = {}
-for n in recent:
-    d = n.get('domain', 'unknown')
-    domains[d] = domains.get(d, 0) + 1
-for d in sorted(domains, key=domains.get, reverse=True):
-    print(f'{d}: {domains[d]}')
-if not domains:
+cd ~/openbodhi && python3 -c "
+import sys
+sys.path.insert(0, 'packages/bodhi_vault/src')
+from pathlib import Path
+from collections import Counter
+from bodhi_vault.energy_model import compute_cluster_energies
+
+vault = Path.home() / 'openbodhi/vault'
+clusters = compute_cluster_energies(vault_path=vault)
+
+if not clusters:
     print('no data')
+else:
+    domain_energy = Counter()
+    domain_nodes = Counter()
+    for c in clusters:
+        for d in c.domains:
+            domain_energy[d] += c.energy
+            domain_nodes[d] += c.node_count
+    for d, e in domain_energy.most_common():
+        print(f'{d}:{round(e, 2)}:{domain_nodes[d]}')
 "
 ```
 
-Format as:
+Format the output as:
 ```
-Patterns (14 days)
+Patterns (energy-weighted)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-health:        ████████ 8
-fitness:       █████ 5
-mental-health: ████ 4
-wellness:      ██ 2
-cognitive:     █ 1
+health:        ████████ 8 nodes · 3.4 energy
+fitness:       █████ 5 nodes · 1.8 energy
+mental-health: ████ 4 nodes · 1.2 energy
+wellness:      ██ 2 nodes · 0.6 energy
+cognitive:     █ 1 node  · 0.2 energy
 ```
+
+Bar width = proportional to energy, not node count. Energy is what matters here.
 
 ## Rules
 
