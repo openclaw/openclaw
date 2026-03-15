@@ -1,15 +1,35 @@
 import { logVerbose } from "../../globals.js";
 import {
   buildNamedDmSessionKey,
-  isNamedDmSessionKey,
   parseNamedDmSessionKey,
 } from "../../sessions/session-key-utils.js";
-import { getActiveNamedSessionKey, setActiveNamedSession } from "../../gateway/session-utils.js";
+import { setActiveNamedSession } from "../../gateway/session-utils.js";
+import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const RESUME_COMMAND_PREFIX = "/resume";
 const DEFAULT_SESSION_NAMES = new Set(["main", "default"]);
+
+/**
+ * Resolve the main session key and entry, even when the current session
+ * is a named DM session. All `/resume` mutations must target the main
+ * entry because `activeNamedSession` lives there.
+ */
+function resolveMainSession(params: Parameters<CommandHandler>[0]): {
+  mainSessionKey: string;
+  mainEntry: import("../../config/sessions.js").SessionEntry | undefined;
+} {
+  const parsed = parseNamedDmSessionKey(params.sessionKey ?? "");
+  if (parsed) {
+    // Currently on a named session — derive the main key and look it up.
+    const mainSessionKey = buildAgentMainSessionKey({ agentId: parsed.agentId });
+    const mainEntry = params.sessionStore?.[mainSessionKey];
+    return { mainSessionKey, mainEntry };
+  }
+  // Already on the main session.
+  return { mainSessionKey: params.sessionKey ?? "", mainEntry: params.sessionEntry };
+}
 
 /**
  * Handle /resume [name] command for named DM session switching.
@@ -64,7 +84,7 @@ export const handleResumeCommand: CommandHandler = async (params, allowTextComma
  * List all named sessions for this DM peer.
  */
 async function listNamedSessions(params: Parameters<CommandHandler>[0]): Promise<ReturnType<CommandHandler>> {
-  const { sessionStore, sessionEntry, agentId } = params;
+  const { sessionStore, agentId } = params;
   if (!sessionStore) {
     return {
       shouldContinue: false,
@@ -95,7 +115,11 @@ async function listNamedSessions(params: Parameters<CommandHandler>[0]): Promise
     };
   }
 
-  const activeSession = sessionEntry?.activeNamedSession;
+  // Derive active session from key (works whether on main or named session)
+  const activeSession =
+    parseNamedDmSessionKey(params.sessionKey ?? "")?.name ??
+    params.sessionEntry?.activeNamedSession;
+
   const lines = namedSessions.map((name) => {
     const marker = name === activeSession ? "→ " : "  ";
     return `${marker}${name}`;
@@ -113,22 +137,36 @@ async function listNamedSessions(params: Parameters<CommandHandler>[0]): Promise
  * Clear the active named session, return to main.
  */
 async function clearActiveNamedSession(params: Parameters<CommandHandler>[0]): Promise<ReturnType<CommandHandler>> {
-  const { sessionEntry, sessionStore, sessionKey } = params;
+  const { sessionStore } = params;
 
-  if (!sessionEntry || !sessionStore || !sessionKey) {
+  if (!sessionStore || !params.sessionKey) {
     return {
       shouldContinue: false,
       reply: { text: "⚠️ Session store unavailable." },
     };
   }
 
+  const { mainSessionKey, mainEntry } = resolveMainSession(params);
+  if (!mainEntry) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚠️ Main session entry not found." },
+    };
+  }
+
   const updated = setActiveNamedSession({
-    mainEntry: sessionEntry,
+    mainEntry,
     name: null,
   });
 
   if (updated) {
-    await persistSessionEntry(params);
+    // Persist the main entry (not the current named entry)
+    sessionStore[mainSessionKey] = mainEntry;
+    await persistSessionEntry({
+      ...params,
+      sessionKey: mainSessionKey,
+      sessionEntry: mainEntry,
+    });
   }
 
   return {
@@ -144,9 +182,9 @@ async function switchToNamedSession(
   params: Parameters<CommandHandler>[0],
   sessionName: string,
 ): Promise<ReturnType<CommandHandler>> {
-  const { sessionEntry, sessionStore, sessionKey, agentId } = params;
+  const { sessionStore, agentId } = params;
 
-  if (!sessionEntry || !sessionStore || !sessionKey) {
+  if (!sessionStore || !params.sessionKey) {
     return {
       shouldContinue: false,
       reply: { text: "⚠️ Session store unavailable." },
@@ -186,8 +224,20 @@ async function switchToNamedSession(
     };
   }
 
+  // Resolve the main session — mutations go here
+  const { mainSessionKey, mainEntry } = resolveMainSession(params);
+  if (!mainEntry) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚠️ Main session entry not found." },
+    };
+  }
+
   // Check if we're already on this session
-  if (sessionEntry.activeNamedSession === sessionName) {
+  const currentNamed =
+    parseNamedDmSessionKey(params.sessionKey ?? "")?.name ??
+    mainEntry.activeNamedSession;
+  if (currentNamed === sessionName) {
     return {
       shouldContinue: false,
       reply: { text: `ℹ️ Already on session \`${sessionName}\`.` },
@@ -199,12 +249,18 @@ async function switchToNamedSession(
 
   // Update main session entry to point to this named session
   const updated = setActiveNamedSession({
-    mainEntry: sessionEntry,
+    mainEntry,
     name: sessionName,
   });
 
   if (updated) {
-    await persistSessionEntry(params);
+    // Persist the main entry (not the current named entry)
+    sessionStore[mainSessionKey] = mainEntry;
+    await persistSessionEntry({
+      ...params,
+      sessionKey: mainSessionKey,
+      sessionEntry: mainEntry,
+    });
   }
 
   const action = namedSessionExists ? "Switched to" : "Created and switched to";
