@@ -1,4 +1,7 @@
+import { execFile } from "node:child_process";
 import path from "node:path";
+import { promisify } from "node:util";
+import { resolveWindowsExecutablePath } from "../plugin-sdk/windows-spawn.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -13,6 +16,9 @@ import type {
 } from "../config/types.memory.js";
 import { resolveUserPath } from "../utils.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { resolveCliSpawnInvocation } from "./qmd-process.js";
+
+const execFileAsync = promisify(execFile);
 
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
@@ -351,4 +357,67 @@ export function resolveMemoryBackendConfig(params: {
     citations,
     qmd: resolved,
   };
+}
+
+/**
+ * Check if the QMD binary is available on the system PATH.
+ * Returns the resolved command path if available, null otherwise.
+ *
+ * @param command - The command to check (default: "qmd")
+ * @param timeoutMs - Timeout in milliseconds (default: 5000)
+ * @param cwd - Working directory for the command (default: undefined, uses process.cwd())
+ * @returns Object indicating availability and path or error message
+ */
+export async function checkQmdBinaryAvailable(
+  command = "qmd",
+  timeoutMs = 5000,
+  cwd?: string,
+): Promise<{ available: true; path: string } | { available: false; error: string }> {
+  const isWindows = process.platform === "win32";
+  const hasPath = /[\\/]/.test(command) || path.isAbsolute(command);
+
+  // Resolve command using the same logic as runtime spawn to handle Windows shims correctly
+  // This ensures consistency between the probe and actual execution
+  const spawnInvocation = resolveCliSpawnInvocation({
+    command,
+    args: ["--version"],
+    env: process.env,
+    packageName: "openclaw",
+  });
+
+  // Only use cwd when command has explicit path (relative or absolute)
+  // Never use workspace cwd for bare command names to avoid executing malicious binaries
+  const effectiveCwd = hasPath ? cwd : undefined;
+
+  try {
+    // Try to run `qmd --version` to verify the binary works
+    await execFileAsync(spawnInvocation.command, spawnInvocation.argv, {
+      timeout: timeoutMs,
+      encoding: "utf8",
+      cwd: effectiveCwd,
+      shell: spawnInvocation.shell,
+      windowsHide: spawnInvocation.windowsHide,
+    });
+    return { available: true, path: spawnInvocation.command };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    // Check for various "not found" error patterns across platforms
+    const notFoundPatterns = [
+      "ENOENT",
+      "not found",
+      "cannot find",
+      "EINVAL", // Windows spawn EINVAL for non-existent executables
+    ];
+    const isNotFound = notFoundPatterns.some((pattern) => error.includes(pattern));
+    if (isNotFound) {
+      return {
+        available: false,
+        error: `QMD binary "${command}" not found on PATH. Please install QMD or check your configuration.`,
+      };
+    }
+    return {
+      available: false,
+      error: `QMD binary check failed: ${error}`,
+    };
+  }
 }
