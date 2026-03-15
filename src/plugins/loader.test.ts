@@ -544,6 +544,15 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     expect(getGlobalHookRunner()).toBeNull();
   });
 
+  it("throws when activate:false is used without cache:false", () => {
+    expect(() => loadOpenClawPlugins({ activate: false })).toThrow(
+      "activate:false requires cache:false",
+    );
+    expect(() => loadOpenClawPlugins({ activate: false, cache: true })).toThrow(
+      "activate:false requires cache:false",
+    );
+  });
+
   it("re-initializes global hook runner when serving registry from cache", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({

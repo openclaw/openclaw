@@ -606,6 +606,13 @@ function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): voi
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+  // Snapshot (non-activating) loads must disable the cache to avoid storing a registry
+  // whose commands were never globally registered.
+  if (options.activate === false && options.cache !== false) {
+    throw new Error(
+      "loadOpenClawPlugins: activate:false requires cache:false to prevent command registry divergence",
+    );
+  }
   const env = options.env ?? process.env;
   // Test env: default-disable plugins unless explicitly configured.
   // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
