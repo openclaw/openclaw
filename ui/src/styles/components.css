@@ -3452,9 +3452,20 @@
   transition: background var(--duration-fast) ease;
 }
 
-.cmd-palette__item:hover,
+.cmd-palette__item:hover {
+  background: color-mix(in srgb, var(--bg-hover) 90%, transparent);
+}
+
 .cmd-palette__item--active {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg-hover) 94%, #fff);
+}
+
+:root[data-theme-mode="light"] .cmd-palette__item:hover {
+  background: color-mix(in srgb, var(--bg-hover) 90%, #fff);
+}
+
+:root[data-theme-mode="light"] .cmd-palette__item--active {
+  background: color-mix(in srgb, var(--bg-hover) 94%, #000);
 }
 
 .cmd-palette__item .nav-item__icon {
