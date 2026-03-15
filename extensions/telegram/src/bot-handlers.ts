@@ -56,6 +56,7 @@ import {
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  hasBotMention,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
@@ -525,7 +526,7 @@ export const registerTelegramHandlers = ({
     hasGroupAllowOverride: boolean;
     groupConfig?: TelegramGroupConfig;
     topicConfig?: TelegramTopicConfig;
-  }) => {
+  }): { skip: boolean; reason?: string } => {
     const {
       isGroup,
       chatId,
@@ -552,21 +553,21 @@ export const registerTelegramHandlers = ({
     if (!baseAccess.allowed) {
       if (baseAccess.reason === "group-disabled") {
         logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
-        return true;
+        return { skip: true, reason: "group-disabled" };
       }
       if (baseAccess.reason === "topic-disabled") {
         logVerbose(
           `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
         );
-        return true;
+        return { skip: true, reason: "topic-disabled" };
       }
       logVerbose(
         `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`,
       );
-      return true;
+      return { skip: true, reason: "allowfrom-override" };
     }
     if (!isGroup) {
-      return false;
+      return { skip: false };
     }
     const policyAccess = evaluateTelegramGroupPolicyAccess({
       isGroup,
@@ -589,26 +590,26 @@ export const registerTelegramHandlers = ({
     if (!policyAccess.allowed) {
       if (policyAccess.reason === "group-policy-disabled") {
         logVerbose("Blocked telegram group message (groupPolicy: disabled)");
-        return true;
+        return { skip: true, reason: "group-policy-disabled" };
       }
       if (policyAccess.reason === "group-policy-allowlist-no-sender") {
         logVerbose("Blocked telegram group message (no sender ID, groupPolicy: allowlist)");
-        return true;
+        return { skip: true, reason: "group-policy-allowlist-no-sender" };
       }
       if (policyAccess.reason === "group-policy-allowlist-empty") {
         logVerbose(
           "Blocked telegram group message (groupPolicy: allowlist, no group allowlist entries)",
         );
-        return true;
+        return { skip: true, reason: "group-policy-allowlist-empty" };
       }
       if (policyAccess.reason === "group-policy-allowlist-unauthorized") {
         logVerbose(`Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`);
-        return true;
+        return { skip: true, reason: "group-policy-allowlist-unauthorized" };
       }
       logger.info({ chatId, title: chatTitle, reason: "not-allowed" }, "skipping group message");
-      return true;
+      return { skip: true, reason: "not-allowed" };
     }
-    return false;
+    return { skip: false };
   };
 
   type TelegramGroupAllowContext = Awaited<ReturnType<typeof resolveTelegramGroupAllowFromContext>>;
@@ -714,7 +715,7 @@ export const registerTelegramHandlers = ({
         hasGroupAllowOverride,
         groupConfig,
         topicConfig,
-      })
+      }).skip
     ) {
       return { allowed: false, reason: "group-policy" };
     }
@@ -1554,20 +1555,36 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      if (
-        shouldSkipGroupMessage({
-          isGroup: event.isGroup,
-          chatId: event.chatId,
-          chatTitle: event.msg.chat.title,
-          resolvedThreadId,
-          senderId: event.senderId,
-          senderUsername: event.senderUsername,
-          effectiveGroupAllow,
-          hasGroupAllowOverride,
-          groupConfig,
-          topicConfig,
-        })
-      ) {
+      const { skip: shouldSkip, reason: skipReason } = shouldSkipGroupMessage({
+        isGroup: event.isGroup,
+        chatId: event.chatId,
+        chatTitle: event.msg.chat.title,
+        resolvedThreadId,
+        senderId: event.senderId,
+        senderUsername: event.senderUsername,
+        effectiveGroupAllow,
+        hasGroupAllowOverride,
+        groupConfig,
+        topicConfig,
+      });
+
+      if (shouldSkip) {
+        // Only send hint for unconfigured groups (not intentionally disabled)
+        if (skipReason === "group-policy-allowlist-empty") {
+          const botUsername = event.ctx.me?.username;
+          if (botUsername && hasBotMention(event.msg, botUsername)) {
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () =>
+                bot.api.sendMessage(
+                  event.chatId,
+                  "⚠️ I received your message, but I'm not authorized to respond in this group. Please check the group configuration.",
+                  resolvedThreadId != null ? { message_thread_id: resolvedThreadId } : undefined,
+                ),
+            }).catch(() => {}); // Silently ignore errors
+          }
+        }
         return;
       }
 
