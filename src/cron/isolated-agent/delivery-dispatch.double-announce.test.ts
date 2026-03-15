@@ -371,6 +371,34 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
+  it("suppresses NO_REPLY on direct (thread-based) delivery path (#45909)", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "NO_REPLY" });
+    // Simulate thread-based delivery so useDirectDelivery = true
+    (params.resolvedDelivery as { threadId?: string }).threadId = "42";
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    // Must NOT call deliverOutboundPayloads — NO_REPLY should be suppressed
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("suppresses NO_REPLY on structured content delivery path (#45909)", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "NO_REPLY" });
+    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
   it("structured/thread delivery also bypasses the write-ahead queue", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
