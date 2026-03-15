@@ -235,6 +235,8 @@ await session.prompt(effectivePrompt, { images: imageResult.images });
 
 SDK 处理完整的智能体循环：发送到 LLM、执行工具调用、流式响应。
 
+图片注入只作用于当前 prompt：OpenClaw 会从当前提示中加载图片引用，并通过 `images` 仅为这一轮传入。它不会重新扫描更早的历史轮次，也不会重新注入旧的图片负载。
+
 ## 工具架构
 
 ### 工具管道
@@ -540,80 +542,22 @@ import { ... } from "@mariozechner/pi-tui";
 
 ## 测试
 
-所有涵盖 pi 集成及其扩展的现有测试：
+Pi 集成的测试覆盖主要来自这些测试套件：
 
-- `src/agents/pi-embedded-block-chunker.test.ts`
-- `src/agents/pi-embedded-helpers.buildbootstrapcontextfiles.test.ts`
-- `src/agents/pi-embedded-helpers.classifyfailoverreason.test.ts`
-- `src/agents/pi-embedded-helpers.downgradeopenai-reasoning.test.ts`
-- `src/agents/pi-embedded-helpers.formatassistanterrortext.test.ts`
-- `src/agents/pi-embedded-helpers.formatrawassistanterrorforui.test.ts`
-- `src/agents/pi-embedded-helpers.image-dimension-error.test.ts`
-- `src/agents/pi-embedded-helpers.image-size-error.test.ts`
-- `src/agents/pi-embedded-helpers.isautherrormessage.test.ts`
-- `src/agents/pi-embedded-helpers.isbillingerrormessage.test.ts`
-- `src/agents/pi-embedded-helpers.iscloudcodeassistformaterror.test.ts`
-- `src/agents/pi-embedded-helpers.iscompactionfailureerror.test.ts`
-- `src/agents/pi-embedded-helpers.iscontextoverflowerror.test.ts`
-- `src/agents/pi-embedded-helpers.isfailovererrormessage.test.ts`
-- `src/agents/pi-embedded-helpers.islikelycontextoverflowerror.test.ts`
-- `src/agents/pi-embedded-helpers.ismessagingtoolduplicate.test.ts`
-- `src/agents/pi-embedded-helpers.messaging-duplicate.test.ts`
-- `src/agents/pi-embedded-helpers.normalizetextforcomparison.test.ts`
-- `src/agents/pi-embedded-helpers.resolvebootstrapmaxchars.test.ts`
-- `src/agents/pi-embedded-helpers.sanitize-session-messages-images.keeps-tool-call-tool-result-ids-unchanged.test.ts`
-- `src/agents/pi-embedded-helpers.sanitize-session-messages-images.removes-empty-assistant-text-blocks-but-preserves.test.ts`
-- `src/agents/pi-embedded-helpers.sanitizegoogleturnordering.test.ts`
-- `src/agents/pi-embedded-helpers.sanitizesessionmessagesimages-thought-signature-stripping.test.ts`
-- `src/agents/pi-embedded-helpers.sanitizetoolcallid.test.ts`
-- `src/agents/pi-embedded-helpers.sanitizeuserfacingtext.test.ts`
-- `src/agents/pi-embedded-helpers.stripthoughtsignatures.test.ts`
-- `src/agents/pi-embedded-helpers.validate-turns.test.ts`
-- `src/agents/pi-embedded-runner-extraparams.live.test.ts`（实时）
-- `src/agents/pi-embedded-runner-extraparams.test.ts`
-- `src/agents/pi-embedded-runner.applygoogleturnorderingfix.test.ts`
-- `src/agents/pi-embedded-runner.buildembeddedsandboxinfo.test.ts`
-- `src/agents/pi-embedded-runner.createsystempromptoverride.test.ts`
-- `src/agents/pi-embedded-runner.get-dm-history-limit-from-session-key.falls-back-provider-default-per-dm-not.test.ts`
-- `src/agents/pi-embedded-runner.get-dm-history-limit-from-session-key.returns-undefined-sessionkey-is-undefined.test.ts`
-- `src/agents/pi-embedded-runner.google-sanitize-thinking.test.ts`
-- `src/agents/pi-embedded-runner.guard.test.ts`
-- `src/agents/pi-embedded-runner.limithistoryturns.test.ts`
-- `src/agents/pi-embedded-runner.resolvesessionagentids.test.ts`
-- `src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts`
-- `src/agents/pi-embedded-runner.sanitize-session-history.test.ts`
-- `src/agents/pi-embedded-runner.splitsdktools.test.ts`
-- `src/agents/pi-embedded-runner.test.ts`
-- `src/agents/pi-embedded-subscribe.code-span-awareness.test.ts`
-- `src/agents/pi-embedded-subscribe.reply-tags.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.calls-onblockreplyflush-before-tool-execution-start-preserve.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.does-not-append-text-end-content-is.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.does-not-call-onblockreplyflush-callback-is-not.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.does-not-duplicate-text-end-repeats-full.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.does-not-emit-duplicate-block-replies-text.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.emits-block-replies-text-end-does-not.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.emits-reasoning-as-separate-message-enabled.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.filters-final-suppresses-output-without-start-tag.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.includes-canvas-action-metadata-tool-summaries.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.keeps-assistanttexts-final-answer-block-replies-are.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.keeps-indented-fenced-blocks-intact.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.reopens-fenced-blocks-splitting-inside-them.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.splits-long-single-line-fenced-blocks-reopen.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.streams-soft-chunks-paragraph-preference.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.subscribeembeddedpisession.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.suppresses-message-end-block-replies-message-tool.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.waits-multiple-compaction-retries-before-resolving.test.ts`
-- `src/agents/pi-embedded-subscribe.tools.test.ts`
-- `src/agents/pi-embedded-utils.test.ts`
-- `src/agents/pi-extensions/compaction-safeguard.test.ts`
-- `src/agents/pi-extensions/context-pruning.test.ts`
+- `src/agents/pi-*.test.ts`
+- `src/agents/pi-auth-json.test.ts`
+- `src/agents/pi-embedded-*.test.ts`
+- `src/agents/pi-embedded-helpers*.test.ts`
+- `src/agents/pi-embedded-runner*.test.ts`
+- `src/agents/pi-embedded-runner/**/*.test.ts`
+- `src/agents/pi-embedded-subscribe*.test.ts`
+- `src/agents/pi-tools*.test.ts`
+- `src/agents/pi-tool-definition-adapter*.test.ts`
 - `src/agents/pi-settings.test.ts`
-- `src/agents/pi-tool-definition-adapter.test.ts`
-- `src/agents/pi-tools-agent-config.test.ts`
-- `src/agents/pi-tools.create-openclaw-coding-tools.adds-claude-style-aliases-schemas-without-dropping-b.test.ts`
-- `src/agents/pi-tools.create-openclaw-coding-tools.adds-claude-style-aliases-schemas-without-dropping-d.test.ts`
-- `src/agents/pi-tools.create-openclaw-coding-tools.adds-claude-style-aliases-schemas-without-dropping-f.test.ts`
-- `src/agents/pi-tools.create-openclaw-coding-tools.adds-claude-style-aliases-schemas-without-dropping.test.ts`
-- `src/agents/pi-tools.policy.test.ts`
-- `src/agents/pi-tools.safe-bins.test.ts`
-- `src/agents/pi-tools.workspace-paths.test.ts`
+- `src/agents/pi-extensions/**/*.test.ts`
+
+实时或按需启用的测试：
+
+- `src/agents/pi-embedded-runner-extraparams.live.test.ts`（设置 `OPENCLAW_LIVE_TEST=1` 启用）
+
+当前可用的运行命令见 [Pi Development Workflow](/pi-dev)。
