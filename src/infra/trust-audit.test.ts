@@ -69,6 +69,11 @@ describe("trust audit", () => {
     expect(summary).not.toContain("cmd-3");
   });
 
+  it("returns null when no audit entries exist in window", () => {
+    const summary = summarizeTrustAudit({ agentId: "main" });
+    expect(summary).toBeNull();
+  });
+
   it("cleans up the audit file", () => {
     appendTrustAuditEntry({ agentId: "main", command: "echo hi", now: 100 });
     const filePath = resolveTrustAuditPath("main");

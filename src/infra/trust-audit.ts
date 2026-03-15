@@ -152,6 +152,10 @@ export function summarizeTrustAudit(params: {
         })
       : allEntries;
 
+  if (entries.length === 0) {
+    return null;
+  }
+
   const failedCount = entries.filter(
     (entry) => typeof entry.code === "number" && entry.code !== 0,
   ).length;

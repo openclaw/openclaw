@@ -293,11 +293,9 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const untrustParams = params as { agentId?: string; revokedBy?: string; keepAudit?: boolean };
+    const untrustParams = params as { agentId?: string; keepAudit?: boolean };
     const result = revokeTrustWindow({
       agentId: untrustParams.agentId,
-      revokedBy: untrustParams.revokedBy,
-      keepAudit: untrustParams.keepAudit,
     });
     if (!result.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));

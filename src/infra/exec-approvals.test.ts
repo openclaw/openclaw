@@ -320,4 +320,20 @@ describe("trust window", () => {
     expect(revoked.ok).toBe(true);
     expect(getTrustWindow("main")).toBeUndefined();
   });
+
+  it("does not revoke expired trust windows", () => {
+    initTrustWindowCache();
+    expect(grantTrustWindow({ agentId: "main", minutes: 1 }).ok).toBe(true);
+    const trustWindow = getTrustWindow("main");
+    expect(trustWindow).toBeTruthy();
+    if (!trustWindow) {
+      return;
+    }
+    trustWindow.expiresAt = Date.now() - 1_000;
+    const revoked = revokeTrustWindow({ agentId: "main" });
+    expect(revoked.ok).toBe(false);
+    if (!revoked.ok) {
+      expect(revoked.error).toContain("No active trust window");
+    }
+  });
 });

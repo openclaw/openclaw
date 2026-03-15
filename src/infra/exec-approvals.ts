@@ -486,22 +486,18 @@ export function grantTrustWindow(params: {
   return { ok: true, agentId: validated.agentId, expiresAt };
 }
 
-export function revokeTrustWindow(params: {
-  agentId?: string;
-  revokedBy?: string;
-  keepAudit?: boolean;
-}): RevokeTrustResult {
+export function revokeTrustWindow(params: { agentId?: string }): RevokeTrustResult {
   const validated = resolveTrustAgentIdOrError(params.agentId);
   if (!validated.agentId) {
     return { ok: false, error: validated.error ?? "invalid agentId" };
   }
 
+  const now = Date.now();
   const trustWindow = trustWindowCache.get(validated.agentId);
-  if (!trustWindow || trustWindow.status !== "active") {
+  if (!isTrustWindowActive(trustWindow, now)) {
     return { ok: false, error: `No active trust window for agent "${validated.agentId}"` };
   }
 
-  const now = Date.now();
   const endedAt = trustWindow.expiresAt > now ? now : trustWindow.expiresAt;
   const summary = summarizeTrustAudit({
     agentId: validated.agentId,
