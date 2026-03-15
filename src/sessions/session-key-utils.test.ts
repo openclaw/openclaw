@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
+import { getActiveNamedSessionKey, setActiveNamedSession } from "../gateway/session-utils.js";
 import {
   buildNamedDmSessionKey,
   isNamedDmSessionKey,
   parseNamedDmSessionKey,
 } from "./session-key-utils.js";
-import {
-  getActiveNamedSessionKey,
-  setActiveNamedSession,
-} from "../gateway/session-utils.js";
-import type { SessionEntry } from "../config/sessions.js";
 
 describe("Named DM Session Keys (ETH-608)", () => {
   describe("buildNamedDmSessionKey", () => {
@@ -251,7 +248,11 @@ describe("Named DM Session Keys (ETH-608)", () => {
 
   describe("getActiveNamedSessionKey", () => {
     it("returns null when mainEntry is undefined", () => {
-      const result = getActiveNamedSessionKey({ mainEntry: undefined, agentId: "main", peerId: "123" });
+      const result = getActiveNamedSessionKey({
+        mainEntry: undefined,
+        agentId: "main",
+        peerId: "123",
+      });
       expect(result).toBeNull();
     });
 

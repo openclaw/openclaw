@@ -5,6 +5,7 @@ Docs: https://docs.openclaw.ai
 ## Unreleased
 
 ### Changes
+
 - Sessions/named DM: add `buildNamedDmSessionKey`, `parseNamedDmSessionKey`, and `isNamedDmSessionKey` key-format helpers, an `activeNamedSession` field on `SessionEntry`, and `setActiveNamedSession`/`getActiveNamedSessionKey` store helpers as infrastructure for named DM session switching.
 
 - Android/mobile: add a system-aware dark theme across onboarding and post-onboarding screens so the app follows the device theme through setup, chat, and voice flows. (#46249) Thanks @sibbl.
