@@ -51,7 +51,7 @@ function replaceBlockLines(
 }
 
 function renderKimiK2Ids(prefix: string) {
-  return MOONSHOT_KIMI_K2_MODELS.map((model) => `- \`${prefix}${model.id}\``);
+  return [...MOONSHOT_KIMI_K2_MODELS.map((model) => `- \`${prefix}${model.id}\``), ""];
 }
 
 function renderMoonshotAliases() {

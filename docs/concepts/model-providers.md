@@ -193,7 +193,8 @@ Kimi K2 model IDs:
 - `moonshot/kimi-k2-turbo-preview`
 - `moonshot/kimi-k2-thinking`
 - `moonshot/kimi-k2-thinking-turbo`
-  [//]: # (moonshot-kimi-k2-model-refs:end)
+
+[//]: # "moonshot-kimi-k2-model-refs:end"
 
 ```json5
 {
