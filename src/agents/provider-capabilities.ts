@@ -1,3 +1,4 @@
+import { resolveProviderCapabilitiesWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ProviderCapabilities = {
@@ -35,11 +36,6 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
   },
-  // kimi-coding natively supports Anthropic tool framing (input_schema);
-  // converting to OpenAI format causes XML text fallback instead of tool_use blocks.
-  "kimi-coding": {
-    preserveAnthropicThinkingSignatures: false,
-  },
   mistral: {
     transcriptToolCallIdMode: "strict9",
     transcriptToolCallIdModelHints: [
@@ -55,14 +51,6 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   openai: {
     providerFamily: "openai",
   },
-  "openai-codex": {
-    providerFamily: "openai",
-  },
-  openrouter: {
-    openAiCompatTurnValidation: false,
-    geminiThoughtSignatureSanitization: true,
-    geminiThoughtSignatureModelHints: ["gemini"],
-  },
   opencode: {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
@@ -73,20 +61,17 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     geminiThoughtSignatureSanitization: true,
     geminiThoughtSignatureModelHints: ["gemini"],
   },
-  kilocode: {
-    geminiThoughtSignatureSanitization: true,
-    geminiThoughtSignatureModelHints: ["gemini"],
-  },
-  "github-copilot": {
-    dropThinkingBlockModelHints: ["claude"],
-  },
 };
 
 export function resolveProviderCapabilities(provider?: string | null): ProviderCapabilities {
   const normalized = normalizeProviderId(provider ?? "");
+  const pluginCapabilities = normalized
+    ? resolveProviderCapabilitiesWithPlugin({ provider: normalized })
+    : undefined;
   return {
     ...DEFAULT_PROVIDER_CAPABILITIES,
     ...PROVIDER_CAPABILITIES[normalized],
+    ...pluginCapabilities,
   };
 }
 

@@ -2,15 +2,16 @@ import { resolveConfiguredAcpRoute } from "../../../src/acp/persistent-bindings.
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { logVerbose } from "../../../src/globals.js";
 import { getSessionBindingService } from "../../../src/infra/outbound/session-binding-service.js";
+import { isPluginOwnedSessionBindingRecord } from "../../../src/plugins/conversation-binding.js";
 import {
   buildAgentSessionKey,
   deriveLastRoutePolicy,
-  pickFirstExistingAgentId,
   resolveAgentRoute,
 } from "../../../src/routing/resolve-route.js";
 import {
   buildAgentMainSessionKey,
   resolveAgentIdFromSessionKey,
+  sanitizeAgentId,
 } from "../../../src/routing/session-key.js";
 import {
   buildTelegramGroupPeerId,
@@ -56,7 +57,9 @@ export function resolveTelegramConversationRoute(params: {
 
   const rawTopicAgentId = params.topicAgentId?.trim();
   if (rawTopicAgentId) {
-    const topicAgentId = pickFirstExistingAgentId(params.cfg, rawTopicAgentId);
+    // Preserve the configured topic agent ID so topic-bound sessions stay stable
+    // even when that agent is not present in the current config snapshot.
+    const topicAgentId = sanitizeAgentId(rawTopicAgentId);
     route = {
       ...route,
       agentId: topicAgentId,
@@ -116,21 +119,25 @@ export function resolveTelegramConversationRoute(params: {
     });
     const boundSessionKey = threadBinding?.targetSessionKey?.trim();
     if (threadBinding && boundSessionKey) {
-      route = {
-        ...route,
-        sessionKey: boundSessionKey,
-        agentId: resolveAgentIdFromSessionKey(boundSessionKey),
-        lastRoutePolicy: deriveLastRoutePolicy({
+      if (!isPluginOwnedSessionBindingRecord(threadBinding)) {
+        route = {
+          ...route,
           sessionKey: boundSessionKey,
-          mainSessionKey: route.mainSessionKey,
-        }),
-        matchedBy: "binding.channel",
-      };
+          agentId: resolveAgentIdFromSessionKey(boundSessionKey),
+          lastRoutePolicy: deriveLastRoutePolicy({
+            sessionKey: boundSessionKey,
+            mainSessionKey: route.mainSessionKey,
+          }),
+          matchedBy: "binding.channel",
+        };
+      }
       configuredBinding = null;
       configuredBindingSessionKey = "";
       getSessionBindingService().touch(threadBinding.bindingId);
       logVerbose(
-        `telegram: routed via bound conversation ${threadBindingConversationId} -> ${boundSessionKey}`,
+        isPluginOwnedSessionBindingRecord(threadBinding)
+          ? `telegram: plugin-bound conversation ${threadBindingConversationId}`
+          : `telegram: routed via bound conversation ${threadBindingConversationId} -> ${boundSessionKey}`,
       );
     }
   }
