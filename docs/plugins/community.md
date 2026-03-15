@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Stimm Voice** — Real-time voice conversations via a dual-agent architecture: one agent talks fast, one thinks deep — both collaborate in real-time. A Python voice agent handles low-latency speech; OpenClaw acts as supervisor for reasoning, tools, and long-context decisions.
+  npm: `openclaw-stimm-voice`
+  repo: `https://github.com/EtienneLescot/openclaw-stimm-voice`
+  install: `openclaw plugins install openclaw-stimm-voice`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
