@@ -325,6 +325,7 @@ export async function tryDispatchAcpReply(params: {
     // Skip fallback for ttsMode="all" because blocks were already processed with TTS.
     const shouldSkipFallback = hasFinalDelivered || ttsMode === "all";
     if (!shouldSkipFallback && accumulatedBlockText.trim()) {
+      let ttsSucceeded = false;
       // Only attempt final TTS synthesis for ttsMode="final".
       // For other modes, skip directly to text fallback to avoid double TTS calls.
       if (ttsMode === "final") {
@@ -345,9 +346,7 @@ export async function tryDispatchAcpReply(params: {
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
             });
             queuedFinal = queuedFinal || delivered;
-            // TTS succeeded, skip text fallback but continue with remaining success-path logic
-          } else {
-            // TTS produced no media, fall through to text fallback
+            ttsSucceeded = true; // TTS succeeded, skip text fallback
           }
         } catch (err) {
           logVerbose(
@@ -356,10 +355,12 @@ export async function tryDispatchAcpReply(params: {
           // TTS failed, fall through to text fallback
         }
       }
-      // Fallback to text-only delivery (no TTS).
+      // Fallback to text-only delivery (no TTS) if TTS didn't succeed.
       // Use delivery.deliver to ensure proper routing in cross-provider ACP turns.
-      const delivered = await delivery.deliver("final", { text: accumulatedBlockText });
-      queuedFinal = queuedFinal || delivered;
+      if (!ttsSucceeded) {
+        const delivered = await delivery.deliver("final", { text: accumulatedBlockText });
+        queuedFinal = queuedFinal || delivered;
+      }
     }
 
     if (shouldEmitResolvedIdentityNotice) {
