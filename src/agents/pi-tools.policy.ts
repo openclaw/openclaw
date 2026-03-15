@@ -313,6 +313,9 @@ export function resolveEffectiveToolPolicy(params: {
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
     // alsoAllow is applied at the profile stage (to avoid being filtered out early).
+    // explicitProfileAlsoAllow contains only explicit tools.alsoAllow entries (no implicit
+    // exec/read/write/edit exposure).
+    explicitProfileAlsoAllow,
     profileAlsoAllow,
     providerProfileAlsoAllow: Array.isArray(agentProviderPolicy?.alsoAllow)
       ? agentProviderPolicy?.alsoAllow
