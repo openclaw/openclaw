@@ -420,7 +420,7 @@ describe("statusCommand", () => {
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         includeFilesystem: true,
-        includeChannelSecurity: false,
+        includeChannelSecurity: true,
       }),
     );
   });
