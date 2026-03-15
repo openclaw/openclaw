@@ -1,6 +1,11 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getMessageFeishu, listFeishuThreadMessages } from "./send.js";
+import {
+  buildStructuredCard,
+  getMessageFeishu,
+  listFeishuThreadMessages,
+  resolveFeishuCardTemplate,
+} from "./send.js";
 
 const { mockClientGet, mockClientList, mockCreateFeishuClient, mockResolveFeishuAccount } =
   vi.hoisted(() => ({
@@ -231,5 +236,35 @@ describe("getMessageFeishu", () => {
         content: "hello from card 2.0",
       }),
     ]);
+  });
+});
+
+describe("resolveFeishuCardTemplate", () => {
+  it("accepts supported Feishu templates", () => {
+    expect(resolveFeishuCardTemplate(" purple ")).toBe("purple");
+  });
+
+  it("drops unsupported free-form identity themes", () => {
+    expect(resolveFeishuCardTemplate("space lobster")).toBeUndefined();
+  });
+});
+
+describe("buildStructuredCard", () => {
+  it("falls back to blue when the header template is unsupported", () => {
+    const card = buildStructuredCard("hello", {
+      header: {
+        title: "Agent",
+        template: "space lobster",
+      },
+    });
+
+    expect(card).toEqual(
+      expect.objectContaining({
+        header: {
+          title: { tag: "plain_text", content: "Agent" },
+          template: "blue",
+        },
+      }),
+    );
   });
 });
