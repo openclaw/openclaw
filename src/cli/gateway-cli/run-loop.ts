@@ -35,6 +35,15 @@ export async function runGatewayLoop(params: {
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
 
+  // Server-startup guard: ignore SIGTERM while `params.start()` is in
+  // progress to avoid tearing down a half-initialised server when a CLI
+  // process that shares the systemd cgroup exits immediately.  (#47133)
+  // Outside of the startup window every SIGTERM is treated as intentional
+  // so that `systemctl stop` always triggers a graceful drain-and-close
+  // sequence — including after a failed in-process restart where the
+  // process is idle and waiting for the next restart signal.
+  let serverStarting = false;
+
   const cleanupSignals = () => {
     process.removeListener("SIGTERM", onSigterm);
     process.removeListener("SIGINT", onSigint);
@@ -176,6 +185,17 @@ export async function runGatewayLoop(params: {
   };
 
   const onSigterm = () => {
+    // While params.start() is in progress no CLI client can have connected
+    // yet, so a SIGTERM at this point is almost certainly a side-effect of a
+    // CLI process exiting from the same systemd cgroup rather than an
+    // intentional service stop.  Ignore it to break the restart loop
+    // described in #47133 / #29827.  At all other times (including after a
+    // failed restart where the process is idle) we honour the signal so that
+    // `systemctl stop` always triggers a full graceful shutdown.
+    if (serverStarting && !shuttingDown) {
+      gatewayLog.warn("signal SIGTERM received during server startup; ignoring spurious signal");
+      return;
+    }
     gatewayLog.info("signal SIGTERM received");
     request("stop", "SIGTERM");
   };
@@ -218,7 +238,9 @@ export async function runGatewayLoop(params: {
     while (true) {
       onIteration();
       try {
+        serverStarting = true;
         server = await params.start();
+        serverStarting = false;
         isFirstStart = false;
       } catch (err) {
         // On initial startup, let the error propagate so the outer handler
@@ -229,6 +251,7 @@ export async function runGatewayLoop(params: {
           throw err;
         }
         server = null;
+        serverStarting = false;
         // Release the gateway lock so that `daemon restart/stop` (which
         // discovers PIDs via the gateway port) can still manage the process.
         // Without this, the process holds the lock but is not listening,

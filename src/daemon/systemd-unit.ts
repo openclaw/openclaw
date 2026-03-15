@@ -62,9 +62,12 @@ export function buildSystemdUnit({
     "TimeoutStopSec=30",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
-    // Keep service children in the same lifecycle so restarts do not leave
-    // orphan ACP/runtime workers behind.
-    "KillMode=control-group",
+    // Use mixed mode: SIGTERM is sent only to the main gateway process on
+    // unit stop, while residual children (ACP workers, etc.) still receive
+    // SIGKILL after TimeoutStopSec.  This prevents CLI processes that
+    // happen to share the service cgroup from propagating a spurious
+    // SIGTERM to the gateway on disconnect.  (#47133, #29827)
+    "KillMode=mixed",
     workingDirLine,
     ...envLines,
     "",
