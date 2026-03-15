@@ -17,6 +17,24 @@ export type AnnounceTarget = {
   threadId?: string; // Forum topic/thread ID
 };
 
+function buildDirectTargetCandidates(channel: string | null, id: string): string[] {
+  if (!id) {
+    return [];
+  }
+  switch (channel) {
+    case "discord":
+    case "slack":
+    case "feishu":
+    case "mattermost":
+    case "msteams":
+      return [`user:${id}`, id];
+    case "webchat":
+      return [`webchat:${id}`, id];
+    default:
+      return [id, `user:${id}`];
+  }
+}
+
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
   const rawParts = sessionKey.split(":").filter(Boolean);
   const parts = rawParts.length >= 3 && rawParts[0] === "agent" ? rawParts.slice(2) : rawParts;
@@ -24,24 +42,24 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     return null;
   }
   const [channelRaw, kind, ...rest] = parts;
-  if (kind !== "group" && kind !== "channel") {
+  if (kind !== "group" && kind !== "channel" && kind !== "direct" && kind !== "dm") {
     return null;
   }
 
   // Extract topic/thread ID from rest (supports both :topic: and :thread:)
-  // Telegram uses :topic:, other platforms use :thread:
+  // Telegram uses :topic:, other platforms use :thread:.
   let threadId: string | undefined;
   const restJoined = rest.join(":");
-  const topicMatch = restJoined.match(/:topic:(\d+)$/);
-  const threadMatch = restJoined.match(/:thread:(\d+)$/);
+  const topicMatch = restJoined.match(/:topic:([^:]+)$/);
+  const threadMatch = restJoined.match(/:thread:([^:]+)$/);
   const match = topicMatch || threadMatch;
 
   if (match) {
     threadId = match[1]; // Keep as string to match AgentCommandOpts.threadId
   }
 
-  // Remove :topic:N or :thread:N suffix from ID for target
-  const id = match ? restJoined.replace(/:(topic|thread):\d+$/, "") : restJoined.trim();
+  // Remove :topic:<id> or :thread:<id> suffix from ID for target.
+  const id = match ? restJoined.replace(/:(topic|thread):[^:]+$/, "") : restJoined.trim();
 
   if (!id) {
     return null;
@@ -51,7 +69,18 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   }
   const normalizedChannel = normalizeAnyChannelId(channelRaw) ?? normalizeChatChannelId(channelRaw);
   const channel = normalizedChannel ?? channelRaw.toLowerCase();
+  const plugin = normalizedChannel ? getChannelPlugin(normalizedChannel) : undefined;
   const kindTarget = (() => {
+    if (kind === "direct" || kind === "dm") {
+      const candidates = buildDirectTargetCandidates(normalizedChannel ?? null, id);
+      for (const candidate of candidates) {
+        const normalized = plugin?.messaging?.normalizeTarget?.(candidate);
+        if (normalized) {
+          return normalized;
+        }
+      }
+      return candidates[0] ?? id;
+    }
     if (!normalizedChannel) {
       return id;
     }
@@ -60,9 +89,12 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     }
     return kind === "channel" ? `channel:${id}` : `group:${id}`;
   })();
-  const normalized = normalizedChannel
-    ? getChannelPlugin(normalizedChannel)?.messaging?.normalizeTarget?.(kindTarget)
-    : undefined;
+  const normalized =
+    kind === "direct" || kind === "dm"
+      ? undefined
+      : normalizedChannel
+        ? plugin?.messaging?.normalizeTarget?.(kindTarget)
+        : undefined;
   return {
     channel,
     to: normalized ?? kindTarget,

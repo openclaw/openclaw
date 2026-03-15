@@ -47,6 +47,9 @@ const probeGateway = vi.fn<
 >();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.fn(() => ({}));
+const writeRestartSentinelFromEnvIfPresent = vi.fn<(env?: NodeJS.ProcessEnv) => Promise<boolean>>(
+  async () => true,
+);
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -72,6 +75,11 @@ vi.mock("../../gateway/probe.js", () => ({
 
 vi.mock("../../config/commands.js", () => ({
   isRestartEnabled: (config?: { commands?: unknown }) => isRestartEnabled(config),
+}));
+
+vi.mock("./restart-notify.js", () => ({
+  writeRestartSentinelFromEnvIfPresent: (env?: NodeJS.ProcessEnv) =>
+    writeRestartSentinelFromEnvIfPresent(env),
 }));
 
 vi.mock("../../daemon/service.js", () => ({
@@ -143,6 +151,7 @@ describe("runDaemonRestart health checks", () => {
     probeGateway.mockReset();
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
+    writeRestartSentinelFromEnvIfPresent.mockReset();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -240,6 +249,19 @@ describe("runDaemonRestart health checks", () => {
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes restart notify sentinels through the lifecycle-core completion hook", async () => {
+    runServiceRestart.mockImplementation(
+      async (params: RestartParams & { onRestartComplete?: () => Promise<void> }) => {
+        await params.onRestartComplete?.();
+        return true;
+      },
+    );
+
+    await runDaemonRestart({ json: true });
+
+    expect(writeRestartSentinelFromEnvIfPresent).toHaveBeenCalledWith(process.env);
   });
 
   it("signals an unmanaged gateway process on stop", async () => {

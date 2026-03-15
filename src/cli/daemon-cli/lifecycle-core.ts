@@ -31,6 +31,12 @@ type RestartPostCheckContext = {
   fail: (message: string, hints?: string[]) => void;
 };
 
+type RestartCompleteContext = {
+  json: boolean;
+  stdout: Writable;
+  warnings: string[];
+};
+
 type NotLoadedActionResult = {
   result: "stopped" | "restarted";
   message?: string;
@@ -334,15 +340,17 @@ export async function runServiceRestart(params: {
   checkTokenDrift?: boolean;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<GatewayServiceRestartResult | void>;
   onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
+  onRestartComplete?: (ctx: RestartCompleteContext) => Promise<void> | void;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
   const warnings: string[] = [];
   let handledNotLoaded: NotLoadedActionResult | null = null;
-  const emitScheduledRestart = (
+  const emitScheduledRestart = async (
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
     serviceLoaded: boolean,
   ) => {
+    await params.onRestartComplete?.({ json, stdout, warnings });
     emit({
       ok: true,
       result: restartStatus.daemonActionResult,
@@ -439,14 +447,14 @@ export async function runServiceRestart(params: {
     }
     let restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
     if (restartStatus.scheduled) {
-      return emitScheduledRestart(restartStatus, loaded);
+      return await emitScheduledRestart(restartStatus, loaded);
     }
     if (params.postRestartCheck) {
       const postRestartResult = await params.postRestartCheck({ json, stdout, warnings, fail });
       if (postRestartResult) {
         restartStatus = describeGatewayServiceRestart(params.serviceNoun, postRestartResult);
         if (restartStatus.scheduled) {
-          return emitScheduledRestart(restartStatus, loaded);
+          return await emitScheduledRestart(restartStatus, loaded);
         }
       }
     }
@@ -458,6 +466,7 @@ export async function runServiceRestart(params: {
         restarted = true;
       }
     }
+    await params.onRestartComplete?.({ json, stdout, warnings });
     emit({
       ok: true,
       result: "restarted",

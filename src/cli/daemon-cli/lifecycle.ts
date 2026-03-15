@@ -25,6 +25,7 @@ import {
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
+import { writeRestartSentinelFromEnvIfPresent } from "./restart-notify.js";
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -166,6 +167,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         restartedWithoutServiceManager = true;
       }
       return handled;
+    },
+    onRestartComplete: async () => {
+      await writeRestartSentinelFromEnvIfPresent(process.env);
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       if (restartedWithoutServiceManager) {
