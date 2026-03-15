@@ -159,8 +159,15 @@ async function resolveFeishuSenderName(params: {
   if (lookupCandidates.length === 0) return {};
 
   const now = Date.now();
-  const client = createFeishuClient(account);
   let deferredPermissionError: PermissionError | undefined;
+  let client: ReturnType<typeof createFeishuClient>;
+
+  try {
+    client = createFeishuClient(account);
+  } catch (err) {
+    log(`feishu: failed to initialize sender name lookup client: ${String(err)}`);
+    return {};
+  }
 
   for (const candidate of lookupCandidates) {
     const cached = senderNameCache.get(candidate.id);

@@ -441,6 +441,49 @@ describe("handleFeishuMessage sender name resolution", () => {
       }),
     );
   });
+
+  it("keeps sender-name lookup best-effort when Feishu client creation throws", async () => {
+    mockCreateFeishuClient.mockImplementation(() => {
+      throw new Error("client init failed");
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await expect(
+      dispatchMessage({
+        cfg,
+        event: {
+          sender: {
+            sender_id: {
+              open_id: "ou_sender_client_init_failure",
+              user_id: "0b1a2c3d_client_init_failure",
+            },
+          },
+          message: {
+            message_id: "msg-client-init-failure",
+            chat_id: "oc-dm",
+            chat_type: "p2p",
+            message_type: "text",
+            content: JSON.stringify({ text: "你好" }),
+          },
+        },
+      }),
+    ).resolves.toBeDefined();
+
+    expect(mockFinalizeInboundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("ou_sender_client_init_failure: 你好"),
+      }),
+    );
+  });
 });
 
 describe("handleFeishuMessage command authorization", () => {
