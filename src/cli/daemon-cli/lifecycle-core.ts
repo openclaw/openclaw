@@ -420,6 +420,8 @@ export async function runServiceRestart(params: {
         }
       }
     } catch (err) {
+      // Best-effort drift check; SecretRef-unavailable is handled by
+      // resolveGatewayTokenForDriftCheck returning undefined.
       void err;
     }
   }
