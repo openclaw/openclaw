@@ -1,6 +1,6 @@
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import type { GatewayAuthResult } from "../../auth.js";
+import type { GatewayAuthResult, ResolvedGatewayAuthMode } from "../../auth.js";
 import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
 import { isLoopbackAddress } from "../../net.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
@@ -66,7 +66,7 @@ export function shouldSkipBackendSelfPairing(params: {
   hasBrowserOriginHeader: boolean;
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
-  authMode?: string;
+  authMode?: ResolvedGatewayAuthMode;
 }): boolean {
   const isGatewayBackendClient =
     params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
