@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
-import { danger } from "../../globals.js";
+import { danger, warn } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
@@ -208,6 +208,36 @@ export function registerCronEditCommand(cron: Command) {
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
           const model =
             typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined;
+          if (model) {
+            try {
+              const { loadConfig } = await import("../../config/config.js");
+              const { loadModelCatalog } = await import("../../agents/model-catalog.js");
+              const { buildAllowedModelSet, parseModelRef } =
+                await import("../../agents/model-selection.js");
+              const { DEFAULT_PROVIDER, DEFAULT_MODEL } = await import("../../agents/defaults.js");
+              const cfg = loadConfig();
+              const catalog = await loadModelCatalog({ config: cfg });
+              const { allowAny, allowedKeys } = buildAllowedModelSet({
+                cfg,
+                catalog,
+                defaultProvider: DEFAULT_PROVIDER,
+                defaultModel: DEFAULT_MODEL,
+              });
+              if (!allowAny) {
+                const ref = parseModelRef(model, DEFAULT_PROVIDER);
+                const key = ref ? `${ref.provider}/${ref.model}` : model;
+                if (!allowedKeys.has(key)) {
+                  defaultRuntime.error(
+                    warn(
+                      `Warning: "${model}" is not in the allowed model set. This cron may fail at execution time.`,
+                    ),
+                  );
+                }
+              }
+            } catch {
+              // Config/catalog loading can fail; don't block cron edit.
+            }
+          }
           const thinking =
             typeof opts.thinking === "string" && opts.thinking.trim()
               ? opts.thinking.trim()
