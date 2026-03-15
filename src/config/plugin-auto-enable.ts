@@ -461,6 +461,55 @@ function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawCon
   };
 }
 
+function hasEnabledAlternativePluginForChannels(params: {
+  cfg: OpenClawConfig;
+  channelIds: string[];
+  pluginId: string;
+  registry: PluginManifestRegistry;
+}): boolean {
+  if (params.channelIds.length === 0) {
+    return false;
+  }
+  const entries = params.cfg.plugins?.entries;
+  if (!entries || typeof entries !== "object") {
+    return false;
+  }
+  const channelSet = new Set(params.channelIds);
+  for (const record of params.registry.plugins) {
+    if (record.id === params.pluginId) {
+      continue;
+    }
+    if (!record.channels.some((channelId) => channelSet.has(channelId))) {
+      continue;
+    }
+    if (entries[record.id]?.enabled !== true) {
+      continue;
+    }
+    if (isPluginDenied(params.cfg, record.id)) {
+      continue;
+    }
+    if (isPluginExplicitlyDisabled(params.cfg, record.id)) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function resolvePluginChannelIds(pluginId: string, registry: PluginManifestRegistry): string[] {
+  const builtInChannelId = normalizeChatChannelId(pluginId);
+  if (builtInChannelId) {
+    return [builtInChannelId];
+  }
+  const record = registry.plugins.find((entry) => entry.id === pluginId);
+  if (!record) {
+    return [];
+  }
+  return record.channels.filter(
+    (channelId) => typeof channelId === "string" && channelId.length > 0,
+  );
+}
+
 function formatAutoEnableChange(entry: PluginEnableChange): string {
   let reason = entry.reason.trim();
   const channelId = normalizeChatChannelId(entry.pluginId);
@@ -503,6 +552,16 @@ export function applyPluginAutoEnable(params: {
       continue;
     }
     if (shouldSkipPreferredPluginAutoEnable(next, entry, configured, env)) {
+      continue;
+    }
+    if (
+      hasEnabledAlternativePluginForChannels({
+        cfg: next,
+        channelIds: resolvePluginChannelIds(entry.pluginId, registry),
+        pluginId: entry.pluginId,
+        registry,
+      })
+    ) {
       continue;
     }
     const allow = next.plugins?.allow;

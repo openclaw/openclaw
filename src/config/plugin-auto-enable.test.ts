@@ -204,6 +204,34 @@ describe("applyPluginAutoEnable", () => {
     expect(result.changes).toEqual([]);
   });
 
+  it("does not auto-enable built-in feishu when alternative feishu plugin is already enabled", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          feishu: {
+            appId: "cli_test_appid",
+            appSecret: "cli_test_secret",
+          },
+        },
+        plugins: {
+          entries: {
+            "openclaw-lark": { enabled: true },
+          },
+        },
+      },
+      env: {},
+      manifestRegistry: makeRegistry([
+        { id: "feishu", channels: ["feishu"] },
+        { id: "openclaw-lark", channels: ["feishu"] },
+      ]),
+    });
+
+    expect(result.config.channels?.feishu?.enabled).toBeUndefined();
+    expect(result.config.plugins?.entries?.feishu?.enabled).toBeUndefined();
+    expect(result.config.plugins?.entries?.["openclaw-lark"]?.enabled).toBe(true);
+    expect(result.changes).toEqual([]);
+  });
+
   it("auto-enables irc when configured via env", () => {
     const result = applyPluginAutoEnable({
       config: {},
