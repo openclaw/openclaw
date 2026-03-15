@@ -29,11 +29,16 @@ log = logging.getLogger(__name__)
 _DEFAULT_SIYUAN_URL = "http://localhost:6806"
 
 DOMAIN_NOTEBOOK: dict[str | None, str] = {
+    # Bo domains — wellness agents
     "wellness": "OpenBodhi-Wellness",
     "fitness": "OpenBodhi-Fitness",
     "health": "OpenBodhi-Health",
     "mental-health": "OpenBodhi-Mental",
     "cognitive": "OpenBodhi-Cognitive",
+    # Qenjin domains — business operations
+    "business": "Qenjin-Business",
+    # Moonman domains — trading
+    "trading": "Trader-Log",
 }
 PEOPLE_NOTEBOOK = "OpenBodhi-People"
 DIGESTS_NOTEBOOK = "OpenBodhi-Digests"
