@@ -25,10 +25,10 @@ export function isCacheTtlEligibleProvider(provider: string, modelId: string): b
   if (pluginEligibility !== undefined) {
     return pluginEligibility;
   }
-  if (CACHE_TTL_NATIVE_PROVIDERS.has(normalizedProvider)) {
+  if (normalizedProvider === "kilocode" && normalizedModelId.startsWith("anthropic/")) {
     return true;
   }
-  if (normalizedProvider === "kilocode" && normalizedModelId.startsWith("anthropic/")) {
+  if (CACHE_TTL_NATIVE_PROVIDERS.has(normalizedProvider)) {
     return true;
   }
   return false;

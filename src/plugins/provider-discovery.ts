@@ -15,7 +15,10 @@ export function resolvePluginDiscoveryProviders(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin[] {
-  return resolvePluginProviders(params).filter((provider) => resolveProviderCatalogHook(provider));
+  return resolvePluginProviders({
+    ...params,
+    bundledProviderAllowlistCompat: true,
+  }).filter((provider) => resolveProviderCatalogHook(provider));
 }
 
 export function groupPluginDiscoveryProvidersByOrder(
