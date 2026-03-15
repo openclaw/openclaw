@@ -1,6 +1,6 @@
 import type { RequestClient } from "@buape/carbon";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
 import { createDiscordRestClient } from "./client.js";
 
 const { attachProxyToCarbonRequestClientMock } = vi.hoisted(() => ({
