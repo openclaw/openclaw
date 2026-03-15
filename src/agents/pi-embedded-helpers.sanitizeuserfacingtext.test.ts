@@ -35,6 +35,14 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Start\n<tool_result>\nline1\nline2\n</tool_result>\nEnd")).toBe(
       "Start\n\nEnd",
     );
+
+    // Word boundary — should NOT match tags that merely start with tool_call/tool_result
+    expect(sanitizeUserFacingText("<tool_calling>data</tool_calling>")).toBe(
+      "<tool_calling>data</tool_calling>",
+    );
+    expect(sanitizeUserFacingText("<tool_results>data</tool_results>")).toBe(
+      "<tool_results>data</tool_results>",
+    );
   });
 
   it.each(["202 results found", "400 days left"])(

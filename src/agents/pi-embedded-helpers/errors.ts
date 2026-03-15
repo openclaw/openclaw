@@ -279,9 +279,9 @@ const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 // Raw tool XML tags that some models (via OpenRouter) may emit in plain text.
 // Strip both the tags and their content since this is internal protocol. See #45856.
 const TOOL_XML_TAG_RE =
-  /<\s*(?:tool_call|tool_result)[^>]*>[\s\S]*?<\s*\/\s*(?:tool_call|tool_result)\s*>/gi;
+  /<\s*(?:tool_call|tool_result)\b[^>]*>[\s\S]*?<\s*\/\s*(?:tool_call|tool_result)\b\s*>/gi;
 // Also catch self-closing or orphaned opening/closing tags
-const TOOL_XML_ORPHAN_TAG_RE = /<\s*\/?\s*(?:tool_call|tool_result)[^>]*\/?>/gi;
+const TOOL_XML_ORPHAN_TAG_RE = /<\s*\/?\s*(?:tool_call|tool_result)\b[^>]*\/?>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
