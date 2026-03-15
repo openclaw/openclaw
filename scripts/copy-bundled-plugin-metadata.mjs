@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { removeFileIfExists, writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 
-function rewritePackageExtensions(entries) {
+export function rewritePackageExtensions(entries) {
   if (!Array.isArray(entries)) {
     return undefined;
   }
@@ -17,8 +17,50 @@ function rewritePackageExtensions(entries) {
     });
 }
 
+function ensurePathInsideRoot(rootDir, rawPath) {
+  const resolved = path.resolve(rootDir, rawPath);
+  const relative = path.relative(rootDir, resolved);
+  if (
+    relative === "" ||
+    relative === "." ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+  ) {
+    return resolved;
+  }
+  throw new Error(`path escapes plugin root: ${rawPath}`);
+}
+
+function copyDeclaredPluginSkillPaths(params) {
+  const skills = Array.isArray(params.manifest.skills) ? params.manifest.skills : [];
+  const copiedSkills = [];
+  for (const raw of skills) {
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+      continue;
+    }
+    const normalized = raw.replace(/^\.\//u, "");
+    const sourcePath = ensurePathInsideRoot(params.pluginDir, raw);
+    if (!fs.existsSync(sourcePath)) {
+      // Some Docker/lightweight builds intentionally omit optional plugin-local
+      // dependencies. Only advertise skill paths that were actually bundled.
+      console.warn(
+        `[bundled-plugin-metadata] skipping missing skill path ${sourcePath} (plugin ${params.manifest.id ?? path.basename(params.pluginDir)})`,
+      );
+      continue;
+    }
+    const targetPath = ensurePathInsideRoot(params.distPluginDir, normalized);
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.cpSync(sourcePath, targetPath, {
+      dereference: true,
+      force: true,
+      recursive: true,
+    });
+    copiedSkills.push(raw);
+  }
+  return copiedSkills;
+}
+
 export function copyBundledPluginMetadata(params = {}) {
-  const repoRoot = params.cwd ?? process.cwd();
+  const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const extensionsRoot = path.join(repoRoot, "extensions");
   const distExtensionsRoot = path.join(repoRoot, "dist", "extensions");
   if (!fs.existsSync(extensionsRoot)) {
@@ -44,7 +86,12 @@ export function copyBundledPluginMetadata(params = {}) {
       continue;
     }
 
-    writeTextFileIfChanged(distManifestPath, fs.readFileSync(manifestPath, "utf8"));
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const copiedSkills = copyDeclaredPluginSkillPaths({ manifest, pluginDir, distPluginDir });
+    const bundledManifest = Array.isArray(manifest.skills)
+      ? { ...manifest, skills: copiedSkills }
+      : manifest;
+    writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
 
     const packageJsonPath = path.join(pluginDir, "package.json");
     if (!fs.existsSync(packageJsonPath)) {
