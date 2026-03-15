@@ -42,7 +42,14 @@ const acpMocks = vi.hoisted(() => ({
 }));
 const sessionBindingMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(targetSessionKey: string) => SessionBindingRecord[]>(() => []),
-  resolveByConversation: vi.fn(() => null),
+  resolveByConversation: vi.fn<
+    (ref: {
+      channel: string;
+      accountId: string;
+      conversationId: string;
+      parentConversationId?: string;
+    }) => SessionBindingRecord | null
+  >(() => null),
   touch: vi.fn(),
 }));
 const sessionStoreMocks = vi.hoisted(() => ({

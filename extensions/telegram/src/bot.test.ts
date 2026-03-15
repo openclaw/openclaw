@@ -1,11 +1,12 @@
 import { rm } from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
-} from "../plugins/interactive.js";
+} from "../../../src/plugins/interactive.js";
+import type { PluginInteractiveTelegramHandlerContext } from "../../../src/plugins/types.js";
+import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
+import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import {
   answerCallbackQuerySpy,
   commandSpy,
@@ -1373,7 +1374,7 @@ describe("createTelegramBot", () => {
     registerPluginInteractiveHandler("codex-plugin", {
       channel: "telegram",
       namespace: "codex",
-      handler: async ({ respond, callback }) => {
+      handler: async ({ respond, callback }: PluginInteractiveTelegramHandlerContext) => {
         await respond.editMessage({
           text: `Handled ${callback.payload}`,
         });

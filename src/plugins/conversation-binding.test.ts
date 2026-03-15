@@ -449,7 +449,11 @@ describe("plugin conversation binding approvals", () => {
             }
             return approved.binding;
           })
-        : request.binding;
+        : request.status === "bound"
+          ? request.binding
+          : (() => {
+              throw new Error("expected pending or bound bind result");
+            })();
 
     expect(binding).toEqual(
       expect.objectContaining({
@@ -506,7 +510,11 @@ describe("plugin conversation binding approvals", () => {
             }
             return approved.binding;
           })
-        : request.binding;
+        : request.status === "bound"
+          ? request.binding
+          : (() => {
+              throw new Error("expected pending or bound bind result");
+            })();
 
     expect(binding).toEqual(
       expect.objectContaining({
