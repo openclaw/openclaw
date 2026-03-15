@@ -97,7 +97,7 @@ function parseContextConfig(value: unknown): ParseResult {
     return { ok: false, message: "context must be an object" };
   }
 
-  const contextRecord = (rawContext ?? {}) as Record<string, unknown>;
+  const contextRecord = rawContext ?? {};
   const allowedContextKeys = new Set([
     "enabled",
     "recentTurns",

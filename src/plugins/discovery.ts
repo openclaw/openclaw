@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -14,6 +15,7 @@ import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
 import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
+const BUILT_IN_BUNDLED_PLUGIN_IDS = ["structured-context"] as const;
 
 export type PluginCandidate = {
   idHint: string;
@@ -79,8 +81,38 @@ function buildDiscoveryCacheKey(params: {
   const workspaceKey = roots.workspace ?? "";
   const configExtensionsRoot = roots.global ?? "";
   const bundledRoot = roots.stock ?? "";
+  const builtInBundledRoots = resolveBuiltInBundledPluginDirs({ env: params.env });
   const ownershipUid = params.ownershipUid ?? currentUid();
-  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(loadPaths)}`;
+  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${builtInBundledRoots.join(",")}::${JSON.stringify(loadPaths)}`;
+}
+
+function resolveBuiltInBundledPluginDirs(params: { env: NodeJS.ProcessEnv }): string[] {
+  // Explicit bundled root override fully controls discovery roots.
+  if (params.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim()) {
+    return [];
+  }
+
+  const dirs: string[] = [];
+  try {
+    let cursor = path.dirname(fileURLToPath(import.meta.url));
+    for (let i = 0; i < 6; i += 1) {
+      for (const pluginId of BUILT_IN_BUNDLED_PLUGIN_IDS) {
+        const candidate = path.join(cursor, pluginId);
+        if (fs.existsSync(path.join(candidate, "openclaw.plugin.json"))) {
+          dirs.push(candidate);
+        }
+      }
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        break;
+      }
+      cursor = parent;
+    }
+  } catch {
+    // ignore
+  }
+
+  return [...new Set(dirs)];
 }
 
 function currentUid(overrideUid?: number | null): number | null {
@@ -707,6 +739,17 @@ export function discoverOpenClawPlugins(params: {
   if (roots.stock) {
     discoverInDirectory({
       dir: roots.stock,
+      origin: "bundled",
+      ownershipUid: params.ownershipUid,
+      candidates,
+      diagnostics,
+      seen,
+    });
+  }
+
+  for (const builtInDir of resolveBuiltInBundledPluginDirs({ env })) {
+    discoverInDirectory({
+      dir: builtInDir,
       origin: "bundled",
       ownershipUid: params.ownershipUid,
       candidates,

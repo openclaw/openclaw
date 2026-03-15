@@ -501,7 +501,7 @@ async function callDefaultCompaction(params: {
   runtimeContext?: ContextEngineRuntimeContext;
 }): Promise<CompactResult> {
   const { compactEmbeddedPiSessionDirect } =
-    await import("../../../src/agents/pi-embedded-runner/compact.runtime.js");
+    await import("../../../agents/pi-embedded-runner/compact.runtime.js");
 
   const runtimeContext = params.runtimeContext ?? {};
   const result = await compactEmbeddedPiSessionDirect({

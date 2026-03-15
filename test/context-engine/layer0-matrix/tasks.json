@@ -48,7 +48,7 @@
     "title": "Fix identifier loss during compaction",
     "objective": "Investigate why identifiers are rewritten after context compaction and ensure exact identifier preservation.",
     "inputArtifacts": [
-      "extensions/structured-context/src/context-engine.ts",
+      "src/plugins/structured-context/src/context-engine.ts",
       "test/context-engine/layer0-matrix/cases.json",
       "Issue #24902"
     ],
@@ -65,7 +65,7 @@
     "primaryIdentifiers": [
       "Issue #24902",
       "OPENAI_API_KEY",
-      "extensions/structured-context/src/context-engine.ts"
+      "src/plugins/structured-context/src/context-engine.ts"
     ],
     "toolProfile": "light"
   },
@@ -276,7 +276,7 @@
     "title": "Revise feature spec",
     "objective": "Revise a feature spec for context-engine plugin rollout with config contract and failure modes.",
     "inputArtifacts": [
-      "extensions/structured-context/openclaw.plugin.json",
+      "src/plugins/structured-context/openclaw.plugin.json",
       "src/config/validation.ts",
       "plans/context-compaction-audit.md"
     ],
@@ -335,7 +335,7 @@
     "inputArtifacts": [
       "pnpm check",
       "pnpm test -- src/plugins/loader.test.ts",
-      "extensions/structured-context/src/context-engine.test.ts"
+      "src/plugins/structured-context/src/context-engine.test.ts"
     ],
     "hardConstraints": [
       "Keep failing command output externally referenced",

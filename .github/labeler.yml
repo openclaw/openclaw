@@ -247,7 +247,7 @@
 "extensions: structured-context":
   - changed-files:
       - any-glob-to-any-file:
-          - "extensions/structured-context/**"
+          - "src/plugins/structured-context/**"
 "extensions: minimax-portal-auth":
   - changed-files:
       - any-glob-to-any-file:

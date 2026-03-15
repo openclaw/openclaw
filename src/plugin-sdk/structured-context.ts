@@ -1,5 +1,5 @@
 // Narrow plugin-sdk surface for the bundled structured-context plugin.
-// Keep this list additive and scoped to symbols used under extensions/structured-context.
+// Keep this list additive and scoped to symbols used under src/plugins/structured-context.
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { OpenClawPluginApi, OpenClawPluginConfigSchema } from "../plugins/types.js";

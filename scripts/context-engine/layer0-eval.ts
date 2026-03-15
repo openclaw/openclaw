@@ -2,7 +2,7 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { __testing as layer0Testing } from "../../extensions/structured-context/src/context-engine.js";
+import { __testing as layer0Testing } from "../../src/plugins/structured-context/src/context-engine.js";
 
 type MatrixCase = {
   id: string;
