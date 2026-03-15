@@ -8,11 +8,7 @@ import {
   resolveTimedInstallModeOptions,
 } from "../infra/install-mode-options.js";
 import { installPackageDir } from "../infra/install-package-dir.js";
-import {
-  resolveSafeInstallDir,
-  safeDirName,
-  unscopedPackageName,
-} from "../infra/install-safe-path.js";
+import { resolveSafeInstallDir, safeDirName } from "../infra/install-safe-path.js";
 import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
@@ -85,13 +81,24 @@ function safeFileName(input: string): string {
 }
 
 function validatePluginId(pluginId: string): string | null {
-  if (!pluginId) {
+  const trimmed = pluginId.trim();
+  if (!trimmed) {
     return "invalid plugin name: missing";
   }
-  if (pluginId === "." || pluginId === "..") {
+  if (trimmed.includes("\\")) {
+    return "invalid plugin name: path separators not allowed";
+  }
+  const segments = trimmed.split("/");
+  if (segments.some((segment) => !segment)) {
+    return "invalid plugin name: malformed scope";
+  }
+  if (segments.some((segment) => segment === "." || segment === "..")) {
     return "invalid plugin name: reserved path segment";
   }
-  if (pluginId.includes("/") || pluginId.includes("\\")) {
+  if (segments.length === 1) {
+    return null;
+  }
+  if (segments.length !== 2 || !segments[0]?.startsWith("@")) {
     return "invalid plugin name: path separators not allowed";
   }
   return null;
@@ -233,8 +240,8 @@ async function installPluginFromPackageDir(
   }
   const extensions = extensionsResult.entries;
 
-  const pkgName = typeof manifest.name === "string" ? manifest.name : "";
-  const npmPluginId = pkgName ? unscopedPackageName(pkgName) : "plugin";
+  const pkgName = typeof manifest.name === "string" ? manifest.name.trim() : "";
+  const npmPluginId = pkgName || "plugin";
 
   // Prefer the canonical `id` from openclaw.plugin.json over the npm package name.
   // This avoids a latent key-mismatch bug: if the manifest id (e.g. "memory-cognee")
@@ -243,7 +250,7 @@ async function installPluginFromPackageDir(
   const ocManifestResult = loadPluginManifest(params.packageDir);
   const manifestPluginId =
     ocManifestResult.ok && ocManifestResult.manifest.id
-      ? unscopedPackageName(ocManifestResult.manifest.id)
+      ? ocManifestResult.manifest.id.trim()
       : undefined;
 
   const pluginId = manifestPluginId ?? npmPluginId;

@@ -157,7 +157,7 @@ async function setupVoiceCallArchiveInstall(params: { outName: string; version: 
 }
 
 function expectPluginFiles(result: { targetDir: string }, stateDir: string, pluginId: string) {
-  expect(result.targetDir).toBe(path.join(stateDir, "extensions", pluginId));
+  expect(result.targetDir).toBe(path.join(stateDir, "extensions", pluginId.replaceAll("/", "__")));
   expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
   expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
 }
@@ -394,7 +394,7 @@ beforeEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
-  it("installs into ~/.openclaw/extensions and uses unscoped id", async () => {
+  it("installs into ~/.openclaw/extensions and preserves scoped package ids", async () => {
     const { stateDir, archivePath, extensionsDir } = await setupVoiceCallArchiveInstall({
       outName: "plugin.tgz",
       version: "0.0.1",
@@ -404,7 +404,7 @@ describe("installPluginFromArchive", () => {
       archivePath,
       extensionsDir,
     });
-    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "voice-call" });
+    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/voice-call" });
   });
 
   it("rejects installing when plugin already exists", async () => {
@@ -443,7 +443,7 @@ describe("installPluginFromArchive", () => {
       archivePath,
       extensionsDir,
     });
-    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "zipper" });
+    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/zipper" });
   });
 
   it("allows updates when mode is update", async () => {
@@ -615,16 +615,17 @@ describe("installPluginFromArchive", () => {
 });
 
 describe("installPluginFromDir", () => {
-  function expectInstalledAsMemoryCognee(
+  function expectInstalledWithPluginId(
     result: Awaited<ReturnType<typeof installPluginFromDir>>,
     extensionsDir: string,
+    pluginId: string,
   ) {
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;
     }
-    expect(result.pluginId).toBe("memory-cognee");
-    expect(result.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
+    expect(result.pluginId).toBe(pluginId);
+    expect(result.targetDir).toBe(path.join(extensionsDir, pluginId.replaceAll("/", "__")));
   }
 
   it("uses --ignore-scripts for dependency install", async () => {
@@ -689,17 +690,17 @@ describe("installPluginFromDir", () => {
       logger: { info: (msg: string) => infoMessages.push(msg), warn: () => {} },
     });
 
-    expectInstalledAsMemoryCognee(res, extensionsDir);
+    expectInstalledWithPluginId(res, extensionsDir, "memory-cognee");
     expect(
       infoMessages.some((msg) =>
         msg.includes(
-          'Plugin manifest id "memory-cognee" differs from npm package name "cognee-openclaw"',
+          'Plugin manifest id "memory-cognee" differs from npm package name "@openclaw/cognee-openclaw"',
         ),
       ),
     ).toBe(true);
   });
 
-  it("normalizes scoped manifest ids to unscoped install keys", async () => {
+  it("preserves scoped manifest ids as install keys", async () => {
     const { pluginDir, extensionsDir } = setupManifestInstallFixture({
       manifestId: "@team/memory-cognee",
     });
@@ -707,11 +708,22 @@ describe("installPluginFromDir", () => {
     const res = await installPluginFromDir({
       dirPath: pluginDir,
       extensionsDir,
-      expectedPluginId: "memory-cognee",
+      expectedPluginId: "@team/memory-cognee",
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expectInstalledAsMemoryCognee(res, extensionsDir);
+    expectInstalledWithPluginId(res, extensionsDir, "@team/memory-cognee");
+  });
+
+  it("preserves scoped package names when no plugin manifest id is present", async () => {
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectInstalledWithPluginId(res, extensionsDir, "@openclaw/test-plugin");
   });
 });
 
