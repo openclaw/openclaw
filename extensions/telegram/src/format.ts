@@ -512,6 +512,67 @@ function sliceLinkSpans(
   });
 }
 
+function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
+  return {
+    text: ir.text.slice(start, end),
+    styles: sliceStyleSpans(ir.styles, start, end),
+    links: sliceLinkSpans(ir.links, start, end),
+  };
+}
+
+function mergeAdjacentStyleSpans(styles: MarkdownIR["styles"]): MarkdownIR["styles"] {
+  const merged: MarkdownIR["styles"] = [];
+  for (const span of styles) {
+    const last = merged.at(-1);
+    if (last && last.style === span.style && span.start <= last.end) {
+      last.end = Math.max(last.end, span.end);
+      continue;
+    }
+    merged.push({ ...span });
+  }
+  return merged;
+}
+
+function mergeAdjacentLinkSpans(links: MarkdownIR["links"]): MarkdownIR["links"] {
+  const merged: MarkdownIR["links"] = [];
+  for (const link of links) {
+    const last = merged.at(-1);
+    if (last && last.href === link.href && link.start <= last.end) {
+      last.end = Math.max(last.end, link.end);
+      continue;
+    }
+    merged.push({ ...link });
+  }
+  return merged;
+}
+
+function mergeMarkdownIRChunks(left: MarkdownIR, right: MarkdownIR): MarkdownIR {
+  const offset = left.text.length;
+  return {
+    text: left.text + right.text,
+    styles: mergeAdjacentStyleSpans([
+      ...left.styles,
+      ...right.styles.map((span) => ({
+        ...span,
+        start: span.start + offset,
+        end: span.end + offset,
+      })),
+    ]),
+    links: mergeAdjacentLinkSpans([
+      ...left.links,
+      ...right.links.map((link) => ({
+        ...link,
+        start: link.start + offset,
+        end: link.end + offset,
+      })),
+    ]),
+  };
+}
+
+function renderTelegramChunkHtml(ir: MarkdownIR): string {
+  return wrapFileReferencesInHtml(renderTelegramHtml(ir));
+}
+
 function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: number): number {
   const maxEnd = Math.min(text.length, start + limit);
   if (maxEnd >= text.length) {
@@ -613,35 +674,98 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   return chunks;
 }
 
+function coalesceWhitespaceOnlyMarkdownIRChunks(chunks: MarkdownIR[], limit: number): MarkdownIR[] {
+  const coalesced: MarkdownIR[] = [];
+  let index = 0;
+
+  while (index < chunks.length) {
+    const chunk = chunks[index];
+    if (!chunk) {
+      index += 1;
+      continue;
+    }
+    if (chunk.text.trim().length > 0) {
+      coalesced.push(chunk);
+      index += 1;
+      continue;
+    }
+
+    const prev = coalesced.at(-1);
+    const next = chunks[index + 1];
+    const chunkLength = chunk.text.length;
+
+    const canMergePrev = (candidate: MarkdownIR) =>
+      renderTelegramChunkHtml(candidate).length <= limit;
+    const canMergeNext = (candidate: MarkdownIR) =>
+      renderTelegramChunkHtml(candidate).length <= limit;
+
+    if (prev) {
+      const mergedPrev = mergeMarkdownIRChunks(prev, chunk);
+      if (canMergePrev(mergedPrev)) {
+        coalesced[coalesced.length - 1] = mergedPrev;
+        index += 1;
+        continue;
+      }
+    }
+
+    if (next) {
+      const mergedNext = mergeMarkdownIRChunks(chunk, next);
+      if (canMergeNext(mergedNext)) {
+        chunks[index + 1] = mergedNext;
+        index += 1;
+        continue;
+      }
+    }
+
+    if (prev && next) {
+      for (let prefixLength = chunkLength - 1; prefixLength >= 1; prefixLength -= 1) {
+        const prefix = sliceMarkdownIR(chunk, 0, prefixLength);
+        const suffix = sliceMarkdownIR(chunk, prefixLength, chunkLength);
+        const mergedPrev = mergeMarkdownIRChunks(prev, prefix);
+        const mergedNext = mergeMarkdownIRChunks(suffix, next);
+        if (canMergePrev(mergedPrev) && canMergeNext(mergedNext)) {
+          coalesced[coalesced.length - 1] = mergedPrev;
+          chunks[index + 1] = mergedNext;
+          break;
+        }
+      }
+    }
+
+    index += 1;
+  }
+
+  return coalesced;
+}
+
 function renderTelegramChunksWithinHtmlLimit(
   ir: MarkdownIR,
   limit: number,
 ): TelegramFormattedChunk[] {
   const normalizedLimit = Math.max(1, Math.floor(limit));
   const pending = chunkMarkdownIR(ir, normalizedLimit);
-  const rendered: TelegramFormattedChunk[] = [];
+  const finalized: MarkdownIR[] = [];
   while (pending.length > 0) {
     const chunk = pending.shift();
     if (!chunk) {
       continue;
     }
-    const html = wrapFileReferencesInHtml(renderTelegramHtml(chunk));
-    if (chunk.text.trim().length === 0) {
-      continue;
-    }
+    const html = renderTelegramChunkHtml(chunk);
     if (html.length <= normalizedLimit || chunk.text.length <= 1) {
-      rendered.push({ html, text: chunk.text });
+      finalized.push(chunk);
       continue;
     }
     const split = splitTelegramChunkByHtmlLimit(chunk, normalizedLimit, html.length);
     if (split.length <= 1) {
       // Worst-case safety: avoid retry loops, deliver the chunk as-is.
-      rendered.push({ html, text: chunk.text });
+      finalized.push(chunk);
       continue;
     }
     pending.unshift(...split);
   }
-  return rendered;
+  return coalesceWhitespaceOnlyMarkdownIRChunks(finalized, normalizedLimit).map((chunk) => ({
+    html: renderTelegramChunkHtml(chunk),
+    text: chunk.text,
+  }));
 }
 
 export function markdownToTelegramChunks(
