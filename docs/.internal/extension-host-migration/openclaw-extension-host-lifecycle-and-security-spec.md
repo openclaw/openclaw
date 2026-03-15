@@ -39,7 +39,8 @@ What has been implemented:
 - static config-baseline generation now reads bundled extension metadata through the host-owned resolved-extension registry
 - channel, provider, HTTP-route, gateway-method, tool, CLI, service, command, context-engine, and hook registration normalization now delegates through `src/extension-host/runtime-registrations.ts`
 - loader cache key construction and registry cache control now route through `src/extension-host/loader-cache.ts`
-- loader provenance, duplicate-order, and record/error policy now route through `src/extension-host/loader-policy.ts`
+- loader provenance helpers now route through `src/extension-host/loader-provenance.ts`
+- loader duplicate-order and record/error policy now route through `src/extension-host/loader-policy.ts`
 - loader discovery policy outcomes now route through `src/extension-host/loader-discovery-policy.ts`
 - loader initial candidate planning and record creation now route through `src/extension-host/loader-records.ts`
 - loader entry-path opening and module import now route through `src/extension-host/loader-import.ts`
@@ -76,6 +77,7 @@ How it has been implemented:
 - by adding explicit compatibility `lifecycleState` mapping on loader-owned plugin records before enforcing the loader lifecycle state machine
 - by promoting successfully registered plugins to `ready` during host-owned finalization while leaving broader activation-state semantics for later phases
 - by moving mutable activation state such as seen-id tracking, memory-slot selection, and finalization inputs into a host-owned loader session before broader activation-state semantics move
+- by extracting shared provenance path matching and install-rule evaluation into `src/extension-host/loader-provenance.ts` so activation and finalization policy seams reuse one host-owned implementation
 - by turning open-allowlist discovery warnings into explicit host-owned discovery-policy results before the orchestrator logs them
 - by moving duplicate precedence, config enablement, and early memory-slot gating into explicit host-owned activation-policy outcomes before broader policy semantics move
 - by turning provenance-based untracked-extension warnings and final memory-slot warnings into explicit host-owned finalization-policy results before the finalizer applies them

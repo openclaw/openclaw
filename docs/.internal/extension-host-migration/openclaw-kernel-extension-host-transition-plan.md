@@ -47,7 +47,8 @@ What has landed:
 - an initial Phase 0 cutover inventory now exists in `src/extension-host/cutover-inventory.md`
 - plugin SDK alias resolution now routes through `src/extension-host/loader-compat.ts`
 - loader cache key construction and registry cache control now route through `src/extension-host/loader-cache.ts`
-- loader provenance, duplicate-order, and record/error policy now route through `src/extension-host/loader-policy.ts`
+- loader provenance helpers now route through `src/extension-host/loader-provenance.ts`
+- loader duplicate-order and record/error policy now route through `src/extension-host/loader-policy.ts`
 - loader discovery policy outcomes now route through `src/extension-host/loader-discovery-policy.ts`
 - loader initial candidate planning and record creation now route through `src/extension-host/loader-records.ts`
 - loader entry-path opening and module import now route through `src/extension-host/loader-import.ts`
@@ -95,6 +96,7 @@ How it was done:
 - by turning that compatibility `lifecycleState` field into an enforced loader lifecycle state machine with readiness promotion during finalization
 - by moving the remaining top-level loader orchestration into a host-owned module so `src/plugins/loader.ts` becomes a compatibility facade instead of the real owner
 - by moving mutable activation state such as seen-id tracking, memory-slot selection, and finalization inputs into a host-owned loader session instead of leaving them in top-level loader variables
+- by extracting shared provenance path matching and install-rule evaluation into `src/extension-host/loader-provenance.ts` so activation and finalization policy seams reuse one host-owned implementation
 - by turning open-allowlist discovery warnings into explicit host-owned discovery-policy results before the orchestrator logs them
 - by moving duplicate precedence, config enablement, and early memory-slot gating into explicit host-owned activation-policy outcomes instead of leaving them inline in the loader flow
 - by turning provenance-based untracked-extension warnings and final memory-slot warnings into explicit host-owned finalization-policy results before the finalizer applies them
@@ -117,6 +119,7 @@ Committed implementation slices so far:
 - `fc51ce2867` `Plugins: add loader activation policy`
 - `fd7488e10a` `Plugins: add loader finalization policy`
 - `97e2af7f97` `Plugins: add loader discovery policy`
+- `83b18eab72` `Plugins: share loader provenance helpers`
 - `89414ed857` `Docs: track extension host migration internally`
 - `d8af1eceaf` `Docs: refresh extension host migration status`
 

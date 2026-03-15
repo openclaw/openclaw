@@ -37,7 +37,8 @@ What has been implemented:
 - config doc baseline generation now uses the same host-owned resolved-extension metadata path
 - plugin SDK alias resolution now routes through `src/extension-host/loader-compat.ts`
 - loader cache key construction and registry cache control now route through `src/extension-host/loader-cache.ts`
-- loader provenance, duplicate-order, and record/error policy now route through `src/extension-host/loader-policy.ts`
+- loader provenance helpers now route through `src/extension-host/loader-provenance.ts`
+- loader duplicate-order and record/error policy now route through `src/extension-host/loader-policy.ts`
 - loader discovery policy outcomes now route through `src/extension-host/loader-discovery-policy.ts`
 - loader initial candidate planning and record creation now route through `src/extension-host/loader-records.ts`
 - loader entry-path opening and module import now route through `src/extension-host/loader-import.ts`
@@ -62,6 +63,7 @@ How it has been implemented:
 - by beginning loader-path migration with host-owned compatibility, candidate-planning, import-flow, policy, runtime, register-flow, candidate-orchestration, top-level load orchestration, record-state with compatibility lifecycle mapping, and finalization helpers before attempting canonical catalog publication
 - by converting the compatibility record-state layer into an enforced loader lifecycle state machine before catalog publication work
 - by moving mutable activation state into a host-owned loader session before catalog publication work
+- by extracting shared provenance path matching and install-rule evaluation into `src/extension-host/loader-provenance.ts` so activation and finalization policy seams reuse one host-owned implementation
 - by turning open-allowlist discovery warnings into explicit host-owned discovery-policy results before catalog publication work
 - by moving duplicate precedence, config enablement, and early memory-slot gating into explicit host-owned activation-policy outcomes before catalog publication work
 - by turning provenance-based untracked-extension warnings and final memory-slot warnings into explicit host-owned finalization-policy results before catalog publication work
