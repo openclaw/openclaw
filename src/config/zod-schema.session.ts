@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import {
   GroupChatSchema,
@@ -206,7 +205,15 @@ export const CommandsSchema = z
     ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     ownerDisplay: z.enum(["raw", "hash"]).optional().default("raw"),
     ownerDisplaySecret: z.string().optional().register(sensitive),
-    allowFrom: ElevatedAllowFromSchema.optional(),
+    // Accepts a flat array ["id"] (coerced to { "*": ["id"] }) or a record { provider: ["id"] }.
+    allowFrom: z
+      .union([
+        z.record(z.string(), z.array(z.union([z.string(), z.number()]))),
+        z
+          .array(z.union([z.string(), z.number()]))
+          .transform((arr) => ({ "*": arr }) as Record<string, Array<string | number>>),
+      ])
+      .optional(),
   })
   .strict()
   .optional()

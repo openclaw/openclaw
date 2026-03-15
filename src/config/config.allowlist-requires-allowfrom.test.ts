@@ -145,3 +145,32 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
     expect(res.ok).toBe(true);
   });
 });
+
+describe("commands.allowFrom schema coercion", () => {
+  it("accepts flat array and coerces to { '*': [...] }", () => {
+    const res = validateConfigObject({
+      commands: { allowFrom: ["123456789"] },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.commands?.allowFrom).toEqual({ "*": ["123456789"] });
+    }
+  });
+
+  it("accepts record format unchanged", () => {
+    const res = validateConfigObject({
+      commands: { allowFrom: { "*": ["userId"], telegram: ["123"] } },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.commands?.allowFrom).toEqual({ "*": ["userId"], telegram: ["123"] });
+    }
+  });
+
+  it("rejects invalid shape (object with boolean values)", () => {
+    const res = validateConfigObject({
+      commands: { allowFrom: { userId: true } },
+    });
+    expect(res.ok).toBe(false);
+  });
+});
