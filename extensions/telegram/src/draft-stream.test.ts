@@ -325,7 +325,12 @@ describe("createTelegramDraftStream", () => {
       resolveFirstDraft = resolve;
     });
     const api = {
-      sendMessageDraft: vi.fn().mockReturnValueOnce(firstDraftSend).mockResolvedValueOnce(true),
+      // Expect 3 calls: first draft, clear previous draft, second draft
+      sendMessageDraft: vi
+        .fn()
+        .mockReturnValueOnce(firstDraftSend)
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(true),
       sendMessage: vi.fn().mockResolvedValue({ message_id: 17 }),
       editMessageText: vi.fn().mockResolvedValue(true),
       deleteMessage: vi.fn().mockResolvedValue(true),
@@ -344,13 +349,17 @@ describe("createTelegramDraftStream", () => {
     resolveFirstDraft?.(true);
     await stream.flush();
 
-    expect(api.sendMessageDraft).toHaveBeenCalledTimes(2);
+    // forceNewMessage clears the previous draft before allocating a new one
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(3);
     const firstDraftId = api.sendMessageDraft.mock.calls[0]?.[1];
-    const secondDraftId = api.sendMessageDraft.mock.calls[1]?.[1];
+    const clearCall = api.sendMessageDraft.mock.calls[1];
+    const secondDraftId = api.sendMessageDraft.mock.calls[2]?.[1];
     expect(typeof firstDraftId).toBe("number");
+    expect(clearCall?.[1]).toBe(firstDraftId);
+    expect(clearCall?.[2]).toBe(""); // clear call sends empty text
     expect(typeof secondDraftId).toBe("number");
     expect(firstDraftId).not.toBe(secondDraftId);
-    expect(api.sendMessageDraft.mock.calls[1]?.[2]).toBe("Message B");
+    expect(api.sendMessageDraft.mock.calls[2]?.[2]).toBe("Message B");
     expect(api.sendMessage).not.toHaveBeenCalled();
     expect(api.editMessageText).not.toHaveBeenCalled();
   });
@@ -393,6 +402,36 @@ describe("createTelegramDraftStream", () => {
     } finally {
       draftA.__testing.resetTelegramDraftStreamForTests();
     }
+  });
+
+  it("clears previous draft when forceNewMessage is called to prevent stale drafts", async () => {
+    // Regression test for #40750: stale draft preview can reappear after final
+    // message is delivered when forceNewMessage is called during streaming.
+    const api = createMockDraftApi();
+    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+
+    stream.update("First draft");
+    await stream.flush();
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+    const firstDraftId = api.sendMessageDraft.mock.calls[0]?.[1];
+
+    stream.forceNewMessage();
+    // Allow async clear to complete
+    await vi.waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledTimes(2));
+
+    // The second call should be a clear (empty text) for the first draft
+    const clearCall = api.sendMessageDraft.mock.calls[1];
+    expect(clearCall?.[1]).toBe(firstDraftId);
+    expect(clearCall?.[2]).toBe("");
+
+    stream.update("Second draft");
+    await stream.flush();
+
+    // Third call is the new draft with different id
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(3);
+    const secondDraftId = api.sendMessageDraft.mock.calls[2]?.[1];
+    expect(secondDraftId).not.toBe(firstDraftId);
+    expect(api.sendMessageDraft.mock.calls[2]?.[2]).toBe("Second draft");
   });
 
   it("creates new message after forceNewMessage is called", async () => {
