@@ -39,6 +39,9 @@ type DebounceBuffer<T> = {
   debounceMs: number;
 };
 
+/** Hard cap on concurrent debounce keys to bound memory usage. */
+const DEFAULT_MAX_KEYS = 2000;
+
 export type InboundDebounceCreateParams<T> = {
   debounceMs: number;
   buildKey: (item: T) => string | null | undefined;
@@ -46,11 +49,15 @@ export type InboundDebounceCreateParams<T> = {
   resolveDebounceMs?: (item: T) => number | undefined;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
+  /** Max number of distinct debounce keys held concurrently (default 2000). */
+  maxKeys?: number;
 };
 
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
   const buffers = new Map<string, DebounceBuffer<T>>();
   const defaultDebounceMs = Math.max(0, Math.trunc(params.debounceMs));
+  const rawMaxKeys = Math.trunc(params.maxKeys ?? DEFAULT_MAX_KEYS);
+  const maxKeys = Number.isFinite(rawMaxKeys) && rawMaxKeys >= 1 ? rawMaxKeys : DEFAULT_MAX_KEYS;
 
   const resolveDebounceMs = (item: T) => {
     const resolved = params.resolveDebounceMs?.(item);
@@ -121,6 +128,29 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
     const buffer: DebounceBuffer<T> = { items: [item], timeout: null, debounceMs };
     buffers.set(key, buffer);
+    // Evict oldest keys: flush their buffered items and cancel pending timers.
+    while (buffers.size > maxKeys) {
+      const oldest = buffers.keys().next();
+      if (oldest.done) {
+        break;
+      }
+      const evicted = buffers.get(oldest.value);
+      if (evicted) {
+        if (evicted.timeout) {
+          clearTimeout(evicted.timeout);
+          evicted.timeout = null;
+        }
+        buffers.delete(oldest.value);
+        if (evicted.items.length > 0) {
+          // Fire-and-forget: flush evicted items so they are not silently lost.
+          void Promise.resolve(params.onFlush(evicted.items)).catch((err) => {
+            params.onError?.(err, evicted.items);
+          });
+        }
+      } else {
+        buffers.delete(oldest.value);
+      }
+    }
     scheduleFlush(key, buffer);
   };
 
