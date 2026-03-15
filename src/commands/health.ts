@@ -348,6 +348,10 @@ export const formatHealthChannelLines = (
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
+  runtime?: {
+    channels: Partial<Record<string, ChannelAccountSnapshot>>;
+    channelAccounts: Partial<Record<string, Record<string, ChannelAccountSnapshot>>>;
+  };
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = loadConfig();
@@ -450,7 +454,15 @@ export async function getHealthSnapshot(params?: {
         debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
       }
 
+      // Merge runtime state (running, connected, etc.) when available (#42538).
+      const runtimeAccounts = params?.runtime?.channelAccounts[plugin.id];
+      const runtimeDefault = params?.runtime?.channels[plugin.id];
+      const runtimeSnapshot =
+        runtimeAccounts?.[accountId] ??
+        (accountId === defaultAccountId ? runtimeDefault : undefined);
+
       const snapshot: ChannelAccountSnapshot = {
+        ...runtimeSnapshot,
         accountId,
         enabled,
         configured,

@@ -712,6 +712,7 @@ export async function startGatewayServer(
       getPresenceVersion,
       getHealthVersion,
       refreshGatewayHealthSnapshot,
+      getRuntimeSnapshot,
       logHealth,
       dedupe,
       chatAbortControllers,

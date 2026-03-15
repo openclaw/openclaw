@@ -1,4 +1,5 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { STATE_DIR, createConfigIO, loadConfig } from "../../config/config.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
@@ -13,6 +14,10 @@ let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
+let runtimeSnapshotFn: (() => {
+  channels: Partial<Record<string, ChannelAccountSnapshot>>;
+  channelAccounts: Partial<Record<string, Record<string, ChannelAccountSnapshot>>>;
+}) | null = null;
 
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
@@ -67,10 +72,15 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
   broadcastHealthUpdate = fn;
 }
 
+export function setRuntimeSnapshotFn(fn: typeof runtimeSnapshotFn) {
+  runtimeSnapshotFn = fn;
+}
+
 export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
-      const snap = await getHealthSnapshot({ probe: opts?.probe });
+      const runtime = runtimeSnapshotFn?.();
+      const snap = await getHealthSnapshot({ probe: opts?.probe, runtime });
       healthCache = snap;
       healthVersion += 1;
       if (broadcastHealthUpdate) {
