@@ -5,6 +5,7 @@ import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -468,6 +469,11 @@ export function createAgentEventHandler({
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
+      // Extract MEDIA: tokens so WS clients can fetch audio/images.
+      const mediaSplit = splitMediaFromOutput(text);
+      const cleanText = mediaSplit.text?.trim() ?? "";
+      const mediaUrls = mediaSplit.mediaUrls ?? [];
+
       const payload = {
         runId: clientRunId,
         sessionKey,
@@ -475,10 +481,11 @@ export function createAgentEventHandler({
         state: "final" as const,
         ...(stopReason && { stopReason }),
         message:
-          text && !shouldSuppressSilent
+          (cleanText || mediaUrls.length > 0) && !shouldSuppressSilent
             ? {
                 role: "assistant",
-                content: [{ type: "text", text }],
+                content: cleanText ? [{ type: "text", text: cleanText }] : [],
+                ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
                 timestamp: Date.now(),
               }
             : undefined,
@@ -537,13 +544,22 @@ export function createAgentEventHandler({
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
-    // Build tool payload: strip result/partialResult unless verbose=full
+    // Build tool payload: strip result/partialResult unless verbose=full,
+    // but preserve mediaUrls extracted from MEDIA: tokens in tool results
+    // so WS clients can fetch audio/image assets.
     const toolPayload =
       isToolEvent && toolVerbose !== "full"
         ? (() => {
             const data = evt.data ? { ...evt.data } : {};
+            // Extract media URLs from result before stripping
+            const resultText = typeof data.result === "string" ? data.result : undefined;
+            const mediaParsed = resultText ? splitMediaFromOutput(resultText) : undefined;
+            const mediaUrls = mediaParsed?.mediaUrls;
             delete data.result;
             delete data.partialResult;
+            if (mediaUrls && mediaUrls.length > 0) {
+              data.mediaUrls = mediaUrls;
+            }
             return sessionKey
               ? { ...eventForClients, sessionKey, data }
               : { ...eventForClients, data };
