@@ -111,6 +111,7 @@ export async function buildReplyPayloads(params: {
   originatingTo?: string;
   accountId?: string;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+  transformPayload?: (payload: ReplyPayload) => ReplyPayload;
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads = params.isHeartbeat
@@ -158,6 +159,9 @@ export async function buildReplyPayloads(params: {
       }),
     )
   ).filter(isRenderablePayload);
+  const transformedReplyTaggedPayloads = params.transformPayload
+    ? replyTaggedPayloads.map(params.transformPayload)
+    : replyTaggedPayloads;
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
@@ -194,10 +198,10 @@ export async function buildReplyPayloads(params: {
     : (params.messagingToolSentMediaUrls ?? []);
   const dedupedPayloads = dedupeMessagingToolPayloads
     ? filterMessagingToolDuplicates({
-        payloads: replyTaggedPayloads,
+        payloads: transformedReplyTaggedPayloads,
         sentTexts: messagingToolSentTexts,
       })
-    : replyTaggedPayloads;
+    : transformedReplyTaggedPayloads;
   const mediaFilteredPayloads = dedupeMessagingToolPayloads
     ? filterMessagingToolMediaDuplicates({
         payloads: dedupedPayloads,

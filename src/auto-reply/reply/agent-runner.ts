@@ -517,6 +517,7 @@ export async function runReplyAgent(params: {
       }),
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: normalizeReplyMediaPaths,
+      transformPayload: applyOutboundTransformsToPayload,
     });
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
@@ -541,14 +542,10 @@ export async function runReplyAgent(params: {
             sessionKey,
           })
         : false;
-    // Apply plugin outbound transforms to LLM-generated reply payloads only,
-    // before verbose notices and usage lines are prepended.
-    const transformedPayloads = replyPayloads.map(applyOutboundTransformsToPayload);
-
     const guardedReplyPayloads =
       hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
-        ? appendUnscheduledReminderNote(transformedPayloads)
-        : transformedPayloads;
+        ? appendUnscheduledReminderNote(replyPayloads)
+        : replyPayloads;
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
