@@ -467,4 +467,27 @@ describe("failover-error", () => {
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
   });
+
+  it("does not stack-overflow on cyclic error cause chains", () => {
+    const a = new Error("error a");
+    const b = new Error("error b");
+    // Create a cycle: a -> b -> a
+    a.cause = b;
+    b.cause = a;
+    // Should return null (no classifiable reason) instead of throwing RangeError
+    expect(resolveFailoverReasonFromError(a)).toBeNull();
+  });
+
+  it("still classifies through cause chains when one node is classifiable", () => {
+    const inner = Object.assign(new Error("rate limit"), { status: 429 });
+    const outer = new Error("wrapper");
+    outer.cause = inner;
+    expect(resolveFailoverReasonFromError(outer)).toBe("rate_limit");
+  });
+
+  it("handles self-referencing cause without stack overflow", () => {
+    const err = new Error("self-ref");
+    err.cause = err;
+    expect(resolveFailoverReasonFromError(err)).toBeNull();
+  });
 });

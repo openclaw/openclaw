@@ -220,7 +220,17 @@ export function isTimeoutError(err: unknown): boolean {
   return hasTimeoutHint(cause) || hasTimeoutHint(reason);
 }
 
-export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
+export function resolveFailoverReasonFromError(
+  err: unknown,
+  seen: WeakSet<object> = new WeakSet(),
+): FailoverReason | null {
+  if (err && typeof err === "object") {
+    if (seen.has(err)) {
+      return null;
+    }
+    seen.add(err);
+  }
+
   if (isFailoverError(err)) {
     return err.reason;
   }
@@ -261,7 +271,7 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   // message-based "timeout" guess from isTimeoutError.
   const cause = getErrorCause(err);
   if (cause && cause !== err) {
-    const causeReason = resolveFailoverReasonFromError(cause);
+    const causeReason = resolveFailoverReasonFromError(cause, seen);
     if (causeReason) {
       return causeReason;
     }
