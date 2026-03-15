@@ -424,8 +424,12 @@ describe("config-backup-restore", () => {
         // Create invalid current config
         await fs.writeFile(configPath, "{ invalid json", "utf-8");
 
-        // Create valid backup
-        await fs.writeFile(`${configPath}.bak`, JSON.stringify({ valid: true }), "utf-8");
+        // Create valid backup (must pass schema validation)
+        await fs.writeFile(
+          `${configPath}.bak`,
+          JSON.stringify({ gateway: { port: 18789 } }),
+          "utf-8",
+        );
 
         await attemptConfigRollback(configPath);
 
@@ -435,6 +439,38 @@ describe("config-backup-restore", () => {
         const failedBackups = entries.filter((e) => e.includes(".failed-"));
 
         expect(failedBackups.length).toBe(1);
+      });
+    });
+
+    it("skips backup that fails schema validation", async () => {
+      await withTempHome(async () => {
+        const configPath = resolveConfigPathFromTempState();
+
+        // Create invalid current config
+        await fs.writeFile(configPath, "{ invalid json", "utf-8");
+
+        // Create backup with valid JSON but invalid schema (invalid port type)
+        await fs.writeFile(
+          `${configPath}.bak`,
+          JSON.stringify({ gateway: { port: "not-a-number" } }),
+          "utf-8",
+        );
+
+        // Create backup with valid schema
+        await fs.writeFile(
+          `${configPath}.bak.1`,
+          JSON.stringify({ gateway: { port: 18789 } }),
+          "utf-8",
+        );
+
+        const result = await attemptConfigRollback(configPath);
+
+        expect(result.restored).toBe(true);
+        expect(result.backupPath).toBe(`${configPath}.bak.1`);
+
+        // Verify restored config
+        const restored = JSON.parse(await fs.readFile(configPath, "utf-8"));
+        expect(restored.gateway.port).toBe(18789);
       });
     });
   });

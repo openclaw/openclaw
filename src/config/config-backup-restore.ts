@@ -11,6 +11,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSON5 from "json5";
+import { OpenClawSchema } from "./zod-schema.js";
 
 export const DEFAULT_KEEP_BACKUPS = 10;
 
@@ -273,10 +274,17 @@ export async function attemptConfigRollback(
       const content = await ioFs.readFile(backup.path);
 
       // Validate the backup content is valid JSON5 (supports comments, trailing commas)
+      let parsed: unknown;
       try {
-        JSON5.parse(content);
+        parsed = JSON5.parse(content);
       } catch {
-        continue; // Skip invalid backups
+        continue; // Skip invalid JSON backups
+      }
+
+      // Validate against the config schema
+      const schemaResult = OpenClawSchema.safeParse(parsed);
+      if (!schemaResult.success) {
+        continue; // Skip backups that fail schema validation
       }
 
       // Backup current failed config
