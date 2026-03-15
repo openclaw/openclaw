@@ -4,7 +4,23 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Vio Dashboard</title>
-  <link rel="stylesheet" href="styles.css?v=7" />
+  <link rel="stylesheet" href="/styles.css?v=9" />
+  <link rel="stylesheet" href="/vendor/xterm.css" />
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/xterm-addon-fit.js"></script>
+  <script>
+    (function () {
+      fetch('/styles.css?v=9', { cache: 'no-store' })
+        .then(function (r) { return r.text(); })
+        .then(function (css) {
+          var style = document.createElement('style');
+          style.setAttribute('data-fallback-styles', '1');
+          style.textContent = css;
+          document.head.appendChild(style);
+        })
+        .catch(function () {});
+    })();
+  </script>
 </head>
 <body>
   <div class="dashboard ide-layout">
@@ -191,9 +207,6 @@ Terminal ready.</div>
 <div id="chatFlowValue" style="display:none"></div><div id="chatFlowDetail" style="display:none"></div><div id="bodyLinkValue" style="display:none"></div><div id="bodyLinkDetail" style="display:none"></div><div id="lastTokensDetail" style="display:none"></div><div id="totalTokensDetail" style="display:none"></div><div id="modelWindowDetail" style="display:none"></div><span id="modelWindowDot" style="display:none"></span><div id="devInfo" style="display:none"></div><div id="cssHash" style="display:none"></div><div id="appHash" style="display:none"></div><select id="settingAnimations" style="display:none"></select><select id="settingCompact" style="display:none"></select><select id="settingTelemetry" style="display:none"></select>
     </section>
   </div>
-  <link rel="stylesheet" href="/vendor/xterm.css" />
-  <script src="/vendor/xterm.js"></script>
-  <script src="/vendor/xterm-addon-fit.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import WebSocket, { WebSocketServer } from 'ws';
-import { APP_DISPLAY_NAME, DASHBOARD_LAUNCHD_ROOT, DATA_DIR, DEBUG_DIR, DEFAULT_CLAUDE_CWD, GATEWAY_PROFILE, OPENCLAW_BIN, OPENCLAW_DIST_BUILD_INFO, OPENCLAW_REPO_ROOT, PNPM_BIN, ROADMAP_DATA_PATH, ROADMAP_HISTORY_DATA_PATH, ROOT, appRel, wrapperPort } from './config.mjs';
+import { APP_DISPLAY_NAME, DASHBOARD_LAUNCHD_ROOT, DATA_DIR, DEBUG_DIR, DEFAULT_CLAUDE_CWD, GATEWAY_PROFILE, LEGACY_VIODASHBOARD_NODE_MODULES, OPENCLAW_BIN, OPENCLAW_DIST_BUILD_INFO, OPENCLAW_REPO_ROOT, PNPM_BIN, ROADMAP_DATA_PATH, ROADMAP_HISTORY_DATA_PATH, ROOT, appRel, wrapperPort } from './config.mjs';
 import { onAssistantFinal, onAssistantError } from './moodBridge.mjs';
 import { sendJson, sendText } from './server/httpUtils.mjs';
 import { listProjectFiles, readProjectFile, writeProjectFile, safeProjectPath } from './server/filesystem.mjs';
@@ -852,38 +852,6 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (requestUrl.pathname === '/vendor/xterm.js' && req.method === 'GET') {
-    try {
-      const p = path.join(process.cwd(), 'node_modules', 'xterm', 'lib', 'xterm.js');
-      res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
-      res.end(fs.readFileSync(p));
-    } catch {
-      sendText(res, 404, 'not found');
-    }
-    return;
-  }
-
-  if (requestUrl.pathname === '/vendor/xterm-addon-fit.js' && req.method === 'GET') {
-    try {
-      const p = path.join(process.cwd(), 'node_modules', '@xterm', 'addon-fit', 'lib', 'addon-fit.js');
-      res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
-      res.end(fs.readFileSync(p));
-    } catch {
-      sendText(res, 404, 'not found');
-    }
-    return;
-  }
-
-  if (requestUrl.pathname === '/vendor/xterm.css' && req.method === 'GET') {
-    try {
-      const p = path.join(process.cwd(), 'node_modules', 'xterm', 'css', 'xterm.css');
-      res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
-      res.end(fs.readFileSync(p));
-    } catch {
-      sendText(res, 404, 'not found');
-    }
-    return;
-  }
 
   if (requestUrl.pathname === '/api/claude/start' && req.method === 'POST') {
     readJsonRequest(req)

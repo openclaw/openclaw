@@ -1,7 +1,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { PUBLIC_DIR, VIO_CAM_DIR } from '../config.mjs';
+import { PROJECT_ROOT, PUBLIC_DIR, VIO_CAM_DIR } from '../config.mjs';
 import { sendText } from './httpUtils.mjs';
+
+export function serveWorkspaceAvatar(requestUrl, res) {
+  try {
+    const relName = decodeURIComponent(requestUrl.pathname.replace('/avatars/', ''));
+    const avatarsRoot = path.join(PROJECT_ROOT, 'avatars');
+    const abs = path.join(avatarsRoot, relName);
+    if (!abs.startsWith(avatarsRoot)) {throw new Error('forbidden');}
+    const data = fs.readFileSync(abs);
+    const ext = path.extname(abs).toLowerCase();
+    const type = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+    res.end(data);
+  } catch {
+    sendText(res, 404, 'not found');
+  }
+}
 
 export function serveCameraAsset(requestUrl, res) {
   try {
@@ -25,7 +41,8 @@ export function servePublicFile(requestUrl, res) {
     sendText(res, 403, 'forbidden');
     return;
   }
-  fs.readFile(filePath, (err, data) => {
+
+  fs.readFile(filePath, 'utf8', (err, text) => {
     if (err) {
       sendText(res, 404, 'not found');
       return;
@@ -38,8 +55,20 @@ export function servePublicFile(requestUrl, res) {
       '.jpg': 'image/jpeg',
       '.jpeg': 'image/jpeg',
       '.png': 'image/png',
+      '.webp': 'image/webp',
     };
-    res.writeHead(200, { 'Content-Type': types[ext] || 'text/plain; charset=utf-8' });
-    res.end(data);
+
+    if (urlPath === '/index.html') {
+      try {
+        const css = fs.readFileSync(path.join(PUBLIC_DIR, 'styles.css'), 'utf8');
+        const injected = text.replace('</head>', `<style data-inline-main-css="1">\n${css}\n</style>\n</head>`);
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(injected);
+        return;
+      } catch {}
+    }
+
+    res.writeHead(200, { 'Content-Type': types[ext] || 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(text);
   });
 }

@@ -572,7 +572,7 @@ function formatStamp(date = new Date()) {
 
 function avatarLabel(role) { return role === 'user' ? 'X' : 'V'; }
 function avatarImageSrc(role) {
-  if (role === 'user') {return '/user-avatar.jpg';}
+  if (role === 'user') {return '/avatars/xin-headshot-avatar.jpg';}
   if (role === 'assistant') {return '/vio.png';}
   return '';
 }
@@ -1136,8 +1136,16 @@ function ensureClaudeTerminal() {
 
 function syncClaudeTerminalOutput() {
   ensureClaudeTerminal();
-  if (!claude.term) {return;}
   const text = claude.output || '';
+  if (!claude.term) {
+    if (claudeOutputEl) {
+      claudeOutputEl.textContent = text;
+      if (claude.autoScroll) {claudeOutputEl.scrollTop = claudeOutputEl.scrollHeight;}
+    }
+    claude.renderedLength = text.length;
+    claude.lastOutputLength = text.length;
+    return;
+  }
   const nextChunk = text.slice(claude.renderedLength);
   if (!nextChunk) {return;}
   claude.suppressInput = true;
@@ -1152,6 +1160,7 @@ function syncClaudeTerminalOutput() {
 function resetClaudeTerminalOutput() {
   ensureClaudeTerminal();
   if (claude.term) {claude.term.reset();}
+  if (claudeOutputEl) {claudeOutputEl.textContent = '';}
   claude.renderedLength = 0;
 }
 
@@ -1256,9 +1265,12 @@ function renderClaudeChrome() {
 
 function renderClaudePanel() {
   ensureClaudeTerminal();
+  const useTerminal = !!claude.term;
+  if (claudeOutputEl) {claudeOutputEl.hidden = useTerminal;}
+  if (claudeTerminalHostEl) {claudeTerminalHostEl.hidden = !useTerminal;}
   renderClaudeChrome();
   renderClaudeComposer();
-  if (claudeOutputEl) {claudeOutputEl.textContent = claude.output || '';}
+  if (claudeOutputEl && !useTerminal) {claudeOutputEl.textContent = claude.output || '';}
   syncClaudeTerminalOutput();
 }
 
@@ -2281,3 +2293,4 @@ fetchRunMode().catch(() => renderRunModeChip());
 runModeChipEl?.addEventListener('click', toggleRunMode);
 window.__VIO_APP_LOADED__ = true;
 connect();
+onnect();

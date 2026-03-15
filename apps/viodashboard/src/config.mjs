@@ -23,6 +23,8 @@ export const DEFAULT_CLAUDE_CWD = process.env.VIO_DEFAULT_CLAUDE_CWD || OPENCLAW
 export const DASHBOARD_LAUNCHD_ROOT = process.env.VIO_DASHBOARD_LAUNCHD_ROOT || path.join(DASHBOARD_APP_ROOT, 'launchd');
 export const OPENCLAW_DIST_ROOT = process.env.VIO_OPENCLAW_DIST_ROOT || path.join(OPENCLAW_REPO_ROOT, 'dist');
 export const OPENCLAW_DIST_BUILD_INFO = process.env.VIO_OPENCLAW_DIST_BUILD_INFO || path.join(OPENCLAW_DIST_ROOT, 'build-info.json');
+export const LEGACY_VIODASHBOARD_ROOT = process.env.VIO_LEGACY_VIODASHBOARD_ROOT || path.join(PROJECT_ROOT, 'legacy', 'VioDashboard');
+export const LEGACY_VIODASHBOARD_NODE_MODULES = process.env.VIO_LEGACY_VIODASHBOARD_NODE_MODULES || path.join(LEGACY_VIODASHBOARD_ROOT, 'node_modules');
 
 export const EXTRA_ALLOWED_ROOTS = [
   '/Users/visen24/MAS',
