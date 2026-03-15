@@ -3,12 +3,29 @@ import Testing
 @testable import OpenClaw
 
 struct CronModelsTests {
+    private struct CronJobFixture: Encodable {
+        let id: String
+        let agentId: String?
+        let name: String
+        let description: String?
+        let enabled: Bool
+        let deleteAfterRun: Bool?
+        let createdAtMs: Int
+        let updatedAtMs: Int
+        let schedule: CronSchedule
+        let sessionTarget: String
+        let wakeMode: CronWakeMode
+        let payload: CronPayload
+        let delivery: CronDelivery?
+        let state: CronJobState
+    }
+
     private func makeCronJob(
         name: String,
         payloadText: String,
-        state: CronJobState = CronJobState()) -> CronJob
+        state: CronJobState = CronJobState()) throws -> CronJob
     {
-        CronJob(
+        let fixture = CronJobFixture(
             id: "x",
             agentId: nil,
             name: name,
@@ -18,11 +35,14 @@ struct CronModelsTests {
             createdAtMs: 0,
             updatedAtMs: 0,
             schedule: .at(at: "2026-02-03T18:00:00Z"),
-            sessionTarget: .main,
+            sessionTarget: CronSessionTarget.main.rawValue,
             wakeMode: .now,
             payload: .systemEvent(text: payloadText),
             delivery: nil,
             state: state)
+
+        let data = try JSONEncoder().encode(fixture)
+        return try JSONDecoder().decode(CronJob.self, from: data)
     }
 
     @Test func `schedule at encodes and decodes`() throws {
@@ -73,7 +93,7 @@ struct CronModelsTests {
     }
 
     @Test func `job encodes and decodes delete after run`() throws {
-        let job = CronJob(
+        let fixture = CronJobFixture(
             id: "job-1",
             agentId: nil,
             name: "One-shot",
@@ -83,11 +103,13 @@ struct CronModelsTests {
             createdAtMs: 0,
             updatedAtMs: 0,
             schedule: .at(at: "2026-02-03T18:00:00Z"),
-            sessionTarget: .main,
+            sessionTarget: CronSessionTarget.main.rawValue,
             wakeMode: .now,
             payload: .systemEvent(text: "ping"),
             delivery: nil,
             state: CronJobState())
+        let fixtureData = try JSONEncoder().encode(fixture)
+        let job = try JSONDecoder().decode(CronJob.self, from: fixtureData)
         let data = try JSONEncoder().encode(job)
         let decoded = try JSONDecoder().decode(CronJob.self, from: data)
         #expect(decoded.deleteAfterRun == true)
@@ -111,8 +133,8 @@ struct CronModelsTests {
         }
     }
 
-    @Test func `display name trims whitespace and falls back`() {
-        let base = self.makeCronJob(name: "  hello  ", payloadText: "hi")
+    @Test func `display name trims whitespace and falls back`() throws {
+        let base = try self.makeCronJob(name: "  hello  ", payloadText: "hi")
         #expect(base.displayName == "hello")
 
         var unnamed = base
@@ -120,8 +142,8 @@ struct CronModelsTests {
         #expect(unnamed.displayName == "Untitled job")
     }
 
-    @Test func `next run date and last run date derive from state`() {
-        let job = self.makeCronJob(
+    @Test func `next run date and last run date derive from state`() throws {
+        let job = try self.makeCronJob(
             name: "t",
             payloadText: "hi",
             state: CronJobState(

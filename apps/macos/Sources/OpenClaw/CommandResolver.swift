@@ -570,7 +570,7 @@ enum CommandResolver {
         return args
     }
 
-    #if SWIFT_PACKAGE
+    #if SWIFT_PACKAGE || DEBUG
     static func _testNodeManagerBinPaths(home: URL) -> [String] {
         self.nodeManagerBinPaths(home: home)
     }

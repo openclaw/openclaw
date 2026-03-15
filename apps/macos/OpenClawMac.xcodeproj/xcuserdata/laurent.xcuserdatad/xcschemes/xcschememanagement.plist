@@ -12,12 +12,12 @@
 		<key>OpenClawDiscovery.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>4</integer>
+			<integer>6</integer>
 		</dict>
 		<key>OpenClawIPC.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>3</integer>
+			<integer>7</integer>
 		</dict>
 		<key>OpenClawIPCTests.xcscheme_^#shared#^_</key>
 		<dict>
