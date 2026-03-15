@@ -1,6 +1,5 @@
 package ai.openclaw.android.gateway
 
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -11,10 +10,15 @@ fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
 fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
+/**
+ * Returns the string content of a [JsonPrimitive], or `null` for non-primitives
+ * and [JsonNull]. Only actual JSON string values are returned; numeric and boolean
+ * primitives yield `null`. Use [asLongOrNull] / [asBooleanOrNull] for those types.
+ */
 fun JsonElement?.asStringOrNull(): String? =
   when (this) {
     is JsonNull -> null
-    is JsonPrimitive -> content
+    is JsonPrimitive -> if (isString) content else null
     else -> null
   }
 
@@ -36,13 +40,3 @@ fun JsonElement?.asLongOrNull(): Long? =
     is JsonPrimitive -> content.toLongOrNull()
     else -> null
   }
-
-fun parseJsonOrNull(payload: String): JsonElement? {
-  val trimmed = payload.trim()
-  if (trimmed.isEmpty()) return null
-  return try {
-    Json.parseToJsonElement(trimmed)
-  } catch (_: Throwable) {
-    null
-  }
-}

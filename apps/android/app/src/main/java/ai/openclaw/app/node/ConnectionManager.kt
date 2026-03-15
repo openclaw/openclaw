@@ -4,7 +4,7 @@ import android.os.Build
 import ai.openclaw.android.gateway.GatewayClientProfiles
 import ai.openclaw.android.gateway.GatewayClientInfo
 import ai.openclaw.android.gateway.GatewayConnectOptions
-import ai.openclaw.android.gateway.GatewayConnectProfiles
+import ai.openclaw.android.gateway.GatewayConnectBuilder
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -135,7 +135,7 @@ class ConnectionManager(
   }
 
   fun buildOperatorConnectOptions(): GatewayConnectOptions {
-    return GatewayConnectProfiles.buildOperatorConnectOptions(
+    return GatewayConnectBuilder.buildOperatorConnectOptions(
       client = buildClientInfo(
         clientId = GatewayClientProfiles.AndroidClientId,
         clientMode = GatewayClientProfiles.UiMode,

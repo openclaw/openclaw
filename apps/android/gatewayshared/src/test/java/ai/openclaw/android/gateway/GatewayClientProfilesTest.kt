@@ -10,7 +10,7 @@ class GatewayClientProfilesTest {
   fun buildGatewayUrlBracketsIpv6Hosts() {
     assertEquals(
       "wss://[fd7a:115c:a1e0::1234]:18789",
-      GatewayClientProfiles.buildGatewayUrl(
+      GatewayUrlHelpers.buildGatewayUrl(
         scheme = "wss",
         host = "fd7a:115c:a1e0::1234",
         port = 18789,
@@ -22,7 +22,7 @@ class GatewayClientProfilesTest {
   fun buildGatewayUrlKeepsBracketedIpv6HostsStable() {
     assertEquals(
       "https://[fd7a:115c:a1e0::1234]:443",
-      GatewayClientProfiles.buildGatewayUrl(
+      GatewayUrlHelpers.buildGatewayUrl(
         scheme = "https",
         host = "[fd7a:115c:a1e0::1234]",
         port = 443,
@@ -33,7 +33,7 @@ class GatewayClientProfilesTest {
   @Test
   fun buildOperatorConnectOptionsUsesSharedOperatorScopes() {
     val options =
-      GatewayConnectProfiles.buildOperatorConnectOptions(
+      GatewayConnectBuilder.buildOperatorConnectOptions(
         client =
           GatewayClientInfo(
             id = GatewayClientProfiles.AndroidClientId,
@@ -47,13 +47,13 @@ class GatewayClientProfilesTest {
           ),
       )
 
-    assertEquals(GatewayConnectProfiles.OperatorScopes, options.scopes)
+    assertEquals(GatewayConnectBuilder.OperatorScopes, options.scopes)
   }
 
   @Test
   fun buildConnectParamsJsonIncludesOperatorScopes() {
     val options =
-      GatewayConnectProfiles.buildOperatorConnectOptions(
+      GatewayConnectBuilder.buildOperatorConnectOptions(
         client =
           GatewayClientInfo(
             id = GatewayClientProfiles.AndroidClientId,
@@ -67,11 +67,11 @@ class GatewayClientProfilesTest {
           ),
       )
 
-    val params = GatewayConnectProfiles.buildConnectParamsJson(options = options, locale = "en-US")
+    val params = GatewayConnectBuilder.buildConnectParamsJson(options = options, locale = "en-US")
 
     assertEquals("operator", params["role"]?.jsonPrimitive?.content)
     assertEquals(
-      GatewayConnectProfiles.OperatorScopes,
+      GatewayConnectBuilder.OperatorScopes,
       params["scopes"]?.jsonArray?.map { it.jsonPrimitive.content },
     )
   }
