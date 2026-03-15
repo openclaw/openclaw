@@ -119,7 +119,10 @@ async function executeModel(
   sessionKey: string,
   args: string,
 ): Promise<SlashCommandResult> {
-  if (!args) {
+  const rawArg = args.trim();
+  const normalizedArg = rawArg.toLowerCase();
+
+  if (!rawArg || normalizedArg === "status" || normalizedArg === "list") {
     try {
       const [sessions, models] = await Promise.all([
         client.request<SessionsListResult>("sessions.list", {}),
@@ -144,11 +147,11 @@ async function executeModel(
   }
 
   try {
-    await client.request("sessions.patch", { key: sessionKey, model: args.trim() });
+    await client.request("sessions.patch", { key: sessionKey, model: rawArg });
     return {
-      content: `Model set to \`${args.trim()}\`.`,
+      content: `Model set to \`${rawArg}\`.`,
       action: "refresh",
-      sessionPatch: { model: args.trim() },
+      sessionPatch: { model: rawArg },
     };
   } catch (err) {
     return { content: `Failed to set model: ${String(err)}` };
