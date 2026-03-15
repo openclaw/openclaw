@@ -28,9 +28,9 @@ const CLAUDE_MODEL_ALIASES: Record<string, string> = {
   "claude-sonnet-4-5": "sonnet",
   "claude-sonnet-4-1": "sonnet",
   "claude-sonnet-4-0": "sonnet",
-  haiku: "haiku",
-  "haiku-3.5": "haiku",
-  "claude-haiku-3-5": "haiku",
+  haiku: "claude-haiku-4-5",
+  "haiku-3.5": "claude-haiku-4-5",
+  "claude-haiku-3-5": "claude-haiku-4-5",
 };
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
