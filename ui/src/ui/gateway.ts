@@ -262,6 +262,17 @@ export class GatewayBrowserClient {
       if (this.pendingDeviceTokenRetry && selectedAuth.authDeviceToken) {
         this.pendingDeviceTokenRetry = false;
       }
+    } else {
+      // In insecure context (HTTP/LAN), skip device identity but still use
+      // explicit token/password if provided. Gateways may reject this unless
+      // gateway.controlUi.allowInsecureAuth is enabled.
+      const explicitToken = this.opts.token?.trim() || undefined;
+      const explicitPassword = this.opts.password?.trim() || undefined;
+      selectedAuth = {
+        authToken: explicitToken,
+        authPassword: explicitPassword,
+        canFallbackToShared: false,
+      };
     }
     const authToken = selectedAuth.authToken;
     const deviceToken = selectedAuth.authDeviceToken ?? selectedAuth.resolvedDeviceToken;
