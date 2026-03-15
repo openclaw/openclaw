@@ -1,13 +1,26 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
+import {
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveSubagentToolPolicyForSession,
+} from "../../agents/pi-tools.policy.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
-import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
+import {
+  applyToolPolicyPipeline,
+  buildDefaultToolPolicyPipelineSteps,
+} from "../../agents/tool-policy-pipeline.js";
+import { resolveToolProfilePolicy } from "../../agents/tool-policy-shared.js";
+import { applyOwnerOnlyToolPolicy, mergeAlsoAllowPolicy } from "../../agents/tool-policy.js";
 import { getChannelDock } from "../../channels/dock.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { getPluginToolMeta } from "../../plugins/tools.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   listReservedChatSlashCommandNames,
@@ -83,6 +96,110 @@ function extractTextFromToolResult(result: any): string | null {
   const out = parts.join("");
   const trimmed = out.trim();
   return trimmed ? trimmed : null;
+}
+
+function resolveSkillDispatchTools(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  agentDir?: string;
+  provider: string;
+  senderIsOwner: boolean;
+  senderId?: string;
+}) {
+  const channel =
+    resolveGatewayMessageChannel(params.ctx.Surface) ??
+    resolveGatewayMessageChannel(params.ctx.Provider) ??
+    undefined;
+  const tools = createOpenClawTools({
+    agentSessionKey: params.sessionKey,
+    agentChannel: channel,
+    agentAccountId: (params.ctx as { AccountId?: string }).AccountId,
+    agentTo: params.ctx.OriginatingTo ?? params.ctx.To,
+    agentThreadId: params.ctx.MessageThreadId ?? undefined,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    config: params.cfg,
+    requesterSenderId: params.senderId ?? undefined,
+    senderIsOwner: params.senderIsOwner,
+  });
+  const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, params.senderIsOwner);
+  const {
+    agentId,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    profile,
+    providerProfile,
+    profileAlsoAllow,
+    providerProfileAlsoAllow,
+  } = resolveEffectiveToolPolicy({
+    config: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    modelProvider: params.provider,
+  });
+  const groupCtx = params.ctx as {
+    AccountId?: string;
+    GroupID?: string;
+    GroupChannel?: string;
+    GroupSpace?: string;
+    SenderId?: string;
+    SenderName?: string;
+    SenderUsername?: string;
+    SenderE164?: string;
+  };
+  const groupPolicy = resolveGroupToolPolicy({
+    config: params.cfg,
+    sessionKey: params.sessionKey,
+    messageProvider: channel,
+    groupId: groupCtx.GroupID,
+    groupChannel: groupCtx.GroupChannel,
+    groupSpace: groupCtx.GroupSpace,
+    accountId: groupCtx.AccountId,
+    senderId: groupCtx.SenderId,
+    senderName: groupCtx.SenderName,
+    senderUsername: groupCtx.SenderUsername,
+    senderE164: groupCtx.SenderE164,
+  });
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  const providerProfilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(providerProfile),
+    providerProfileAlsoAllow,
+  );
+  const sandboxRuntime = resolveSandboxRuntimeStatus({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
+  const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
+  const subagentPolicy = isSubagentSessionKey(params.sessionKey)
+    ? resolveSubagentToolPolicyForSession(params.cfg, params.sessionKey)
+    : undefined;
+
+  return applyToolPolicyPipeline({
+    tools: toolsByAuthorization,
+    toolMeta: (tool) => getPluginToolMeta(tool),
+    warn: logVerbose,
+    steps: [
+      ...buildDefaultToolPolicyPipelineSteps({
+        profilePolicy,
+        profile,
+        providerProfilePolicy,
+        providerProfile,
+        globalPolicy,
+        globalProviderPolicy,
+        agentPolicy,
+        agentProviderPolicy,
+        groupPolicy,
+        agentId,
+      }),
+      { policy: sandboxPolicy, label: "sandbox tools.allow" },
+      { policy: subagentPolicy, label: "subagent tools.allow" },
+    ],
+  });
 }
 
 export async function handleInlineActions(params: {
@@ -206,22 +323,17 @@ export async function handleInlineActions(params: {
     const dispatch = skillInvocation.command.dispatch;
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
-      const channel =
-        resolveGatewayMessageChannel(ctx.Surface) ??
-        resolveGatewayMessageChannel(ctx.Provider) ??
-        undefined;
-
-      const tools = createOpenClawTools({
-        agentSessionKey: sessionKey,
-        agentChannel: channel,
-        agentAccountId: (ctx as { AccountId?: string }).AccountId,
-        agentTo: ctx.OriginatingTo ?? ctx.To,
-        agentThreadId: ctx.MessageThreadId ?? undefined,
-        agentDir,
+      const authorizedTools = resolveSkillDispatchTools({
+        ctx,
+        cfg,
+        agentId,
+        sessionKey,
         workspaceDir,
-        config: cfg,
+        agentDir,
+        provider,
+        senderIsOwner: command.senderIsOwner,
+        senderId: command.senderId,
       });
-      const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
