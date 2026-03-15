@@ -347,6 +347,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
+    readBestEffortConfig: mocks.loadConfig,
   };
 });
 vi.mock("../daemon/service.js", () => ({
@@ -488,25 +489,43 @@ describe("statusCommand", () => {
   });
 
   it("warns instead of crashing when gateway auth SecretRef is unresolved for probe auth", async () => {
-    mocks.loadConfig.mockReturnValue({
-      session: {},
-      gateway: {
-        auth: {
-          mode: "token",
-          token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+    // Clear gateway token env vars so the SecretRef resolution path is exercised
+    const savedToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    const savedLegacy = process.env.CLAWDBOT_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    try {
+      mocks.loadConfig.mockReturnValue({
+        session: {},
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+          },
         },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
         },
-      },
-    });
+      });
 
-    await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
-    expect(payload.gateway.error).toContain("gateway.auth.token");
-    expect(payload.gateway.error).toContain("SecretRef");
+      await statusCommand({ json: true }, runtime as never);
+      const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+      expect(payload.gateway.error).toContain("gateway.auth.token");
+      expect(payload.gateway.error).toContain("SecretRef");
+    } finally {
+      if (savedToken !== undefined) {
+        process.env.OPENCLAW_GATEWAY_TOKEN = savedToken;
+      } else {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      }
+      if (savedLegacy !== undefined) {
+        process.env.CLAWDBOT_GATEWAY_TOKEN = savedLegacy;
+      } else {
+        delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+      }
+    }
   });
 
   it("surfaces channel runtime errors from the gateway", async () => {
@@ -594,6 +613,45 @@ describe("statusCommand", () => {
     });
     const joined = await runStatusAndGetJoinedLogs();
     expect(joined).toContain("devices approve req-close-456");
+  });
+
+  it("skips deep health probe when gateway is unreachable (guard)", async () => {
+    // Default probeGateway mock returns ok: false → gatewayReachable is false.
+    // The health probe callGateway should NOT be called at all.
+    mocks.callGateway.mockClear();
+
+    await expect(statusCommand({ deep: true }, runtime as never)).resolves.not.toThrow();
+
+    // Verify callGateway was never called with method "health"
+    const healthCalls = mocks.callGateway.mock.calls.filter(
+      (call: unknown[]) => (call[0] as { method?: string })?.method === "health",
+    );
+    expect(healthCalls).toHaveLength(0);
+  });
+
+  it("captures health probe error instead of crashing when gateway is reachable (catch)", async () => {
+    // Gateway is reachable but the health probe itself fails
+    mockProbeGatewayResult({
+      ok: true,
+      connectLatencyMs: 10,
+      error: null,
+      health: {},
+      status: {},
+      presence: [],
+    });
+    // First callGateway (channels.status from scanStatus) succeeds,
+    // second callGateway (health probe) rejects
+    mocks.callGateway
+      .mockResolvedValueOnce({}) // channels.status
+      .mockRejectedValueOnce(new Error("gateway closed (1008): unauthorized"));
+
+    // Should not throw — error should be captured gracefully
+    await expect(statusCommand({ deep: true }, runtime as never)).resolves.not.toThrow();
+
+    // Health section should show the error
+    const logs = getRuntimeLogs();
+    expect(logs.some((l) => l.includes("Health"))).toBe(true);
+    expect(logs.some((l) => l.includes("gateway closed (1008): unauthorized"))).toBe(true);
   });
 
   it("includes sessions across agents in JSON output", async () => {
