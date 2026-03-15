@@ -20,6 +20,7 @@ import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
@@ -726,6 +727,16 @@ export async function runMessageAction(
     const boundAccountIds = byAgent?.get(normalizeAgentId(resolvedAgentId));
     if (boundAccountIds && boundAccountIds.length > 0) {
       accountId = boundAccountIds[0];
+    }
+  }
+  if (!accountId) {
+    // Keep generic send/poll paths aligned with channel-native actions that
+    // already resolve their configured default account internally.
+    const pluginDefaultAccountId = resolveOutboundChannelPlugin({ channel, cfg })
+      ?.config.defaultAccountId?.(cfg)
+      ?.trim();
+    if (pluginDefaultAccountId) {
+      accountId = pluginDefaultAccountId;
     }
   }
   if (accountId) {

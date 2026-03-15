@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -434,6 +434,72 @@ describe("runMessageAction plugin dispatch", () => {
       }
       expect(ctx.accountId).toBe(expectedAccountId);
       expect(ctx.params.accountId).toBe(expectedAccountId);
+    });
+
+    it("falls back to the channel plugin defaultAccountId for core outbound sends", async () => {
+      const sendWhatsApp: NonNullable<ChannelOutboundAdapter["sendText"]> = vi.fn(async () => ({
+        channel: "whatsapp",
+        messageId: "wa-1",
+        toJid: "1555@s.whatsapp.net",
+      }));
+      const plugin = createOutboundTestPlugin({
+        id: "whatsapp",
+        outbound: {
+          deliveryMode: "direct",
+          sendText: sendWhatsApp,
+        },
+      });
+      plugin.config = {
+        ...plugin.config,
+        listAccountIds: () => ["work"],
+        resolveAccount: () => ({ enabled: true }),
+        defaultAccountId: () => "work",
+      };
+      plugin.messaging = {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      };
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "whatsapp",
+            source: "test",
+            plugin,
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            whatsapp: {
+              defaultAccount: "work",
+              accounts: {
+                work: {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "whatsapp",
+          target: "+1555",
+          message: "hi",
+        },
+        deps: { sendWhatsApp },
+        dryRun: false,
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "+1555",
+          text: "hi",
+          accountId: "work",
+          cfg: expect.any(Object),
+        }),
+      );
     });
   });
 });
