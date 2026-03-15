@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { isImmutableThinkingBlock } from "../../pi-embedded-helpers/thinking-guard.js";
 
 export const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
 
@@ -31,6 +32,9 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): boolean {
     for (let j = 0; j < message.content.length; j++) {
       const block = message.content[j];
       if (!block || typeof block !== "object") {
+        continue;
+      }
+      if (isImmutableThinkingBlock(block)) {
         continue;
       }
       if ((block as { type?: string }).type !== "image") {
