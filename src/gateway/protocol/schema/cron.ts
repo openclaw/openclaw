@@ -275,6 +275,8 @@ export const CronListParamsSchema = Type.Object(
     enabled: Type.Optional(CronJobsEnabledFilterSchema),
     sortBy: Type.Optional(CronJobsSortBySchema),
     sortDir: Type.Optional(CronSortDirSchema),
+    agentId: Type.Optional(Type.String()),
+    sessionKey: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
@@ -312,12 +314,19 @@ export const CronJobPatchSchema = Type.Object(
 
 export const CronUpdateParamsSchema = cronIdOrJobIdParams({
   patch: CronJobPatchSchema,
+  agentId: Type.Optional(Type.String()),
+  sessionKey: Type.Optional(Type.String()),
 });
 
-export const CronRemoveParamsSchema = cronIdOrJobIdParams({});
+export const CronRemoveParamsSchema = cronIdOrJobIdParams({
+  agentId: Type.Optional(Type.String()),
+  sessionKey: Type.Optional(Type.String()),
+});
 
 export const CronRunParamsSchema = cronIdOrJobIdParams({
   mode: Type.Optional(Type.Union([Type.Literal("due"), Type.Literal("force")])),
+  agentId: Type.Optional(Type.String()),
+  sessionKey: Type.Optional(Type.String()),
 });
 
 export const CronRunsParamsSchema = Type.Object(
