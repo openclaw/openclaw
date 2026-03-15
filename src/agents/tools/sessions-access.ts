@@ -163,16 +163,17 @@ function a2aDeniedMessage(action: SessionAccessAction): string {
 }
 
 function crossVisibilityMessage(action: SessionAccessAction): string {
+  const hint = " Also ensure tools.agentToAgent.enabled=true for cross-agent communication.";
   if (action === "history") {
-    return "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+    return `Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.${hint}`;
   }
   if (action === "send") {
-    return "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+    return `Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.${hint}`;
   }
   if (action === "status") {
-    return "Session status visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+    return `Session status visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.${hint}`;
   }
-  return "Session list visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+  return `Session list visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.${hint}`;
 }
 
 function selfVisibilityMessage(action: SessionAccessAction): string {
