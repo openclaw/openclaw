@@ -77,6 +77,15 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     geminiThoughtSignatureSanitization: true,
     geminiThoughtSignatureModelHints: ["gemini"],
   },
+  // Qiniu (qnaigc.com) - used with moonshotai/kimi-k2.5 models
+  // Kimi API does not support thinking content blocks in anthropic-messages API
+  qiniu: {
+    dropThinkingBlockModelHints: ["kimi"],
+  },
+  // moonshotai provider - same issue with thinking blocks
+  moonshotai: {
+    dropThinkingBlockModelHints: ["kimi"],
+  },
   "github-copilot": {
     dropThinkingBlockModelHints: ["claude"],
   },
