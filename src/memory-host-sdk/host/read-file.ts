@@ -19,6 +19,7 @@ export async function readMemoryFile(params: {
   lines?: number;
   defaultLines?: number;
   maxChars?: number;
+  userId?: string;
 }): Promise<MemoryReadResult> {
   const rawPath = params.relPath.trim();
   if (!rawPath) {
