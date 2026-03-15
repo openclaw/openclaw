@@ -22,12 +22,13 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "duckduckgo", "gemini", "grok", "kimi", "perplexity"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
+const DUCKDUCKGO_HTML_ENDPOINT = "https://html.duckduckgo.com/html";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
@@ -593,6 +594,13 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "duckduckgo") {
+    return {
+      error: "duckduckgo_search_unavailable",
+      message: "web_search (duckduckgo) failed to initialize.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_perplexity_api_key",
     message:
@@ -608,6 +616,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       : "";
   if (raw === "brave") {
     return "brave";
+  }
+  if (raw === "duckduckgo") {
+    return "duckduckgo";
   }
   if (raw === "gemini") {
     return "gemini";
@@ -1154,6 +1165,106 @@ function resolveSiteName(url: string | undefined): string | undefined {
   }
 }
 
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, "").trim();
+}
+
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#039;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
+}
+
+function decodeDuckDuckGoUrl(rawUrl: string): string {
+  try {
+    const normalizedRawUrl = rawUrl.startsWith("//") ? `https:${rawUrl}` : rawUrl;
+    const parsed = new URL(normalizedRawUrl);
+    const uddg = parsed.searchParams.get("uddg");
+    if (uddg) {
+      return uddg;
+    }
+  } catch {
+    // Keep rawUrl when DuckDuckGo returns a relative or already-decoded link.
+  }
+  return rawUrl;
+}
+
+type DuckDuckGoResult = {
+  title: string;
+  url: string;
+  snippet: string;
+};
+
+function readHtmlAttribute(tagAttributes: string, attribute: string): string {
+  return new RegExp(`\\b${attribute}="([^"]*)"`, "i").exec(tagAttributes)?.[1] ?? "";
+}
+
+function parseDuckDuckGoHtml(html: string): DuckDuckGoResult[] {
+  const results: DuckDuckGoResult[] = [];
+  const resultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")([^>]*)>([\s\S]*?)<\/a>/gi;
+  const nextResultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")[^>]*>/i;
+  const snippetRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__snippet\b[^"]*")[^>]*>([\s\S]*?)<\/a>/i;
+
+  for (const match of html.matchAll(resultRegex)) {
+    const rawAttributes = match[1] ?? "";
+    const rawTitle = match[2] ?? "";
+    const rawUrl = readHtmlAttribute(rawAttributes, "href");
+    const matchEnd = (match.index ?? 0) + match[0].length;
+    const trailingHtml = html.slice(matchEnd);
+    const nextResultIndex = trailingHtml.search(nextResultRegex);
+    const scopedTrailingHtml =
+      nextResultIndex >= 0 ? trailingHtml.slice(0, nextResultIndex) : trailingHtml;
+    const rawSnippet = snippetRegex.exec(scopedTrailingHtml)?.[1] ?? "";
+    const url = decodeDuckDuckGoUrl(decodeHtmlEntities(rawUrl));
+    const title = decodeHtmlEntities(stripHtml(rawTitle));
+    const snippet = decodeHtmlEntities(stripHtml(rawSnippet));
+    if (url && title) {
+      results.push({ title, url, snippet });
+    }
+  }
+
+  return results;
+}
+
+async function runDuckDuckGoSearch(params: {
+  query: string;
+  count: number;
+  timeoutSeconds: number;
+}): Promise<DuckDuckGoResult[]> {
+  const url = new URL(DUCKDUCKGO_HTML_ENDPOINT);
+  url.searchParams.set("q", params.query);
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: url.toString(),
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "GET",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+        const detail = detailResult.text;
+        throw new Error(`DuckDuckGo search error (${res.status}): ${detail || res.statusText}`);
+      }
+
+      const html = await res.text();
+      return parseDuckDuckGoHtml(html).slice(0, params.count);
+    },
+  );
+}
+
 async function throwWebSearchApiError(res: Response, providerLabel: string): Promise<never> {
   const detailResult = await readResponseText(res, { maxBytes: 64_000 });
   const detail = detailResult.text;
@@ -1608,17 +1719,21 @@ async function runWebSearch(params: {
   const providerSpecificKey =
     params.provider === "perplexity"
       ? `${params.perplexityTransport ?? "search_api"}:${params.perplexityBaseUrl ?? PERPLEXITY_DIRECT_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}`
-      : params.provider === "grok"
-        ? `${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
-        : params.provider === "gemini"
-          ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
-          : params.provider === "kimi"
-            ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-            : "";
+      : params.provider === "duckduckgo"
+        ? "duckduckgo"
+        : params.provider === "grok"
+          ? `${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
+          : params.provider === "gemini"
+            ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
+            : params.provider === "kimi"
+              ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
+              : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
       ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
-      : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
+      : params.provider === "duckduckgo"
+        ? `${params.provider}:${params.query}:${params.count}:${providerSpecificKey}`
+        : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -1689,6 +1804,10 @@ async function runWebSearch(params: {
   }
 
   if (params.provider === "grok") {
+    if (!params.apiKey) {
+      throw new Error("Missing API key for Grok web search.");
+    }
+
     const { content, citations, inlineCitations } = await runGrokSearch({
       query: params.query,
       apiKey: params.apiKey,
@@ -1711,6 +1830,37 @@ async function runWebSearch(params: {
       content: wrapWebContent(content),
       citations,
       inlineCitations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "duckduckgo") {
+    const results = await runDuckDuckGoSearch({
+      query: params.query,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const mapped = results.map((entry) => ({
+      title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+      url: entry.url,
+      description: entry.snippet ? wrapWebContent(entry.snippet, "web_search") : "",
+      siteName: resolveSiteName(entry.url) || undefined,
+    }));
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: mapped,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -1917,15 +2067,17 @@ export function createWebSearchTool(options?: {
       ? perplexitySchemaTransportHint === "chat_completions"
         ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
         : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path."
-      : provider === "grok"
-        ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : provider === "kimi"
-          ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
-          : provider === "gemini"
-            ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+      : provider === "duckduckgo"
+        ? "Search the web using DuckDuckGo. Returns titles, URLs, and snippets for fast research. No API key required."
+        : provider === "grok"
+          ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
+          : provider === "kimi"
+            ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
+            : provider === "gemini"
+              ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1943,13 +2095,15 @@ export function createWebSearchTool(options?: {
       const apiKey =
         provider === "perplexity"
           ? perplexityRuntime?.apiKey
-          : provider === "grok"
-            ? resolveGrokApiKey(grokConfig)
-            : provider === "kimi"
-              ? resolveKimiApiKey(kimiConfig)
-              : provider === "gemini"
-                ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+          : provider === "duckduckgo"
+            ? "duckduckgo"
+            : provider === "grok"
+              ? resolveGrokApiKey(grokConfig)
+              : provider === "kimi"
+                ? resolveKimiApiKey(kimiConfig)
+                : provider === "gemini"
+                  ? resolveGeminiApiKey(geminiConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));

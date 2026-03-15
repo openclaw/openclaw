@@ -15,6 +15,17 @@ function installMockFetch(payload: unknown) {
   return mockFetch;
 }
 
+function installTextFetch(payload: string) {
+  const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+    Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(payload),
+    } as Response),
+  );
+  global.fetch = withFetchPreconnect(mockFetch);
+  return mockFetch;
+}
+
 function createPerplexitySearchTool(perplexityConfig?: {
   apiKey?: string;
   baseUrl?: string;
@@ -68,17 +79,21 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
   });
 }
 
-function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+function createProviderSearchTool(
+  provider: "brave" | "duckduckgo" | "perplexity" | "grok" | "gemini" | "kimi",
+) {
   const searchConfig =
-    provider === "perplexity"
-      ? { provider, perplexity: { apiKey: "pplx-config-test" } } // pragma: allowlist secret
-      : provider === "grok"
-        ? { provider, grok: { apiKey: "xai-config-test" } } // pragma: allowlist secret
-        : provider === "gemini"
-          ? { provider, gemini: { apiKey: "gemini-config-test" } } // pragma: allowlist secret
-          : provider === "kimi"
-            ? { provider, kimi: { apiKey: "moonshot-config-test" } } // pragma: allowlist secret
-            : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
+    provider === "duckduckgo"
+      ? { provider }
+      : provider === "perplexity"
+        ? { provider, perplexity: { apiKey: "pplx-config-test" } } // pragma: allowlist secret
+        : provider === "grok"
+          ? { provider, grok: { apiKey: "xai-config-test" } } // pragma: allowlist secret
+          : provider === "gemini"
+            ? { provider, gemini: { apiKey: "gemini-config-test" } } // pragma: allowlist secret
+            : provider === "kimi"
+              ? { provider, kimi: { apiKey: "moonshot-config-test" } } // pragma: allowlist secret
+              : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
   return createWebSearchTool({
     config: {
       tools: {
@@ -122,11 +137,21 @@ function installPerplexityChatFetch(payload?: Record<string, unknown>) {
   );
 }
 
+function createProviderSuccessPayload(provider: "duckduckgo"): string;
 function createProviderSuccessPayload(
   provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
-) {
+): Record<string, unknown>;
+function createProviderSuccessPayload(
+  provider: "brave" | "duckduckgo" | "perplexity" | "grok" | "gemini" | "kimi",
+): string | Record<string, unknown> {
   if (provider === "brave") {
     return { web: { results: [] } };
+  }
+  if (provider === "duckduckgo") {
+    return `
+      <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com">Example</a>
+      <a class="result__snippet">Example snippet</a>
+    `;
   }
   if (provider === "perplexity") {
     return { results: [] };
@@ -151,6 +176,14 @@ function createProviderSuccessPayload(
 }
 
 describe("web tools defaults", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    webSearchTesting.SEARCH_CACHE.clear();
+    global.fetch = priorFetch;
+    vi.unstubAllEnvs();
+  });
+
   it("enables web_fetch by default (non-sandbox)", () => {
     const tool = createWebFetchTool({ config: {}, sandboxed: false });
     expect(tool?.name).toBe("web_fetch");
@@ -200,6 +233,133 @@ describe("web tools defaults", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(String(mockFetch.mock.calls[0]?.[0])).toContain("generativelanguage.googleapis.com");
     expect((result?.details as { provider?: string } | undefined)?.provider).toBe("gemini");
+  });
+
+  it("supports duckduckgo without an API key", async () => {
+    const mockFetch = installTextFetch(
+      `
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com">Example&apos;s result</a>
+        <a class="result__snippet">Example&apos;s snippet</a>
+      `,
+    );
+    const tool = createProviderSearchTool("duckduckgo");
+
+    const result = await tool?.execute?.("call-duckduckgo", { query: "duckduckgo test" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("html.duckduckgo.com/html");
+    expect(result?.details).toMatchObject({
+      provider: "duckduckgo",
+      count: 1,
+    });
+    const firstResult = (
+      result?.details as
+        | { results?: Array<{ url?: string; title?: string; description?: string }> }
+        | undefined
+    )?.results?.[0];
+    expect(firstResult?.url).toBe("https://example.com");
+    expect(firstResult?.title).toContain("Example's result");
+    expect(firstResult?.description).toContain("Example's snippet");
+  });
+
+  it("keeps duckduckgo snippets aligned to the matching result", async () => {
+    const mockFetch = installTextFetch(
+      `
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffirst.example">First result</a>
+        <div class="result__extras">No snippet here</div>
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fsecond.example">Second result</a>
+        <a class="result__snippet">Second snippet</a>
+      `,
+    );
+    const tool = createProviderSearchTool("duckduckgo");
+
+    const result = await tool?.execute?.("call-duckduckgo-alignment", {
+      query: "duckduckgo test",
+    });
+
+    expect(mockFetch).toHaveBeenCalled();
+    const results =
+      (result?.details as { results?: Array<{ url?: string; description?: string }> } | undefined)
+        ?.results ?? [];
+    expect(results.length).toBe(2);
+    expect(results[0]?.url).toBe("https://first.example");
+    expect(results[0]?.description ?? "").toBe("");
+    expect(results[1]?.url).toBe("https://second.example");
+    expect(results[1]?.description).toContain("Second snippet");
+  });
+
+  it("parses duckduckgo results when href comes before class and snippets span newlines", async () => {
+    const mockFetch = installTextFetch(
+      `
+        <a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fsearch%3Fa%3Db%252Fc%26next%3Dx%2526y" class="result__a">Example result</a>
+        <div class="result__extras">
+          <a href="/snippet" class="result__snippet">
+            Example snippet
+          </a>
+        </div>
+      `,
+    );
+    const tool = createProviderSearchTool("duckduckgo");
+
+    const result = await tool?.execute?.("call-duckduckgo-ordering", { query: "duckduckgo test" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    const firstResult = (
+      result?.details as
+        | { results?: Array<{ url?: string; title?: string; description?: string }> }
+        | undefined
+    )?.results?.[0];
+    expect(firstResult?.url).toBe("https://example.com/search?a=b%2Fc&next=x%26y");
+    expect(firstResult?.title).toContain("Example result");
+    expect(firstResult?.description).toContain("Example snippet");
+  });
+
+  it("reuses the duckduckgo cache entry across unsupported filters", async () => {
+    webSearchTesting.SEARCH_CACHE.clear();
+    const mockFetch = installTextFetch(
+      `
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com">Example</a>
+        <a class="result__snippet">Example snippet</a>
+      `,
+    );
+    const firstTool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "duckduckgo",
+              grok: { apiKey: "xai-config-test", model: "grok-a", inlineCitations: false },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const secondTool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "duckduckgo",
+              grok: { apiKey: "xai-config-test", model: "grok-b", inlineCitations: true },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const first = await firstTool?.execute?.("call-duckduckgo-1", {
+      query: "duckduckgo test",
+      count: 5,
+    });
+    const second = await secondTool?.execute?.("call-duckduckgo-2", {
+      query: "duckduckgo test",
+      count: 5,
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(first?.details).toMatchObject({ provider: "duckduckgo", count: 1 });
+    expect(second?.details).toMatchObject({ provider: "duckduckgo", count: 1 });
   });
 });
 
@@ -305,11 +465,14 @@ describe("web_search provider proxy dispatch", () => {
     global.fetch = priorFetch;
   });
 
-  it.each(["brave", "perplexity", "grok", "gemini", "kimi"] as const)(
+  it.each(["brave", "duckduckgo", "perplexity", "grok", "gemini", "kimi"] as const)(
     "uses proxy-aware dispatcher for %s provider when HTTP_PROXY is configured",
     async (provider) => {
       vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
-      const mockFetch = installMockFetch(createProviderSuccessPayload(provider));
+      const mockFetch =
+        provider === "duckduckgo"
+          ? installTextFetch(createProviderSuccessPayload(provider))
+          : installMockFetch(createProviderSuccessPayload(provider));
       const tool = createProviderSearchTool(provider);
       expect(tool).not.toBeNull();
 

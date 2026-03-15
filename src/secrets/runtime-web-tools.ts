@@ -10,7 +10,15 @@ import {
   type SecretDefaults,
 } from "./runtime-shared.js";
 
-const WEB_SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const WEB_SEARCH_PROVIDERS = [
+  "brave",
+  "duckduckgo",
+  "gemini",
+  "grok",
+  "kimi",
+  "perplexity",
+] as const;
+const WEB_SEARCH_PROVIDERS_WITH_KEYS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
@@ -84,6 +92,7 @@ function normalizeProvider(value: unknown): WebSearchProvider | undefined {
   const normalized = value.trim().toLowerCase();
   if (
     normalized === "brave" ||
+    normalized === "duckduckgo" ||
     normalized === "gemini" ||
     normalized === "grok" ||
     normalized === "kimi" ||
@@ -320,6 +329,9 @@ function envVarsForProvider(provider: WebSearchProvider): string[] {
   if (provider === "brave") {
     return ["BRAVE_API_KEY"];
   }
+  if (provider === "duckduckgo") {
+    return [];
+  }
   if (provider === "gemini") {
     return ["GEMINI_API_KEY"];
   }
@@ -339,11 +351,18 @@ function resolveProviderKeyValue(
   if (provider === "brave") {
     return search.apiKey;
   }
+  if (provider === "duckduckgo") {
+    return undefined;
+  }
   const scoped = search[provider];
   if (!isRecord(scoped)) {
     return undefined;
   }
   return scoped.apiKey;
+}
+
+function providerRequiresKey(provider: WebSearchProvider): boolean {
+  return provider !== "duckduckgo";
 }
 
 function hasConfiguredSecretRef(value: unknown, defaults: SecretDefaults | undefined): boolean {
@@ -398,7 +417,9 @@ export async function resolveRuntimeWebTools(params: {
   }
 
   if (searchEnabled && search) {
-    const candidates = configuredProvider ? [configuredProvider] : [...WEB_SEARCH_PROVIDERS];
+    const candidates = configuredProvider
+      ? [configuredProvider]
+      : [...WEB_SEARCH_PROVIDERS_WITH_KEYS];
     const unresolvedWithoutFallback: Array<{
       provider: WebSearchProvider;
       path: string;
@@ -409,6 +430,11 @@ export async function resolveRuntimeWebTools(params: {
     let selectedResolution: SecretResolutionResult | undefined;
 
     for (const provider of candidates) {
+      if (!providerRequiresKey(provider)) {
+        selectedProvider = provider;
+        selectedResolution = undefined;
+        break;
+      }
       const path =
         provider === "brave" ? "tools.web.search.apiKey" : `tools.web.search.${provider}.apiKey`;
       const value = resolveProviderKeyValue(search, provider);
@@ -526,7 +552,7 @@ export async function resolveRuntimeWebTools(params: {
   }
 
   if (searchEnabled && search && !configuredProvider && searchMetadata.selectedProvider) {
-    for (const provider of WEB_SEARCH_PROVIDERS) {
+    for (const provider of WEB_SEARCH_PROVIDERS_WITH_KEYS) {
       if (provider === searchMetadata.selectedProvider) {
         continue;
       }
@@ -543,7 +569,7 @@ export async function resolveRuntimeWebTools(params: {
       });
     }
   } else if (search && !searchEnabled) {
-    for (const provider of WEB_SEARCH_PROVIDERS) {
+    for (const provider of WEB_SEARCH_PROVIDERS_WITH_KEYS) {
       const path =
         provider === "brave" ? "tools.web.search.apiKey" : `tools.web.search.${provider}.apiKey`;
       const value = resolveProviderKeyValue(search, provider);
@@ -559,7 +585,7 @@ export async function resolveRuntimeWebTools(params: {
   }
 
   if (searchEnabled && search && configuredProvider) {
-    for (const provider of WEB_SEARCH_PROVIDERS) {
+    for (const provider of WEB_SEARCH_PROVIDERS_WITH_KEYS) {
       if (provider === configuredProvider) {
         continue;
       }

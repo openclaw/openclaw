@@ -138,6 +138,56 @@ describe("runtime web tools resolution", () => {
     },
   );
 
+  it("keeps configured duckduckgo selected even when other web-search credentials exist", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "duckduckgo",
+              apiKey: { source: "env", provider: "default", id: "BRAVE_REF" },
+              gemini: {
+                apiKey: { source: "env", provider: "default", id: "GEMINI_REF" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        BRAVE_REF: "brave-provider-key",
+        GEMINI_REF: "gemini-provider-key",
+      },
+    });
+
+    expect(metadata.search.providerConfigured).toBe("duckduckgo");
+    expect(metadata.search.providerSource).toBe("configured");
+    expect(metadata.search.selectedProvider).toBe("duckduckgo");
+    expect(metadata.search.selectedProviderKeySource).toBeUndefined();
+    expect(resolvedConfig.tools?.web?.search?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "BRAVE_REF",
+    });
+    expect(resolvedConfig.tools?.web?.search?.gemini?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GEMINI_REF",
+    });
+    expect(context.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "tools.web.search.apiKey",
+        }),
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "tools.web.search.gemini.apiKey",
+        }),
+      ]),
+    );
+  });
+
   it("auto-detects provider precedence across all configured providers", async () => {
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
