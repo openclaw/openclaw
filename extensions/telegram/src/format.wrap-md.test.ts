@@ -174,6 +174,14 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
     expect(chunks.every((chunk) => chunk.html.length <= 5)).toBe(true);
   });
+
+  it("prefers word boundaries when html-limit retry splits formatted prose", () => {
+    const input = "**Which of these**";
+    const chunks = markdownToTelegramChunks(input, 16);
+    expect(chunks.map((chunk) => chunk.text)).toEqual(["Which of ", "these"]);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe("Which of these");
+    expect(chunks.every((chunk) => chunk.html.length <= 16)).toBe(true);
+  });
 });
 
 describe("edge cases", () => {

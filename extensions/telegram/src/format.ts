@@ -512,6 +512,45 @@ function sliceLinkSpans(
   });
 }
 
+function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: number): number {
+  const maxEnd = Math.min(text.length, start + limit);
+  if (maxEnd >= text.length) {
+    return text.length;
+  }
+
+  let lastNewlineBreak = -1;
+  let lastWhitespaceBreak = -1;
+  let parenDepth = 0;
+
+  for (let index = start; index < maxEnd; index += 1) {
+    const char = text[index];
+    if (char === "(") {
+      parenDepth += 1;
+      continue;
+    }
+    if (char === ")" && parenDepth > 0) {
+      parenDepth -= 1;
+      continue;
+    }
+    if (parenDepth !== 0) {
+      continue;
+    }
+    if (char === "\n") {
+      lastNewlineBreak = index + 1;
+    } else if (/\s/.test(char)) {
+      lastWhitespaceBreak = index + 1;
+    }
+  }
+
+  if (lastNewlineBreak > start) {
+    return lastNewlineBreak;
+  }
+  if (lastWhitespaceBreak > start) {
+    return lastWhitespaceBreak;
+  }
+  return maxEnd;
+}
+
 function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): MarkdownIR[] {
   if (!ir.text) {
     return [];
@@ -523,7 +562,7 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   const chunks: MarkdownIR[] = [];
   let cursor = 0;
   while (cursor < ir.text.length) {
-    const end = Math.min(ir.text.length, cursor + normalizedLimit);
+    const end = findMarkdownIRPreservedSplitIndex(ir.text, cursor, normalizedLimit);
     chunks.push({
       text: ir.text.slice(cursor, end),
       styles: sliceStyleSpans(ir.styles, cursor, end),
