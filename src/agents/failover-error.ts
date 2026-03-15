@@ -59,6 +59,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 408;
     case "format":
       return 400;
+    case "content_policy":
+      return 400;
     case "model_not_found":
       return 404;
     case "session_expired":
@@ -225,8 +227,17 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return err.reason;
   }
 
-  const status = getStatusCode(err);
   const message = getErrorMessage(err);
+  // Important: content policy violations often arrive as HTTP 400s.
+  // We must classify by message BEFORE the status===400 -> "format" fallback.
+  if (message) {
+    const inferred = classifyFailoverReason(message);
+    if (inferred === "content_policy") {
+      return inferred;
+    }
+  }
+
+  const status = getStatusCode(err);
   const statusReason = classifyFailoverReasonFromHttpStatus(status, message);
   if (statusReason) {
     return statusReason;

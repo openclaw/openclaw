@@ -317,6 +317,15 @@ describe("failover-error", () => {
     ).toBe("format");
   });
 
+  it("prefers content_policy classification over status===400 format fallback", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "Output blocked by content filtering policy",
+      }),
+    ).toBe("content_policy");
+  });
+
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");

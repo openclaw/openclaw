@@ -950,6 +950,80 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   return false;
 }
 
+function isContentPolicyErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+
+  // Anthropic and proxy variants.
+  // Examples seen in the wild:
+  // - "Output blocked by content filtering policy"
+  // - "content_policy_violation"
+  // - "Request rejected by content policy"
+  // - stop reasons like "sensitive" / "refusal" are handled elsewhere, but those
+  //   may also bubble up as generic error text.
+  // "policy violation" by itself is too broad — some auth failures (401/403) use that wording.
+  // Only treat it as a content-policy signal when paired with stronger safety/content keywords.
+  // Use a regex instead of bare string match to avoid false positives on
+  // unrelated messages (e.g. "no policy violations found").
+  const hasPolicyViolation = /policy[\s_]violation/i.test(lower);
+  if (hasPolicyViolation) {
+    // Org/account policy denials (e.g. "org policy violation", "account policy
+    // violation") are access-control errors, not content-filter events — exclude
+    // them here so they fall through to auth/cooldown handling.
+    const looksLikeAuth =
+      /\b(401|403)\b/.test(lower) ||
+      lower.includes("unauthorized") ||
+      lower.includes("forbidden") ||
+      lower.includes("authentication") ||
+      lower.includes("auth") ||
+      lower.includes("org policy") ||
+      lower.includes("account policy");
+    const hasSafetyContext =
+      lower.includes("content") ||
+      lower.includes("safety") ||
+      lower.includes("output blocked") ||
+      lower.includes("content filter") ||
+      lower.includes("content filtering");
+    if (!looksLikeAuth && hasSafetyContext) {
+      return true;
+    }
+  }
+
+  if (
+    lower.includes("content filtering") ||
+    lower.includes("content filter") ||
+    lower.includes("content_policy") ||
+    lower.includes("content policy") ||
+    lower.includes("output blocked") ||
+    (lower.includes("blocked by") && lower.includes("policy")) ||
+    (lower.includes("violates") && lower.includes("policy")) ||
+    (lower.includes("safety") && lower.includes("policy"))
+  ) {
+    return true;
+  }
+
+  // JSON-ish Anthropic error payload fragments.
+  // e.g. {"error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}
+  // We require explicit content/safety filtering keywords alongside invalid_request_error.
+  // Matching on "policy" alone would swallow org/account policy denials (e.g. "Your
+  // organization's policy does not allow this request") — those indicate access-control
+  // restrictions, not Anthropic content filtering, and must reach auth/cooldown handling.
+  if (
+    lower.includes("invalid_request_error") &&
+    (lower.includes("content filtering") ||
+      lower.includes("content filter") ||
+      lower.includes("content_policy") ||
+      lower.includes("output blocked") ||
+      (lower.includes("blocked") && lower.includes("content")))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function isCliSessionExpiredErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
@@ -983,6 +1057,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isModelNotFoundErrorMessage(raw)) {
     return "model_not_found";
+  }
+  if (isContentPolicyErrorMessage(raw)) {
+    return "content_policy";
   }
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
