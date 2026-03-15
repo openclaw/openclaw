@@ -1425,9 +1425,10 @@ export async function runEmbeddedAttempt(
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      entries: skillEntries.length > 0 ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      originalWorkspaceDir: isSandbox ? resolvedWorkspace : undefined,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

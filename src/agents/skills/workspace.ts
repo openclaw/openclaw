@@ -642,19 +642,30 @@ export function resolveSkillsPromptForRun(params: {
   entries?: SkillEntry[];
   config?: OpenClawConfig;
   workspaceDir: string;
+  originalWorkspaceDir?: string;
 }): string {
+  // When running in sandbox, the effective workspace differs from the original.
+  // The snapshot was built with host paths, but those don't exist in the container.
+  // Rebuild the prompt using entries from the sandbox workspace.
+  const isSandbox =
+    params.originalWorkspaceDir && params.workspaceDir !== params.originalWorkspaceDir;
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
-  if (snapshotPrompt) {
-    return snapshotPrompt;
+
+  // If in sandbox or no snapshot, rebuild from entries
+  if (isSandbox || !snapshotPrompt) {
+    if (params.entries && params.entries.length > 0) {
+      const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
+        entries: params.entries,
+        config: params.config,
+        skillFilter: params.skillsSnapshot?.skillFilter,
+      });
+      return prompt.trim() ? prompt : "";
+    }
+    return "";
   }
-  if (params.entries && params.entries.length > 0) {
-    const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
-      entries: params.entries,
-      config: params.config,
-    });
-    return prompt.trim() ? prompt : "";
-  }
-  return "";
+
+  // Use snapshot prompt only when not in sandbox
+  return snapshotPrompt;
 }
 
 export function loadWorkspaceSkillEntries(
