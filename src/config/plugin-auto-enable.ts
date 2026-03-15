@@ -99,6 +99,11 @@ const STRUCTURED_CHANNEL_CONFIG_SPECS: Record<string, StructuredChannelConfigSpe
     stringKeys: ["host", "nick"],
     accountStringKeys: ["host", "nick"],
   },
+  "kudosity-sms": {
+    envAll: ["KUDOSITY_API_KEY", "KUDOSITY_SENDER"],
+    stringKeys: ["apiKey", "sender"],
+    accountStringKeys: ["apiKey", "sender"],
+  },
   slack: {
     envAny: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
     stringKeys: ["botToken", "appToken", "userToken"],
