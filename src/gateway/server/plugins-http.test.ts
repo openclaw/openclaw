@@ -178,6 +178,40 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("missing scope: operator.admin"));
   });
 
+  it("does not mark unauthenticated plugin routes as internal backend clients", async () => {
+    loadOpenClawPlugins.mockReset();
+    handleGatewayRequest.mockReset();
+    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(true, { internal: opts.client?.isInternalBackendClient === true });
+    });
+
+    const subagent = await createSubagentRuntime();
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/hook",
+            auth: "plugin",
+            handler: async (_req, _res) => {
+              await subagent.deleteSession({ sessionKey: "agent:main:subagent:child" });
+              return true;
+            },
+          }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/hook" } as IncomingMessage, res, undefined, {
+      gatewayAuthSatisfied: false,
+    });
+
+    expect(handled).toBe(true);
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+    expect(handleGatewayRequest.mock.calls[0]?.[0]?.client?.isInternalBackendClient).toBe(false);
+  });
+
   it("returns false when no routes are registered", async () => {
     const log = createPluginLog();
     const handler = createGatewayPluginRequestHandler({

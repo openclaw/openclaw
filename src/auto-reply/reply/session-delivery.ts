@@ -9,6 +9,7 @@ import {
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
+  isInterSessionChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
@@ -89,7 +90,23 @@ export function resolveLastChannelRaw(params: {
   persistedLastChannel?: string;
   sessionKey?: string;
 }): string | undefined {
+  // Inter-session messages (from sessions_send): preserve the receiver's
+  // established external channel without injecting the sender's channel.
+  // Threading the sender's channel alone — without paired to/accountId/threadId —
+  // would leave the receiver with a mismatched channel+to state.
+  if (isInterSessionChannel(params.originatingChannelRaw)) {
+    const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
+    if (isExternalRoutingChannel(persistedChannel)) {
+      return persistedChannel;
+    }
+    return undefined;
+  }
+
+  // originatingChannel is only needed for the webchat-flip and external-routing
+  // checks below — declared after the inter-session guard to avoid computing it
+  // for the common inter-session fast path.
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+
   // WebChat should own reply routing for direct-session UI turns, even when the
   // session previously replied through an external channel like iMessage.
   if (
@@ -121,6 +138,21 @@ export function resolveLastToRaw(params: {
   persistedLastChannel?: string;
   sessionKey?: string;
 }): string | undefined {
+  // Inter-session messages: preserve the receiver's established destination,
+  // but only when the persisted channel is already external. If the channel
+  // resolver falls back to a session-key hint (e.g. discord derived from the
+  // key while persistedLastChannel is still webchat), returning a stale
+  // persistedLastTo would create a mismatched lastChannel/lastTo pair and route
+  // replies to an invalid destination. In that case return undefined so the
+  // caller can derive an appropriate target from the new channel.
+  if (isInterSessionChannel(params.originatingChannelRaw)) {
+    const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
+    if (isExternalRoutingChannel(persistedChannel)) {
+      return params.persistedLastTo;
+    }
+    return undefined;
+  }
+
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
   if (
     originatingChannel === INTERNAL_MESSAGE_CHANNEL &&

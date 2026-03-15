@@ -140,9 +140,18 @@ describe("sessions_send gateway loopback", () => {
     expect(details.sessionKey).toBe("main");
 
     const firstCall = spy.mock.calls[0]?.[0] as
-      | { lane?: string; inputProvenance?: { kind?: string; sourceTool?: string } }
+      | {
+          lane?: string;
+          channel?: string;
+          messageChannel?: string;
+          runContext?: { messageChannel?: string };
+          inputProvenance?: { kind?: string; sourceTool?: string };
+        }
       | undefined;
     expect(firstCall?.lane).toBe("nested");
+    expect(firstCall?.channel).toBe("inter_session");
+    expect(firstCall?.messageChannel).toBe("inter_session");
+    expect(firstCall?.runContext?.messageChannel).toBe("inter_session");
     expect(firstCall?.inputProvenance).toMatchObject({
       kind: "inter_session",
       sourceTool: "sessions_send",

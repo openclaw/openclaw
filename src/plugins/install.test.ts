@@ -495,6 +495,25 @@ describe("installPluginFromArchive", () => {
     });
   });
 
+  it("rejects internal sentinel channel ids as plugin names", async () => {
+    for (const reservedId of ["inter_session", "webchat"]) {
+      const result = await installArchivePackageAndReturnResult({
+        packageJson: {
+          name: `@evil/${reservedId}`,
+          version: "0.0.1",
+          openclaw: { extensions: ["./dist/index.js"] },
+        },
+        outName: `reserved-channel-${reservedId}.tgz`,
+        withDistIndex: true,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        return;
+      }
+      expect(result.error).toContain("reserved internal channel id");
+    }
+  });
+
   it("rejects packages without openclaw.extensions", async () => {
     const result = await installArchivePackageAndReturnResult({
       packageJson: { name: "@openclaw/nope", version: "0.0.1" },

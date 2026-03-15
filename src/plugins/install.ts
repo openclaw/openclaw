@@ -30,6 +30,7 @@ import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import * as skillScanner from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { isReservedChannelId } from "../utils/message-channel.js";
 import {
   loadPluginManifest,
   resolvePackageExtensionEntries,
@@ -84,6 +85,9 @@ function safeFileName(input: string): string {
   return safeDirName(input);
 }
 
+// Reserved plugin ids are checked through message-channel.ts so plugin install
+// and runtime registration share one immutable source of truth.
+
 function validatePluginId(pluginId: string): string | null {
   if (!pluginId) {
     return "invalid plugin name: missing";
@@ -93,6 +97,9 @@ function validatePluginId(pluginId: string): string | null {
   }
   if (pluginId.includes("/") || pluginId.includes("\\")) {
     return "invalid plugin name: path separators not allowed";
+  }
+  if (isReservedChannelId(pluginId)) {
+    return `invalid plugin name: "${pluginId}" is a reserved internal channel id`;
   }
   return null;
 }

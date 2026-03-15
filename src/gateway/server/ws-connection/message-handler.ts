@@ -83,6 +83,8 @@ import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
+  resolveInternalBackendClientAttestation,
+  shouldSkipBackendSelfPairing,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
 import {
@@ -90,7 +92,6 @@ import {
   resolveHandshakeBrowserSecurityContext,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
-  shouldSkipBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
@@ -680,6 +681,7 @@ export function attachGatewayWsMessageHandler(params: {
             isLocalClient,
             hasBrowserOriginHeader,
             sharedAuthOk,
+            authOk,
             authMethod,
           }) || shouldSkipControlUiPairing(controlUiAuthPolicy, role, trustedProxyAuthOk);
         if (device && devicePublicKey && !skipPairing) {
@@ -880,6 +882,13 @@ export function attachGatewayWsMessageHandler(params: {
         const deviceToken = device
           ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
           : null;
+        const attestedInternalBackendClient = resolveInternalBackendClientAttestation({
+          connectParams,
+          hasBrowserOriginHeader,
+          initialIsInternalBackendClient: isInternalBackendClient,
+          authMethod,
+          deviceTokenIssued: deviceToken !== null,
+        });
 
         if (role === "node") {
           const cfg = loadConfig();
@@ -984,6 +993,7 @@ export function attachGatewayWsMessageHandler(params: {
           canvasHostUrl,
           canvasCapability,
           canvasCapabilityExpiresAtMs,
+          isInternalBackendClient: attestedInternalBackendClient,
         };
         setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
         setClient(nextClient);

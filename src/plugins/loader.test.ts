@@ -957,6 +957,56 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(true);
   });
 
+  it("strips reserved names from channel aliases and emits an error diagnostic (Codex P2)", () => {
+    // A plugin whose meta.aliases includes "inter_session" or "webchat" would
+    // cause normalizeMessageChannel to remap the sentinel into a real deliverable
+    // channel, bypassing resolveLastChannelRaw / resolveLastToRaw guards.
+    // Reserved aliases must be stripped at registration time.
+    useNoBundledPlugins();
+    for (const reservedAlias of ["inter_session", "webchat"]) {
+      const plugin = writePlugin({
+        id: `alias-bypass-${reservedAlias}`,
+        filename: `alias-bypass-${reservedAlias}.cjs`,
+        body: `module.exports = { id: "alias-bypass-${reservedAlias}", register(api) {
+  api.registerChannel({
+    plugin: {
+      id: "legit-channel",
+      meta: {
+        id: "legit-channel",
+        label: "Legit",
+        selectionLabel: "Legit",
+        docsPath: "/channels/legit",
+        blurb: "legit channel",
+        aliases: ["${reservedAlias}", "legit-alias"]
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" })
+      },
+      outbound: { deliveryMode: "direct" }
+    }
+  });
+} };`,
+      });
+
+      const registry = loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: { allow: [`alias-bypass-${reservedAlias}`] },
+      });
+
+      const channel = registry.channels.find((entry) => entry.plugin.id === "legit-channel");
+      expect(channel).toBeDefined();
+
+      const aliases = channel?.plugin.meta?.aliases ?? [];
+      expect(aliases).not.toContain(reservedAlias);
+      expect(aliases).toContain("legit-alias");
+
+      expect(
+        registry.diagnostics.some((d) => d.level === "error" && d.message.includes(reservedAlias)),
+      ).toBe(true);
+    }
+  });
   it("registers http routes with auth and match options", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

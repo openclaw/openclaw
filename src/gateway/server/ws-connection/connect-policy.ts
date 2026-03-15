@@ -1,3 +1,5 @@
+import type { GatewayAuthResult } from "../../auth.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import type { ConnectParams } from "../../protocol/index.js";
 import type { GatewayRole } from "../../role-policy.js";
 import { roleCanSkipDeviceIdentity } from "../../role-policy.js";
@@ -60,6 +62,62 @@ export function isTrustedProxyControlUiOperatorAuth(params: {
     params.authOk &&
     params.authMethod === "trusted-proxy"
   );
+}
+
+export function shouldSkipBackendSelfPairing(params: {
+  connectParams: ConnectParams;
+  isLocalClient: boolean;
+  hasBrowserOriginHeader: boolean;
+  sharedAuthOk: boolean;
+  authOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+}): boolean {
+  const isGatewayBackendClient =
+    params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  if (!isGatewayBackendClient) {
+    return false;
+  }
+  if (params.hasBrowserOriginHeader || !params.isLocalClient) {
+    return false;
+  }
+  // token/password: sharedAuthOk is set specifically for these in auth-context.ts.
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  // device-token and tailscale are valid backend auth methods, but sharedAuthOk is never
+  // set for them in the WS flow (auth-context.ts only sets it for token/password/
+  // trusted-proxy). Gate on authOk directly for these instead.
+  // bootstrap-token is intentionally excluded: first-time bootstrap connects must still
+  // complete pairing so the gateway can mint and persist a device token.
+  const usesAuthOkMethod =
+    params.authMethod === "device-token" || params.authMethod === "tailscale";
+  // When auth is disabled entirely (mode="none"), there is no credential to verify. Restricting
+  // backend self-pairing skip to locally attested clients keeps remote callers from turning a
+  // client-reported gateway-client/backend label into implicit trust.
+  const authIsDisabled = params.authMethod === "none";
+  return (
+    (params.sharedAuthOk && usesSharedSecretAuth) ||
+    (params.authOk && usesAuthOkMethod) ||
+    authIsDisabled
+  );
+}
+
+export function resolveInternalBackendClientAttestation(params: {
+  connectParams: ConnectParams;
+  hasBrowserOriginHeader: boolean;
+  initialIsInternalBackendClient: boolean;
+  authMethod: GatewayAuthResult["method"];
+  deviceTokenIssued: boolean;
+}): boolean {
+  if (params.initialIsInternalBackendClient) {
+    return true;
+  }
+  const isGatewayBackendClient =
+    params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  if (!isGatewayBackendClient || params.hasBrowserOriginHeader) {
+    return false;
+  }
+  return params.authMethod === "bootstrap-token" && params.deviceTokenIssued;
 }
 
 export type MissingDeviceIdentityDecision =

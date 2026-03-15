@@ -31,6 +31,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
+  isInterSessionChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
@@ -69,6 +70,10 @@ const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
+}
+
+function isInternalInterSessionCaller(client: GatewayRequestHandlerOptions["client"]): boolean {
+  return client?.isInternalBackendClient === true;
 }
 
 async function runSessionResetFromAgent(params: {
@@ -231,7 +236,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
+    const allowInterSessionSentinel = isInternalInterSessionCaller(client);
+    const isKnownGatewayChannel = (raw: string): boolean =>
+      isGatewayMessageChannel(raw) || (allowInterSessionSentinel && isInterSessionChannel(raw));
     const channelHints = [request.channel, request.replyChannel]
       .filter((value): value is string => typeof value === "string")
       .map((value) => value.trim())
@@ -306,6 +313,23 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+
+    const wantsDelivery = request.deliver === true;
+    const requestedInterSessionForDelivery = [request.channel, request.replyChannel].some((value) =>
+      isInterSessionChannel(normalizeMessageChannel(value)),
+    );
+    if (wantsDelivery && requestedInterSessionForDelivery) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "delivery channel cannot use the inter_session sentinel",
+        ),
+      );
+      return;
+    }
+
     let resolvedSessionId = request.sessionId?.trim() || undefined;
     let sessionEntry: SessionEntry | undefined;
     let bestEffortDeliver = requestedBestEffortDeliver ?? false;
@@ -465,7 +489,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    const wantsDelivery = request.deliver === true;
     const explicitTo =
       typeof request.replyTo === "string" && request.replyTo.trim()
         ? request.replyTo.trim()
@@ -549,8 +572,13 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);
+    // Only backend-internal gateway callers may propagate the inter-session
+    // sentinel so resolveLastChannelRaw can preserve an established external
+    // route. Public RPC callers must not inject sentinel channels here.
     const turnSourceMessageChannel =
-      normalizedTurnSource && isGatewayMessageChannel(normalizedTurnSource)
+      normalizedTurnSource &&
+      (isGatewayMessageChannel(normalizedTurnSource) ||
+        (allowInterSessionSentinel && isInterSessionChannel(normalizedTurnSource)))
         ? normalizedTurnSource
         : undefined;
     const originMessageChannel =
