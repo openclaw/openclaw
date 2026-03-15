@@ -2,12 +2,28 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Load .env if present so variables like OPENCLAW_DOCKER_APT_PACKAGES are available
+# Load .env if present so variables like OPENCLAW_DOCKER_APT_PACKAGES are available.
+# Only sets variables not already in the environment so explicit CLI overrides
+# (e.g. OPENCLAW_IMAGE=foo ./docker-setup.sh) take precedence over .env defaults.
+# Parses the file manually to avoid executing unquoted words as shell commands.
 if [[ -f "$ROOT_DIR/.env" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source "$ROOT_DIR/.env"
-  set +a
+  while IFS= read -r _env_line || [[ -n "$_env_line" ]]; do
+    _env_line="${_env_line%$'\r'}"
+    [[ -z "$_env_line" || "$_env_line" == '#'* ]] && continue
+    _env_key="${_env_line%%=*}"
+    _env_val="${_env_line#*=}"
+    if [[ "$_env_val" == '"'*'"' ]]; then
+      _env_val="${_env_val%'"'}"
+      _env_val="${_env_val#'"'}"
+    elif [[ "$_env_val" == "'"*"'" ]]; then
+      _env_val="${_env_val%"'"}"
+      _env_val="${_env_val#"'"}"
+    fi
+    if [[ -n "$_env_key" && -z "${!_env_key+x}" ]]; then
+      export "$_env_key=$_env_val"
+    fi
+  done < "$ROOT_DIR/.env"
+  unset _env_line _env_key _env_val
 fi
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
