@@ -309,6 +309,7 @@ type BraveLlmContextResponse = {
 
 type BraveConfig = {
   mode?: string;
+  baseUrl?: string;
 };
 
 type PerplexityConfig = {
@@ -682,6 +683,20 @@ function resolveBraveConfig(search?: WebSearchConfig): BraveConfig {
 
 function resolveBraveMode(brave: BraveConfig): "web" | "llm-context" {
   return brave.mode === "llm-context" ? "llm-context" : "web";
+}
+
+function resolveBraveBaseUrl(search?: WebSearchConfig, brave?: BraveConfig): string | undefined {
+  // Top-level tools.web.search.baseUrl takes precedence, then brave.baseUrl, then env var fallback.
+  const topLevel =
+    search && "baseUrl" in search && typeof search.baseUrl === "string"
+      ? search.baseUrl.trim()
+      : undefined;
+  const subLevel =
+    brave && "baseUrl" in brave && typeof brave.baseUrl === "string"
+      ? brave.baseUrl.trim()
+      : undefined;
+  const envLevel = process.env.BRAVE_BASE_URL?.trim();
+  return topLevel || subLevel || envLevel || undefined;
 }
 
 function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
@@ -1529,6 +1544,7 @@ async function runBraveLlmContextSearch(params: {
   country?: string;
   search_lang?: string;
   freshness?: string;
+  baseUrl?: string;
 }): Promise<{
   results: Array<{
     url: string;
@@ -1538,7 +1554,10 @@ async function runBraveLlmContextSearch(params: {
   }>;
   sources?: BraveLlmContextResponse["sources"];
 }> {
-  const url = new URL(BRAVE_LLM_CONTEXT_ENDPOINT);
+  const llmContextEndpoint = params.baseUrl
+    ? `${params.baseUrl.trim().replace(/\/$/, "")}/res/v1/llm/context`
+    : BRAVE_LLM_CONTEXT_ENDPOINT;
+  const url = new URL(llmContextEndpoint);
   url.searchParams.set("q", params.query);
   if (params.country) {
     url.searchParams.set("country", params.country);
@@ -1603,6 +1622,7 @@ async function runWebSearch(params: {
   kimiBaseUrl?: string;
   kimiModel?: string;
   braveMode?: "web" | "llm-context";
+  braveBaseUrl?: string;
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
   const providerSpecificKey =
@@ -1781,6 +1801,7 @@ async function runWebSearch(params: {
       country: params.country,
       search_lang: params.search_lang,
       freshness: params.freshness,
+      baseUrl: params.braveBaseUrl,
     });
 
     const mapped = llmResults.map((entry) => ({
@@ -1809,7 +1830,10 @@ async function runWebSearch(params: {
     return payload;
   }
 
-  const url = new URL(BRAVE_SEARCH_ENDPOINT);
+  const webSearchEndpoint = params.braveBaseUrl
+    ? `${params.braveBaseUrl.trim().replace(/\/$/, "")}/res/v1/web/search`
+    : BRAVE_SEARCH_ENDPOINT;
+  const url = new URL(webSearchEndpoint);
   url.searchParams.set("q", params.query);
   url.searchParams.set("count", String(params.count));
   if (params.country) {
@@ -1911,6 +1935,7 @@ export function createWebSearchTool(options?: {
   const kimiConfig = resolveKimiConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
+  const braveBaseUrl = resolveBraveBaseUrl(search, braveConfig);
 
   const description =
     provider === "perplexity"
@@ -2186,6 +2211,7 @@ export function createWebSearchTool(options?: {
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         braveMode,
+        braveBaseUrl,
       });
       return jsonResult(result);
     },
@@ -2218,5 +2244,6 @@ export const __testing = {
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
+  resolveBraveBaseUrl,
   mapBraveLlmContextResults,
 } as const;

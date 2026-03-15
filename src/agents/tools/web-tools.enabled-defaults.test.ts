@@ -208,6 +208,7 @@ describe("web_search country and language parameters", () => {
 
   beforeEach(() => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_BASE_URL", "");
   });
 
   afterEach(() => {
@@ -853,6 +854,7 @@ describe("web_search external content wrapping", () => {
 
   it("uses Brave llm-context endpoint when mode is configured", async () => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_BASE_URL", "");
     const mockFetch = installBraveLlmContextFetch({
       title: "Context title",
       url: "https://example.com/ctx",

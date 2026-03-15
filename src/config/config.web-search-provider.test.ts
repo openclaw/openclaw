@@ -64,6 +64,48 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts brave config with baseUrl in brave sub-object", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "brave",
+        providerConfig: {
+          baseUrl: "http://localhost:8080/brave",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts top-level tools.web.search.baseUrl for brave proxy", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "brave",
+            baseUrl: "http://localhost:8080/brave",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts brave config with both mode and baseUrl", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "brave",
+        providerConfig: {
+          mode: "web",
+          baseUrl: "http://localhost:8080/brave",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects invalid brave mode config values", () => {
     const res = validateConfigObject(
       buildWebSearchProviderConfig({
