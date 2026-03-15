@@ -79,8 +79,6 @@ type SecretDefaults = {
   exec?: string;
 };
 
-const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
-
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
   const match = /^\$\{([A-Z0-9_]+)\}$/.exec(trimmed);
@@ -500,7 +498,6 @@ export function normalizeProviders(params: {
         params.secretRefManagedProviders?.add(normalizedKey);
       }
     }
-
 
     // If a provider defines models, pi's ModelRegistry requires apiKey to be set.
     // Fill it from the environment or auth profiles when possible.

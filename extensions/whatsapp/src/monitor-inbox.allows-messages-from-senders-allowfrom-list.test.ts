@@ -255,6 +255,9 @@ describe("web monitor inbox", () => {
   it("handles append messages by marking them read but skipping auto-reply", async () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
 
+    // Use a timestamp 2 minutes in the past to ensure it's outside the 60s grace period
+    const oldTimestamp = nowSeconds(-120_000);
+
     const upsert = {
       type: "append",
       messages: [
@@ -265,7 +268,7 @@ describe("web monitor inbox", () => {
             remoteJid: "999@s.whatsapp.net",
           },
           message: { conversation: "old message" },
-          messageTimestamp: nowSeconds(),
+          messageTimestamp: oldTimestamp,
           pushName: "History Sender",
         },
       ],
@@ -284,7 +287,7 @@ describe("web monitor inbox", () => {
       },
     ]);
 
-    // Verify it WAS NOT passed to onMessage
+    // Verify it WAS NOT passed to onMessage (old append messages are skipped)
     expect(onMessage).not.toHaveBeenCalled();
 
     await listener.close();
