@@ -156,8 +156,9 @@ export function createIdentityFromEnsure(params: {
   if (!acpxRecordId && !acpxSessionId && !agentSessionId) {
     return undefined;
   }
+  const resolved = Boolean(acpxSessionId || agentSessionId);
   return {
-    state: "pending",
+    state: resolved ? "resolved" : "pending",
     ...(acpxRecordId ? { acpxRecordId } : {}),
     ...(acpxSessionId ? { acpxSessionId } : {}),
     ...(agentSessionId ? { agentSessionId } : {}),
