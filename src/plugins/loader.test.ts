@@ -2103,7 +2103,65 @@ describe("loadOpenClawPlugins", () => {
     const subpaths = __testing.listPluginSdkExportedSubpaths();
     expect(subpaths).toContain("compat");
     expect(subpaths).toContain("telegram");
+    expect(subpaths).toContain("keyed-async-queue");
     expect(subpaths).not.toContain("root-alias");
+  });
+
+  it("includes keyed-async-queue in scoped plugin-sdk alias map", () => {
+    const aliasMap = __testing.resolvePluginSdkScopedAliasMap();
+    expect(Object.keys(aliasMap)).toContain("openclaw/plugin-sdk/keyed-async-queue");
+    const resolved = aliasMap["openclaw/plugin-sdk/keyed-async-queue"];
+    expect(resolved).toBeTruthy();
+    expect(resolved).toMatch(/plugin-sdk[/\\]keyed-async-queue\.(ts|js)$/);
+  });
+
+  it("loads bundled plugins importing openclaw/plugin-sdk/keyed-async-queue", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "keyed-async-queue-consumer",
+      filename: "keyed-async-queue-consumer.cjs",
+      body: `const { KeyedAsyncQueue } = require("openclaw/plugin-sdk/keyed-async-queue");
+if (typeof KeyedAsyncQueue !== "function") {
+  throw new Error("KeyedAsyncQueue not a constructor: " + typeof KeyedAsyncQueue);
+}
+module.exports = {
+  id: "keyed-async-queue-consumer",
+  register() {},
+};`,
+    });
+
+    const loaderModuleUrl = pathToFileURL(
+      path.join(process.cwd(), "src", "plugins", "loader.ts"),
+    ).href;
+    const script = `
+      import { loadOpenClawPlugins } from ${JSON.stringify(loaderModuleUrl)};
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: ${JSON.stringify(plugin.dir)},
+        config: {
+          plugins: {
+            load: { paths: [${JSON.stringify(plugin.file)}] },
+            allow: ["keyed-async-queue-consumer"],
+          },
+        },
+      });
+      const record = registry.plugins.find((entry) => entry.id === "keyed-async-queue-consumer");
+      if (!record || record.status !== "loaded") {
+        console.error(record?.error ?? "keyed-async-queue-consumer missing");
+        process.exit(1);
+      }
+    `;
+
+    execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
   });
 
   it("falls back to src plugin-sdk alias when dist is missing in production", () => {
