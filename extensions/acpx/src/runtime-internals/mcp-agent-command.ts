@@ -6,6 +6,7 @@ const ACPX_BUILTIN_AGENT_COMMANDS: Record<string, string> = {
   codex: "npx @zed-industries/codex-acp",
   claude: "npx -y @zed-industries/claude-agent-acp",
   gemini: "gemini",
+  kiro: "kiro-cli acp",
   opencode: "npx -y opencode-ai acp",
   pi: "npx pi-acp",
 };
