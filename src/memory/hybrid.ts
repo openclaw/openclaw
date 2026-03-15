@@ -1,5 +1,11 @@
 import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
 import {
+  applyStressScoringToResults,
+  type StressRegimeSplitResolver,
+  type StressScoringConfig,
+  DEFAULT_STRESS_SCORING_CONFIG,
+} from "./stress-scoring.js";
+import {
   applyTemporalDecayToHybridResults,
   type TemporalDecayConfig,
   DEFAULT_TEMPORAL_DECAY_CONFIG,
@@ -8,6 +14,7 @@ import {
 export type HybridSource = string;
 
 export { type MMRConfig, DEFAULT_MMR_CONFIG };
+export { type StressRegimeSplitResolver, type StressScoringConfig, DEFAULT_STRESS_SCORING_CONFIG };
 export { type TemporalDecayConfig, DEFAULT_TEMPORAL_DECAY_CONFIG };
 
 export type HybridVectorResult = {
@@ -64,6 +71,22 @@ export async function mergeHybridResults(params: {
   mmr?: Partial<MMRConfig>;
   /** Temporal decay configuration for recency-aware scoring */
   temporalDecay?: Partial<TemporalDecayConfig>;
+  /**
+   * Distribution-shift stress scoring configuration.
+   *
+   * Final score formula when enabled:
+   * finalScore = max(0, baseScore - instabilityPenalty - stressPenalty)
+   */
+  stressScoring?: Partial<StressScoringConfig>;
+  /** Optional pre/post regime split hook for stress scoring. */
+  stressRegimeSplitResolver?: StressRegimeSplitResolver<{
+    path: string;
+    startLine: number;
+    endLine: number;
+    score: number;
+    snippet: string;
+    source: HybridSource;
+  }>;
   /** Test seam for deterministic time-dependent behavior */
   nowMs?: number;
 }): Promise<
@@ -143,7 +166,23 @@ export async function mergeHybridResults(params: {
     workspaceDir: params.workspaceDir,
     nowMs: params.nowMs,
   });
-  const sorted = decayed.toSorted((a, b) => b.score - a.score);
+
+  const stressScoringConfig = {
+    ...DEFAULT_STRESS_SCORING_CONFIG,
+    ...params.stressScoring,
+    regimeSplit: {
+      ...DEFAULT_STRESS_SCORING_CONFIG.regimeSplit,
+      ...params.stressScoring?.regimeSplit,
+    },
+  };
+
+  const stressAdjusted = applyStressScoringToResults({
+    results: decayed,
+    stressScoring: stressScoringConfig,
+    regimeSplitResolver: params.stressRegimeSplitResolver,
+  });
+
+  const sorted = stressAdjusted.toSorted((a, b) => b.score - a.score);
 
   // Apply MMR re-ranking if enabled
   const mmrConfig = { ...DEFAULT_MMR_CONFIG, ...params.mmr };
