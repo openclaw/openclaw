@@ -521,7 +521,7 @@ function mapContainerPathToWorkspaceRoot(params: {
     if (normalizedCandidate === bind.containerRoot) {
       return bind.hostRoot;
     }
-    const bindPrefix = `${bind.containerRoot}/`;
+    const bindPrefix = bind.containerRoot === "/" ? "/" : `${bind.containerRoot}/`;
     if (normalizedCandidate.startsWith(bindPrefix)) {
       const relative = normalizedCandidate.slice(bindPrefix.length);
       return path.resolve(bind.hostRoot, ...relative.split("/").filter(Boolean));
