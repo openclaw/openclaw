@@ -6,6 +6,7 @@ import {
   isScopeLimitedProbeFailure,
   renderProbeSummaryLine,
   resolveAuthForTarget,
+  resolveProbeBudgetMs,
 } from "./helpers.js";
 
 describe("extractConfigSummary", () => {
@@ -271,5 +272,17 @@ describe("probe reachability classification", () => {
     expect(isScopeLimitedProbeFailure(probe)).toBe(false);
     expect(isProbeReachable(probe)).toBe(false);
     expect(renderProbeSummaryLine(probe, false)).toContain("RPC: failed");
+  });
+});
+
+describe("resolveProbeBudgetMs", () => {
+  it("lets local loopback probes use the full caller budget", () => {
+    expect(resolveProbeBudgetMs(15_000, "localLoopback")).toBe(15_000);
+    expect(resolveProbeBudgetMs(3_000, "localLoopback")).toBe(3_000);
+  });
+
+  it("keeps non-local probe caps unchanged", () => {
+    expect(resolveProbeBudgetMs(15_000, "configRemote")).toBe(1_500);
+    expect(resolveProbeBudgetMs(15_000, "sshTunnel")).toBe(2_000);
   });
 });
