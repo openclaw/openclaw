@@ -2,10 +2,11 @@ package ai.openclaw.app.node
 
 import android.os.Build
 import ai.openclaw.android.gateway.GatewayClientProfiles
+import ai.openclaw.android.gateway.GatewayClientInfo
+import ai.openclaw.android.gateway.GatewayConnectOptions
+import ai.openclaw.android.gateway.GatewayConnectProfiles
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.SecurePrefs
-import ai.openclaw.app.gateway.GatewayClientInfo
-import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.LocationMode
@@ -134,12 +135,7 @@ class ConnectionManager(
   }
 
   fun buildOperatorConnectOptions(): GatewayConnectOptions {
-    return GatewayConnectOptions(
-      role = "operator",
-      scopes = listOf("operator.read", "operator.write", "operator.talk.secrets"),
-      caps = emptyList(),
-      commands = emptyList(),
-      permissions = emptyMap(),
+    return GatewayConnectProfiles.buildOperatorConnectOptions(
       client = buildClientInfo(
         clientId = GatewayClientProfiles.AndroidClientId,
         clientMode = GatewayClientProfiles.UiMode,
