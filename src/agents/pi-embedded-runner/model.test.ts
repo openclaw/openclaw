@@ -767,6 +767,64 @@ describe("resolveModel", () => {
     });
   });
 
+  it("builds an xai forward-compat fallback for grok-4-1-fast-reasoning", () => {
+    mockDiscoveredModel({
+      provider: "xai",
+      modelId: "grok-4-fast-non-reasoning",
+      templateModel: buildForwardCompatTemplate({
+        id: "grok-4-fast-non-reasoning",
+        name: "Grok 4 Fast Non-Reasoning",
+        provider: "xai",
+        api: "openai-completions",
+        baseUrl: "https://api.x.ai/v1",
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        maxTokens: 131072,
+      }),
+    });
+
+    expectResolvedForwardCompatFallback({
+      provider: "xai",
+      id: "grok-4-1-fast-reasoning",
+      expectedModel: {
+        provider: "xai",
+        id: "grok-4-1-fast-reasoning",
+        api: "openai-completions",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+      },
+    });
+  });
+
+  it("builds an xai forward-compat fallback for grok-code-fast-1", () => {
+    mockDiscoveredModel({
+      provider: "xai",
+      modelId: "grok-4-fast-non-reasoning",
+      templateModel: buildForwardCompatTemplate({
+        id: "grok-4-fast-non-reasoning",
+        name: "Grok 4 Fast Non-Reasoning",
+        provider: "xai",
+        api: "openai-completions",
+        baseUrl: "https://api.x.ai/v1",
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        maxTokens: 131072,
+      }),
+    });
+
+    expectResolvedForwardCompatFallback({
+      provider: "xai",
+      id: "grok-code-fast-1",
+      expectedModel: {
+        provider: "xai",
+        id: "grok-code-fast-1",
+        api: "openai-completions",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: false,
+      },
+    });
+  });
+
   it("keeps unknown-model errors when no antigravity thinking template exists", () => {
     expectUnknownModelError("google-antigravity", "claude-opus-4-6-thinking");
   });

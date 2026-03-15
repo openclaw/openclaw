@@ -341,6 +341,60 @@ function resolveZaiGlm5ForwardCompatModel(
   } as Model<Api>);
 }
 
+// xAI Grok 4.x models — the pi-coding-agent registry may only contain a single
+// grok model entry. Clone it as a template for any grok-4* variant the user
+// requests so they don't get "Unknown model" errors.
+const XAI_GROK_TEMPLATE_IDS = ["grok-4-fast-non-reasoning", "grok-4", "grok-3-fast"] as const;
+const XAI_GROK_4_CONTEXT_TOKENS = 2_000_000;
+
+function resolveXaiGrokForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "xai") {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  const lower = trimmedModelId.toLowerCase();
+
+  // Only handle grok-4* model IDs that aren't already in the registry.
+  if (!lower.startsWith("grok-4") && !lower.startsWith("grok-code-fast")) {
+    return undefined;
+  }
+
+  const isReasoning = lower.includes("reasoning") && !lower.includes("non-reasoning");
+  const contextWindow = lower.startsWith("grok-code-fast") ? 256_000 : XAI_GROK_4_CONTEXT_TOKENS;
+
+  return (
+    cloneFirstTemplateModel({
+      normalizedProvider,
+      trimmedModelId,
+      templateIds: [...XAI_GROK_TEMPLATE_IDS],
+      modelRegistry,
+      patch: {
+        reasoning: isReasoning,
+        contextWindow,
+      },
+    }) ??
+    // Hard-coded fallback when no template is found in the registry at all.
+    normalizeModelCompat({
+      id: trimmedModelId,
+      name: trimmedModelId,
+      api: "openai-completions",
+      provider: normalizedProvider,
+      baseUrl: "https://api.x.ai/v1",
+      reasoning: isReasoning,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow,
+      maxTokens: DEFAULT_CONTEXT_TOKENS,
+    } as Model<Api>)
+  );
+}
+
 export function resolveForwardCompatModel(
   provider: string,
   modelId: string,
@@ -352,6 +406,7 @@ export function resolveForwardCompatModel(
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveGoogle31ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveGoogle31ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveXaiGrokForwardCompatModel(provider, modelId, modelRegistry)
   );
 }
