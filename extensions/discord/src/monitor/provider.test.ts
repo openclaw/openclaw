@@ -884,4 +884,72 @@ describe("monitorDiscordProvider", () => {
     const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
     expect(messages.some((msg) => msg.includes("discord startup ["))).toBe(false);
   });
+
+  it("skips reaction listeners when all guilds have reactionNotifications off and DMs disabled", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const { registerDiscordListener, DiscordReactionListener, DiscordReactionRemoveListener } =
+      await import("./listeners.js");
+
+    mockResolvedDiscordAccountConfig({
+      dm: { enabled: false, groupEnabled: false },
+    });
+    resolveDiscordAllowlistConfigMock.mockResolvedValue({
+      guildEntries: {
+        "guild-1": { reactionNotifications: "off" as const },
+        "guild-2": { reactionNotifications: "off" as const },
+      },
+      allowFrom: undefined,
+    });
+    vi.mocked(registerDiscordListener).mockClear();
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const registeredListeners = vi.mocked(registerDiscordListener).mock.calls.map((c) => c[1]);
+    const hasReactionListener = registeredListeners.some(
+      (l) => l instanceof DiscordReactionListener,
+    );
+    const hasReactionRemoveListener = registeredListeners.some(
+      (l) => l instanceof DiscordReactionRemoveListener,
+    );
+
+    expect(hasReactionListener).toBe(false);
+    expect(hasReactionRemoveListener).toBe(false);
+  });
+
+  it("registers reaction listeners when at least one guild allows reactions", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const { registerDiscordListener, DiscordReactionListener, DiscordReactionRemoveListener } =
+      await import("./listeners.js");
+
+    mockResolvedDiscordAccountConfig({
+      dm: { enabled: false, groupEnabled: false },
+    });
+    resolveDiscordAllowlistConfigMock.mockResolvedValue({
+      guildEntries: {
+        "guild-1": { reactionNotifications: "off" as const },
+        "guild-2": { reactionNotifications: "own" as const },
+      },
+      allowFrom: undefined,
+    });
+    vi.mocked(registerDiscordListener).mockClear();
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const registeredListeners = vi.mocked(registerDiscordListener).mock.calls.map((c) => c[1]);
+    const hasReactionListener = registeredListeners.some(
+      (l) => l instanceof DiscordReactionListener,
+    );
+    const hasReactionRemoveListener = registeredListeners.some(
+      (l) => l instanceof DiscordReactionRemoveListener,
+    );
+
+    expect(hasReactionListener).toBe(true);
+    expect(hasReactionRemoveListener).toBe(true)
+  });
 });

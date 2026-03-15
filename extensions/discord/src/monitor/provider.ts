@@ -942,11 +942,30 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       logger,
       onEvent: trackInboundEvent,
     };
-    registerDiscordListener(client.listeners, new DiscordReactionListener(reactionListenerOptions));
-    registerDiscordListener(
-      client.listeners,
-      new DiscordReactionRemoveListener(reactionListenerOptions),
+    // Skip reaction listener registration when no guild can ever produce a
+    // reaction notification and DM/group-DM reactions are also disabled.
+    // This avoids queuing every reaction event only to early-return inside the
+    // handler (which also triggers spurious "Slow listener detected" warnings).
+    const guildKeys = Object.keys(guildEntries ?? {});
+    const allGuildsReactionsOff =
+      guildKeys.length > 0 &&
+      guildKeys.every((k) => guildEntries?.[k]?.reactionNotifications === "off");
+    const shouldRegisterReactionListeners = !(
+      allGuildsReactionsOff &&
+      !dmEnabled &&
+      !groupDmEnabled
     );
+
+    if (shouldRegisterReactionListeners) {
+      registerDiscordListener(
+        client.listeners,
+        new DiscordReactionListener(reactionListenerOptions),
+      );
+      registerDiscordListener(
+        client.listeners,
+        new DiscordReactionRemoveListener(reactionListenerOptions),
+      );
+    }
 
     registerDiscordListener(
       client.listeners,
