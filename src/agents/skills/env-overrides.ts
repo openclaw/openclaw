@@ -9,12 +9,25 @@ import type { SkillEntry, SkillSnapshot } from "./types.js";
 
 const log = createSubsystemLogger("env-overrides");
 
-type EnvUpdate = { key: string };
+type EnvUpdate = { key: string; isSkillOverride?: boolean };
 type SkillConfig = NonNullable<ReturnType<typeof resolveSkillConfig>>;
 type ActiveSkillEnvEntry = {
   baseline: string | undefined;
   value: string;
   count: number;
+  /**
+   * Number of per-skill (non-global) sessions currently holding this key.
+   * Used to enforce skill > global precedence across concurrent sessions and
+   * to correctly downgrade to the global value when the last skill owner exits.
+   */
+  skillOwnerCount: number;
+  /**
+   * The global-env value saved when the first per-skill session upgraded this
+   * key. Restored to `value` (and `process.env`) when the last skill owner
+   * releases so that any remaining global-env sessions continue to see the
+   * correct credential.
+   */
+  globalValue?: string;
 };
 
 /**
@@ -30,11 +43,21 @@ export function getActiveSkillEnvKeys(): ReadonlySet<string> {
   return new Set(activeSkillEnvEntries.keys());
 }
 
-function acquireActiveSkillEnvKey(key: string, value: string): boolean {
+function acquireActiveSkillEnvKey(key: string, value: string, isSkillOverride = false): boolean {
   const active = activeSkillEnvEntries.get(key);
   if (active) {
     active.count += 1;
-    if (process.env[key] === undefined) {
+    if (isSkillOverride) {
+      if (active.skillOwnerCount === 0) {
+        // First per-skill session taking over a key previously held only by
+        // global-env passes. Save the global value so we can restore it when
+        // the last skill owner exits, then upgrade to the skill value.
+        active.globalValue = active.value;
+        active.value = value;
+        process.env[key] = value;
+      }
+      active.skillOwnerCount += 1;
+    } else if (process.env[key] === undefined) {
       process.env[key] = active.value;
     }
     return true;
@@ -46,16 +69,29 @@ function acquireActiveSkillEnvKey(key: string, value: string): boolean {
     baseline: process.env[key],
     value,
     count: 1,
+    skillOwnerCount: isSkillOverride ? 1 : 0,
+    globalValue: undefined,
   });
   return true;
 }
 
-function releaseActiveSkillEnvKey(key: string) {
+function releaseActiveSkillEnvKey(key: string, isSkillOverride = false) {
   const active = activeSkillEnvEntries.get(key);
   if (!active) {
     return;
   }
   active.count -= 1;
+  if (isSkillOverride && active.skillOwnerCount > 0) {
+    active.skillOwnerCount -= 1;
+    if (active.skillOwnerCount === 0 && active.count > 0 && active.globalValue !== undefined) {
+      // The last per-skill owner has released the key, but global-env sessions
+      // still hold a reference. Downgrade to the saved global value so those
+      // sessions see the correct credential for the rest of their lifetime.
+      active.value = active.globalValue;
+      active.globalValue = undefined;
+      process.env[key] = active.value;
+    }
+  }
   if (active.count > 0) {
     if (process.env[key] === undefined) {
       process.env[key] = active.value;
@@ -154,6 +190,8 @@ function applySkillConfigEnvOverrides(params: {
   }
 
   const pendingOverrides: Record<string, string> = {};
+
+  // Step 1 — skill-level env (highest user-configured precedence).
   if (skillConfig.env) {
     for (const [rawKey, envValue] of Object.entries(skillConfig.env)) {
       const envKey = rawKey.trim();
@@ -166,6 +204,7 @@ function applySkillConfigEnvOverrides(params: {
     }
   }
 
+  // Step 2 — apiKey fallback for the skill's primary env var.
   const resolvedApiKey =
     normalizeResolvedSecretInputString({
       value: skillConfig.apiKey,
@@ -194,10 +233,10 @@ function applySkillConfigEnvOverrides(params: {
   }
 
   for (const [envKey, envValue] of Object.entries(sanitized.allowed)) {
-    if (!acquireActiveSkillEnvKey(envKey, envValue)) {
+    if (!acquireActiveSkillEnvKey(envKey, envValue, /* isSkillOverride */ true)) {
       continue;
     }
-    updates.push({ key: envKey });
+    updates.push({ key: envKey, isSkillOverride: true });
     process.env[envKey] = activeSkillEnvEntries.get(envKey)?.value ?? envValue;
   }
 }
@@ -205,21 +244,61 @@ function applySkillConfigEnvOverrides(params: {
 function createEnvReverter(updates: EnvUpdate[]) {
   return () => {
     for (const update of updates) {
-      releaseActiveSkillEnvKey(update.key);
+      releaseActiveSkillEnvKey(update.key, update.isSkillOverride ?? false);
     }
   };
+}
+
+/**
+ * Second-pass: inject global skills.env defaults for any keys not already
+ * acquired by a per-skill override. Running this after all per-skill overrides
+ * ensures skill-level env always wins, regardless of iteration order.
+ */
+function applyGlobalEnvPass(params: { updates: EnvUpdate[]; globalEnv: Record<string, string> }) {
+  const { updates, globalEnv } = params;
+  if (Object.keys(globalEnv).length === 0) {
+    return;
+  }
+  // All global env keys are explicitly user-configured, so allow sensitive names.
+  const allowedSensitiveKeys = new Set(
+    Object.keys(globalEnv)
+      .map((k) => k.trim())
+      .filter(Boolean),
+  );
+  const sanitized = sanitizeSkillEnvOverrides({
+    overrides: globalEnv,
+    allowedSensitiveKeys,
+  });
+
+  for (const [envKey, envValue] of Object.entries(sanitized.allowed)) {
+    // Skip only if the key is externally managed (set outside our ref-counting system).
+    // Keys already active from a skill override are still acquired here so that the
+    // ref-count is incremented — this prevents a concurrent session's revert from
+    // releasing the variable while this session is still running.
+    if (process.env[envKey] !== undefined && !activeSkillEnvEntries.has(envKey)) {
+      continue;
+    }
+    if (!acquireActiveSkillEnvKey(envKey, envValue)) {
+      continue;
+    }
+    updates.push({ key: envKey });
+    // If a skill already owns this key, acquireActiveSkillEnvKey keeps its value;
+    // process.env already reflects the skill's value, so no assignment needed.
+    if (!activeSkillEnvEntries.get(envKey) || process.env[envKey] === undefined) {
+      process.env[envKey] = activeSkillEnvEntries.get(envKey)?.value ?? envValue;
+    }
+  }
 }
 
 export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
   const { skills, config } = params;
   const updates: EnvUpdate[] = [];
+  const globalEnv = config?.skills?.env ?? {};
 
+  // Pass 1: per-skill env and apiKey overrides (higher precedence than global).
   for (const entry of skills) {
     const skillKey = resolveSkillKey(entry.skill, entry);
-    const skillConfig = resolveSkillConfig(config, skillKey);
-    if (!skillConfig) {
-      continue;
-    }
+    const skillConfig = resolveSkillConfig(config, skillKey) ?? {};
 
     applySkillConfigEnvOverrides({
       updates,
@@ -229,6 +308,9 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
       skillKey,
     });
   }
+
+  // Pass 2: global env defaults — only fills keys not set by any skill above.
+  applyGlobalEnvPass({ updates, globalEnv });
 
   return createEnvReverter(updates);
 }
@@ -242,12 +324,11 @@ export function applySkillEnvOverridesFromSnapshot(params: {
     return () => {};
   }
   const updates: EnvUpdate[] = [];
+  const globalEnv = config?.skills?.env ?? {};
 
+  // Pass 1: per-skill env and apiKey overrides.
   for (const skill of snapshot.skills) {
-    const skillConfig = resolveSkillConfig(config, skill.name);
-    if (!skillConfig) {
-      continue;
-    }
+    const skillConfig = resolveSkillConfig(config, skill.name) ?? {};
 
     applySkillConfigEnvOverrides({
       updates,
@@ -257,6 +338,9 @@ export function applySkillEnvOverridesFromSnapshot(params: {
       skillKey: skill.name,
     });
   }
+
+  // Pass 2: global env defaults — only fills keys not set by any skill above.
+  applyGlobalEnvPass({ updates, globalEnv });
 
   return createEnvReverter(updates);
 }
