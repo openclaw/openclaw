@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Cortex Memory** — Local-first persistent memory engine for AI agents. 4-tier architecture (Working/Episodic/Semantic/Procedural), Bayesian belief tracking, people graph, sub-millisecond retrieval. Rust core, zero cloud dependency — your memory, your data, stored locally.
+  npm: `@cortex-ai-memory/cortex-memory`
+  repo: `https://github.com/gambletan/cortex`
+  install: `openclaw plugins install @cortex-ai-memory/cortex-memory`
