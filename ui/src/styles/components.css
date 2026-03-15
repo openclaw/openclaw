@@ -1371,6 +1371,105 @@
   animation: fade-in 0.2s var(--ease-out);
 }
 
+.context-notices {
+  align-self: center;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.context-notice {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(100%, calc(100vw - 48px));
+  padding: 6px 14px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--ctx-color, var(--warn)) 28%, transparent);
+  background: var(--ctx-bg, rgba(217, 119, 6, 0.08));
+  color: var(--ctx-color, var(--warn));
+  font-size: 13px;
+  line-height: 1.2;
+  user-select: none;
+  animation: fade-in 0.2s var(--ease-out);
+}
+
+.context-notice--stacked {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: min(100%, 560px);
+  padding: 10px 14px;
+  white-space: normal;
+}
+
+.context-notice__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.context-notice__summary-label {
+  color: color-mix(in srgb, var(--text) 72%, currentColor);
+  margin-right: 4px;
+}
+
+.context-notice__metric--used {
+  color: color-mix(in srgb, var(--text) 88%, #93c5fd);
+}
+
+.context-notice__metric--pricing {
+  color: rgb(217, 119, 6);
+}
+
+.context-notice__metric--limit {
+  color: rgb(96, 165, 250);
+}
+
+.context-notice__separator {
+  color: color-mix(in srgb, currentColor 40%, var(--text));
+}
+
+.context-notice__note {
+  font-size: 12px;
+  color: color-mix(in srgb, currentColor 72%, var(--text));
+}
+
+.context-notice__note--pricing {
+  color: rgb(217, 119, 6);
+}
+
+.context-notice__note--limit {
+  color: rgb(220, 38, 38);
+  font-weight: 600;
+}
+
+.context-notice__icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.context-notice__detail {
+  color: color-mix(in srgb, currentColor 72%, var(--text));
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
 .compaction-indicator svg {
   width: 16px;
   height: 16px;

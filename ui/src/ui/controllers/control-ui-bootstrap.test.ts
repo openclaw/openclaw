@@ -14,6 +14,7 @@ describe("loadControlUiBootstrapConfig", () => {
         assistantAvatar: "O",
         assistantAgentId: "main",
         serverVersion: "2026.3.7",
+        chat: { contextNotice: { showPricingThreshold: false } },
       }),
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -24,6 +25,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantAvatar: null,
       assistantAgentId: null,
       serverVersion: null,
+      chatContextNoticeShowPricingThreshold: true,
     };
 
     await loadControlUiBootstrapConfig(state);
@@ -36,6 +38,7 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(state.assistantAvatar).toBe("O");
     expect(state.assistantAgentId).toBe("main");
     expect(state.serverVersion).toBe("2026.3.7");
+    expect(state.chatContextNoticeShowPricingThreshold).toBe(false);
 
     vi.unstubAllGlobals();
   });
@@ -50,6 +53,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantAvatar: null,
       assistantAgentId: null,
       serverVersion: null,
+      chatContextNoticeShowPricingThreshold: true,
     };
 
     await loadControlUiBootstrapConfig(state);
@@ -73,6 +77,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantAvatar: null,
       assistantAgentId: null,
       serverVersion: null,
+      chatContextNoticeShowPricingThreshold: true,
     };
 
     await loadControlUiBootstrapConfig(state);
