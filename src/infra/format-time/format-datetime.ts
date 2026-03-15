@@ -6,6 +6,93 @@
  * that previously lived in envelope.ts and session-updates.ts.
  */
 
+export type TimestampStyle = "short" | "medium" | "long";
+
+export interface UnifiedTimestampOptions {
+  style?: TimestampStyle;
+  timeZone?: string;
+}
+
+function isValidTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveEffectiveTimezone(timeZone?: string): string {
+  const explicit = timeZone ?? process.env.TZ;
+  return explicit && isValidTimeZone(explicit)
+    ? explicit
+    : Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+function formatOffset(tz: string, date: Date): string {
+  const fmt = new Intl.DateTimeFormat("en", {
+    timeZone: tz,
+    timeZoneName: "longOffset",
+  });
+  const parts = Object.fromEntries(fmt.formatToParts(date).map((p) => [p.type, p.value]));
+  const offsetRaw = parts.timeZoneName ?? "GMT";
+  if (offsetRaw === "GMT") {
+    return "+00:00";
+  }
+  return offsetRaw.slice(3);
+}
+
+function getTimeInZone(
+  date: Date,
+  timeZone: string,
+): {
+  year: string;
+  month: string;
+  day: string;
+  hour: string;
+  minute: string;
+  second: string;
+  fractionalSecond: string;
+} {
+  const fmt = new Intl.DateTimeFormat("en", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    fractionalSecondDigits: 3 as 1 | 2 | 3,
+  });
+  const parts = Object.fromEntries(fmt.formatToParts(date).map((p) => [p.type, p.value]));
+  return {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: parts.hour,
+    minute: parts.minute,
+    second: parts.second,
+    fractionalSecond: parts.fractionalSecond,
+  };
+}
+
+export function formatTimestamp(date: Date, options?: UnifiedTimestampOptions): string {
+  const style = options?.style ?? "medium";
+  const timeZone = resolveEffectiveTimezone(options?.timeZone);
+  const time = getTimeInZone(date, timeZone);
+  const offset = formatOffset(timeZone, date);
+
+  switch (style) {
+    case "short":
+      return `${time.hour}:${time.minute}:${time.second}${offset}`;
+    case "medium":
+      return `${time.hour}:${time.minute}:${time.second}.${time.fractionalSecond}${offset}`;
+    case "long":
+      return `${time.year}-${time.month}-${time.day}T${time.hour}:${time.minute}:${time.second}.${time.fractionalSecond}${offset}`;
+  }
+}
+
 /**
  * Validate an IANA timezone string. Returns the string if valid, undefined otherwise.
  */

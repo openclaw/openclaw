@@ -1,8 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { formatTimestamp } from "../infra/format-time/format-datetime.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
-import { formatLocalIsoWithOffset, isValidTimeZone } from "../logging/timestamps.js";
+import { isValidTimeZone } from "../logging/timestamps.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { createSafeStreamWriter } from "../terminal/stream-writer.js";
@@ -76,12 +77,12 @@ export function formatLogTimestamp(
 
   let timeString: string;
   if (localTime) {
-    timeString = formatLocalIsoWithOffset(parsed);
+    timeString = formatTimestamp(parsed, { style: "long" });
   } else {
     timeString = parsed.toISOString();
   }
   if (mode === "pretty") {
-    return timeString.slice(11, 19);
+    return formatTimestamp(parsed, { style: "short" });
   }
   return timeString;
 }
