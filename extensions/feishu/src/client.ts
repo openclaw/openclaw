@@ -163,6 +163,10 @@ export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSCli
     appSecret,
     domain: resolveDomain(domain),
     loggerLevel: Lark.LoggerLevel.info,
+    wsConfig: {
+      PingInterval: 30,
+      PingTimeout: 5,
+    },
     ...(agent ? { agent } : {}),
   });
 }
