@@ -649,7 +649,11 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
-    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
+    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions, and can optionally include creator-owned ACP sessions via tools.sessions.ownedAcp.enabled; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent unless the tree-only owned ACP exception applies).',
+  "tools.sessions.ownedAcp":
+    'Optional narrow exception for creator-owned ACP sessions. Only applies when tools.sessions.visibility="tree", only matches ACP sessions whose spawnedBy points at the current session, and stays disabled by default.',
+  "tools.sessions.ownedAcp.enabled":
+    'Enable creator-owned ACP visibility for session tools when tools.sessions.visibility="tree". This allows sessions_list/sessions_history/sessions_send to target ACP sessions spawned by the current session without broadening general cross-agent access or requiring tools.agentToAgent.enabled.',
   "tools.message.allowCrossContextSend":
     "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":

@@ -785,6 +785,12 @@ export const ToolsSchema = z
     sessions: z
       .object({
         visibility: z.enum(["self", "tree", "agent", "all"]).optional(),
+        ownedAcp: z
+          .object({
+            enabled: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

@@ -589,6 +589,16 @@ export type ToolsConfig = {
      * - "all": any session (cross-agent still requires tools.agentToAgent)
      */
     visibility?: SessionsToolsVisibility;
+    /**
+     * Narrow exception for creator-owned ACP sessions.
+     *
+     * When enabled alongside visibility="tree", the current session can also access
+     * ACP sessions it created via spawnedBy metadata, even across agents.
+     */
+    ownedAcp?: {
+      /** Enable creator-owned ACP visibility under visibility="tree". Default: false. */
+      enabled?: boolean;
+    };
   };
   /** Elevated exec permissions for the host machine. */
   elevated?: {

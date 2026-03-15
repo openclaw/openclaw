@@ -15,7 +15,9 @@ import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
   extractAssistantText,
+  precheckSessionLookupAccess,
   resolveEffectiveSessionToolsVisibility,
+  resolveOwnedAcpSessionToolsEnabled,
   resolveSessionReference,
   resolveSessionToolContext,
   resolveVisibleSessionReference,
@@ -81,6 +83,7 @@ export function createSessionsSendTool(opts?: {
         resolveSessionToolContext(opts);
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const ownedAcpEnabled = resolveOwnedAcpSessionToolsEnabled(cfg);
       const sessionVisibility = resolveEffectiveSessionToolsVisibility({
         cfg,
         sandboxed: opts?.sandboxed === true,
@@ -103,37 +106,37 @@ export function createSessionsSendTool(opts?: {
         const requestedAgentId = labelAgentIdParam
           ? normalizeAgentId(labelAgentIdParam)
           : undefined;
+        let resolveSpawnedBy = restrictToSpawned ? effectiveRequesterKey : undefined;
+        const isCrossAgentLookup =
+          Boolean(requesterAgentId) &&
+          Boolean(requestedAgentId) &&
+          requestedAgentId !== requesterAgentId;
 
-        if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "forbidden",
-            error: "Sandboxed sessions_send label lookup is limited to this agent",
+        if (isCrossAgentLookup && requestedAgentId) {
+          const access = precheckSessionLookupAccess({
+            action: "send",
+            requesterSessionKey: effectiveRequesterKey,
+            targetAgentId: requestedAgentId,
+            visibility: sessionVisibility,
+            ownedAcpEnabled,
+            a2aPolicy,
           });
-        }
-
-        if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
-          if (!a2aPolicy.enabled) {
+          if (!access.allowed) {
             return jsonResult({
               runId: crypto.randomUUID(),
-              status: "forbidden",
-              error:
-                "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+              status: access.status,
+              error: restrictToSpawned
+                ? "Sandboxed sessions_send label lookup is limited to this agent"
+                : access.error,
             });
           }
-          if (!a2aPolicy.isAllowed(requesterAgentId, requestedAgentId)) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
-            });
-          }
+          resolveSpawnedBy = access.spawnedByConstraint ?? resolveSpawnedBy;
         }
 
         const resolveParams: Record<string, unknown> = {
           label: labelParam,
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-          ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
+          ...(resolveSpawnedBy ? { spawnedBy: resolveSpawnedBy } : {}),
         };
         let resolvedKey = "";
         try {
@@ -227,6 +230,7 @@ export function createSessionsSendTool(opts?: {
         requesterSessionKey: effectiveRequesterKey,
         visibility: sessionVisibility,
         a2aPolicy,
+        ownedAcpEnabled,
       });
       const access = visibilityGuard.check(resolvedKey);
       if (!access.allowed) {

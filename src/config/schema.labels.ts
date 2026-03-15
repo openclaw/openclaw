@@ -175,6 +175,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.loopDetection.detectors.pingPong": "Tool-loop Ping-Pong Detection",
   "tools.fs.workspaceOnly": "Workspace-only FS tools",
   "tools.sessions.visibility": "Session Tools Visibility",
+  "tools.sessions.ownedAcp": "Owned ACP Session Visibility",
+  "tools.sessions.ownedAcp.enabled": "Enable Owned ACP Session Visibility",
   "tools.exec.notifyOnExit": "Exec Notify On Exit",
   "tools.exec.notifyOnExitEmptySuccess": "Exec Notify On Empty Success",
   "tools.exec.approvalRunningNoticeMs": "Exec Approval Running Notice (ms)",

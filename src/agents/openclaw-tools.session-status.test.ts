@@ -312,6 +312,59 @@ describe("session_status tool", () => {
     expectSpawnedSessionLookupCalls("agent:main:subagent:child");
   });
 
+  it("allows sandboxed creator-owned ACP session_status access when owned ACP visibility is enabled", async () => {
+    resetSessionStore({
+      "agent:ops:acp:owned": {
+        sessionId: "s-owned",
+        updatedAt: 20,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "tree", ownedAcp: { enabled: true } },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {},
+          sandbox: { sessionToolsVisibility: "spawned" },
+        },
+      },
+    };
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.list") {
+        return {
+          sessions:
+            request.params?.spawnedBy === "agent:main:main" ? [{ key: "agent:ops:acp:owned" }] : [],
+        };
+      }
+      return {};
+    });
+
+    const tool = getSessionStatusTool("agent:main:main", {
+      sandboxed: true,
+    });
+    const result = await tool.execute("call-owned-status", {
+      sessionKey: "agent:ops:acp:owned",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:ops:acp:owned");
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        limit: 500,
+        spawnedBy: "agent:main:main",
+      },
+    });
+  });
+
   it("keeps legacy main requester keys for sandboxed session tree checks", async () => {
     resetSessionStore({
       "agent:main:main": {

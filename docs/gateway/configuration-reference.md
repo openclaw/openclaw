@@ -1915,6 +1915,9 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
     sessions: {
       // "self" | "tree" | "agent" | "all"
       visibility: "tree",
+      ownedAcp: {
+        enabled: false,
+      },
     },
   },
 }
@@ -1923,9 +1926,11 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
 Notes:
 
 - `self`: only the current session key.
-- `tree`: current session + sessions spawned by the current session (subagents).
+- `tree`: current session + sessions spawned by the current session (subagents). When `ownedAcp.enabled=true`, this also includes ACP sessions spawned by the current session.
 - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
 - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
+- `ownedAcp.enabled`: default off. Only applies when `visibility="tree"`, only covers ACP sessions whose `spawnedBy` points at the current session, and does not broaden general cross-agent visibility.
+- The owned ACP exception applies to `sessions_list`, `sessions_history`, and `sessions_send`, including `sessions_send` lookups by `label + agentId`.
 - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"`, visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
 
 ### `tools.sessions_spawn`

@@ -190,6 +190,7 @@ Session tools can be scoped to reduce cross-session access.
 Default behavior:
 
 - `tools.sessions.visibility` defaults to `tree` (current session + spawned subagent sessions).
+- `tools.sessions.ownedAcp.enabled` defaults to `false`. When enabled, `tree` visibility also includes ACP sessions spawned by the current session.
 - For sandboxed sessions, `agents.defaults.sandbox.sessionToolsVisibility` can hard-clamp visibility.
 
 Config:
@@ -201,6 +202,10 @@ Config:
       // "self" | "tree" | "agent" | "all"
       // default: "tree"
       visibility: "tree",
+      ownedAcp: {
+        // default: false
+        enabled: true,
+      },
     },
   },
   agents: {
@@ -217,7 +222,9 @@ Config:
 Notes:
 
 - `self`: only the current session key.
-- `tree`: current session + sessions spawned by the current session.
+- `tree`: current session + sessions spawned by the current session. With `ownedAcp.enabled=true`, it also includes ACP sessions spawned by the current session.
 - `agent`: any session belonging to the current agent id.
 - `all`: any session (cross-agent access still requires `tools.agentToAgent`).
+- `ownedAcp.enabled` is a narrow exception: it is tree-only, default-off, and only grants access to ACP sessions whose existing `spawnedBy` metadata points at the current session.
+- The owned ACP exception applies consistently to `sessions_list`, `sessions_history`, and `sessions_send`, including `sessions_send` lookups by `label + agentId`.
 - When a session is sandboxed and `sessionToolsVisibility="spawned"`, OpenClaw clamps visibility to `tree` even if you set `tools.sessions.visibility="all"`.

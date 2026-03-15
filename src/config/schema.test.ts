@@ -308,6 +308,19 @@ describe("config schema", () => {
     expect(lookup?.hintPath).toBe("agents.list.*.identity.avatar");
   });
 
+  it("surfaces owned ACP session visibility config help", () => {
+    const lookup = lookupConfigSchema(baseSchema, "tools.sessions.ownedAcp");
+    expect(lookup?.path).toBe("tools.sessions.ownedAcp");
+    expect(lookup?.hintPath).toBe("tools.sessions.ownedAcp");
+    expect(lookup?.children.find((child) => child.key === "enabled")).toMatchObject({
+      key: "enabled",
+      path: "tools.sessions.ownedAcp.enabled",
+      hintPath: "tools.sessions.ownedAcp.enabled",
+    });
+    expect(baseSchema.uiHints["tools.sessions.ownedAcp"]?.label).toBeTruthy();
+    expect(baseSchema.uiHints["tools.sessions.ownedAcp.enabled"]?.help).toContain("ACP");
+  });
+
   it("matches ui hints that use empty array brackets", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
     expect(lookup?.path).toBe("agents.list.0.runtime");

@@ -18,6 +18,7 @@ import {
   resolveDisplaySessionKey,
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
+  resolveOwnedAcpSessionToolsEnabled,
   resolveSandboxedSessionToolContext,
   type SessionListRow,
   stripToolMessages,
@@ -29,6 +30,32 @@ const SessionsListToolSchema = Type.Object({
   activeMinutes: Type.Optional(Type.Number({ minimum: 1 })),
   messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
 });
+
+function mergeSessionRowsByKey(
+  primary: SessionListRow[],
+  secondary: SessionListRow[],
+): SessionListRow[] {
+  const merged = new Map<string, SessionListRow>();
+  for (const entry of primary) {
+    const key = typeof entry?.key === "string" ? entry.key.trim() : "";
+    if (!key || merged.has(key)) {
+      continue;
+    }
+    merged.set(key, entry);
+  }
+  for (const entry of secondary) {
+    const key = typeof entry?.key === "string" ? entry.key.trim() : "";
+    if (!key || merged.has(key)) {
+      continue;
+    }
+    merged.set(key, entry);
+  }
+  return Array.from(merged.values()).toSorted((a, b) => {
+    const aUpdated = typeof a.updatedAt === "number" ? a.updatedAt : 0;
+    const bUpdated = typeof b.updatedAt === "number" ? b.updatedAt : 0;
+    return bUpdated - aUpdated;
+  });
+}
 
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
@@ -76,11 +103,14 @@ export function createSessionsListTool(opts?: {
           ? Math.max(0, Math.floor(params.messageLimit))
           : 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
+      const ownedAcpEnabled = resolveOwnedAcpSessionToolsEnabled(cfg);
+      const shouldUnionOwnedAcpRows =
+        visibility === "tree" && ownedAcpEnabled && !restrictToSpawned;
 
       const list = await callGateway<{ sessions: Array<SessionListRow>; path: string }>({
         method: "sessions.list",
         params: {
-          limit,
+          limit: shouldUnionOwnedAcpRows ? undefined : limit,
           activeMinutes,
           includeGlobal: !restrictToSpawned,
           includeUnknown: !restrictToSpawned,
@@ -88,7 +118,25 @@ export function createSessionsListTool(opts?: {
         },
       });
 
-      const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+      let sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+      if (shouldUnionOwnedAcpRows) {
+        // Keep creator-owned spawned rows visible even if the gateway's default tree listing
+        // omits them; the spawnedBy filter keeps the lookup narrow.
+        const spawned = await callGateway<{ sessions: Array<SessionListRow> }>({
+          method: "sessions.list",
+          params: {
+            activeMinutes,
+            includeGlobal: false,
+            includeUnknown: false,
+            spawnedBy: effectiveRequesterKey,
+          },
+        });
+        sessions = mergeSessionRowsByKey(
+          sessions,
+          Array.isArray(spawned?.sessions) ? spawned.sessions : [],
+        );
+      }
+
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const visibilityGuard = await createSessionVisibilityGuard({
@@ -96,9 +144,9 @@ export function createSessionsListTool(opts?: {
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
+        ownedAcpEnabled,
       });
-      const rows: SessionListRow[] = [];
-      const historyTargets: Array<{ row: SessionListRow; resolvedKey: string }> = [];
+      let rows: SessionListRow[] = [];
 
       for (const entry of sessions) {
         if (!entry || typeof entry !== "object") {
@@ -215,16 +263,24 @@ export function createSessionsListTool(opts?: {
           lastAccountId,
           transcriptPath,
         };
-        if (messageLimit > 0) {
-          const resolvedKey = resolveInternalSessionKey({
-            key: displayKey,
-            alias,
-            mainKey,
-          });
-          historyTargets.push({ row, resolvedKey });
-        }
         rows.push(row);
       }
+
+      if (limit && rows.length > limit) {
+        rows = rows.slice(0, limit);
+      }
+
+      const historyTargets =
+        messageLimit > 0
+          ? rows.map((row) => ({
+              row,
+              resolvedKey: resolveInternalSessionKey({
+                key: row.key,
+                alias,
+                mainKey,
+              }),
+            }))
+          : [];
 
       if (messageLimit > 0 && historyTargets.length > 0) {
         const maxConcurrent = Math.min(4, historyTargets.length);

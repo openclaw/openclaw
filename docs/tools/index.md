@@ -487,7 +487,8 @@ Notes:
 
 - `main` is the canonical direct-chat key; global/unknown are hidden.
 - `messageLimit > 0` fetches last N messages per session (tool messages filtered).
-- Session targeting is controlled by `tools.sessions.visibility` (default `tree`: current session + spawned subagent sessions). If you run a shared agent for multiple users, consider setting `tools.sessions.visibility: "self"` to prevent cross-session browsing.
+- Session targeting is controlled by `tools.sessions.visibility` (default `tree`: current session + spawned subagent sessions). When `tools.sessions.ownedAcp.enabled=true`, `tree` also includes ACP sessions spawned by the current session. If you run a shared agent for multiple users, consider setting `tools.sessions.visibility: "self"` to prevent cross-session browsing.
+- `tools.sessions.ownedAcp.enabled` is default-off, tree-only, and only covers ACP sessions owned by the current session; it does not broaden general cross-agent access.
 - `sessions_send` waits for final completion when `timeoutSeconds > 0`.
 - Delivery/announce happens after completion and is best-effort; `status: "ok"` confirms the agent run finished, not that the announce was delivered.
 - `sessions_spawn` supports `runtime: "subagent" | "acp"` (`subagent` default). For ACP runtime behavior, see [ACP Agents](/tools/acp-agents).
