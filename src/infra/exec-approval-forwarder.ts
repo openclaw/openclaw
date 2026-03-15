@@ -50,6 +50,12 @@ export type ExecApprovalForwarderDeps = {
     cfg: OpenClawConfig;
     request: ExecApprovalRequest;
   }) => ExecApprovalForwardTarget | null;
+  // Skip Discord/Telegram channel-specific suppression. Tool approval
+  // forwarders set this to true because the native exec-approval handlers on
+  // those channels only consume exec.approval.* events, not tool.approval.*
+  // events. Without this flag, tool approval prompts are silently dropped
+  // when exec approvals are enabled on those channels.
+  skipChannelSuppression?: boolean;
 };
 
 const DEFAULT_MODE = "session" as const;
@@ -439,6 +445,7 @@ export function createExecApprovalForwarder(
   const deliver = deps.deliver ?? deliverOutboundPayloads;
   const nowMs = deps.nowMs ?? Date.now;
   const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;
+  const skipChannelSuppression = deps.skipChannelSuppression === true;
   const pending = new Map<string, PendingApproval>();
 
   const handleRequested = async (request: ExecApprovalRequest): Promise<boolean> => {
@@ -455,8 +462,9 @@ export function createExecApprovalForwarder(
         : []),
     ].filter(
       (target) =>
-        !shouldSkipDiscordForwarding(target, cfg) &&
-        !shouldSkipTelegramForwarding({ target, cfg, request }),
+        skipChannelSuppression ||
+        (!shouldSkipDiscordForwarding(target, cfg) &&
+          !shouldSkipTelegramForwarding({ target, cfg, request })),
     );
 
     if (filteredTargets.length === 0) {
@@ -530,8 +538,9 @@ export function createExecApprovalForwarder(
           : []),
       ].filter(
         (target) =>
-          !shouldSkipDiscordForwarding(target, cfg) &&
-          !shouldSkipTelegramForwarding({ target, cfg, request }),
+          skipChannelSuppression ||
+          (!shouldSkipDiscordForwarding(target, cfg) &&
+            !shouldSkipTelegramForwarding({ target, cfg, request })),
       );
     }
     if (!targets || targets.length === 0) {

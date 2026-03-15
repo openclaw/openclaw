@@ -804,6 +804,10 @@ export async function startGatewayServer(
       // forwarder reads tool-specific settings instead of exec settings.
       return { ...cfg, approvals: { ...cfg.approvals, exec: cfg.approvals?.tool } };
     },
+    // Tool approval events are not consumed by the native Discord/Telegram
+    // exec-approval handlers. Skip channel suppression so tool approval
+    // prompts are not silently filtered out when exec approvals are enabled.
+    skipChannelSuppression: true,
   });
   const toolApprovalHandlers = createToolApprovalHandlers(toolApprovalManager, {
     forwarder: toolApprovalForwarder,
@@ -866,11 +870,16 @@ export async function startGatewayServer(
       }
       return false;
     },
-    hasToolApprovalClients: () => {
+    hasToolApprovalClients: (excludeConnId?: string) => {
       // Accept any client with an approval scope. Built-in approver clients
       // (Control UI, macOS app) already handle exec approvals and can handle
       // tool approvals without declaring a separate "tool-approvals" cap.
+      // Exclude the requesting client (by connId) so the agent that submitted
+      // the tool.approval.request does not count as its own approver.
       for (const gatewayClient of clients) {
+        if (excludeConnId && gatewayClient.connId === excludeConnId) {
+          continue;
+        }
         const scopes = Array.isArray(gatewayClient.connect.scopes)
           ? gatewayClient.connect.scopes
           : [];

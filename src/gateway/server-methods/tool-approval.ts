@@ -118,7 +118,10 @@ export function createToolApprovalHandlers(
 
       // Use the tool-specific capability check so legacy exec-approval-only
       // clients do not cause the request to block until timeout.
-      const hasApprovalClients = context.hasToolApprovalClients?.() ?? false;
+      // Exclude the requesting client so the agent that submitted the
+      // tool.approval.request does not count as its own approver.
+      const hasApprovalClients =
+        context.hasToolApprovalClients?.(client?.connId ?? undefined) ?? false;
       let forwarded = false;
       if (opts?.forwarder) {
         try {

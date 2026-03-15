@@ -1088,4 +1088,45 @@ describe("tool approval handlers", () => {
       undefined,
     );
   });
+
+  it("excludes requesting client connId from approver presence check", async () => {
+    const { createToolApprovalHandlers } = await import("./tool-approval.js");
+    const manager = new ExecApprovalManager();
+    const handlers = createToolApprovalHandlers(manager);
+    const respond = vi.fn();
+    const hasToolApprovalClients = vi.fn((excludeConnId?: string) => {
+      // Simulate: only the requesting agent's own connection is present.
+      return excludeConnId !== "agent-conn-1";
+    });
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+      hasToolApprovalClients,
+      hasExecApprovalClients: () => false,
+    };
+
+    await handlers["tool.approval.request"]({
+      params: { toolName: "mcp__read_file", timeoutMs: 2000 },
+      respond: respond as unknown as Parameters<
+        (typeof handlers)["tool.approval.request"]
+      >[0]["respond"],
+      context: context as unknown as Parameters<
+        (typeof handlers)["tool.approval.request"]
+      >[0]["context"],
+      client: {
+        connect: { scopes: ["operator.approvals"] },
+        connId: "agent-conn-1",
+      } as unknown as Parameters<(typeof handlers)["tool.approval.request"]>[0]["client"],
+      req: { id: "req-2", type: "req", method: "tool.approval.request" },
+      isWebchatConnect: () => false,
+    });
+
+    // Should pass the requesting client's connId to the presence check.
+    expect(hasToolApprovalClients).toHaveBeenCalledWith("agent-conn-1");
+    // No real approver connected, so should take the no-route path.
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ decision: null }),
+      undefined,
+    );
+  });
 });
