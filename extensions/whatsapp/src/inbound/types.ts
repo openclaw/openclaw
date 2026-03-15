@@ -41,4 +41,6 @@ export type WebInboundMessage = {
   mediaFileName?: string;
   mediaUrl?: string;
   wasMentioned?: boolean;
+  isForwarded?: boolean;
+  forwardingScore?: number;
 };
