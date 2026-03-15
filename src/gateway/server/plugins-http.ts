@@ -26,6 +26,16 @@ export { shouldEnforceGatewayAuthForPluginPath } from "./plugins-http/route-auth
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
+/** Merge two route arrays, preferring entries from `primary` on path+match collisions. */
+function deduplicateRoutes(
+  primary: PluginHttpRouteRegistration[],
+  secondary: PluginHttpRouteRegistration[],
+): PluginHttpRouteRegistration[] {
+  const seen = new Set(primary.map((r) => `${r.path}::${r.match}`));
+  const extra = secondary.filter((r) => !seen.has(`${r.path}::${r.match}`));
+  return extra.length > 0 ? [...primary, ...extra] : primary;
+}
+
 function createPluginRouteRuntimeClient(params: {
   requiresGatewayAuth: boolean;
   gatewayAuthSatisfied?: boolean;
@@ -65,14 +75,22 @@ export function createGatewayPluginRequestHandler(params: {
 }): PluginHttpRequestHandler {
   const { registry, log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
-    // Fall back to process-level route bridge when the registry's httpRoutes
-    // are empty. Plugin channels running in jiti VM contexts register routes
-    // on a different globalThis, so the registry captured at construction time
-    // may never see them. The process object is shared across all VM contexts.
-    const sharedRoutes = (
-      process as NodeJS.Process & { __openclawPluginHttpRoutes?: PluginHttpRouteRegistration[] }
-    ).__openclawPluginHttpRoutes;
-    const routes = (registry.httpRoutes?.length ? registry.httpRoutes : sharedRoutes) ?? [];
+    // Merge registry routes with the process-level bridge. Plugin channels
+    // running in jiti VM contexts register routes on a different globalThis,
+    // so the registry captured at construction time may never see them.
+    // The process object is shared across all VM contexts, so we merge both
+    // sources to handle mixed deployments where some routes are static and
+    // others are dynamically registered from a different context.
+    const registryRoutes = registry.httpRoutes ?? [];
+    const sharedRoutes =
+      (process as NodeJS.Process & { __openclawPluginHttpRoutes?: PluginHttpRouteRegistration[] })
+        .__openclawPluginHttpRoutes ?? [];
+    const routes =
+      registryRoutes.length && sharedRoutes.length
+        ? deduplicateRoutes(registryRoutes, sharedRoutes)
+        : registryRoutes.length
+          ? registryRoutes
+          : sharedRoutes;
     if (routes.length === 0) {
       return false;
     }

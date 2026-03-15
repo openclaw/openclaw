@@ -71,6 +71,16 @@ export function registerPluginHttpRoute(params: {
       `plugin: replacing stale webhook path ${normalizedPath} (${routeMatch})${suffix}${pluginHint}`,
     );
     routes.splice(existingIndex, 1);
+    // Also remove from the process-level bridge so stale handlers don't shadow replacements.
+    const sharedArr = (
+      process as NodeJS.Process & { __openclawPluginHttpRoutes?: PluginHttpRouteRegistration[] }
+    ).__openclawPluginHttpRoutes;
+    if (sharedArr) {
+      const sharedIdx = sharedArr.indexOf(existing);
+      if (sharedIdx >= 0) {
+        sharedArr.splice(sharedIdx, 1);
+      }
+    }
   }
 
   const entry: PluginHttpRouteRegistration = {
