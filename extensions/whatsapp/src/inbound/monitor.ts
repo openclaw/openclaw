@@ -399,15 +399,15 @@ export async function monitorWebInbox(options: {
       return;
     }
     for (const msg of upsert.messages ?? []) {
+      const inbound = await normalizeInboundMessage(msg);
+      if (!inbound) {
+        continue;
+      }
       recordChannelActivity({
         channel: "whatsapp",
         accountId: options.accountId,
         direction: "inbound",
       });
-      const inbound = await normalizeInboundMessage(msg);
-      if (!inbound) {
-        continue;
-      }
 
       await maybeMarkInboundAsRead(inbound);
 
