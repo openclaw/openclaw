@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
@@ -65,8 +66,13 @@ export async function runSessionsSendA2AFlow(params: {
       let currentSessionKey = params.requesterSessionKey;
       let nextSessionKey = params.targetSessionKey;
       let incomingMessage = latestReply;
+      // Chain hook promises to preserve turn order without blocking the loop.
+      // Each turn's hook waits for the previous turn's hook to complete before
+      // dispatching, but the main loop continues immediately (not awaited).
+      // eslint-disable-next-line no-unused-vars
+      let _hookChain: Promise<void> = Promise.resolve();
       for (let turn = 1; turn <= params.maxPingPongTurns; turn += 1) {
-        const currentRole =
+        const currentRole: "requester" | "target" =
           currentSessionKey === params.requesterSessionKey ? "requester" : "target";
         const replyPrompt = buildAgentToAgentReplyContext({
           requesterSessionKey: params.requesterSessionKey,
@@ -92,11 +98,39 @@ export async function runSessionsSendA2AFlow(params: {
           break;
         }
         latestReply = replyText;
+
+        // Emit hook so channel plugins can forward A2A turns to users.
+        // Chained (not awaited) to preserve turn order without blocking the loop.
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("agent_to_agent_turn")) {
+          const resolvedTargetChannel = targetChannel === "unknown" ? undefined : targetChannel;
+          const event = {
+            turn,
+            maxTurns: params.maxPingPongTurns,
+            speakerSessionKey: currentSessionKey,
+            listenerSessionKey: nextSessionKey,
+            speakerRole: currentRole,
+            reply: replyText,
+            requesterChannel: params.requesterChannel,
+            targetChannel: resolvedTargetChannel,
+          };
+          const ctx = {
+            requesterSessionKey: params.requesterSessionKey,
+            targetSessionKey: params.targetSessionKey,
+          };
+          _hookChain = _hookChain.then(() =>
+            hookRunner.runAgentToAgentTurn(event, ctx).catch(() => {}),
+          );
+        }
+
         incomingMessage = replyText;
         const swap = currentSessionKey;
         currentSessionKey = nextSessionKey;
         nextSessionKey = swap;
       }
+      // Ensure all queued turn hooks complete before the announce step,
+      // so users see intermediate turns before the final conclusion.
+      await _hookChain;
     }
 
     const announcePrompt = buildAgentToAgentAnnounceContext({
