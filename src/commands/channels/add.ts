@@ -183,9 +183,8 @@ export async function channelsAddCommand(
     if (existing) {
       return existing;
     }
-    const { loadOnboardingPluginRegistrySnapshotForChannel } = await import(
-      "../onboarding/plugin-install.js"
-    );
+    const { loadOnboardingPluginRegistrySnapshotForChannel } =
+      await import("../onboarding/plugin-install.js");
     const snapshot = loadOnboardingPluginRegistrySnapshotForChannel({
       cfg: nextConfig,
       runtime,
