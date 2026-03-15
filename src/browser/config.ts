@@ -48,6 +48,8 @@ export type ResolvedBrowserProfile = {
   color: string;
   driver: "openclaw" | "extension" | "existing-session";
   attachOnly: boolean;
+  /** Per-profile executable path override. undefined = use global executablePath setting. */
+  executablePath: string | undefined;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -363,6 +365,7 @@ export function resolveProfile(
     color: profile.color,
     driver,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
+    executablePath: profile.executablePath?.trim() || undefined,
   };
 }
 
