@@ -7,6 +7,7 @@ import type { ProgramContext } from "./context.js";
 vi.mock("./register.agent.js", () => ({
   registerAgentCommands: (program: Command) => {
     program.command("agent");
+    program.command("agent-ui");
     program.command("agents");
   },
 }));
@@ -66,6 +67,7 @@ describe("command-registry", () => {
   it("includes both agent and agents in core CLI command names", () => {
     const names = getCoreCliCommandNames();
     expect(names).toContain("agent");
+    expect(names).toContain("agent-ui");
     expect(names).toContain("agents");
   });
 
@@ -78,6 +80,7 @@ describe("command-registry", () => {
     expect(names).toContain("browser");
     expect(names).toContain("sessions");
     expect(names).not.toContain("agent");
+    expect(names).not.toContain("agent-ui");
     expect(names).not.toContain("status");
     expect(names).not.toContain("doctor");
   });
@@ -91,6 +94,8 @@ describe("command-registry", () => {
     // The registrar also installs the singular "agent" command from the same entry.
     const agentCmd = program.commands.find((c) => c.name() === "agent");
     expect(agentCmd).toBeDefined();
+    const agentUiCmd = program.commands.find((c) => c.name() === "agent-ui");
+    expect(agentUiCmd).toBeDefined();
   });
 
   it("registerCoreCliByName returns false for unknown commands", async () => {
