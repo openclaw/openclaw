@@ -321,6 +321,37 @@ function createParallelToolCallsWrapper(
   };
 }
 
+function createNvidiaThinkingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          // NVIDIA NIM (vLLM) only supports low, medium, high for reasoning_effort.
+          // Map minimal to low to avoid 400 errors.
+          if (payloadObj.reasoning_effort === "minimal") {
+            payloadObj.reasoning_effort = "low";
+          }
+          if (
+            payloadObj.reasoning &&
+            typeof payloadObj.reasoning === "object" &&
+            !Array.isArray(payloadObj.reasoning)
+          ) {
+            const reasoningObj = payloadObj.reasoning as Record<string, unknown>;
+            if (reasoningObj.effort === "minimal") {
+              reasoningObj.effort = "low";
+            }
+          }
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -420,6 +451,11 @@ export function applyExtraParamsToAgent(
     const kilocodeThinkingLevel =
       modelId === "kilo/auto" || isProxyReasoningUnsupported(modelId) ? undefined : thinkingLevel;
     agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
+  }
+
+  if (provider === "nvidia" || provider === "nvidia-nim") {
+    log.debug(`applying NVIDIA thinking wrapper for ${provider}/${modelId}`);
+    agent.streamFn = createNvidiaThinkingWrapper(agent.streamFn);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
