@@ -9,7 +9,8 @@ import type {
 } from "../config/types.approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
-import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
+import { compileConfigRegex } from "../security/config-regex.js";
+import { testRegexWithBoundedInput } from "../security/safe-regex.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -63,8 +64,8 @@ function matchSessionFilter(sessionKey: string, patterns: string[]): boolean {
     if (sessionKey.includes(pattern)) {
       return true;
     }
-    const regex = compileSafeRegex(pattern);
-    return regex ? testRegexWithBoundedInput(regex, sessionKey) : false;
+    const compiled = compileConfigRegex(pattern);
+    return compiled?.regex ? testRegexWithBoundedInput(compiled.regex, sessionKey) : false;
   });
 }
 

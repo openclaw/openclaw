@@ -11,7 +11,7 @@ import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
 const applyAuthChoice = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
-const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(() => "openai"));
+const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "openai"));
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
 const promptDefaultModel = vi.hoisted(() => vi.fn(async () => ({ config: null, model: null })));
