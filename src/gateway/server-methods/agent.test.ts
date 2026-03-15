@@ -649,4 +649,72 @@ describe("gateway agent handler", () => {
       }),
     );
   });
+
+  it("normalizes threadId='true' (session-thread selector shorthand)", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "existing-session-id",
+        updatedAt: Date.now(),
+        deliveryContext: { channel: "telegram", to: "group:-1", threadId: 42 },
+      },
+      canonicalKey: "agent:main:telegram:group:-1:topic:42",
+    });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 50 } });
+
+    const respond = vi.fn();
+    await agentHandlers.agent({
+      params: {
+        message: "test",
+        sessionKey: "agent:main:telegram:group:-1:topic:42",
+        threadId: "true",
+        idempotencyKey: "thread-true-string",
+      },
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "3", method: "agent" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { threadId?: string | number };
+    expect(callArgs?.threadId).toBeUndefined();
+  });
+
+  it("accepts boolean threadId=true without forwarding literal true", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "existing-session-id",
+        updatedAt: Date.now(),
+        deliveryContext: { channel: "telegram", to: "group:-1", threadId: 77 },
+      },
+      canonicalKey: "agent:main:telegram:group:-1:topic:77",
+    });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 50 } });
+
+    const respond = vi.fn();
+    await agentHandlers.agent({
+      params: {
+        message: "test",
+        sessionKey: "agent:main:telegram:group:-1:topic:77",
+        threadId: true,
+        idempotencyKey: "thread-true-bool",
+      },
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "4", method: "agent" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { threadId?: string | number };
+    expect(callArgs?.threadId).toBeUndefined();
+  });
 });
