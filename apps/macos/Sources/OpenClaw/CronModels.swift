@@ -308,6 +308,71 @@ struct CronJob: Identifiable, Codable, Equatable {
         guard let ms = self.state.lastRunAtMs else { return nil }
         return Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
     }
+
+    init(
+        id: String,
+        agentId: String?,
+        name: String,
+        description: String?,
+        enabled: Bool,
+        deleteAfterRun: Bool?,
+        createdAtMs: Int,
+        updatedAtMs: Int,
+        schedule: CronSchedule,
+        sessionTarget: CronSessionTarget,
+        wakeMode: CronWakeMode,
+        payload: CronPayload,
+        delivery: CronDelivery?,
+        state: CronJobState)
+    {
+        self.init(
+            id: id,
+            agentId: agentId,
+            name: name,
+            description: description,
+            enabled: enabled,
+            deleteAfterRun: deleteAfterRun,
+            createdAtMs: createdAtMs,
+            updatedAtMs: updatedAtMs,
+            schedule: schedule,
+            sessionTargetRaw: sessionTarget.rawValue,
+            wakeMode: wakeMode,
+            payload: payload,
+            delivery: delivery,
+            state: state)
+    }
+
+    init(
+        id: String,
+        agentId: String?,
+        name: String,
+        description: String?,
+        enabled: Bool,
+        deleteAfterRun: Bool?,
+        createdAtMs: Int,
+        updatedAtMs: Int,
+        schedule: CronSchedule,
+        sessionTargetRaw: String,
+        wakeMode: CronWakeMode,
+        payload: CronPayload,
+        delivery: CronDelivery?,
+        state: CronJobState)
+    {
+        self.id = id
+        self.agentId = agentId
+        self.name = name
+        self.description = description
+        self.enabled = enabled
+        self.deleteAfterRun = deleteAfterRun
+        self.createdAtMs = createdAtMs
+        self.updatedAtMs = updatedAtMs
+        self.schedule = schedule
+        self.sessionTargetRaw = sessionTargetRaw
+        self.wakeMode = wakeMode
+        self.payload = payload
+        self.delivery = delivery
+        self.state = state
+    }
 }
 
 struct CronEvent: Codable {
