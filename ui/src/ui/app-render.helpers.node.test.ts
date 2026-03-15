@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildChatModelOptions,
   isCronSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
 } from "./app-render.helpers.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { ModelCatalogEntry, SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -282,5 +283,81 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+/* ================================================================
+ *  buildChatModelOptions – deduplication with normalized model refs
+ * ================================================================ */
+
+describe("buildChatModelOptions", () => {
+  const catalog: ModelCatalogEntry[] = [
+    { id: "gpt-5.4", name: "GPT-5.4", provider: "openai-codex" },
+    { id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" },
+  ];
+
+  it("returns one entry per catalog model with the provider label", () => {
+    const options = buildChatModelOptions(catalog, "", "");
+    expect(options).toHaveLength(2);
+    expect(options[0]).toEqual({ value: "gpt-5.4", label: "gpt-5.4 · openai-codex" });
+    expect(options[1]).toEqual({ value: "claude-opus-5", label: "claude-opus-5 · anthropic" });
+  });
+
+  it("does not add a duplicate when currentOverride is the bare catalog id", () => {
+    // "gpt-5.4" is already in the catalog; it should not appear twice.
+    const options = buildChatModelOptions(catalog, "gpt-5.4", "");
+    expect(options).toHaveLength(2);
+    expect(options.filter((o) => o.value === "gpt-5.4")).toHaveLength(1);
+  });
+
+  it("does not add a duplicate when currentOverride is the provider-qualified ref", () => {
+    // "openai-codex/gpt-5.4" is the qualified form of the same catalog entry.
+    const options = buildChatModelOptions(catalog, "openai-codex/gpt-5.4", "");
+    expect(options).toHaveLength(2);
+  });
+
+  it("does not add a duplicate when defaultModel is the bare catalog id", () => {
+    const options = buildChatModelOptions(catalog, "", "gpt-5.4");
+    expect(options).toHaveLength(2);
+  });
+
+  it("does not add a duplicate when defaultModel is the qualified form", () => {
+    const options = buildChatModelOptions(catalog, "", "openai-codex/gpt-5.4");
+    expect(options).toHaveLength(2);
+  });
+
+  it("does not duplicate when currentOverride and defaultModel are both the bare id", () => {
+    const options = buildChatModelOptions(catalog, "gpt-5.4", "gpt-5.4");
+    expect(options).toHaveLength(2);
+  });
+
+  it("does not duplicate when override is bare and defaultModel is qualified (or vice versa)", () => {
+    const a = buildChatModelOptions(catalog, "gpt-5.4", "openai-codex/gpt-5.4");
+    expect(a).toHaveLength(2);
+
+    const b = buildChatModelOptions(catalog, "openai-codex/gpt-5.4", "gpt-5.4");
+    expect(b).toHaveLength(2);
+  });
+
+  it("adds an unknown override as a new entry (not in catalog)", () => {
+    const options = buildChatModelOptions(catalog, "some-custom-model", "");
+    expect(options).toHaveLength(3);
+    expect(options[2]).toEqual({ value: "some-custom-model", label: "some-custom-model" });
+  });
+
+  it("handles a catalog-only model with no provider without error", () => {
+    const noProv: ModelCatalogEntry[] = [{ id: "local-llm", name: "Local LLM", provider: "" }];
+    const options = buildChatModelOptions(noProv, "local-llm", "");
+    expect(options).toHaveLength(1);
+    expect(options[0]).toEqual({ value: "local-llm", label: "local-llm" });
+  });
+
+  it("handles Docker-style model ids with slashes correctly", () => {
+    const dockerCatalog: ModelCatalogEntry[] = [
+      { id: "docker.io/ai/gpt-oss:latest", name: "GPT OSS", provider: "docker" },
+    ];
+    // The bare id contains slashes but is still a bare (unqualified) ref.
+    const options = buildChatModelOptions(dockerCatalog, "docker.io/ai/gpt-oss:latest", "");
+    expect(options).toHaveLength(1);
   });
 });

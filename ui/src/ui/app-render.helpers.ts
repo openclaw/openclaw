@@ -541,19 +541,58 @@ function resolveDefaultModelValue(state: AppViewState): string {
   return typeof model === "string" ? model.trim() : "";
 }
 
-function buildChatModelOptions(
+/**
+ * Build a lookup map from the catalog so that both the bare model id and the
+ * provider-qualified form (`provider/id`) resolve to the same canonical key.
+ *
+ * This is needed because the same logical model can appear as:
+ *   - a catalog entry with  id="gpt-5.4"  provider="openai-codex"
+ *   - a session/default override stored as the bare string "gpt-5.4"
+ *   - a session/default override stored as "openai-codex/gpt-5.4"
+ *
+ * Note: we cannot use `value.includes("/")` to distinguish bare from qualified
+ * refs — model ids themselves may contain slashes (e.g. Docker-style ids like
+ * `docker.io/ai/gpt-oss:latest`).  We therefore resolve only against the
+ * catalog rather than making structural assumptions about the id string.
+ */
+function buildCatalogNormalizationMap(catalog: ModelCatalogEntry[]): Map<string, string> {
+  // key (lowercase) → canonical value (as stored in the catalog entry)
+  const map = new Map<string, string>();
+  for (const entry of catalog) {
+    const id = entry.id?.trim();
+    if (!id) {
+      continue;
+    }
+    const provider = entry.provider?.trim();
+    const qualified = provider ? `${provider}/${id}` : id;
+    // Both the bare id and the qualified form map to the same canonical key.
+    map.set(id.toLowerCase(), qualified);
+    map.set(qualified.toLowerCase(), qualified);
+  }
+  return map;
+}
+
+export function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
   currentOverride: string,
   defaultModel: string,
 ): Array<{ value: string; label: string }> {
+  const normMap = buildCatalogNormalizationMap(catalog);
   const seen = new Set<string>();
   const options: Array<{ value: string; label: string }> = [];
+
+  const dedupeKey = (value: string): string => {
+    const lower = value.trim().toLowerCase();
+    // Resolve to the canonical form if the catalog recognizes this ref.
+    return normMap.get(lower) ?? lower;
+  };
+
   const addOption = (value: string, label?: string) => {
     const trimmed = value.trim();
     if (!trimmed) {
       return;
     }
-    const key = trimmed.toLowerCase();
+    const key = dedupeKey(trimmed);
     if (seen.has(key)) {
       return;
     }
