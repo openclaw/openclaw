@@ -65,7 +65,7 @@ Relevant prerequisite work that has landed:
 - compatibility plugin-registry facade ownership now has a host-owned helper boundary in `src/extension-host/plugin-registry.ts`
 - compatibility plugin-registry policy now has a host-owned helper boundary in `src/extension-host/plugin-registry-compat.ts`
 - compatibility plugin-registry registration actions now have a host-owned helper boundary in `src/extension-host/plugin-registry-registrations.ts`
-- host-owned runtime registry accessors now have a host-owned helper boundary in `src/extension-host/runtime-registry.ts`, and the provider, tool, HTTP-route, gateway-method, CLI, and service slices now keep host-owned storage there with mirrored legacy compatibility views
+- host-owned runtime registry accessors now have a host-owned helper boundary in `src/extension-host/runtime-registry.ts`, and the channel, provider, tool, HTTP-route, gateway-method, CLI, and service slices now keep host-owned storage there with mirrored legacy compatibility views
 - service startup, stop ordering, service-context creation, and failure logging now have a host-owned helper boundary in `src/extension-host/service-lifecycle.ts`
 - CLI duplicate detection, registrar invocation, and async failure logging now have a host-owned helper boundary in `src/extension-host/cli-lifecycle.ts`
 - gateway method-id aggregation, plugin diagnostic shaping, and extra-handler composition now have a host-owned helper boundary in `src/extension-host/gateway-methods.ts`

@@ -50,6 +50,7 @@ What has been implemented:
 - gateway method-id aggregation, plugin diagnostic shaping, and extra-handler composition now route through `src/extension-host/gateway-methods.ts`
 - plugin tool resolution, conflict handling, optional-tool gating, and plugin-tool metadata tracking now route through `src/extension-host/tool-runtime.ts`
 - plugin provider projection from registry entries into runtime provider objects now route through `src/extension-host/provider-runtime.ts`
+- channel registrations now also keep host-owned runtime-registry storage with mirrored legacy compatibility views, and channel readers now consume the same host-owned boundary
 - provider and tool registrations now also keep host-owned runtime-registry storage with mirrored legacy compatibility views
 - plugin provider discovery filtering, order grouping, and result normalization now route through `src/extension-host/provider-discovery.ts`
 - provider matching, auth-method selection, config-patch merging, and default-model application now route through `src/extension-host/provider-auth.ts`
@@ -114,6 +115,7 @@ How it has been implemented:
 - by extracting gateway method-id aggregation, plugin diagnostic shaping, and extra-handler composition into a host-owned gateway-methods helper while request dispatch semantics remain in the gateway server code
 - by extracting plugin tool resolution, conflict handling, optional-tool gating, and plugin-tool metadata tracking into a host-owned tool-runtime helper while `src/plugins/tools.ts` remains the loader and config-normalization facade
 - by extracting provider projection from registry entries into runtime provider objects into a host-owned provider-runtime helper while `src/plugins/providers.ts` remains the loader and config-normalization facade
+- by moving channel registration storage into host-owned runtime-registry state after channel lookup readers were already on the host boundary, while keeping mirrored legacy compatibility arrays
 - by moving provider and tool registration storage into host-owned runtime-registry state after their runtime readers were already host-owned, while keeping mirrored legacy compatibility arrays
 - by extracting provider discovery filtering, order grouping, and result normalization into a host-owned provider-discovery helper while `src/plugins/provider-discovery.ts` remains the compatibility facade around the legacy provider loader path
 - by extracting provider matching, auth-method selection, config-patch merging, and default-model application into a host-owned provider-auth helper while `src/commands/provider-auth-helpers.ts` remains the command-facing compatibility facade
