@@ -2,7 +2,7 @@ import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { registerContextEngine } from "../context-engine/registry.js";
+import { registerContextEngineForOwner } from "../context-engine/registry.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
@@ -664,7 +664,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           });
           return;
         }
-        const result = registerContextEngine(id, factory, { owner: `plugin:${record.id}` });
+        const result = registerContextEngineForOwner(id, factory, `plugin:${record.id}`, {
+          allowSameOwnerRefresh: true,
+        });
         if (!result.ok) {
           pushDiagnostic({
             level: "error",
