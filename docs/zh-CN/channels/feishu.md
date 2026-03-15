@@ -149,7 +149,11 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
 在 **事件订阅** 页面：
 
 1. 选择 **使用长连接接收事件**（WebSocket 模式）
-2. 添加事件：`im.message.receive_v1`（接收消息）
+2. 添加事件：
+   - `im.message.receive_v1`
+   - `im.message.reaction.created_v1`
+   - `im.message.reaction.deleted_v1`
+   - `application.bot.menu_v6`
 
 ⚠️ **注意**：如果网关未启动或渠道未添加，长连接设置将保存失败。
 
@@ -435,7 +439,7 @@ openclaw pairing list feishu
 | `/reset`  | 重置对话会话   |
 | `/model`  | 查看/切换模型  |
 
-> 注意：飞书目前不支持原生命令菜单，命令需要以文本形式发送。
+飞书机器人菜单建议直接在飞书开放平台的机器人能力页面配置。OpenClaw 当前支持接收 `application.bot.menu_v6` 事件，并把点击事件转换成普通文本命令（例如 `/menu <eventKey>`）继续走现有消息路由，但不通过渠道配置自动创建或同步菜单。
 
 ## 网关管理命令
 
@@ -526,13 +530,51 @@ openclaw pairing list feishu
   channels: {
     feishu: {
       streaming: true, // 启用流式卡片输出（默认 true）
-      blockStreaming: true, // 启用块级流式（默认 true）
+      blockStreamingCoalesce: {
+        enabled: true,
+        minDelayMs: 50,
+        maxDelayMs: 250,
+      },
     },
   },
 }
 ```
 
 如需禁用流式输出（等待完整回复后一次性发送），可设置 `streaming: false`。
+
+### 交互式卡片
+
+OpenClaw 默认会在需要时发送 Markdown 卡片；如果你需要完整的 Feishu 原生交互式卡片，也可以显式发送原始 `card` payload。
+
+- 默认路径：文本自动渲染或 Markdown 卡片
+- 显式卡片：通过消息动作的 `card` 参数发送原始交互卡片
+- 更新卡片：同一消息支持后续 patch/update
+
+卡片按钮回调当前走文本回退路径：
+
+- 若 `action.value.text` 存在，则作为入站文本继续处理
+- 若 `action.value.command` 存在，则作为命令文本继续处理
+- 其他对象值会序列化为 JSON 文本
+
+这样可以保持与现有消息/命令路由兼容，而不要求下游先理解 Feishu 专有的交互 payload。
+
+### 表情反应
+
+飞书渠道现已完整支持表情反应生命周期：
+
+- 接收 `reaction created`
+- 接收 `reaction deleted`
+- 主动添加反应
+- 主动删除自身反应
+- 查询消息上的反应列表
+
+是否把入站反应转成内部消息，可通过 `reactionNotifications` 控制：
+
+| 值    | 行为                         |
+| ----- | ---------------------------- |
+| `off` | 不生成反应通知               |
+| `own` | 仅当反应发生在机器人消息上时 |
+| `all` | 所有可验证的反应都生成通知   |
 
 ### 消息引用
 
@@ -653,14 +695,19 @@ openclaw pairing list feishu
 | `channels.feishu.accounts.<id>.domain`            | 单账号 API 域名覆盖               | `feishu`         |
 | `channels.feishu.dmPolicy`                        | 私聊策略                          | `pairing`        |
 | `channels.feishu.allowFrom`                       | 私聊白名单（open_id 列表）        | -                |
-| `channels.feishu.groupPolicy`                     | 群组策略                          | `open`           |
+| `channels.feishu.groupPolicy`                     | 群组策略                          | `allowlist`      |
 | `channels.feishu.groupAllowFrom`                  | 群组白名单                        | -                |
 | `channels.feishu.groups.<chat_id>.requireMention` | 是否需要 @提及                    | `true`           |
 | `channels.feishu.groups.<chat_id>.enabled`        | 是否启用该群组                    | `true`           |
+| `channels.feishu.replyInThread`                   | 群聊回复是否进入飞书话题线程      | `disabled`       |
+| `channels.feishu.groupSessionScope`               | 群聊会话隔离粒度                  | `group`          |
 | `channels.feishu.textChunkLimit`                  | 消息分块大小                      | `2000`           |
 | `channels.feishu.mediaMaxMb`                      | 媒体大小限制                      | `30`             |
 | `channels.feishu.streaming`                       | 启用流式卡片输出                  | `true`           |
-| `channels.feishu.blockStreaming`                  | 启用块级流式                      | `true`           |
+| `channels.feishu.blockStreamingCoalesce.enabled`  | 启用块级流式合并                  | `true`           |
+| `channels.feishu.typingIndicator`                 | 发送“正在输入”状态                | `true`           |
+| `channels.feishu.resolveSenderNames`              | 拉取发送者名称                    | `true`           |
+| `channels.feishu.reactionNotifications`           | 入站反应通知策略                  | `own`            |
 
 ---
 
