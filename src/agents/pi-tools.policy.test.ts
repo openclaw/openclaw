@@ -271,4 +271,57 @@ describe("resolveEffectiveToolPolicy", () => {
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "coder" });
     expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
   });
+
+  it("does not implicitly expose fs tools when profile is minimal", () => {
+    const cfg = {
+      tools: {
+        profile: "minimal",
+        fs: { workspaceOnly: true },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toBeUndefined();
+  });
+
+  it("does not implicitly expose exec tools when profile is minimal", () => {
+    const cfg = {
+      tools: {
+        profile: "minimal",
+        exec: { host: "sandbox" },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toBeUndefined();
+  });
+
+  it("does not implicitly expose tools when agent profile is minimal", () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "pixel",
+            tools: {
+              profile: "minimal",
+              fs: { workspaceOnly: true },
+              exec: { host: "gateway" },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "pixel" });
+    expect(result.profileAlsoAllow).toBeUndefined();
+  });
+
+  it("still honors explicit alsoAllow even with minimal profile", () => {
+    const cfg = {
+      tools: {
+        profile: "minimal",
+        alsoAllow: ["web_search"],
+        fs: { workspaceOnly: true },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toEqual(["web_search"]);
+  });
 });

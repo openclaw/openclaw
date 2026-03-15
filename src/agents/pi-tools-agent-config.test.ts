@@ -315,6 +315,58 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toEqual(["session_status"]);
   });
 
+  it("minimal profile with tools.fs configured should not expose fs tools", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "pixel",
+            workspace: "/home/test/.openclaw/workspace-pixel",
+            tools: {
+              profile: "minimal",
+              exec: { host: "gateway", security: "allowlist", ask: "always" },
+              fs: { workspaceOnly: true },
+            },
+          },
+        ],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:pixel:discord:channel:123",
+      workspaceDir: "/tmp/test-minimal-fs",
+      agentDir: "/tmp/agent-minimal-fs",
+    });
+
+    const toolNames = tools.map((t) => t.name);
+    expect(toolNames).toEqual(["session_status"]);
+  });
+
+  it("minimal profile without any tool sections should only expose session_status", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "restricted",
+            workspace: "~/openclaw-restricted",
+            tools: { profile: "minimal" },
+          },
+        ],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:restricted:main",
+      workspaceDir: "/tmp/test-minimal-bare",
+      agentDir: "/tmp/agent-minimal-bare",
+    });
+
+    const toolNames = tools.map((t) => t.name);
+    expect(toolNames).toEqual(["session_status"]);
+  });
+
   it("should allow different tool policies for different agents", () => {
     const cfg: OpenClawConfig = {
       agents: {
