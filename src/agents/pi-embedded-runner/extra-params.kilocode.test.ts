@@ -19,7 +19,7 @@ function applyAndCapture(params: {
 
   const baseStreamFn: StreamFn = (model, _context, options) => {
     captured.headers = options?.headers;
-    options?.onPayload?.({}, model);
+    (options?.onPayload as ((p: unknown, m?: unknown) => void) | undefined)?.({}, model);
     return createAssistantMessageEventStream();
   };
   const agent = { streamFn: baseStreamFn };
@@ -97,7 +97,7 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning_effort: "high" };
-      options?.onPayload?.(payload, model);
+      (options?.onPayload as ((p: unknown, m?: unknown) => void) | undefined)?.(payload, model);
       capturedPayload = payload;
       return createAssistantMessageEventStream();
     };
@@ -125,7 +125,7 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, model);
+      (options?.onPayload as ((p: unknown, m?: unknown) => void) | undefined)?.(payload, model);
       capturedPayload = payload;
       return createAssistantMessageEventStream();
     };
@@ -158,7 +158,7 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning_effort: "high" };
-      options?.onPayload?.(payload, model);
+      (options?.onPayload as ((p: unknown, m?: unknown) => void) | undefined)?.(payload, model);
       capturedPayload = payload;
       return createAssistantMessageEventStream();
     };

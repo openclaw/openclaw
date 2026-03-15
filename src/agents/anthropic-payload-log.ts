@@ -145,11 +145,14 @@ export function createAnthropicPayloadLogger(params: {
           payload: redactedPayload,
           payloadDigest: digest(redactedPayload),
         });
-        return options?.onPayload?.(payload, model);
+        return (options?.onPayload as ((p: unknown, m?: unknown) => void) | undefined)?.(
+          payload,
+          model,
+        );
       };
       return streamFn(model, context, {
         ...options,
-        onPayload: nextOnPayload,
+        onPayload: nextOnPayload as (payload: unknown) => void,
       });
     };
     return wrapped;

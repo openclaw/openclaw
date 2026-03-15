@@ -467,6 +467,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Webchat/Control UI: fix `/avatar/{agentId}` returning 404 when avatar is set only in workspace `IDENTITY.md` (no `agents.list[].identity.avatar`). Avatar path is now normalized for cross-platform resolution, and IDENTITY.md values in backticks are parsed correctly. Fixes #38439.
 - Models/MiniMax: stop advertising removed `MiniMax-M2.5-Lightning` in built-in provider catalogs, onboarding metadata, and docs; keep the supported fast-tier model as `MiniMax-M2.5-highspeed`.
 - Models/Vercel AI Gateway: synthesize the built-in `vercel-ai-gateway` provider from `AI_GATEWAY_API_KEY` and auto-discover the live `/v1/models` catalog so `/models vercel-ai-gateway` exposes current refs including `openai/gpt-5.4`.
 - Security/Config: fail closed when `loadConfig()` hits validation or read errors so invalid configs cannot silently fall back to permissive runtime defaults. (#9040) Thanks @joetomasone.
