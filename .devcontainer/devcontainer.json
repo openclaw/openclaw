@@ -1,0 +1,10 @@
+{
+    "name": "OpenClaw Systemd Env",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "privileged": true,
+    "privilegedJustification": "Privileged mode is required to run systemd and manipulate cgroups inside this devcontainer. This grants elevated access to the host, so use only in trusted environments and be cautious when running untrusted code.",
+    "remoteUser": "codespace",
+    "postStartCommand": "sudo /workspaces/openclaw/.devcontainer/start-systemd.sh"
+}
