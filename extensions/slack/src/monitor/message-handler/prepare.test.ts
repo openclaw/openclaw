@@ -297,6 +297,32 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.RawBody).toContain("Readiness probe failed");
   });
 
+  it("drops app-authored bot messages when allowBots is false", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ allowBots: false }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        user: undefined,
+        app_id: "A_ALERTS",
+        subtype: "bot_message",
+        text: "deploy complete",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
   it("keeps channel metadata out of GroupSystemPrompt", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {

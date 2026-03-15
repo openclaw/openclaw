@@ -93,6 +93,7 @@ type SlackConversationContext = {
   isRoomish: boolean;
   channelConfig: ReturnType<typeof resolveSlackChannelConfig> | null;
   allowBots: boolean;
+  botSenderId?: string;
   isBotMessage: boolean;
 };
 
@@ -112,6 +113,14 @@ type SlackRoutingContext = {
   sessionKey: string;
   historyKey: string;
 };
+
+function resolveSlackBotSenderId(message: SlackMessageEvent): string | undefined {
+  return message.bot_id?.trim() || message.app_id?.trim() || undefined;
+}
+
+function isSlackBotMessage(message: SlackMessageEvent): boolean {
+  return Boolean(resolveSlackBotSenderId(message) || message.subtype === "bot_message");
+}
 
 async function resolveSlackConversationContext(params: {
   ctx: SlackMonitorContext;
@@ -157,6 +166,7 @@ async function resolveSlackConversationContext(params: {
     account.config?.allowBots ??
     cfg.channels?.slack?.allowBots ??
     false;
+  const botSenderId = resolveSlackBotSenderId(message);
 
   return {
     channelInfo,
@@ -168,7 +178,8 @@ async function resolveSlackConversationContext(params: {
     isRoomish,
     channelConfig,
     allowBots,
-    isBotMessage: Boolean(message.bot_id),
+    botSenderId,
+    isBotMessage: isSlackBotMessage(message),
   };
 }
 
@@ -179,15 +190,21 @@ async function authorizeSlackInboundMessage(params: {
   conversation: SlackConversationContext;
 }): Promise<SlackAuthorizationContext | null> {
   const { ctx, account, message, conversation } = params;
-  const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBots } =
-    conversation;
+  const {
+    isDirectMessage,
+    channelName,
+    resolvedChannelType,
+    isBotMessage,
+    allowBots,
+    botSenderId,
+  } = conversation;
 
   if (isBotMessage) {
     if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
       return null;
     }
     if (!allowBots) {
-      logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
+      logVerbose(`slack: drop bot message ${botSenderId ?? "unknown"} (allowBots=false)`);
       return null;
     }
   }
@@ -197,7 +214,7 @@ async function authorizeSlackInboundMessage(params: {
     return null;
   }
 
-  const senderId = message.user ?? (isBotMessage ? message.bot_id : undefined);
+  const senderId = message.user ?? (isBotMessage ? botSenderId : undefined);
   if (!senderId) {
     logVerbose("slack: drop message (missing sender id)");
     return null;
@@ -256,6 +273,25 @@ async function authorizeSlackInboundMessage(params: {
     senderId,
     allowFromLower,
   };
+}
+
+function shouldIgnoreOwnBoundThreadBotMessage(params: {
+  ctx: SlackMonitorContext;
+  message: SlackMessageEvent;
+  isBoundThreadSession: boolean;
+  isBotMessage: boolean;
+}): boolean {
+  if (!params.isBoundThreadSession || !params.isBotMessage) {
+    return false;
+  }
+
+  const userId = params.message.user?.trim() || "";
+  if (userId && params.ctx.botUserId && userId === params.ctx.botUserId) {
+    return true;
+  }
+
+  const messageAppId = params.message.app_id?.trim() || "";
+  return Boolean(messageAppId && params.ctx.apiAppId && messageAppId === params.ctx.apiAppId);
 }
 
 function resolveSlackRoutingContext(params: {
@@ -337,6 +373,7 @@ export async function prepareSlackMessage(params: {
     isRoom,
     isRoomish,
     channelConfig,
+    botSenderId,
     isBotMessage,
   } = conversation;
   const authorization = await authorizeSlackInboundMessage({
@@ -399,9 +436,17 @@ export async function prepareSlackMessage(params: {
     }
   }
 
-  // Drop bot-authored system messages in bound threads to avoid echo loops.
-  if (isBoundThreadSession && conversation.isBotMessage) {
-    logVerbose(`slack: drop bound-thread bot message ${message.bot_id ?? "unknown"}`);
+  // Bound threads still honor allowBots for third-party bots. Only suppress
+  // echoes from this OpenClaw app so ACP-bound threads do not self-loop.
+  if (
+    shouldIgnoreOwnBoundThreadBotMessage({
+      ctx,
+      message,
+      isBoundThreadSession,
+      isBotMessage: conversation.isBotMessage,
+    })
+  ) {
+    logVerbose(`slack: drop own bound-thread bot message ${botSenderId ?? "unknown"}`);
     return null;
   }
 
@@ -443,7 +488,7 @@ export async function prepareSlackMessage(params: {
         return resolvedSenderName;
       }
     }
-    resolvedSenderName = message.user ?? message.bot_id ?? "unknown";
+    resolvedSenderName = message.user ?? botSenderId ?? "unknown";
     return resolvedSenderName;
   };
   const senderNameForAuth = ctx.allowNameMatching ? await resolveSenderName() : undefined;
