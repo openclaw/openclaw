@@ -44,6 +44,51 @@ describe("extractTextCached", () => {
   });
 });
 
+describe("extractText — control token filtering for assistant messages", () => {
+  it("returns empty string for assistant message containing only NO_REPLY", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "NO_REPLY" }],
+    };
+    expect(extractText(message)).toBe("");
+  });
+
+  it("returns empty string for assistant message containing only HEARTBEAT_OK", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "HEARTBEAT_OK" }],
+    };
+    expect(extractText(message)).toBe("");
+  });
+
+  it("returns empty string for assistant message with whitespace-padded NO_REPLY", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "  NO_REPLY  " }],
+    };
+    expect(extractText(message)).toBe("");
+  });
+
+  it("does NOT suppress assistant message when NO_REPLY appears in prose", () => {
+    // Exact-match only — a sentence containing the token is not suppressed.
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "The token NO_REPLY is an internal signal." }],
+    };
+    const result = extractText(message);
+    expect(result).toContain("NO_REPLY is an internal signal");
+  });
+
+  it("does NOT affect user messages containing NO_REPLY", () => {
+    const message = {
+      role: "user",
+      content: [{ type: "text", text: "NO_REPLY" }],
+    };
+    // User messages are not filtered by control-token logic.
+    expect(extractText(message)).toBe("NO_REPLY");
+  });
+});
+
 describe("extractThinkingCached", () => {
   it("matches extractThinking output", () => {
     const message = {

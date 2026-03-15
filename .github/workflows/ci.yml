@@ -368,7 +368,15 @@ jobs:
             BASE="${{ github.event.pull_request.base.sha }}"
           fi
 
-          mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
+          COMPARE_BASE="$(git merge-base "$BASE" HEAD 2>/dev/null || true)"
+          if [ -n "$COMPARE_BASE" ]; then
+            echo "Using workflow compare base: $COMPARE_BASE (merge-base of $BASE and HEAD)"
+          else
+            COMPARE_BASE="$BASE"
+            echo "git merge-base unavailable; falling back to workflow base SHA: $COMPARE_BASE"
+          fi
+
+          mapfile -t workflow_files < <(git diff --name-only "$COMPARE_BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
           if [ "${#workflow_files[@]}" -eq 0 ]; then
             echo "No workflow changes detected; skipping zizmor."
             exit 0

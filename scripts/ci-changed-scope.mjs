@@ -93,13 +93,37 @@ export function detectChangedScope(changedPaths) {
 /**
  * @param {string} base
  * @param {string} [head]
+ * @returns {string}
+ */
+export function resolveCompareBase(base, head = "HEAD") {
+  if (!base) {
+    return "";
+  }
+
+  try {
+    // Compare from the branch point so upstream-only base changes do not
+    // expand PR scope detection.
+    const compareBase = execFileSync("git", ["merge-base", base, head], {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+    }).trim();
+    return compareBase || base;
+  } catch {
+    return base;
+  }
+}
+
+/**
+ * @param {string} base
+ * @param {string} [head]
  * @returns {string[]}
  */
 export function listChangedPaths(base, head = "HEAD") {
   if (!base) {
     return [];
   }
-  const output = execFileSync("git", ["diff", "--name-only", base, head], {
+  const compareBase = resolveCompareBase(base, head);
+  const output = execFileSync("git", ["diff", "--name-only", compareBase, head], {
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
   });

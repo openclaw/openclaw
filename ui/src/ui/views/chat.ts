@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { isSilentReplyPrefixText, isSilentReplyText } from "../../../../src/auto-reply/tokens.js";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentMimeType,
@@ -1432,7 +1433,13 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const segments = props.streamSegments ?? [];
   const maxLen = Math.max(segments.length, tools.length);
   for (let i = 0; i < maxLen; i++) {
-    if (i < segments.length && segments[i].text.trim().length > 0) {
+    const segText = segments[i]?.text.trim() ?? "";
+    if (
+      i < segments.length &&
+      segText.length > 0 &&
+      !isSilentReplyText(segText) &&
+      !isSilentReplyPrefixText(segText)
+    ) {
       items.push({
         kind: "stream" as const,
         key: `stream-seg:${props.sessionKey}:${i}`,
@@ -1451,7 +1458,12 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
 
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
+    const streamText = props.stream.trim();
+    if (
+      streamText.length > 0 &&
+      !isSilentReplyText(streamText) &&
+      !isSilentReplyPrefixText(streamText)
+    ) {
       items.push({
         kind: "stream",
         key,

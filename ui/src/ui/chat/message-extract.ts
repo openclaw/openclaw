@@ -1,4 +1,9 @@
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../../../../src/auto-reply/tokens.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { stripThinkingTags } from "../format.ts";
 
@@ -8,7 +13,15 @@ const thinkingCache = new WeakMap<object, string | null>();
 function processMessageText(text: string, role: string): string {
   const shouldStripInboundMetadata = role.toLowerCase() === "user";
   if (role === "assistant") {
-    return stripThinkingTags(text);
+    const stripped = stripThinkingTags(text);
+    // Do not surface control-only tokens as visible assistant content.
+    if (
+      isSilentReplyText(stripped, SILENT_REPLY_TOKEN) ||
+      isSilentReplyText(stripped, HEARTBEAT_TOKEN)
+    ) {
+      return "";
+    }
+    return stripped;
   }
   return shouldStripInboundMetadata
     ? stripInboundMetadata(stripEnvelope(text))

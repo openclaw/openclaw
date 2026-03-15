@@ -1,10 +1,9 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { ThemeMode, ThemeName } from "../theme.ts";
-import { renderConfig } from "./config.ts";
+import { renderConfig, type ConfigProps } from "./config.ts";
 
 describe("config view", () => {
-  const baseProps = () => ({
+  const baseProps = (): ConfigProps => ({
     raw: "{\n}\n",
     originalRaw: "{\n}\n",
     valid: true,
@@ -38,8 +37,8 @@ describe("config view", () => {
     onUpdate: vi.fn(),
     onSubsectionChange: vi.fn(),
     version: "2026.3.11",
-    theme: "claw" as ThemeName,
-    themeMode: "system" as ThemeMode,
+    theme: "claw",
+    themeMode: "system",
     setTheme: vi.fn(),
     setThemeMode: vi.fn(),
     gatewayUrl: "",
@@ -207,6 +206,19 @@ describe("config view", () => {
     (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
+  });
+
+  it("renders the appearance section when selected", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        activeSection: "__appearance__",
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Choose a theme family.");
   });
 
   it("renders the top search icon inside the search input row", () => {

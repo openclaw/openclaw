@@ -145,14 +145,14 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     focusMode: false,
     assistantName: "OpenClaw",
     assistantAvatar: null,
+    agentsList: null,
+    currentAgentId: "",
     onRefresh: () => undefined,
     onToggleFocusMode: () => undefined,
     onDraftChange: () => undefined,
     onSend: () => undefined,
     onQueueRemove: () => undefined,
     onNewSession: () => undefined,
-    agentsList: null,
-    currentAgentId: "",
     onAgentChange: () => undefined,
     ...overrides,
   };
@@ -394,7 +394,7 @@ describe("chat view", () => {
     );
 
     const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
-    expect(stopButton).not.toBeUndefined();
+    expect(stopButton).not.toBeNull();
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("New session");
@@ -414,9 +414,9 @@ describe("chat view", () => {
     );
 
     const newSessionButton = container.querySelector<HTMLButtonElement>(
-      'button[title="New session"]',
+      'button[aria-label="New session"]',
     );
-    expect(newSessionButton).not.toBeUndefined();
+    expect(newSessionButton).not.toBeNull();
     newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
@@ -445,6 +445,38 @@ describe("chat view", () => {
     );
     expect(senderLabels).toContain("Iris");
     expect(senderLabels).not.toContain("You");
+  });
+
+  it('does not render stream text for "NO" lead-fragment — shows reading-indicator instead', () => {
+    const container = document.createElement("div");
+    render(renderChat(createProps({ stream: "NO", streamStartedAt: Date.now() })), container);
+    expect(container.textContent).not.toContain("NO");
+  });
+
+  it('does not render stream text for "NO_REPLY" — shows reading-indicator instead', () => {
+    const container = document.createElement("div");
+    render(renderChat(createProps({ stream: "NO_REPLY", streamStartedAt: Date.now() })), container);
+    expect(container.textContent).not.toContain("NO_REPLY");
+  });
+
+  it("renders normal assistant stream text as a visible stream bubble", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(createProps({ stream: "Hello there", streamStartedAt: Date.now() })),
+      container,
+    );
+    expect(container.textContent).toContain("Hello there");
+  });
+
+  it('does not render stream segment text when segment contains "NO_REPLY"', () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({ streamSegments: [{ text: "NO_REPLY", ts: Date.now() }], stream: null }),
+      ),
+      container,
+    );
+    expect(container.textContent).not.toContain("NO_REPLY");
   });
 
   it("keeps consecutive user messages from different senders in separate groups", () => {

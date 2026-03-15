@@ -15,3 +15,9 @@ rules:
   # Disable artipacked (persist-credentials) - low confidence finding
   artipacked:
     disable: true
+
+  # auto-response uses pull_request_target for label-driven maintenance only;
+  # it does not check out or execute PR code.
+  dangerous-triggers:
+    ignore:
+      - auto-response.yml

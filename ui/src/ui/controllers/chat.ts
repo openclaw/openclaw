@@ -1,15 +1,16 @@
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+} from "../../../../src/auto-reply/tokens.js";
 import { resetToolStream } from "../app-tool-stream.ts";
-import { extractText } from "../chat/message-extract.ts";
+import { extractRawText, extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
+import { stripThinkingTags } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
-
-function isSilentReplyStream(text: string): boolean {
-  return SILENT_REPLY_PATTERN.test(text);
-}
 /** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
 function isAssistantSilentReply(message: unknown): boolean {
   if (!message || typeof message !== "object") {
@@ -22,10 +23,18 @@ function isAssistantSilentReply(message: unknown): boolean {
   }
   // entry.text takes precedence — matches gateway extractAssistantTextForSilentCheck
   if (typeof entry.text === "string") {
-    return isSilentReplyStream(entry.text);
+    const stripped = stripThinkingTags(entry.text);
+    return isSilentReplyText(stripped) || isSilentReplyText(stripped, HEARTBEAT_TOKEN);
   }
-  const text = extractText(message);
-  return typeof text === "string" && isSilentReplyStream(text);
+  // Use extractRawText (not extractText) so that message-extract's own control-token
+  // filtering does not mask the raw NO_REPLY/HEARTBEAT_OK value before we can detect it here.
+  // Strip thinking tags first so that e.g. <think>...</think>NO_REPLY is still detected.
+  const raw = extractRawText(message);
+  if (typeof raw !== "string") {
+    return false;
+  }
+  const stripped = stripThinkingTags(raw);
+  return isSilentReplyText(stripped) || isSilentReplyText(stripped, HEARTBEAT_TOKEN);
 }
 
 export type ChatState = {
@@ -284,7 +293,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 
   if (payload.state === "delta") {
     const next = extractText(payload.message);
-    if (typeof next === "string" && !isSilentReplyStream(next)) {
+    if (
+      typeof next === "string" &&
+      !isSilentReplyText(next) &&
+      !isSilentReplyPrefixText(next) &&
+      !isSilentReplyPrefixText(next, HEARTBEAT_TOKEN)
+    ) {
       const current = state.chatStream ?? "";
       if (!current || next.length >= current.length) {
         state.chatStream = next;
@@ -294,7 +308,13 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
-    } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
+    } else if (
+      state.chatStream?.trim() &&
+      !isSilentReplyText(state.chatStream) &&
+      !isSilentReplyText(state.chatStream, HEARTBEAT_TOKEN) &&
+      !isSilentReplyPrefixText(state.chatStream) &&
+      !isSilentReplyPrefixText(state.chatStream, HEARTBEAT_TOKEN)
+    ) {
       state.chatMessages = [
         ...state.chatMessages,
         {
@@ -313,7 +333,13 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
     } else {
       const streamedText = state.chatStream ?? "";
-      if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
+      if (
+        streamedText.trim() &&
+        !isSilentReplyText(streamedText) &&
+        !isSilentReplyText(streamedText, HEARTBEAT_TOKEN) &&
+        !isSilentReplyPrefixText(streamedText) &&
+        !isSilentReplyPrefixText(streamedText, HEARTBEAT_TOKEN)
+      ) {
         state.chatMessages = [
           ...state.chatMessages,
           {

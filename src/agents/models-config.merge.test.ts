@@ -9,10 +9,26 @@ import type { ProviderConfig } from "./models-config.providers.js";
 
 describe("models-config merge helpers", () => {
   const preservedApiKey = "AGENT_KEY"; // pragma: allowlist secret
+  const defaultProviderBaseUrl = "https://provider.example/v1";
 
+  function providerFixture(params: {
+    api?: ProviderConfig["api"];
+    apiKey?: ProviderConfig["apiKey"];
+    headers?: ProviderConfig["headers"];
+    models: ProviderConfig["models"];
+    baseUrl?: string;
+  }): ProviderConfig {
+    return {
+      baseUrl: params.baseUrl ?? defaultProviderBaseUrl,
+      ...(params.api === undefined ? {} : { api: params.api }),
+      ...(params.apiKey === undefined ? {} : { apiKey: params.apiKey }),
+      ...(params.headers === undefined ? {} : { headers: params.headers }),
+      models: params.models,
+    };
+  }
   it("refreshes implicit model metadata while preserving explicit reasoning overrides", () => {
     const merged = mergeProviderModels(
-      {
+      providerFixture({
         api: "openai-responses",
         models: [
           {
@@ -23,9 +39,9 @@ describe("models-config merge helpers", () => {
             contextWindow: 1_000_000,
             maxTokens: 100_000,
           },
-        ],
-      } as ProviderConfig,
-      {
+        ] as ProviderConfig["models"],
+      }),
+      providerFixture({
         api: "openai-responses",
         models: [
           {
@@ -36,8 +52,8 @@ describe("models-config merge helpers", () => {
             contextWindow: 2_000_000,
             maxTokens: 200_000,
           },
-        ],
-      } as ProviderConfig,
+        ] as ProviderConfig["models"],
+      }),
     );
 
     expect(merged.models).toEqual([
@@ -54,10 +70,10 @@ describe("models-config merge helpers", () => {
   it("merges explicit providers onto trimmed keys", () => {
     const merged = mergeProviders({
       explicit: {
-        " custom ": {
+        " custom ": providerFixture({
           api: "openai-responses",
           models: [] as ProviderConfig["models"],
-        } as ProviderConfig,
+        }),
       },
     });
 
@@ -105,16 +121,16 @@ describe("models-config merge helpers", () => {
   it("replaces stale baseUrl when model api surface changes", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
-        custom: {
+        custom: providerFixture({
           baseUrl: "https://config.example/v1",
-          models: [{ id: "model", api: "openai-responses" }],
-        } as ProviderConfig,
+          models: [{ id: "model", api: "openai-responses" }] as ProviderConfig["models"],
+        }),
       },
       existingProviders: {
         custom: {
           baseUrl: "https://agent.example/v1",
           apiKey: preservedApiKey,
-          models: [{ id: "model", api: "openai-completions" }],
+          models: [{ id: "model", api: "openai-completions" }] as ProviderConfig["models"],
         } as ExistingProviderConfig,
       },
       secretRefManagedProviders: new Set<string>(),
@@ -132,15 +148,16 @@ describe("models-config merge helpers", () => {
   it("does not preserve stale plaintext apiKey when next entry is a marker", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
-        custom: {
+        custom: providerFixture({
           apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
-          models: [{ id: "model", api: "openai-responses" }],
-        } as ProviderConfig,
+          models: [{ id: "model", api: "openai-responses" }] as ProviderConfig["models"],
+        }),
       },
       existingProviders: {
         custom: {
+          baseUrl: defaultProviderBaseUrl,
           apiKey: preservedApiKey,
-          models: [{ id: "model", api: "openai-responses" }],
+          models: [{ id: "model", api: "openai-responses" }] as ProviderConfig["models"],
         } as ExistingProviderConfig,
       },
       secretRefManagedProviders: new Set<string>(),
