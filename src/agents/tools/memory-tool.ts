@@ -11,6 +11,90 @@ import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
+/**
+ * Valid platform names for memory isolation.
+ * These are channel/provider identifiers that appear in session keys.
+ */
+const VALID_PLATFORMS = new Set([
+  "discord",
+  "telegram",
+  "whatsapp",
+  "signal",
+  "slack",
+  "msteams",
+  "webchat",
+  "line",
+  "kakaotalk",
+  "zalo",
+  "matrix",
+  "mattermost",
+  "irc",
+  "feishu",
+  "googlechat",
+  "nextcloud-talk",
+  "nostr",
+  "synology-chat",
+  "tlon",
+  "twitch",
+  "imessage",
+]);
+
+/**
+ * Extract platform name from session key.
+ * Returns the first token in the rest portion if it's a valid platform name.
+ */
+function extractPlatformFromSessionKey(sessionKey: string | undefined | null): string | null {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed?.rest) {
+    return null;
+  }
+  const tokens = parsed.rest.split(":").filter(Boolean);
+  const firstToken = tokens[0];
+  if (!firstToken) {
+    return null;
+  }
+  // Check if first token is a valid platform (with or without -dev suffix)
+  const baseName = firstToken.replace(/-dev$/, "");
+  if (VALID_PLATFORMS.has(baseName)) {
+    return firstToken;
+  }
+  return null;
+}
+
+/**
+ * Add platform prefix to sender ID for memory isolation.
+ * Format: platform:senderId (e.g., "discord:409240289384071168")
+ * Returns undefined if senderId is empty.
+ * Returns senderId as-is if already prefixed with a valid platform.
+ */
+function addPlatformPrefixToSenderId(params: {
+  senderId: string | undefined | null;
+  sessionKey: string | undefined | null;
+}): string | undefined {
+  const { senderId, sessionKey } = params;
+  if (!senderId) {
+    return undefined;
+  }
+  // Check if already prefixed
+  const prefixMatch = senderId.match(/^([a-z0-9-]+):(.+)$/i);
+  if (prefixMatch) {
+    const [, prefix, id] = prefixMatch;
+    const baseName = prefix.replace(/-dev$/, "");
+    if (VALID_PLATFORMS.has(baseName.toLowerCase())) {
+      // Already has valid platform prefix
+      return senderId;
+    }
+    // Prefix exists but not a valid platform - continue to add prefix
+    return id ? `${prefix.toLowerCase()}:${id}` : senderId;
+  }
+  // Extract platform from session key
+  const platform = extractPlatformFromSessionKey(sessionKey);
+  if (platform) {
+    return `${platform}:${senderId}`;
+  }
+  return senderId;
+}
+
 const MemorySearchSchema = Type.Object({
   query: Type.String(),
   maxResults: Type.Optional(Type.Number()),
@@ -42,8 +126,13 @@ function resolveMemoryToolContext(options: {
   // Extract userId for memory isolation (direct message sessions)
   // Fall back to senderId from inbound context for channel/group sessions
   const sessionUserId = extractUserIdFromSessionKey(options.agentSessionKey);
-  const userId = sessionUserId ?? options.senderId;
-  return { cfg, agentId, userId: userId ?? undefined };
+  const rawUserId = sessionUserId ?? options.senderId;
+  // Add platform prefix for user isolation across platforms
+  const userId = addPlatformPrefixToSenderId({
+    senderId: rawUserId,
+    sessionKey: options.agentSessionKey,
+  });
+  return { cfg, agentId, userId };
 }
 
 async function getMemoryManagerContext(params: {
