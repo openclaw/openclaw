@@ -1,17 +1,27 @@
+import type {
+  ChannelOnboardingAdapter,
+  ChannelOnboardingDmPolicy,
+} from "../../../src/channels/plugins/onboarding-types.js";
+import {
+  parseOnboardingEntriesAllowingWildcard,
+  patchChannelConfigForAccount,
+  promptParsedAllowFromForScopedChannel,
+  resolveAccountIdForConfigure,
+  setChannelDmPolicyWithAllowFrom,
+  setOnboardingChannelEnabled,
+} from "../../../src/channels/plugins/onboarding/helpers.js";
+import { formatCliCommand } from "../../../src/cli/command-format.js";
+import { detectBinary } from "../../../src/commands/onboard-helpers.js";
+import { installSignalCli } from "../../../src/commands/signal-install.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { formatDocsLink } from "../../../src/terminal/links.js";
+import { normalizeE164 } from "../../../src/utils.js";
+import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
-} from "../../../../extensions/signal/src/accounts.js";
-import { formatCliCommand } from "../../../cli/command-format.js";
-import { detectBinary } from "../../../commands/onboard-helpers.js";
-import { installSignalCli } from "../../../commands/signal-install.js";
-import type { OpenClawConfig } from "../../../config/config.js";
-import { formatDocsLink } from "../../../terminal/links.js";
-import { normalizeE164 } from "../../../utils.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
-import * as onboardingHelpers from "./helpers.js";
+} from "./accounts.js";
 
 const channel = "signal" as const;
 const MIN_E164_DIGITS = 5;
@@ -41,7 +51,7 @@ function isUuidLike(value: string): boolean {
 }
 
 export function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: string } {
-  return onboardingHelpers.parseOnboardingEntriesAllowingWildcard(raw, (entry) => {
+  return parseOnboardingEntriesAllowingWildcard(raw, (entry) => {
     if (entry.toLowerCase().startsWith("uuid:")) {
       const id = entry.slice("uuid:".length).trim();
       if (!id) {
@@ -65,7 +75,7 @@ async function promptSignalAllowFrom(params: {
   prompter: WizardPrompter;
   accountId?: string;
 }): Promise<OpenClawConfig> {
-  return onboardingHelpers.promptParsedAllowFromForScopedChannel({
+  return promptParsedAllowFromForScopedChannel({
     cfg: params.cfg,
     channel: "signal",
     accountId: params.accountId,
@@ -97,7 +107,7 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   allowFromKey: "channels.signal.allowFrom",
   getCurrent: (cfg) => cfg.channels?.signal?.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy) =>
-    onboardingHelpers.setChannelDmPolicyWithAllowFrom({
+    setChannelDmPolicyWithAllowFrom({
       cfg,
       channel: "signal",
       dmPolicy: policy,
@@ -133,7 +143,7 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
     options,
   }) => {
     const defaultSignalAccountId = resolveDefaultSignalAccountId(cfg);
-    const signalAccountId = await onboardingHelpers.resolveAccountIdForConfigure({
+    const signalAccountId = await resolveAccountIdForConfigure({
       cfg,
       prompter,
       label: "Signal",
@@ -216,7 +226,7 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
     }
 
     if (account) {
-      next = onboardingHelpers.patchChannelConfigForAccount({
+      next = patchChannelConfigForAccount({
         cfg: next,
         channel: "signal",
         accountId: signalAccountId,
@@ -240,5 +250,5 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
     return { cfg: next, accountId: signalAccountId };
   },
   dmPolicy,
-  disable: (cfg) => onboardingHelpers.setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
 };

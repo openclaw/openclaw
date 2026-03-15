@@ -1,14 +1,7 @@
-import {
-  listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
-} from "../../../../extensions/imessage/src/accounts.js";
-import { normalizeIMessageHandle } from "../../../../extensions/imessage/src/targets.js";
-import { detectBinary } from "../../../commands/onboard-helpers.js";
-import type { OpenClawConfig } from "../../../config/config.js";
-import { formatDocsLink } from "../../../terminal/links.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
+import type {
+  ChannelOnboardingAdapter,
+  ChannelOnboardingDmPolicy,
+} from "../../../src/channels/plugins/onboarding-types.js";
 import {
   parseOnboardingEntriesAllowingWildcard,
   patchChannelConfigForAccount,
@@ -16,7 +9,17 @@ import {
   resolveAccountIdForConfigure,
   setChannelDmPolicyWithAllowFrom,
   setOnboardingChannelEnabled,
-} from "./helpers.js";
+} from "../../../src/channels/plugins/onboarding/helpers.js";
+import { detectBinary } from "../../../src/commands/onboard-helpers.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { formatDocsLink } from "../../../src/terminal/links.js";
+import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+import {
+  listIMessageAccountIds,
+  resolveDefaultIMessageAccountId,
+  resolveIMessageAccount,
+} from "./accounts.js";
+import { normalizeIMessageHandle } from "./targets.js";
 
 const channel = "imessage" as const;
 

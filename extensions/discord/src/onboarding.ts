@@ -5,9 +5,9 @@ import type {
 import { configureChannelAccessWithAllowlist } from "../../../src/channels/plugins/onboarding/channel-access-configure.js";
 import {
   applySingleTokenPromptResult,
-  parseMentionOrPrefixedId,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
+  parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   promptLegacyChannelAllowFrom,
   resolveAccountIdForConfigure,

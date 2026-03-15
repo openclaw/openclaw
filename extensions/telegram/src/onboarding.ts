@@ -5,8 +5,8 @@ import type {
 import {
   applySingleTokenPromptResult,
   patchChannelConfigForAccount,
-  promptSingleChannelSecretInput,
   promptResolvedAllowFrom,
+  promptSingleChannelSecretInput,
   resolveAccountIdForConfigure,
   resolveOnboardingAccountId,
   setChannelDmPolicyWithAllowFrom,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseIMessageAllowFromEntries } from "./imessage.js";
+import { parseIMessageAllowFromEntries } from "../../../../extensions/imessage/src/onboarding.js";
 
 describe("parseIMessageAllowFromEntries", () => {
   it("parses handles and chat targets", () => {
