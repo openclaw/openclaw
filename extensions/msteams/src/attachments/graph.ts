@@ -102,10 +102,32 @@ export function buildMSTeamsGraphMessageUrls(params: {
         `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(candidate)}`,
       );
     }
+    // Fallback: Teams channel thread IDs (19:...@thread.tacv2) are rejected by
+    // /teams/{guid}/channels/ but accepted by /chats/{threadId}/messages/.
+    // Add /chats/ URLs so we succeed even when teamId is not a GUID.
+    const convIdFallback = params.conversationId?.trim();
+    if (convIdFallback) {
+      if (replyToId) {
+        for (const candidate of messageIdCandidates) {
+          if (candidate !== replyToId) {
+            urls.push(
+              `${GRAPH_ROOT}/chats/${encodeURIComponent(convIdFallback)}/messages/${encodeURIComponent(replyToId)}/replies/${encodeURIComponent(candidate)}`,
+            );
+          }
+        }
+      }
+      for (const candidate of messageIdCandidates) {
+        urls.push(
+          `${GRAPH_ROOT}/chats/${encodeURIComponent(convIdFallback)}/messages/${encodeURIComponent(candidate)}`,
+        );
+      }
+    }
     return Array.from(new Set(urls));
   }
 
-  const chatId = params.conversationId?.trim() || readNestedString(params.channelData, ["chatId"]);
+  // For DM/group chats, prefer channelData.chatId (proper chat GUID) over
+  // conversationId which may be a Bot Framework conversation ID.
+  const chatId = readNestedString(params.channelData, ["chatId"]) || params.conversationId?.trim();
   if (!chatId) {
     return [];
   }
@@ -193,28 +215,60 @@ async function downloadGraphHostedContent(params: {
 
   const out: MSTeamsInboundMedia[] = [];
   for (const item of hosted.items) {
+    let buffer: Buffer | undefined;
+    let itemContentType = item.contentType ?? undefined;
     const contentBytes = typeof item.contentBytes === "string" ? item.contentBytes : "";
-    if (!contentBytes) {
+    if (contentBytes) {
+      try {
+        buffer = Buffer.from(contentBytes, "base64");
+      } catch {
+        continue;
+      }
+    } else if (item.id) {
+      // Graph API does not inline contentBytes in the collection response.
+      // Fetch the actual bytes via the /$value endpoint instead.
+      const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(item.id)}/$value`;
+      const fetchFn = params.fetchFn ?? fetch;
+      let valRelease: (() => Promise<void>) | undefined;
+      try {
+        const { response: valResp, release } = await fetchWithSsrFGuard({
+          url: valueUrl,
+          fetchImpl: fetchFn,
+          init: { headers: { Authorization: `Bearer ${params.accessToken}` } },
+          policy: params.ssrfPolicy,
+          auditContext: "msteams.graph.hostedcontent.value",
+        });
+        valRelease = release;
+        if (!valResp.ok) {
+          continue;
+        }
+        const ct = normalizeContentType(valResp.headers.get("content-type"));
+        if (ct) itemContentType = ct;
+        const contentLength = Number(valResp.headers.get("content-length") ?? "0");
+        if (contentLength > 0 && contentLength > params.maxBytes) {
+          continue;
+        }
+        buffer = Buffer.from(await valResp.arrayBuffer());
+      } catch {
+        continue;
+      } finally {
+        await valRelease?.();
+      }
+    } else {
       continue;
     }
-    let buffer: Buffer;
-    try {
-      buffer = Buffer.from(contentBytes, "base64");
-    } catch {
-      continue;
-    }
-    if (buffer.byteLength > params.maxBytes) {
+    if (!buffer || buffer.byteLength > params.maxBytes) {
       continue;
     }
     const mime = await getMSTeamsRuntime().media.detectMime({
       buffer,
-      headerMime: item.contentType ?? undefined,
+      headerMime: itemContentType,
     });
     // Download any file type, not just images
     try {
       const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
         buffer,
-        mime ?? item.contentType ?? undefined,
+        mime ?? itemContentType,
         "inbound",
         params.maxBytes,
       );
@@ -240,6 +294,8 @@ export async function downloadMSTeamsGraphMedia(params: {
   fetchFn?: typeof fetch;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
+  /** Tenant ID from the conversation (may differ from the configured bot tenant). */
+  conversationTenantId?: string;
 }): Promise<MSTeamsGraphMediaResult> {
   if (!params.messageUrl || !params.tokenProvider) {
     return { media: [] };
@@ -252,7 +308,29 @@ export async function downloadMSTeamsGraphMedia(params: {
   const messageUrl = params.messageUrl;
   let accessToken: string;
   try {
-    accessToken = await params.tokenProvider.getAccessToken("https://graph.microsoft.com");
+    const provider = params.tokenProvider as unknown as {
+      connectionSettings?: { clientId?: string; clientSecret?: string; tenantId?: string };
+      getAccessToken(authConfig: Record<string, unknown>, scope: string): Promise<string>;
+      getAccessToken(scope: string): Promise<string>;
+    };
+    const conversationTenantId = params.conversationTenantId;
+    if (
+      conversationTenantId &&
+      provider.connectionSettings?.clientId &&
+      provider.connectionSettings?.clientSecret &&
+      conversationTenantId !== provider.connectionSettings.tenantId
+    ) {
+      accessToken = await provider.getAccessToken(
+        {
+          clientId: provider.connectionSettings.clientId,
+          clientSecret: provider.connectionSettings.clientSecret,
+          tenantId: conversationTenantId,
+        },
+        "https://graph.microsoft.com",
+      );
+    } else {
+      accessToken = await params.tokenProvider.getAccessToken("https://graph.microsoft.com");
+    }
   } catch {
     return { media: [], messageUrl, tokenError: true };
   }

@@ -50,7 +50,7 @@ export const DEFAULT_MEDIA_HOST_ALLOWLIST = [
   "ams.skype.com",
   "media.ams.skype.com",
   // Bot Framework attachment URLs
-  "trafficmanager.net",
+  "smba.trafficmanager.net",
   "blob.core.windows.net",
   "azureedge.net",
   "microsoft.com",
@@ -63,6 +63,8 @@ export const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   "graph.microsoft.us",
   "graph.microsoft.de",
   "graph.microsoft.cn",
+  // Bot Framework attachment service (smba.trafficmanager.net) used for DM images
+  "smba.trafficmanager.net",
 ] as const;
 
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";

@@ -49,6 +49,22 @@ async function expectSafeFetchStatus(params: {
 }
 
 describe("msteams attachment allowlists", () => {
+  it("limits default traffic manager allowlists to the SMBA host", () => {
+    const allowHosts = resolveAllowedHosts();
+    const authAllowHosts = resolveAuthAllowedHosts();
+
+    expect(isUrlAllowed("https://smba.trafficmanager.net/attachments/file", allowHosts)).toBe(true);
+    expect(isUrlAllowed("https://evil.trafficmanager.net/attachments/file", allowHosts)).toBe(
+      false,
+    );
+    expect(isUrlAllowed("https://smba.trafficmanager.net/attachments/file", authAllowHosts)).toBe(
+      true,
+    );
+    expect(isUrlAllowed("https://evil.trafficmanager.net/attachments/file", authAllowHosts)).toBe(
+      false,
+    );
+  });
+
   it("normalizes wildcard host lists", () => {
     expect(resolveAllowedHosts(["*", "graph.microsoft.com"])).toEqual(["*"]);
     expect(resolveAuthAllowedHosts(["*", "graph.microsoft.com"])).toEqual(["*"]);

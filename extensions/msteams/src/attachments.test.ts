@@ -860,6 +860,96 @@ describe("msteams attachments", () => {
   describe("downloadMSTeamsGraphMedia", () => {
     it.each<GraphMediaSuccessCase>(GRAPH_MEDIA_SUCCESS_CASES)("$label", runGraphMediaSuccessCase);
 
+    it("skips hosted /$value payloads whose content-length exceeds maxBytes", async () => {
+      const oversizedLength = String(DEFAULT_MAX_BYTES + 1);
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === `${DEFAULT_MESSAGE_URL}/hostedContents`) {
+          return createGraphCollectionResponse([
+            { id: "hosted-oversized", contentType: "image/png" },
+          ]);
+        }
+        if (url === `${DEFAULT_MESSAGE_URL}/hostedContents/hosted-oversized/$value`) {
+          return new Response(new Uint8Array(PNG_BUFFER), {
+            status: 200,
+            headers: {
+              "content-type": CONTENT_TYPE_IMAGE_PNG,
+              "content-length": oversizedLength,
+            },
+          });
+        }
+        if (url === `${DEFAULT_MESSAGE_URL}/attachments`) {
+          return createGraphCollectionResponse([]);
+        }
+        if (url === DEFAULT_MESSAGE_URL) {
+          return createJsonResponse({ attachments: [] });
+        }
+        return createNotFoundResponse();
+      });
+
+      const media = await downloadMSTeamsGraphMedia({
+        messageUrl: DEFAULT_MESSAGE_URL,
+        tokenProvider: createTokenProvider(),
+        maxBytes: DEFAULT_MAX_BYTES,
+        fetchFn: asFetchFn(fetchMock),
+      });
+
+      expectAttachmentMediaLength(media.media, 0);
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${DEFAULT_MESSAGE_URL}/hostedContents/hosted-oversized/$value`,
+        expect.any(Object),
+      );
+      expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    });
+
+    it("uses conversation tenant credentials when conversationTenantId differs", async () => {
+      const getAccessToken = vi.fn(async (...args: unknown[]) => {
+        if (args.length === 2) {
+          return "tenant-token";
+        }
+        return "default-token";
+      });
+      const tokenProvider = {
+        connectionSettings: {
+          clientId: "client-id",
+          clientSecret: "client-secret",
+          tenantId: "bot-tenant",
+        },
+        getAccessToken,
+      } as unknown as MSTeamsAccessTokenProvider;
+
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === `${DEFAULT_MESSAGE_URL}/hostedContents`) {
+          return createGraphCollectionResponse([]);
+        }
+        if (url === `${DEFAULT_MESSAGE_URL}/attachments`) {
+          return createGraphCollectionResponse([]);
+        }
+        if (url === DEFAULT_MESSAGE_URL) {
+          return createJsonResponse({ attachments: [] });
+        }
+        return createNotFoundResponse();
+      });
+
+      await downloadMSTeamsGraphMedia({
+        messageUrl: DEFAULT_MESSAGE_URL,
+        tokenProvider,
+        maxBytes: DEFAULT_MAX_BYTES,
+        conversationTenantId: "conversation-tenant",
+        fetchFn: asFetchFn(fetchMock),
+      });
+
+      expect(getAccessToken).toHaveBeenCalledWith(
+        {
+          clientId: "client-id",
+          clientSecret: "client-secret",
+          tenantId: "conversation-tenant",
+        },
+        "https://graph.microsoft.com",
+      );
+    });
+
     it("does not forward Authorization for SharePoint redirects outside auth allowlist", async () => {
       const tokenProvider = createTokenProvider("top-secret-token");
       const escapedUrl = "https://example.com/collect";
