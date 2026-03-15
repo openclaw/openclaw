@@ -383,6 +383,20 @@ function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): bool
       return true;
     }
   }
+  // Also check channels.* for extension-based channels (e.g. feishu)
+  // that are not in the built-in registry but configured under channels.*
+  if (!builtInChannelId) {
+    const channels = cfg.channels as Record<string, unknown> | undefined;
+    const channelConfig = channels?.[pluginId];
+    if (
+      channelConfig &&
+      typeof channelConfig === "object" &&
+      !Array.isArray(channelConfig) &&
+      (channelConfig as { enabled?: unknown }).enabled === false
+    ) {
+      return true;
+    }
+  }
   const entry = cfg.plugins?.entries?.[pluginId];
   return entry?.enabled === false;
 }
@@ -440,6 +454,28 @@ function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawCon
         ...cfg.channels,
         [builtInChannelId]: {
           ...existingRecord,
+          enabled: true,
+        },
+      },
+    };
+  }
+  // Extension-based channels (e.g. feishu) are not in the built-in registry
+  // but may still be configured under channels.*. When that is the case,
+  // enable the channel there instead of creating a plugins.entries record
+  // which would cause a duplicate plugin id conflict with the bundled extension.
+  const channelsRaw = cfg.channels as Record<string, unknown> | undefined;
+  const existingChannelCfg = channelsRaw?.[pluginId];
+  if (
+    existingChannelCfg &&
+    typeof existingChannelCfg === "object" &&
+    !Array.isArray(existingChannelCfg)
+  ) {
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        [pluginId]: {
+          ...(existingChannelCfg as Record<string, unknown>),
           enabled: true,
         },
       },
@@ -521,7 +557,24 @@ export function applyPluginAutoEnable(params: {
             }
             return (channelConfig as { enabled?: unknown }).enabled === true;
           })()
-        : next.plugins?.entries?.[entry.pluginId]?.enabled === true;
+        : (() => {
+            // Check plugins.entries first
+            if (next.plugins?.entries?.[entry.pluginId]?.enabled === true) {
+              return true;
+            }
+            // Also check channels.* for extension-based channels (e.g. feishu)
+            // that are not in the built-in registry but configured under channels.*
+            const channels = next.channels as Record<string, unknown> | undefined;
+            const channelConfig = channels?.[entry.pluginId];
+            if (
+              channelConfig &&
+              typeof channelConfig === "object" &&
+              !Array.isArray(channelConfig)
+            ) {
+              return (channelConfig as { enabled?: unknown }).enabled === true;
+            }
+            return false;
+          })();
     if (alreadyEnabled && !allowMissing) {
       continue;
     }
