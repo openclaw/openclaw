@@ -27,8 +27,10 @@ import {
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  createOpenAITextVerbosityWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
+  resolveOpenAITextVerbosity,
 } from "./openai-stream-wrappers.js";
 import {
   createKilocodeWrapper,
@@ -70,6 +72,16 @@ export function resolveExtraParams(params: {
   if (resolvedParallelToolCalls !== undefined) {
     merged.parallel_tool_calls = resolvedParallelToolCalls;
     delete merged.parallelToolCalls;
+  }
+
+  const resolvedTextVerbosity = resolveAliasedParamValue(
+    [globalParams, agentParams],
+    "text_verbosity",
+    "textVerbosity",
+  );
+  if (resolvedTextVerbosity !== undefined) {
+    merged.text_verbosity = resolvedTextVerbosity;
+    delete merged.textVerbosity;
   }
 
   return merged;
@@ -457,6 +469,27 @@ export function applyExtraParamsToAgent(
   if (openAIServiceTier) {
     log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
     agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
+  }
+
+  const rawTextVerbosity = resolveAliasedParamValue(
+    [resolvedExtraParams, override],
+    "text_verbosity",
+    "textVerbosity",
+  );
+  if (rawTextVerbosity !== undefined) {
+    if (rawTextVerbosity === null) {
+      log.debug("text verbosity suppressed by null override, skipping injection");
+    } else {
+      const openAITextVerbosity = resolveOpenAITextVerbosity({
+        text_verbosity: rawTextVerbosity,
+      });
+      if (openAITextVerbosity) {
+        log.debug(
+          `applying OpenAI text verbosity=${openAITextVerbosity} for ${provider}/${modelId}`,
+        );
+        agent.streamFn = createOpenAITextVerbosityWrapper(agent.streamFn, openAITextVerbosity);
+      }
+    }
   }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
