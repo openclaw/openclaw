@@ -34,6 +34,49 @@ import type {
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o644;
 
+/**
+ * After `launchctl kickstart -k`, an unmanaged openclaw process may still
+ * hold the gateway port.  Send SIGTERM to any stale listeners so the freshly
+ * restarted service can bind.  Reads the port from the LaunchAgent plist to
+ * support custom --port installations.
+ */
+async function killStalePortListeners(env: GatewayServiceEnv): Promise<void> {
+  const command = await readLaunchAgentProgramArguments(env).catch(() => null);
+  const fromArgs = parseGatewayPortFromProgramArguments(command?.programArguments);
+  const port = fromArgs ?? parseStrictPositiveInteger(env.OPENCLAW_GATEWAY_PORT ?? "");
+  if (port != null) {
+    cleanStaleGatewayProcessesSync(port);
+  }
+}
+
+function parseGatewayPortFromProgramArguments(
+  programArguments: string[] | undefined,
+): number | null {
+  if (!Array.isArray(programArguments) || programArguments.length === 0) {
+    return null;
+  }
+  for (let index = 0; index < programArguments.length; index += 1) {
+    const current = programArguments[index]?.trim();
+    if (!current) {
+      continue;
+    }
+    if (current === "--port") {
+      const next = parseStrictPositiveInteger(programArguments[index + 1] ?? "");
+      if (next !== undefined) {
+        return next;
+      }
+      continue;
+    }
+    if (current.startsWith("--port=")) {
+      const value = parseStrictPositiveInteger(current.slice("--port=".length));
+      if (value !== undefined) {
+        return value;
+      }
+    }
+  }
+  return null;
+}
+
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (envLabel) {
@@ -112,44 +155,6 @@ async function execLaunchctl(
   const file = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
   return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
-}
-
-function parseGatewayPortFromProgramArguments(
-  programArguments: string[] | undefined,
-): number | null {
-  if (!Array.isArray(programArguments) || programArguments.length === 0) {
-    return null;
-  }
-  for (let index = 0; index < programArguments.length; index += 1) {
-    const current = programArguments[index]?.trim();
-    if (!current) {
-      continue;
-    }
-    if (current === "--port") {
-      const next = parseStrictPositiveInteger(programArguments[index + 1] ?? "");
-      if (next !== undefined) {
-        return next;
-      }
-      continue;
-    }
-    if (current.startsWith("--port=")) {
-      const value = parseStrictPositiveInteger(current.slice("--port=".length));
-      if (value !== undefined) {
-        return value;
-      }
-    }
-  }
-  return null;
-}
-
-async function resolveLaunchAgentGatewayPort(env: GatewayServiceEnv): Promise<number | null> {
-  const command = await readLaunchAgentProgramArguments(env).catch(() => null);
-  const fromArgs = parseGatewayPortFromProgramArguments(command?.programArguments);
-  if (fromArgs !== null) {
-    return fromArgs;
-  }
-  const fromEnv = parseStrictPositiveInteger(env.OPENCLAW_GATEWAY_PORT ?? "");
-  return fromEnv ?? null;
 }
 
 function resolveGuiDomain(): string {
@@ -553,10 +558,9 @@ export async function restartLaunchAgent({
     return { outcome: "scheduled" };
   }
 
-  const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
-  if (cleanupPort !== null) {
-    cleanStaleGatewayProcessesSync(cleanupPort);
-  }
+  // Clean stale port listeners BEFORE kickstart to avoid killing the freshly
+  // restarted managed gateway process.
+  await killStalePortListeners(serviceEnv);
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
