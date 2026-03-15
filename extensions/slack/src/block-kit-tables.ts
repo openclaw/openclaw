@@ -18,11 +18,7 @@ export type SlackTableBlock = {
  * @see https://docs.slack.dev/reference/block-kit/blocks/table-block/
  */
 export function markdownTableToBlockKit(table: MarkdownTableData): SlackTableBlock {
-  const columnCount = Math.max(
-    table.headers.length,
-    ...table.rows.map((row) => row.length),
-    0,
-  );
+  const columnCount = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 0);
 
   if (columnCount === 0) {
     return { type: "table", column_settings: [], rows: [] };
@@ -40,10 +36,7 @@ export function markdownTableToBlockKit(table: MarkdownTableData): SlackTableBlo
 
   // Only include a header row if there are actual headers with content.
   const hasHeaders = table.headers.some((h) => h.length > 0);
-  const rows = [
-    ...(hasHeaders ? [makeRow(table.headers)] : []),
-    ...table.rows.map(makeRow),
-  ];
+  const rows = [...(hasHeaders ? [makeRow(table.headers)] : []), ...table.rows.map(makeRow)];
 
   return { type: "table", column_settings, rows };
 }
