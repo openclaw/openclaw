@@ -7,6 +7,29 @@ import {
   runOpenAIOAuthTlsPreflight,
 } from "./oauth-tls-preflight.js";
 
+const OPENAI_PROFILE_CLAIM_PATH = "https://api.openai.com/profile";
+
+function extractEmailFromAccessToken(token: string | undefined): string | undefined {
+  if (typeof token !== "string" || !token.trim()) {
+    return undefined;
+  }
+
+  try {
+    const [, payload] = token.split(".", 3);
+    if (!payload) {
+      return undefined;
+    }
+    const decoded = Buffer.from(payload, "base64url").toString("utf8");
+    const parsed = JSON.parse(decoded) as {
+      [OPENAI_PROFILE_CLAIM_PATH]?: { email?: string };
+    };
+    const email = parsed?.[OPENAI_PROFILE_CLAIM_PATH]?.email?.trim();
+    return email || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function loginOpenAICodexOAuth(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -55,7 +78,19 @@ export async function loginOpenAICodexOAuth(params: {
       onProgress: (msg: string) => spin.update(msg),
     });
     spin.stop("OpenAI OAuth complete");
-    return creds ?? null;
+    if (!creds) {
+      return null;
+    }
+    return {
+      ...creds,
+      ...(typeof creds.email === "string" && creds.email.trim()
+        ? {}
+        : {
+            email: extractEmailFromAccessToken(
+              typeof creds.access === "string" ? creds.access : undefined,
+            ),
+          }),
+    };
   } catch (err) {
     spin.stop("OpenAI OAuth failed");
     runtime.error(String(err));
