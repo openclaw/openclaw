@@ -58,4 +58,21 @@ describe("dropThinkingBlocks", () => {
     const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
     expect(assistant.content).toEqual([{ type: "text", text: "" }]);
   });
+
+  it("drops redacted_thinking blocks", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", data: "opaque-encrypted" },
+          { type: "text", text: "visible" },
+        ],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(result).not.toBe(messages);
+    expect(assistant.content).toEqual([{ type: "text", text: "visible" }]);
+  });
 });

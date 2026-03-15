@@ -13,7 +13,8 @@ export function isAssistantMessageWithContent(message: AgentMessage): message is
 }
 
 /**
- * Strip all `type: "thinking"` content blocks from assistant messages.
+ * Strip all `type: "thinking"` and `type: "redacted_thinking"` content blocks
+ * from assistant messages.
  *
  * If an assistant message becomes empty after stripping, it is replaced with
  * a synthetic `{ type: "text", text: "" }` block to preserve turn structure
@@ -33,7 +34,12 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
     const nextContent: AssistantContentBlock[] = [];
     let changed = false;
     for (const block of msg.content) {
-      if (block && typeof block === "object" && (block as { type?: unknown }).type === "thinking") {
+      if (
+        block &&
+        typeof block === "object" &&
+        ((block as { type?: unknown }).type === "thinking" ||
+          (block as { type?: unknown }).type === "redacted_thinking")
+      ) {
         touched = true;
         changed = true;
         continue;
