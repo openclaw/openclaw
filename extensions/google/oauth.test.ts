@@ -444,4 +444,41 @@ describe("loginGeminiCliOAuth", () => {
     expect(requests.filter((url) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
     expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);
   });
+
+  it("uses trusted_env_proxy when hasProxyEnvConfigured is true", async () => {
+    mockFetchWithSsrFGuard.mockClear();
+    mockHasProxyEnvConfigured.mockReturnValue(true);
+    process.env.GOOGLE_CLOUD_PROJECT = "env-project";
+
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = getRequestUrl(input);
+      if (url === TOKEN_URL) {
+        return responseJson({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url === USERINFO_URL) {
+        return responseJson({ email: "lobster@openclaw.ai" });
+      }
+      if ([LOAD_PROD, LOAD_DAILY, LOAD_AUTOPUSH].includes(url)) {
+        return responseJson({ error: { message: "unavailable" } }, 503);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const { loginGeminiCliOAuth } = await import("./oauth.js");
+      await runRemoteLoginExpectingProjectId(loginGeminiCliOAuth, "env-project");
+
+      expect(mockFetchWithSsrFGuard).toHaveBeenCalled();
+      const tokenCall = mockFetchWithSsrFGuard.mock.calls.find((call) => call[0].url === TOKEN_URL);
+      expect(tokenCall).toBeDefined();
+      expect(tokenCall![0].mode).toBe("trusted_env_proxy");
+    } finally {
+      mockHasProxyEnvConfigured.mockReturnValue(false);
+    }
+  });
 });

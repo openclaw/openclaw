@@ -40,6 +40,7 @@ import {
 import { createConnectedChannelStatusPatch } from "../../../../src/gateway/channel-status-patches.js";
 import { danger, isVerbose, logVerbose, shouldLogVerbose, warn } from "../../../../src/globals.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { resolveEnvHttpProxyUrl } from "../../../../src/infra/net/proxy-env.js";
 import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
 import { getPluginCommandSpecs } from "../../../../src/plugins/commands.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../../../src/runtime.js";
@@ -436,7 +437,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const discordRootThreadBindings = cfg.channels?.discord?.threadBindings;
   const discordAccountThreadBindings =
     cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
-  const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
+  const resolvedProxy = rawDiscordCfg.proxy?.trim() || resolveEnvHttpProxyUrl("https");
+  const discordRestFetch = resolveDiscordRestFetch(resolvedProxy, runtime);
   const dmConfig = rawDiscordCfg.dm;
   let guildEntries = rawDiscordCfg.guilds;
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
