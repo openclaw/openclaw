@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {
   discoverHuggingfaceModels,
@@ -27,6 +28,20 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const log = createSubsystemLogger("agents/model-providers");
+
+function assertBaseUrlNotBlocked(baseUrl: string): void {
+  try {
+    const parsed = new URL(baseUrl);
+    if (isBlockedHostnameOrIp(parsed.hostname)) {
+      throw new Error(`Model provider baseUrl targets a blocked host: ${parsed.hostname}`);
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("blocked host")) {
+      throw err;
+    }
+    // If URL parsing fails, let the fetch() call handle it
+  }
+}
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_SHOW_MAX_MODELS = 200;
@@ -59,6 +74,7 @@ async function discoverOllamaModels(
   }
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
+    assertBaseUrlNotBlocked(apiBase);
     const response = await fetch(`${apiBase}/api/tags`, {
       signal: AbortSignal.timeout(5000),
     });
@@ -114,6 +130,7 @@ async function discoverOpenAICompatibleLocalModels(params: {
   const url = `${trimmedBaseUrl}/models`;
 
   try {
+    assertBaseUrlNotBlocked(trimmedBaseUrl);
     const trimmedApiKey = params.apiKey?.trim();
     const response = await fetch(url, {
       headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,

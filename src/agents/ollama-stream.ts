@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
@@ -435,6 +436,16 @@ export function createOllamaStreamFn(
   defaultHeaders?: Record<string, string>,
 ): StreamFn {
   const chatUrl = resolveOllamaChatUrl(baseUrl);
+  try {
+    const parsed = new URL(chatUrl);
+    if (isBlockedHostnameOrIp(parsed.hostname)) {
+      throw new Error(`Ollama baseUrl targets a blocked host: ${parsed.hostname}`);
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("blocked host")) {
+      throw err;
+    }
+  }
 
   return (model, context, options) => {
     const stream = createAssistantMessageEventStream();
