@@ -132,13 +132,15 @@ function resolveLineAccountConfig(
   return matchKey ? accounts?.[matchKey] : undefined;
 }
 
-function mergeLineAccountConfig(cfg: OpenClawConfig, accountId: string): LineMergedConfig {
+function mergeResolvedLineAccountConfig(
+  cfg: OpenClawConfig,
+  accountConfig?: LineAccountConfig,
+): LineMergedConfig {
   const {
     accounts: _ignoredAccounts,
     defaultAccount: _ignoredDefaultAccount,
     ...lineBase
   } = (resolveLineConfig(cfg) ?? {}) as LineConfigWithMeta;
-  const accountConfig = resolveLineAccountConfig(cfg, accountId) ?? {};
   return { ...lineBase, ...accountConfig };
 }
 
@@ -151,7 +153,7 @@ function hasLineCredentials(
 function resolveLineAccountStrict(cfg: OpenClawConfig, accountId: string): ResolvedLineAccount {
   const lineConfig = resolveLineConfig(cfg);
   const accountConfig = resolveLineAccountConfig(cfg, accountId);
-  const mergedConfig = mergeLineAccountConfig(cfg, accountId);
+  const mergedConfig = mergeResolvedLineAccountConfig(cfg, accountConfig);
 
   const { token, tokenSource } = resolveToken({
     accountId,
@@ -168,7 +170,9 @@ function resolveLineAccountStrict(cfg: OpenClawConfig, accountId: string): Resol
   const baseEnabled = lineConfig?.enabled !== false;
   const accountEnabled = mergedConfig.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const name = mergedConfig.name?.trim() || undefined;
+  const name =
+    accountConfig?.name?.trim() ||
+    (accountId === DEFAULT_ACCOUNT_ID ? lineConfig?.name?.trim() || undefined : undefined);
 
   return {
     accountId,
@@ -207,7 +211,7 @@ export function listLineAccountIds(cfg: OpenClawConfig): string[] {
     ids.add(DEFAULT_ACCOUNT_ID);
   }
 
-  return [...ids].toSorted((a, b) => a.localeCompare(b));
+  return [...ids];
 }
 
 export function resolveDefaultLineAccountId(cfg: OpenClawConfig): string {

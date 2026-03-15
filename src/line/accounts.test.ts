@@ -162,6 +162,26 @@ describe("LINE accounts", () => {
       expect(account.config.webhookPath).toBe("/line-twgreen/webhook");
     });
 
+    it("does not inherit the top-level channel name for unnamed named accounts", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            name: "Main Bot",
+            accounts: {
+              support: {
+                channelAccessToken: "support-token",
+                channelSecret: "support-secret",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg, accountId: "support" });
+
+      expect(account.name).toBeUndefined();
+    });
+
     it("falls back to channels.line.defaultAccount when no explicit account is provided", () => {
       const cfg: OpenClawConfig = {
         channels: {
@@ -354,7 +374,7 @@ describe("LINE accounts", () => {
   });
 
   describe("listLineAccountIds", () => {
-    it("normalizes and sorts configured account ids", () => {
+    it("normalizes configured account ids while preserving declaration order", () => {
       const cfg: OpenClawConfig = {
         channels: {
           line: {
@@ -367,7 +387,7 @@ describe("LINE accounts", () => {
         },
       };
 
-      expect(listLineAccountIds(cfg)).toEqual(["alpha", "business-ops", "zebra"]);
+      expect(listLineAccountIds(cfg)).toEqual(["business-ops", "zebra", "alpha"]);
     });
 
     it("keeps the default account when base-level credentials are configured", () => {
@@ -444,6 +464,20 @@ describe("LINE accounts", () => {
           },
         } satisfies OpenClawConfig,
         expected: "business",
+      },
+      {
+        name: "preserves configured account order when falling back without an explicit default",
+        cfg: {
+          channels: {
+            line: {
+              accounts: {
+                zebra: { enabled: true },
+                alpha: { enabled: true },
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        expected: "zebra",
       },
       {
         name: "falls back when channels.line.defaultAccount is missing",
