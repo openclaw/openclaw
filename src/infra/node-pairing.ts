@@ -27,6 +27,7 @@ type NodePairingNodeMetadata = {
 
 export type NodePairingPendingRequest = NodePairingNodeMetadata & {
   requestId: string;
+  deviceRequestId?: string;
   silent?: boolean;
   isRepair?: boolean;
   ts: number;
@@ -123,6 +124,7 @@ export async function requestNodePairing(
       createRequest: (isRepair) => ({
         requestId: randomUUID(),
         nodeId,
+        deviceRequestId: req.deviceRequestId,
         displayName: req.displayName,
         platform: req.platform,
         version: req.version,
@@ -198,6 +200,16 @@ export async function rejectNodePairing(
       getId: (pending: NodePairingPendingRequest) => pending.nodeId,
     });
   });
+}
+
+export async function findPendingNodeByDeviceRequestId(
+  deviceRequestId: string,
+  baseDir?: string,
+): Promise<NodePairingPendingRequest | null> {
+  const state = await loadState(baseDir);
+  return (
+    Object.values(state.pendingById).find((p) => p.deviceRequestId === deviceRequestId) ?? null
+  );
 }
 
 export async function verifyNodeToken(
