@@ -1123,6 +1123,7 @@
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/synthetic",
+                  "providers/litellm",
                   "providers/together",
                   "providers/vercel-ai-gateway",
                   "providers/venice",

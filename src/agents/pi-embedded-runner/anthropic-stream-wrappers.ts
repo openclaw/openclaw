@@ -195,13 +195,18 @@ function normalizeOpenAiStringModeAnthropicToolChoice(toolChoice: unknown): unkn
 export function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  modelId?: string,
 ): CacheRetention | undefined {
   const isAnthropicDirect = provider === "anthropic";
   const hasBedrockOverride =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
   const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
+  const isLitellmClaude =
+    provider === "litellm" &&
+    typeof modelId === "string" &&
+    modelId.toLowerCase().startsWith("claude-");
 
-  if (!isAnthropicDirect && !isAnthropicBedrock) {
+  if (!isAnthropicDirect && !isAnthropicBedrock && !isLitellmClaude) {
     return undefined;
   }
 

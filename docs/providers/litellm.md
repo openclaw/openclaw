@@ -1,58 +1,72 @@
 ---
-summary: "Run OpenClaw through LiteLLM Proxy for unified model access and cost tracking"
+summary: "Use LiteLLM as an OpenAI-compatible proxy in OpenClaw"
 read_when:
-  - You want to route OpenClaw through a LiteLLM proxy
-  - You need cost tracking, logging, or model routing through LiteLLM
+  - You want to use LiteLLM as a model provider
+  - You need to connect to a self-hosted LiteLLM proxy
+  - You want to use any model through an OpenAI-compatible API
 ---
 
 # LiteLLM
 
-[LiteLLM](https://litellm.ai) is an open-source LLM gateway that provides a unified API to 100+ model providers. Route OpenClaw through LiteLLM to get centralized cost tracking, logging, and the flexibility to switch backends without changing your OpenClaw config.
+LiteLLM is an OpenAI-compatible proxy that supports 100+ LLM APIs. OpenClaw
+registers it as the `litellm` provider and uses the OpenAI Completions API.
 
-## Why use LiteLLM with OpenClaw?
+## Quick setup
 
-- **Cost tracking** — See exactly what OpenClaw spends across all models
-- **Model routing** — Switch between Claude, GPT-4, Gemini, Bedrock without config changes
-- **Virtual keys** — Create keys with spend limits for OpenClaw
-- **Logging** — Full request/response logs for debugging
-- **Fallbacks** — Automatic failover if your primary provider is down
-
-## Quick start
-
-### Via onboarding
+1. Set up your LiteLLM proxy (see [LiteLLM docs](https://docs.litellm.ai/))
+2. Set environment variables (optional):
+   - `LITELLM_API_KEY` - your LiteLLM API key
+   - `LITELLM_BASE_URL` - your LiteLLM endpoint (default: `http://localhost:4000`)
+   - `LITELLM_MODEL` - default model name (default: `gpt-4`)
+3. Run onboarding:
 
 ```bash
 openclaw onboard --auth-choice litellm-api-key
 ```
 
-### Manual setup
+The wizard will prompt for:
 
-1. Start LiteLLM Proxy:
+- Base URL (your LiteLLM proxy endpoint)
+- API key
+- Model name (as configured in your LiteLLM proxy)
 
-```bash
-pip install 'litellm[proxy]'
-litellm --model claude-opus-4-6
+## Config example
+
+```json5
+{
+  env: { LITELLM_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      model: { primary: "litellm/gpt-4" },
+      models: { "litellm/gpt-4": { alias: "GPT-4" } },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      litellm: {
+        baseUrl: "http://localhost:4000",
+        apiKey: "${LITELLM_API_KEY}",
+        api: "openai-completions",
+        models: [
+          {
+            id: "gpt-4",
+            name: "GPT-4",
+            reasoning: false,
+            input: ["text"],
+            contextWindow: 128000,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
+}
 ```
 
-2. Point OpenClaw to LiteLLM:
+## Multiple models
 
-```bash
-export LITELLM_API_KEY="your-litellm-key"
-
-openclaw
-```
-
-That's it. OpenClaw now routes through LiteLLM.
-
-## Configuration
-
-### Environment variables
-
-```bash
-export LITELLM_API_KEY="sk-litellm-key"
-```
-
-### Config file
+Add additional models to your config as needed:
 
 ```json5
 {
@@ -63,91 +77,58 @@ export LITELLM_API_KEY="sk-litellm-key"
         apiKey: "${LITELLM_API_KEY}",
         api: "openai-completions",
         models: [
-          {
-            id: "claude-opus-4-6",
-            name: "Claude Opus 4.6",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 200000,
-            maxTokens: 64000,
-          },
-          {
-            id: "gpt-4o",
-            name: "GPT-4o",
-            reasoning: false,
-            input: ["text", "image"],
-            contextWindow: 128000,
-            maxTokens: 8192,
-          },
+          { id: "gpt-4", name: "GPT-4", contextWindow: 128000, maxTokens: 8192 },
+          { id: "claude-3-opus", name: "Claude Opus", contextWindow: 200000, maxTokens: 4096 },
+          { id: "gemini-pro", name: "Gemini Pro", contextWindow: 32000, maxTokens: 8192 },
         ],
       },
-    },
-  },
-  agents: {
-    defaults: {
-      model: { primary: "litellm/claude-opus-4-6" },
     },
   },
 }
 ```
 
-## Virtual keys
-
-Create a dedicated key for OpenClaw with spend limits:
+Then switch models using:
 
 ```bash
-curl -X POST "http://localhost:4000/key/generate" \
-  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "key_alias": "openclaw",
-    "max_budget": 50.00,
-    "budget_duration": "monthly"
-  }'
+openclaw config set agents.defaults.model.primary litellm/claude-3-opus
 ```
 
-Use the generated key as `LITELLM_API_KEY`.
+## Prompt caching
 
-## Model routing
+When using Anthropic models through LiteLLM (e.g., `claude-opus-4-5`, `claude-sonnet-4-5`), OpenClaw automatically enables **prompt caching** to reduce costs:
 
-LiteLLM can route model requests to different backends. Configure in your LiteLLM `config.yaml`:
-
-```yaml
-model_list:
-  - model_name: claude-opus-4-6
-    litellm_params:
-      model: claude-opus-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-  - model_name: gpt-4o
-    litellm_params:
-      model: gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "litellm/claude-opus-4-5": {
+          params: {
+            cacheControlTtl: "1h", // Auto-configured for Claude models
+          },
+        },
+      },
+    },
+  },
+}
 ```
 
-OpenClaw keeps requesting `claude-opus-4-6` — LiteLLM handles the routing.
+### Cost savings with caching
 
-## Viewing usage
+- **Without caching**: Every message pays full price for the entire conversation history
+- **With caching** (enabled by default): Repeated context costs 10x less
 
-Check LiteLLM's dashboard or API:
+Example from actual usage:
 
-```bash
-# Key info
-curl "http://localhost:4000/key/info" \
-  -H "Authorization: Bearer sk-litellm-key"
+- Without caching: 93k tokens × $0.000005 = **$0.47** per message
+- With caching: 123k tokens (mostly cached) = **$0.05** per message (90% savings!)
 
-# Spend logs
-curl "http://localhost:4000/spend/logs" \
-  -H "Authorization: Bearer $LITELLM_MASTER_KEY"
-```
+Caching is **automatically enabled** for all `claude-*` models through LiteLLM.
 
 ## Notes
 
-- LiteLLM runs on `http://localhost:4000` by default
-- OpenClaw connects via the OpenAI-compatible `/v1/chat/completions` endpoint
-- All OpenClaw features work through LiteLLM — no limitations
-
-## See also
-
-- [LiteLLM Docs](https://docs.litellm.ai)
-- [Model Providers](/concepts/model-providers)
+- Model refs use `litellm/<modelId>` where `modelId` matches your LiteLLM config.
+- The base URL should not include `/v1` - OpenClaw's OpenAI client appends it.
+- Supported LiteLLM models depend on your proxy configuration.
+- **Prompt caching works automatically** when using Claude models through LiteLLM.
+- See [Model providers](/concepts/model-providers) for provider rules.

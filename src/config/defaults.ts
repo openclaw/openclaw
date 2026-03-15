@@ -108,6 +108,18 @@ function resolveAnthropicDefaultAuthMode(cfg: OpenClawConfig): AnthropicAuthDefa
   if (process.env.ANTHROPIC_API_KEY?.trim()) {
     return "api_key";
   }
+
+  // LiteLLM profiles that proxy Claude models should also enable cache defaults
+  const litellmProfiles = Object.entries(profiles).filter(
+    ([, profile]) => profile?.provider === "litellm",
+  );
+  if (litellmProfiles.length > 0) {
+    return "api_key";
+  }
+  if (process.env.LITELLM_API_KEY?.trim()) {
+    return "api_key";
+  }
+
   return null;
 }
 
@@ -447,7 +459,8 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
         parsed &&
         (parsed.provider === "anthropic" ||
           (parsed.provider === "amazon-bedrock" &&
-            parsed.model.toLowerCase().includes("anthropic.claude"))),
+            parsed.model.toLowerCase().includes("anthropic.claude")) ||
+          (parsed.provider === "litellm" && parsed.model.toLowerCase().startsWith("claude-"))),
       );
 
     for (const [key, entry] of Object.entries(nextModels)) {
