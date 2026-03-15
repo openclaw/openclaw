@@ -83,6 +83,12 @@ describe("i18n", () => {
   it("loads Russian translations", async () => {
     await translate.i18n.setLocale("ru-RU");
     expect(translate.t("common.health")).toBe("Состояние");
+    expect(translate.t("common.online")).toBe("В сети");
+    expect(translate.t("login.subtitle")).toBe("Панель управления шлюзом");
+    expect(translate.t("overview.connection.title")).toBe("Как подключиться");
+    expect(translate.t("chat.toolCallsToggle")).toBe(
+      "Переключить отображение вызовов инструментов и их результатов",
+    );
   });
 
   it("loads saved non-English locale on startup", async () => {
