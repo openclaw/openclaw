@@ -704,6 +704,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+      transformOptions: {
+        babel: { compact: false, minified: false },
+      },
       ...(Object.keys(aliasMap).length > 0
         ? {
             alias: aliasMap,
