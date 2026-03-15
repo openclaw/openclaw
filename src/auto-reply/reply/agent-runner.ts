@@ -506,6 +506,7 @@ export async function runReplyAgent(params: {
       }),
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: normalizeReplyMediaPaths,
+      replyInThreadDirective: sessionCtx.ReplyInThreadDirective,
     });
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;

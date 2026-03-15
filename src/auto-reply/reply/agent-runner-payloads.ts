@@ -111,6 +111,8 @@ export async function buildReplyPayloads(params: {
   originatingTo?: string;
   accountId?: string;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+  /** User requested reply to be threaded (e.g., "reply in thread" directive). */
+  replyInThreadDirective?: boolean;
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads = params.isHeartbeat
@@ -137,10 +139,20 @@ export async function buildReplyPayloads(params: {
         return [{ ...payload, text: stripped.text }];
       });
 
+  // Apply reply-in-thread directive from inbound user message.
+  // When the user includes a trigger phrase like "reply in thread" or "rit",
+  // force the response to be threaded (equivalent to [[reply_to_current]]).
+  const payloadsWithDirective = params.replyInThreadDirective
+    ? sanitizedPayloads.map((payload) => ({
+        ...payload,
+        replyToCurrent: true,
+      }))
+    : sanitizedPayloads;
+
   const replyTaggedPayloads = (
     await Promise.all(
       applyReplyThreading({
-        payloads: sanitizedPayloads,
+        payloads: payloadsWithDirective,
         replyToMode: params.replyToMode,
         replyToChannel: params.replyToChannel,
         currentMessageId: params.currentMessageId,

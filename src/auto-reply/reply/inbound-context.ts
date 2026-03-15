@@ -1,6 +1,7 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
+import { extractInboundUserDirectives } from "./inbound-user-directives.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 
 export type FinalizeInboundContextOptions = {
@@ -54,6 +55,29 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
     ).filter((entry) => Boolean(entry));
     normalized.UntrustedContext = normalizedUntrusted;
   }
+
+  // Detect and strip inbound user directives (e.g., "reply in thread", "rit")
+  // These are trigger phrases at the end of the message that affect outbound behavior.
+  // Check all relevant body fields for the directive.
+  const bodyDirectiveResult = extractInboundUserDirectives(normalized.Body ?? "");
+  const rawBodyDirectiveResult = extractInboundUserDirectives(normalized.RawBody ?? "");
+  const commandBodyDirectiveResult = extractInboundUserDirectives(normalized.CommandBody ?? "");
+
+  const replyInThreadDirective =
+    bodyDirectiveResult.replyInThread ||
+    rawBodyDirectiveResult.replyInThread ||
+    commandBodyDirectiveResult.replyInThread;
+
+  if (bodyDirectiveResult.replyInThread) {
+    normalized.Body = bodyDirectiveResult.cleaned;
+  }
+  if (rawBodyDirectiveResult.replyInThread) {
+    normalized.RawBody = rawBodyDirectiveResult.cleaned;
+  }
+  if (commandBodyDirectiveResult.replyInThread) {
+    normalized.CommandBody = commandBodyDirectiveResult.cleaned;
+  }
+  normalized.ReplyInThreadDirective = replyInThreadDirective;
 
   const chatType = normalizeChatType(normalized.ChatType);
   if (chatType && (opts.forceChatType || normalized.ChatType !== chatType)) {

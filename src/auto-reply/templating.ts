@@ -179,6 +179,12 @@ export type MsgContext = {
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];
+  /**
+   * User directive: force the response to be a threaded reply.
+   * Set when the user includes a trigger phrase like "reply in thread" or "rit"
+   * at the end of their message. Equivalent to the LLM emitting [[reply_to_current]].
+   */
+  ReplyInThreadDirective?: boolean;
 };
 
 export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
