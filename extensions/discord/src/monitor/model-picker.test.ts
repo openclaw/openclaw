@@ -655,4 +655,53 @@ describe("Discord model picker recents view", () => {
     const recentBtn = rows[1]?.components?.[0] as { label?: string };
     expect(recentBtn?.label).toContain("anthropic/claude-sonnet-4-5");
   });
+
+  it("includes provider prefix in model dropdown values for nested provider IDs", () => {
+    // Test case for issue #46975: OpenRouter models with nested provider IDs
+    // (e.g., deepseek/deepseek-v3.2) should have full provider/model format in values
+    const data = createModelsProviderData({
+      openrouter: ["deepseek/deepseek-v3.2", "anthropic/claude-3-opus", "gpt-4o"],
+    });
+
+    const rendered = renderDiscordModelPickerModelsView({
+      command: "model",
+      userId: "42",
+      data,
+      provider: "openrouter",
+      page: 1,
+      providerPage: 1,
+    });
+
+    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+      components?: SerializedComponent[];
+    };
+
+    const rows = extractContainerRows(payload.components);
+    const modelSelectRow = rows?.find(
+      (row) =>
+        row.components?.[0]?.type === ComponentType.StringSelect &&
+        row.components?.[0]?.options?.some((opt) => opt.value?.includes("deepseek")),
+    );
+
+    expect(modelSelectRow).toBeDefined();
+    const modelSelect = modelSelectRow?.components?.[0];
+    expect(modelSelect?.options).toBeDefined();
+
+    // Verify that the dropdown options include the provider prefix in their values
+    const deepseekOption = modelSelect?.options?.find((opt) =>
+      opt.value?.includes("deepseek/deepseek-v3.2"),
+    );
+    expect(deepseekOption).toBeDefined();
+    expect(deepseekOption?.value).toBe("openrouter/deepseek/deepseek-v3.2");
+    expect(deepseekOption?.label).toBe("deepseek/deepseek-v3.2"); // Label stays bare for readability
+
+    // Verify other models also have provider prefix
+    const anthropicOption = modelSelect?.options?.find((opt) =>
+      opt.value?.includes("anthropic/claude"),
+    );
+    expect(anthropicOption?.value).toBe("openrouter/anthropic/claude-3-opus");
+
+    const gptOption = modelSelect?.options?.find((opt) => opt.value?.includes("gpt-4o"));
+    expect(gptOption?.value).toBe("openrouter/gpt-4o");
+  });
 });

@@ -431,7 +431,10 @@ function buildModelRows(params: {
   const selectedModelRef = parsedPendingModel ?? parsedCurrentModel;
   const modelOptions: APISelectMenuOption[] = params.modelPage.items.map((model) => ({
     label: model,
-    value: model,
+    // Include provider prefix in the value so downstream handlers receive the full
+    // provider/model string and don't need to re-attach the provider manually.
+    // This prevents issues with nested provider IDs (e.g., OpenRouter's deepseek/model).
+    value: `${params.modelPage.provider}/${model}`,
     default: selectedModelRef
       ? selectedModelRef.provider === params.modelPage.provider && selectedModelRef.model === model
       : false,
