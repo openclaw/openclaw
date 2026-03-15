@@ -8,6 +8,7 @@ import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
+import { normalizeGoogleModelId } from "./model-id-normalization.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
@@ -70,6 +71,7 @@ import {
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 export { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
+export { normalizeGoogleModelId };
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -221,28 +223,6 @@ function resolveApiKeyFromProfiles(params: {
     }
   }
   return undefined;
-}
-
-export function normalizeGoogleModelId(id: string): string {
-  if (id === "gemini-3-pro") {
-    return "gemini-3-pro-preview";
-  }
-  if (id === "gemini-3-flash") {
-    return "gemini-3-flash-preview";
-  }
-  if (id === "gemini-3.1-pro") {
-    return "gemini-3.1-pro-preview";
-  }
-  if (id === "gemini-3.1-flash-lite") {
-    return "gemini-3.1-flash-lite-preview";
-  }
-  // Preserve compatibility with earlier OpenClaw docs/config that pointed at a
-  // non-existent Gemini Flash preview ID. Google's current Flash text model is
-  // `gemini-3-flash-preview`.
-  if (id === "gemini-3.1-flash" || id === "gemini-3.1-flash-preview") {
-    return "gemini-3-flash-preview";
-  }
-  return id;
 }
 
 const ANTIGRAVITY_BARE_PRO_IDS = new Set(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"]);

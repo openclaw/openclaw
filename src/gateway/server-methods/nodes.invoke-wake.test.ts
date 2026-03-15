@@ -2,10 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
 import { maybeWakeNodeWithApns, nodeHandlers } from "./nodes.js";
 
+type MockNodeCommandPolicyParams = {
+  command: string;
+  declaredCommands?: string[];
+  allowlist: Set<string>;
+};
+
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
-  resolveNodeCommandAllowlist: vi.fn(() => []),
-  isNodeCommandAllowed: vi.fn(() => ({ ok: true })),
+  resolveNodeCommandAllowlist: vi.fn<() => Set<string>>(() => new Set()),
+  isNodeCommandAllowed: vi.fn<
+    (params: MockNodeCommandPolicyParams) => { ok: true } | { ok: false; reason: string }
+  >(() => ({ ok: true })),
   sanitizeNodeInvokeParamsForForwarding: vi.fn(({ rawParams }: { rawParams: unknown }) => ({
     ok: true,
     params: rawParams,
@@ -514,6 +522,58 @@ describe("node.invoke APNs wake path", () => {
     expect(emptyPullCall?.[0]).toBe(true);
     expect(emptyPullCall?.[1]).toMatchObject({
       nodeId: "ios-node-queued",
+      actions: [],
+    });
+  });
+
+  it("drops queued actions that are no longer allowed at pull time", async () => {
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+    const allowlistedCommands = new Set(["camera.snap", "canvas.navigate"]);
+    mocks.resolveNodeCommandAllowlist.mockImplementation(() => new Set(allowlistedCommands));
+    mocks.isNodeCommandAllowed.mockImplementation(
+      ({ command, declaredCommands, allowlist }: MockNodeCommandPolicyParams) => {
+        if (!allowlist.has(command)) {
+          return { ok: false, reason: "command not allowlisted" };
+        }
+        if (!declaredCommands.includes(command)) {
+          return { ok: false, reason: "command not declared by node" };
+        }
+        return { ok: true };
+      },
+    );
+
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "ios-node-policy",
+        commands: ["camera.snap", "canvas.navigate"],
+        platform: "iOS 26.4.0",
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: false,
+        error: {
+          code: "NODE_BACKGROUND_UNAVAILABLE",
+          message: "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground",
+        },
+      }),
+    };
+
+    await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "ios-node-policy",
+        command: "camera.snap",
+        params: { facing: "front" },
+        idempotencyKey: "idem-policy",
+      },
+    });
+
+    allowlistedCommands.delete("camera.snap");
+
+    const pullRespond = await pullPending("ios-node-policy");
+    const pullCall = pullRespond.mock.calls[0] as RespondCall | undefined;
+    expect(pullCall?.[0]).toBe(true);
+    expect(pullCall?.[1]).toMatchObject({
+      nodeId: "ios-node-policy",
       actions: [],
     });
   });
