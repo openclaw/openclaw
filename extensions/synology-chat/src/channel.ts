@@ -11,7 +11,11 @@ import {
   buildChannelConfigSchema,
 } from "openclaw/plugin-sdk/synology-chat";
 import { z } from "zod";
-import { listAccountIds, resolveAccount } from "./accounts.js";
+import {
+  findConflictingWebhookPathAccountIds,
+  listAccountIds,
+  resolveAccount,
+} from "./accounts.js";
 import { sendMessage, sendFileUrl } from "./client.js";
 import { getSynologyRuntime } from "./runtime.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
@@ -249,6 +253,19 @@ export function createSynologyChatPlugin() {
           );
           return waitUntilAbort(ctx.abortSignal);
         }
+        const conflictingAccounts = findConflictingWebhookPathAccountIds(
+          ctx.cfg,
+          account.accountId,
+        );
+        if (conflictingAccounts.length > 0) {
+          log?.error?.(
+            `Conflicting webhookPath ${account.webhookPath} for Synology Chat accounts: ${[
+              account.accountId,
+              ...conflictingAccounts,
+            ].join(", ")}. Each enabled account must use a unique webhookPath.`,
+          );
+          return waitUntilAbort(ctx.abortSignal);
+        }
 
         log?.info?.(
           `Starting Synology Chat channel (account: ${accountId}, path: ${account.webhookPath})`,
@@ -325,7 +342,6 @@ export function createSynologyChatPlugin() {
         const unregister = registerPluginHttpRoute({
           path: account.webhookPath,
           auth: "plugin",
-          replaceExisting: true,
           pluginId: CHANNEL_ID,
           accountId: account.accountId,
           log: (msg: string) => log?.info?.(msg),

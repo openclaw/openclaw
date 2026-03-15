@@ -94,3 +94,20 @@ export function resolveAccount(cfg: any, accountId?: string | null): ResolvedSyn
     allowInsecureSsl: accountOverride.allowInsecureSsl ?? channelCfg.allowInsecureSsl ?? false,
   };
 }
+
+export function findConflictingWebhookPathAccountIds(cfg: any, accountId: string): string[] {
+  const current = resolveAccount(cfg, accountId);
+  const currentPath = current.webhookPath.trim();
+  if (!current.enabled || !current.token.trim() || !currentPath) {
+    return [];
+  }
+
+  return listAccountIds(cfg)
+    .filter((candidateId) => candidateId !== accountId)
+    .map((candidateId) => resolveAccount(cfg, candidateId))
+    .filter(
+      (candidate) =>
+        candidate.enabled && candidate.token.trim() && candidate.webhookPath.trim() === currentPath,
+    )
+    .map((candidate) => candidate.accountId);
+}
