@@ -16,6 +16,14 @@ type OpenAIReasoningSignature = {
   type: string;
 };
 
+// pi-ai replays chat-completions thinking by copying the first thinking block to
+// assistantMsg[thinkingSignature], so only provider field names are safe here.
+const OPENAI_COMPLETIONS_REASONING_FIELDS = new Set([
+  "reasoning",
+  "reasoning_content",
+  "reasoning_text",
+]);
+
 function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
   if (!value) {
     return null;
@@ -197,6 +205,65 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
   }
 
   return changed ? rewrittenMessages : messages;
+}
+
+/**
+ * OpenAI-compatible chat completions treat `thinkingSignature` as a raw output
+ * field name. Strip provider-specific signatures that do not map to supported
+ * OpenAI-compatible reasoning fields before replay.
+ */
+export function sanitizeOpenAICompletionsThinkingSignatures(
+  messages: AgentMessage[],
+): AgentMessage[] {
+  let changed = false;
+
+  const nextMessages = messages.map((msg) => {
+    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "assistant") {
+      return msg;
+    }
+
+    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+    if (!Array.isArray(assistantMsg.content)) {
+      return msg;
+    }
+
+    let assistantChanged = false;
+    const nextContent = assistantMsg.content.map((block) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+
+      const record = block as OpenAIThinkingBlock & Record<string, unknown>;
+      if (
+        (record.type !== "thinking" && record.type !== "redacted_thinking") ||
+        record.thinkingSignature === undefined
+      ) {
+        return block;
+      }
+
+      const signature = record.thinkingSignature;
+      if (
+        typeof signature === "string" &&
+        OPENAI_COMPLETIONS_REASONING_FIELDS.has(signature.trim())
+      ) {
+        return block;
+      }
+
+      assistantChanged = true;
+      const nextBlock = { ...record };
+      delete nextBlock.thinkingSignature;
+      return nextBlock as typeof block;
+    });
+
+    if (!assistantChanged) {
+      return msg;
+    }
+
+    changed = true;
+    return { ...assistantMsg, content: nextContent } as AgentMessage;
+  });
+
+  return changed ? nextMessages : messages;
 }
 
 /**

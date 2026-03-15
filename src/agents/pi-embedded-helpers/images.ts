@@ -121,9 +121,11 @@ export async function sanitizeSessionMessagesImages(
           out.push({ ...assistantMsg, content: nextContent });
           continue;
         }
-        const strippedContent = options?.preserveSignatures
-          ? content // Keep signatures for Antigravity Claude
-          : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
+        // stripThoughtSignatures only strips Gemini-style thought_signature/thoughtSignature fields;
+        // it does not touch Anthropic thinkingSignature (handled at openai-completions boundary).
+        // Run it unconditionally so Gemini signature cleanup is never skipped, regardless of
+        // whether Anthropic signature preservation is active.
+        const strippedContent = stripThoughtSignatures(content, options?.sanitizeThoughtSignatures);
 
         const filteredContent = strippedContent.filter((block) => {
           if (!block || typeof block !== "object") {

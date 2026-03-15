@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as helpers from "./pi-embedded-helpers.js";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
   loadSanitizeSessionHistoryWithCleanMocks,
@@ -278,6 +279,143 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(result).toEqual(mockMessages);
+  });
+
+  it("strips Anthropic thinking signatures when falling back to openai-completions", async () => {
+    setNonGoogleModelApi();
+
+    const messages = makeThinkingAndTextAssistantMessages("EvEICkYICxgCKkAzskjLD0odKeC/D5...");
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "openai",
+      modelId: "gpt-5.2",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    const assistant = getAssistantMessage(result);
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "internal",
+      },
+      { type: "text", text: "hi" },
+    ]);
+  });
+
+  it("strips OpenAI Responses reasoning signatures when falling back to openai-completions", async () => {
+    setNonGoogleModelApi();
+
+    const messages = makeThinkingAndTextAssistantMessages(
+      JSON.stringify({ id: "rs_123", type: "reasoning" }),
+    );
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "openai",
+      modelId: "gpt-5.2",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    const assistant = getAssistantMessage(result);
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "internal",
+      },
+      { type: "text", text: "hi" },
+    ]);
+  });
+
+  it("keeps OpenAI-compatible reasoning field signatures for openai-completions replay", async () => {
+    setNonGoogleModelApi();
+
+    const messages = makeThinkingAndTextAssistantMessages("reasoning_content");
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "openai",
+      modelId: "gpt-5.2",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    const assistant = getAssistantMessage(result);
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "internal",
+        thinkingSignature: "reasoning_content",
+      },
+      { type: "text", text: "hi" },
+    ]);
+  });
+
+  it("strips unsupported signatures from redacted_thinking blocks for openai-completions", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "redacted_thinking",
+            data: "...",
+            thinkingSignature: "EvEICkYICxgCKkAzskjLD0odKeC/D5...",
+          },
+          { type: "text", text: "hi" },
+        ],
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "openai",
+      modelId: "gpt-5.2",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    const assistant = getAssistantMessage(result);
+    expect(assistant.content).toEqual([
+      {
+        type: "redacted_thinking",
+        data: "...",
+      },
+      { type: "text", text: "hi" },
+    ]);
+  });
+
+  it("preserves Anthropic thinking signatures when falling back to Gemini", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(true);
+
+    const messages = makeThinkingAndTextAssistantMessages("EvEICkYICxgCKkAzskjLD0odKeC/D5...");
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "google-generative-ai",
+      provider: "google",
+      modelId: "gemini-3-pro",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    const assistant = getAssistantMessage(result);
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "internal",
+        thinkingSignature: "EvEICkYICxgCKkAzskjLD0odKeC/D5...",
+      },
+      { type: "text", text: "hi" },
+    ]);
   });
 
   it("prepends a bootstrap user turn for strict OpenAI-compatible assistant-first history", async () => {
