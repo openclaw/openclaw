@@ -1,0 +1,13 @@
+{
+  "name": "@openclaw/security-shield",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Security shield plugin: dangerous command blocking, secret leak detection, and audit logging",
+  "type": "module",
+  "dependencies": {},
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

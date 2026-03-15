@@ -1,0 +1,39 @@
+{
+  "id": "security-shield",
+  "name": "Security Shield",
+  "description": "Blocks dangerous tool commands, detects secret leaks in tool output, and logs all tool activity for audit.",
+  "skills": ["./skills"],
+  "uiHints": {
+    "enforcement": {
+      "label": "Enforcement Mode",
+      "help": "block = prevent execution, warn = log warning but allow, off = disable"
+    },
+    "auditLog": {
+      "label": "Audit Log",
+      "help": "Enable audit logging of all tool calls to ~/.openclaw/security-audit.jsonl"
+    },
+    "leakDetection": {
+      "label": "Leak Detection",
+      "help": "Scan tool output for API keys and secrets, redact before returning to LLM"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enforcement": {
+        "type": "string",
+        "enum": ["block", "warn", "off"],
+        "default": "block"
+      },
+      "auditLog": {
+        "type": "boolean",
+        "default": true
+      },
+      "leakDetection": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  }
+}
