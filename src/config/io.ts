@@ -1357,6 +1357,10 @@ let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 
+let lastResolvedConfigPath: string | null = null;
+let lastConfigMtimes: Map<string, number> | null = null;
+let lastConfigResult: OpenClawConfig | null = null;
+
 function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_CONFIG_CACHE_MS?.trim();
   if (raw === "" || raw === "0") {
@@ -1468,27 +1472,108 @@ export function loadConfig(): OpenClawConfig {
   if (runtimeConfigSnapshot) {
     return runtimeConfigSnapshot;
   }
-  const io = createConfigIO();
-  const configPath = io.configPath;
+
+  const env = process.env;
   const now = Date.now();
-  if (shouldUseConfigCache(process.env)) {
+
+  // 1. Resolve path (cached permanently at module scope)
+  if (!lastResolvedConfigPath) {
+    lastResolvedConfigPath = createConfigIO().configPath;
+  }
+  const configPath = lastResolvedConfigPath;
+
+  // 2. Memory cache (short-lived TTL)
+  if (shouldUseConfigCache(env)) {
     const cached = configCache;
     if (cached && cached.configPath === configPath && cached.expiresAt > now) {
       return cached.config;
     }
   }
-  const config = io.loadConfig();
-  if (shouldUseConfigCache(process.env)) {
-    const cacheMs = resolveConfigCacheMs(process.env);
-    if (cacheMs > 0) {
+
+  // 3. Disk check (mtimeMs) + Referential Stability
+  try {
+    let mtimesValid = true;
+    if (lastConfigMtimes && lastConfigResult) {
+      for (const [path, lastMtime] of lastConfigMtimes.entries()) {
+        try {
+          const stat = fs.statSync(path);
+          if (stat.mtimeMs !== lastMtime) {
+            mtimesValid = false;
+            break;
+          }
+        } catch {
+          // File deleted or inaccessible
+          if (lastMtime !== 0) {
+            mtimesValid = false;
+            break;
+          }
+        }
+      }
+    } else {
+      mtimesValid = false;
+    }
+
+    if (mtimesValid && lastConfigResult) {
+      // Referential stability: no files modified, keep same WeakMap keys alive
+      if (shouldUseConfigCache(env)) {
+        configCache = {
+          configPath,
+          expiresAt: now + resolveConfigCacheMs(env),
+          config: lastConfigResult,
+        };
+      }
+      return lastConfigResult;
+    }
+
+    // 4. Full load if modified
+    const currentMtimes = new Map<string, number>();
+    const trackingFs = {
+      ...fs,
+      readFileSync: (
+        targetPath: fs.PathOrFileDescriptor,
+        options?: Parameters<typeof fs.readFileSync>[1],
+      ) => {
+        const p = targetPath.toString();
+        try {
+          const stat = fs.statSync(p);
+          currentMtimes.set(p, stat.mtimeMs);
+        } catch {
+          currentMtimes.set(p, 0);
+        }
+        return fs.readFileSync(targetPath, options);
+      },
+      existsSync: (targetPath: fs.PathLike) => {
+        const p = targetPath.toString();
+        try {
+          const stat = fs.statSync(p);
+          currentMtimes.set(p, stat.mtimeMs);
+        } catch {
+          currentMtimes.set(p, 0);
+        }
+        return fs.existsSync(targetPath);
+      },
+    } as typeof fs;
+
+    const io = createConfigIO({ fs: trackingFs });
+    const config = io.loadConfig();
+
+    lastConfigMtimes = currentMtimes;
+    lastConfigResult = config;
+
+    if (shouldUseConfigCache(env)) {
       configCache = {
         configPath,
-        expiresAt: now + cacheMs,
+        expiresAt: now + resolveConfigCacheMs(env),
         config,
       };
     }
+    return config;
+  } catch {
+    // Fallback: File doesn't exist or read error
+    lastConfigMtimes = null;
+    lastConfigResult = null;
+    return createConfigIO().loadConfig();
   }
-  return config;
 }
 
 export async function readBestEffortConfig(): Promise<OpenClawConfig> {

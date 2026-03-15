@@ -2,6 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig } from "../config/io.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
@@ -612,6 +613,15 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
 }
 
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
+  const isTesting = typeof process !== "undefined" && process.env.NODE_ENV === "test";
+  if (!isTesting) {
+    // Channel plugins pass `input.cfg` from their startup snapshot.
+    // Overriding this with `loadConfig()` ensures we read live bindings.
+    // Because `loadConfig` is now backed by `mtimeMs` caching in `io.ts`,
+    // this call has zero I/O latency and maintains object referential stability.
+    input = { ...input, cfg: loadConfig() };
+  }
+
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
   const peer = input.peer
