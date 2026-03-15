@@ -390,9 +390,53 @@ export function isTransientHttpError(raw: string): boolean {
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
 }
 
+/**
+ * Check whether response headers contain rate-limit signals such as
+ * `Retry-After` or any `x-ratelimit-*` header.  Accepts a plain
+ * string-keyed record so callers can pass whatever header bag they have.
+ */
+export function hasRateLimitHeaders(
+  headers: Readonly<Record<string, string | string[] | undefined>> | undefined,
+): boolean {
+  if (!headers || typeof headers !== "object") {
+    return false;
+  }
+  for (const key of Object.keys(headers)) {
+    const lower = key.toLowerCase();
+    if (lower === "retry-after" || lower.startsWith("x-ratelimit")) {
+      if (headers[key] != null && String(headers[key]).trim() !== "") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Narrower check: only `Retry-After` header, not informational
+ * `x-ratelimit-*` metadata.  Used for HTTP 500 where providers often
+ * send informational rate-limit headers on all responses.
+ */
+export function hasRetryAfterHeader(
+  headers: Readonly<Record<string, string | string[] | undefined>> | undefined,
+): boolean {
+  if (!headers || typeof headers !== "object") {
+    return false;
+  }
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === "retry-after") {
+      if (headers[key] != null && String(headers[key]).trim() !== "") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function classifyFailoverReasonFromHttpStatus(
   status: number | undefined,
   message?: string,
+  headers?: Readonly<Record<string, string | string[] | undefined>>,
 ): FailoverReason | null {
   if (typeof status !== "number" || !Number.isFinite(status)) {
     return null;
@@ -427,6 +471,20 @@ export function classifyFailoverReasonFromHttpStatus(
   }
   if (status === 502 || status === 504) {
     return "timeout";
+  }
+  if (status === 500) {
+    if (message && isRateLimitErrorMessage(message)) {
+      return "rate_limit";
+    }
+    if (message && isOverloadedErrorMessage(message)) {
+      return "overloaded";
+    }
+    if (hasRetryAfterHeader(headers)) {
+      return "rate_limit";
+    }
+    // Return null for unclassified 500s so symbolic error codes (e.g.
+    // INTERNAL, UNAVAILABLE from gRPC/Google APIs) can still be checked.
+    return null;
   }
   if (status === 529) {
     return "overloaded";

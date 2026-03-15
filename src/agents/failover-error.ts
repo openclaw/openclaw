@@ -220,6 +220,26 @@ export function isTimeoutError(err: unknown): boolean {
   return hasTimeoutHint(cause) || hasTimeoutHint(reason);
 }
 
+function readDirectResponseHeaders(
+  err: unknown,
+): Record<string, string | string[] | undefined> | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const candidate = err as { headers?: unknown; responseHeaders?: unknown };
+  const raw = candidate.headers ?? candidate.responseHeaders;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, string | string[] | undefined>;
+  }
+  return undefined;
+}
+
+function getResponseHeaders(
+  err: unknown,
+): Record<string, string | string[] | undefined> | undefined {
+  return findErrorProperty(err, readDirectResponseHeaders);
+}
+
 export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
   if (isFailoverError(err)) {
     return err.reason;
@@ -227,7 +247,8 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
 
   const status = getStatusCode(err);
   const message = getErrorMessage(err);
-  const statusReason = classifyFailoverReasonFromHttpStatus(status, message);
+  const headers = getResponseHeaders(err);
+  const statusReason = classifyFailoverReasonFromHttpStatus(status, message, headers);
   if (statusReason) {
     return statusReason;
   }
