@@ -1,8 +1,10 @@
+import path from "node:path";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import { execCronScript } from "../exec-script.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
@@ -1038,6 +1040,37 @@ export async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
+
+  // Script payloads execute directly — no session or LLM turn needed.
+  if (job.payload.kind === "script") {
+    const basePath = path.resolve(path.dirname(state.deps.storePath), "..");
+    const scriptResult = await execCronScript({ payload: job.payload, basePath, abortSignal });
+
+    // Announce stdout to the delivery channel when deliver=true and output exists.
+    if (
+      scriptResult.status === "ok" &&
+      job.payload.deliver === true &&
+      scriptResult.summary &&
+      state.deps.announceScriptOutput
+    ) {
+      try {
+        const deliveryResult = await state.deps.announceScriptOutput({
+          job,
+          text: scriptResult.summary,
+        });
+        return { ...scriptResult, ...deliveryResult };
+      } catch (err) {
+        state.deps.log.warn(
+          { jobId: job.id, err: String(err) },
+          "cron: script output delivery failed",
+        );
+        return { ...scriptResult, delivered: false, deliveryAttempted: true };
+      }
+    }
+
+    return scriptResult;
+  }
+
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {

@@ -78,9 +78,31 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+export type CronScriptPayload = {
+  kind: "script";
+  /** Executable path (resolved via resolveUserPath; ~ and relative paths supported). */
+  command: string;
+  args?: string[];
+  /** Extra environment variables merged on top of process.env for the child process. */
+  env?: Record<string, string>;
+  /** Working directory for the child process (resolved via resolveUserPath). */
+  cwd?: string;
+  /** Timeout in seconds; overrides job-level timeoutSeconds when set. */
+  timeoutSeconds?: number;
+  /** Route stdout through the delivery pipeline (same semantics as agentTurn deliver). */
+  deliver?: boolean;
+};
 
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronScriptPayload;
+
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  // Require the discriminant so runtime patch routing can switch on kind reliably.
+  | ({ kind: "script" } & Partial<Omit<CronScriptPayload, "kind">>);
 
 type CronAgentTurnPayloadFields = {
   message: string;

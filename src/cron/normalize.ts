@@ -91,6 +91,27 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === "script") {
+    next.kind = "script";
+    // Trim command and cwd — consistent with how message/text/model are trimmed above.
+    if (typeof next.command === "string") {
+      const trimmed = next.command.trim();
+      if (trimmed) {
+        next.command = trimmed;
+      } else {
+        // Whitespace-only command is invalid — remove it so downstream validation
+        // sees it as missing rather than silently accepting an empty string.
+        delete next.command;
+      }
+    }
+    if (typeof next.cwd === "string") {
+      const trimmed = next.cwd.trim();
+      if (trimmed) {
+        next.cwd = trimmed;
+      } else {
+        delete next.cwd;
+      }
+    }
   } else if (kindRaw) {
     next.kind = kindRaw;
   }

@@ -139,8 +139,10 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (isIsolatedLike && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated/current/session cron jobs require payload.kind="agentTurn"');
+  if (isIsolatedLike && job.payload.kind !== "agentTurn" && job.payload.kind !== "script") {
+    throw new Error(
+      'isolated/current/session cron jobs require payload.kind="agentTurn" or "script"',
+    );
   }
 }
 
@@ -669,7 +671,24 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return { kind: "systemEvent", text };
   }
 
-  if (existing.kind !== "agentTurn") {
+  if (patch.kind === "script") {
+    if (existing.kind !== "script") {
+      return buildPayloadFromPatch(patch);
+    }
+    // Merge script fields: only override fields that are explicitly present in the patch.
+    return {
+      kind: "script",
+      command:
+        typeof patch.command === "string" && patch.command ? patch.command : existing.command,
+      args: "args" in patch ? patch.args : existing.args,
+      env: "env" in patch ? patch.env : existing.env,
+      cwd: "cwd" in patch ? patch.cwd : existing.cwd,
+      timeoutSeconds: "timeoutSeconds" in patch ? patch.timeoutSeconds : existing.timeoutSeconds,
+      deliver: "deliver" in patch ? patch.deliver : existing.deliver,
+    };
+  }
+
+  if (existing.kind !== "agentTurn" || patch.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
 
@@ -754,6 +773,29 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       throw new Error('cron.update payload.kind="systemEvent" requires text');
     }
     return { kind: "systemEvent", text: patch.text };
+  }
+
+  if (patch.kind === "script") {
+    if (typeof patch.command !== "string" || patch.command.length === 0) {
+      throw new Error('cron.update payload.kind="script" requires command');
+    }
+    return {
+      kind: "script",
+      command: patch.command,
+      args: patch.args,
+      env: patch.env,
+      cwd: patch.cwd,
+      timeoutSeconds: patch.timeoutSeconds,
+      deliver: patch.deliver,
+    };
+  }
+
+  // TypeScript proves the union is exhausted above, but keep the runtime guard
+  // for forward-compatibility when new payload kinds are added without updating here.
+  if ((patch as CronPayloadPatch).kind !== "agentTurn") {
+    throw new Error(
+      `cron.update unsupported payload.kind: ${String((patch as CronPayloadPatch).kind)}`,
+    );
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {
