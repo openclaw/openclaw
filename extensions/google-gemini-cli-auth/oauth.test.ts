@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/google-gemini-cli-auth", () => ({
   isWSL2Sync: () => false,
+  hasProxyEnvConfigured: () => false,
   fetchWithSsrFGuard: async (params: {
     url: string;
     init?: RequestInit;
