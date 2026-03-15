@@ -281,6 +281,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "pack",
+    description: "Create, install, and manage Agent Packs (shareable workspace templates)",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../pack-cli.js");
+      mod.registerPackCli(program);
+    },
+  },
+  {
     name: "skills",
     description: "List and inspect available skills",
     hasSubcommands: true,
