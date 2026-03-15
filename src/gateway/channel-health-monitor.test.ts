@@ -13,6 +13,7 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
+    isChannelConfigured: vi.fn(() => true),
     resetRestartAttempts: vi.fn(),
     ...overrides,
   };

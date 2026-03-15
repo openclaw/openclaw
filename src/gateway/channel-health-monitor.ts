@@ -114,6 +114,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
         if (!accounts) {
           continue;
         }
+        // Skip channels that have been removed from the current config to avoid
+        // emitting system events (restarts) for stale runtime state.
+        if (!channelManager.isChannelConfigured(channelId as ChannelId)) {
+          continue;
+        }
         for (const [accountId, status] of Object.entries(accounts)) {
           if (!status) {
             continue;
