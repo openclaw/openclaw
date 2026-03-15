@@ -10,58 +10,56 @@ enum HostEnvSecurityPolicy {
         "NODE_PATH",
         "PYTHONHOME",
         "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PYTHONWARNINGS",
         "PERL5LIB",
         "PERL5OPT",
+        "PERL_MB_OPT",
         "RUBYLIB",
         "RUBYOPT",
         "BASH_ENV",
         "ENV",
         "GIT_EXTERNAL_DIFF",
-        "GIT_EXEC_PATH",
+        "GIT_SSH_COMMAND",
         "SHELL",
         "SHELLOPTS",
         "PS4",
         "GCONV_PATH",
         "IFS",
-        "SSLKEYLOGFILE"
+        "SSLKEYLOGFILE",
+        "GLIBC_TUNABLES",
+        "JAVA_TOOL_OPTIONS",
+        "JAVA_OPTIONS",
+        "_JAVA_OPTIONS",
+        "JDK_JAVA_OPTIONS",
+        "DOTNET_STARTUP_HOOKS",
+        "LD_AUDIT",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "EDITOR",
+        "VISUAL",
+        "PAGER",
+        "BROWSER",
+        "PROMPT_COMMAND",
+        "SDKMAN_DIR",
+        "NVM_DIR",
+        "GOPATH",
+        "CARGO_HOME"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
         "HOME",
-        "ZDOTDIR",
-        "GIT_SSH_COMMAND",
-        "GIT_SSH",
-        "GIT_PROXY_COMMAND",
-        "GIT_ASKPASS",
-        "SSH_ASKPASS",
-        "LESSOPEN",
-        "LESSCLOSE",
-        "PAGER",
-        "MANPAGER",
-        "GIT_PAGER",
-        "EDITOR",
-        "VISUAL",
-        "FCEDIT",
-        "SUDO_EDITOR",
-        "PROMPT_COMMAND",
-        "HISTFILE",
-        "PERL5DB",
-        "PERL5DBCMD",
-        "OPENSSL_CONF",
-        "OPENSSL_ENGINES",
-        "PYTHONSTARTUP",
-        "WGETRC",
-        "CURL_HOME"
+        "ZDOTDIR"
     ]
 
     static let blockedOverridePrefixes: [String] = [
-        "GIT_CONFIG_",
-        "NPM_CONFIG_"
+
     ]
 
     static let blockedPrefixes: [String] = [
         "DYLD_",
         "LD_",
-        "BASH_FUNC_"
+        "BASH_FUNC_",
+        "OPENCLAW_"
     ]
 }
