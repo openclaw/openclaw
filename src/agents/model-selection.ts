@@ -31,6 +31,22 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
+// Lazy getter to avoid TDZ errors when bundler orders config/defaults.ts
+// before this module. See #44846.
+let _anthropicModelAliases: Readonly<Record<string, string>> | undefined;
+function getAnthropicModelAliases(): Readonly<Record<string, string>> {
+  if (!_anthropicModelAliases) {
+    _anthropicModelAliases = Object.freeze({
+      "opus-4.6": "claude-opus-4-6",
+      "opus-4.5": "claude-opus-4-5",
+      "sonnet-4.6": "claude-sonnet-4-6",
+      "sonnet-4.5": "claude-sonnet-4-5",
+    });
+  }
+  return _anthropicModelAliases;
+}
+
+
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -144,6 +160,7 @@ function normalizeAnthropicModelId(model: string): string {
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
+<<<<<<< HEAD
   // Keep alias resolution local so bundled startup paths cannot trip a TDZ on
   // a module-level alias table while config parsing is still initializing.
   switch (lower) {
@@ -158,6 +175,9 @@ function normalizeAnthropicModelId(model: string): string {
     default:
       return trimmed;
   }
+=======
+  return getAnthropicModelAliases()[lower] ?? trimmed;
+>>>>>>> b2200fbd6 (fix(model-selection): use lazy getter for ANTHROPIC_MODEL_ALIASES to avoid TDZ error)
 }
 
 function normalizeProviderModelId(provider: string, model: string): string {
