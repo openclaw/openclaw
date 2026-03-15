@@ -38,7 +38,16 @@ export async function extractSignalCliArchive(
   installRoot: string,
   timeoutMs: number,
 ): Promise<void> {
-  await extractArchive({ archivePath, destDir: installRoot, timeoutMs });
+  await extractArchive({
+    archivePath,
+    destDir: installRoot,
+    timeoutMs,
+    limits: {
+      maxArchiveBytes: 768 * 1024 * 1024, // 768MB compressed archive
+      maxExtractedBytes: 768 * 1024 * 1024, // 768MB total extracted
+      maxEntryBytes: 768 * 1024 * 1024, // 768MB per file
+    },
+  });
 }
 
 /** @internal Exported for testing. */
