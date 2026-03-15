@@ -149,6 +149,23 @@ describe("operator team routing", () => {
     });
   });
 
+  it("accepts target.role as an alias for target.capability", async () => {
+    await withStateDirEnv("operator-team-routing-role-", async () => {
+      const envelope = resolveOperatorTaskEnvelope({
+        task_id: "task-team-role",
+        idempotency_key: "idem-team-role",
+        requester: { id: "tonya", kind: "operator" },
+        target: { role: "backend", team_id: "engineering" },
+        objective: "Route backend work via role alias",
+        acceptance_criteria: ["engineering routed through Bobby"],
+        timeout_s: 600,
+      });
+
+      expect(envelope.target.capability).toBe("backend");
+      expect(envelope.target.alias).toBe("bobby-digital");
+    });
+  });
+
   it("routes engineering work through Bobby before specialists", async () => {
     await withStateDirEnv("operator-team-routing-engineering-", async () => {
       const envelope = resolveOperatorTaskEnvelope({

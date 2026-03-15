@@ -263,8 +263,10 @@ export function buildAgentSystemPrompt(params: {
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: acpSpawnRuntimeEnabled
-      ? 'Spawn an isolated sub-agent or ACP coding session (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
+      ? "Spawn an isolated sub-agent or ACP coding session (supports direct `agentId` or `teamId + capability/role`; ACP harness ids still follow acp.allowedAgents after resolution)"
       : "Spawn an isolated sub-agent session",
+    sessions_schedule:
+      "Submit a dependency graph of sub-agent/ACP work; ready nodes start immediately and dependent nodes start automatically",
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
@@ -293,6 +295,8 @@ export function buildAgentSystemPrompt(params: {
     "sessions_list",
     "sessions_history",
     "sessions_send",
+    "sessions_spawn",
+    "sessions_schedule",
     "subagents",
     "session_status",
     "image",

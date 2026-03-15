@@ -1,7 +1,6 @@
 import {
   compileOperatorAgentRegistry,
   getCompiledOperatorTeam,
-  type CompiledOperatorAgentRecord,
   type CompiledOperatorTeamRecord,
 } from "./agent-registry.js";
 import {
@@ -9,15 +8,12 @@ import {
   taskEnvelopeSchema,
   type OperatorTaskEnvelope,
 } from "./contracts.js";
+import { resolveSpecialistTarget } from "./specialist-resolver.js";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-}
-
-function normalize(value: string): string {
-  return value.trim().toLowerCase();
 }
 
 function hasExplicitTransport(input: unknown): boolean {
@@ -28,70 +24,26 @@ function hasExplicitTransport(input: unknown): boolean {
   );
 }
 
-function scoreAgentForCapability(agent: CompiledOperatorAgentRecord, capability: string): number {
-  const needle = normalize(capability);
-  const triggers = agent.triggers.map(normalize);
-  if (triggers.includes(needle)) {
-    return 100;
-  }
-  if (triggers.some((entry) => entry.includes(needle) || needle.includes(entry))) {
-    return 60;
-  }
-  const specialty = normalize(agent.specialty ?? "");
-  if (specialty.includes(needle)) {
-    return 40;
-  }
-
-  const needleTokens = needle.split(/[^a-z0-9]+/u).filter(Boolean);
-  const triggerTokenHits = triggers.reduce((count, entry) => {
-    const tokens = new Set(entry.split(/[^a-z0-9]+/u).filter(Boolean));
-    return count + needleTokens.filter((token) => tokens.has(token)).length;
-  }, 0);
-  return triggerTokenHits * 10;
-}
-
-function resolveRecommendedAlias(
-  team: CompiledOperatorTeamRecord,
-  agents: CompiledOperatorAgentRecord[],
-  capability: string,
-): string | null {
-  if (team.routeViaLead && team.leadKind === "agent" && team.lead) {
-    return team.lead;
-  }
-
-  const candidates = agents.filter((entry) =>
-    team.members.some((memberId) => normalize(memberId) === normalize(entry.id)),
-  );
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  const ranked = candidates
-    .map((agent) => ({
-      agent,
-      score: scoreAgentForCapability(agent, capability),
-    }))
-    .toSorted(
-      (left, right) => right.score - left.score || left.agent.name.localeCompare(right.agent.name),
-    );
-
-  if (ranked[0]?.score && ranked[0].score > 0) {
-    return ranked[0].agent.id;
-  }
-  if (team.leadKind === "agent" && team.lead) {
-    return team.lead;
-  }
-  return candidates[0]?.id ?? null;
-}
-
 export function resolveOperatorTaskEnvelope(input: unknown): OperatorTaskEnvelope {
   const parsed = taskEnvelopeSchema.parse(input);
   const teamId = parsed.target.team_id?.trim() || null;
+  const capability = parsed.target.capability.trim();
+  const role = parsed.target.role?.trim() || null;
+  const normalizedCapability = capability || role || null;
+  if (!normalizedCapability) {
+    throw new Error("target capability is required");
+  }
   if (!teamId) {
-    return parsed;
+    return {
+      ...parsed,
+      target: {
+        ...parsed.target,
+        capability: normalizedCapability,
+      },
+    };
   }
 
-  const registry = compileOperatorAgentRegistry();
+  compileOperatorAgentRegistry();
   const team = getCompiledOperatorTeam(teamId);
   if (!team) {
     throw new Error(`unknown operator team: ${teamId}`);
@@ -101,7 +53,9 @@ export function resolveOperatorTaskEnvelope(input: unknown): OperatorTaskEnvelop
     ...parsed,
     target: {
       ...parsed.target,
+      capability: normalizedCapability,
       team_id: team.id,
+      role: undefined,
     },
     execution: {
       ...parsed.execution,
@@ -109,16 +63,18 @@ export function resolveOperatorTaskEnvelope(input: unknown): OperatorTaskEnvelop
     },
   };
 
-  if (next.target.alias) {
-    const aliasInTeam = team.members.some(
-      (entry) => normalize(entry) === normalize(next.target.alias ?? ""),
-    );
-    if (!aliasInTeam) {
-      throw new Error(`target alias ${next.target.alias} is not a member of team ${team.id}`);
-    }
-  } else {
-    next.target.alias = resolveRecommendedAlias(team, registry.agents, next.target.capability);
-  }
+  next.target.alias = resolveSpecialistTarget({
+    teamId: team.id,
+    capability: next.target.capability,
+    explicitAlias: next.target.alias ?? null,
+    role,
+    runtimePreference:
+      next.execution.runtime === "subagent"
+        ? "subagent"
+        : next.execution.runtime === "acpx"
+          ? "acp"
+          : "any",
+  }).identityId;
 
   if (!hasExplicitTransport(input) && team.dispatchTransport) {
     next.execution.transport = canonicalizeOperatorExecutionTransport(

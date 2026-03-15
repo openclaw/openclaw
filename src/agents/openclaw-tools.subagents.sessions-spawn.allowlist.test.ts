@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import "./test-helpers/fast-core-tools.js";
 import {
   getCallGatewayMock,
@@ -6,11 +9,41 @@ import {
   resetSessionsSpawnConfigOverride,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const callGatewayMock = getCallGatewayMock();
 
 describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
+  async function seedRegistryFixture(): Promise<void> {
+    const { resolveOperatorReferenceSourcePath } =
+      await import("../operator-control/reference-paths.js");
+    const { invalidateRegistryCache } = await import("../operator-control/agent-registry.js");
+    const sourcePath = resolveOperatorReferenceSourcePath("agents.yaml");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      [
+        "agents:",
+        "  - id: bobby-digital",
+        "    name: Bobby Digital",
+        "    specialty: Engineering",
+        "    triggers: [engineering, backend]",
+        "  - id: ghostface",
+        "    name: Ghostface",
+        "    specialty: Backend",
+        "    triggers: [backend]",
+        "teams:",
+        "  - id: engineering",
+        "    name: Engineering",
+        "    lead: bobby-digital",
+        "    route_via_lead: true",
+        "    members: [bobby-digital, ghostface]",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    invalidateRegistryCache({ sourcePath });
+  }
+
   function setAllowAgents(allowAgents: string[]) {
     setSessionsSpawnConfigOverride({
       session: {
@@ -51,8 +84,28 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
+      requesterAgentIdOverride: "main",
     });
     return tool.execute(callId, { task: "do thing", agentId, sandbox });
+  }
+
+  async function executeTeamSpawn(params: {
+    callId: string;
+    teamId: string;
+    capability?: string;
+    role?: string;
+  }) {
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:bobby-digital:main",
+      agentChannel: "whatsapp",
+      requesterAgentIdOverride: "bobby-digital",
+    });
+    return tool.execute(params.callId, {
+      task: "route the work",
+      teamId: params.teamId,
+      ...(params.capability ? { capability: params.capability } : {}),
+      ...(params.role ? { role: params.role } : {}),
+    });
   }
 
   function setResearchUnsandboxedConfig(params?: { includeSandboxedDefault?: boolean }) {
@@ -125,8 +178,9 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSessionsSpawnConfigOverride();
+    const { resetSubagentRegistryForTests } = await import("./subagent-registry.js");
     resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
   });
@@ -290,5 +344,55 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     const details = result.details as { status?: string };
     // Must pass: "research" is in allowAgents even though not in agents.list
     expect(details.status).toBe("accepted");
+  });
+
+  it("resolves teamId + capability to the lead-selected specialist", async () => {
+    await withStateDirEnv("sessions-spawn-team-selector-", async () => {
+      await seedRegistryFixture();
+      setSessionsSpawnConfigOverride({
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          list: [
+            { id: "bobby-digital", subagents: { allowAgents: ["bobby-digital"] } },
+            { id: "ghostface" },
+          ],
+        },
+      });
+      const getChildSessionKey = mockAcceptedSpawn(1000);
+
+      const result = await executeTeamSpawn({
+        callId: "call-team-capability",
+        teamId: "engineering",
+        capability: "backend",
+      });
+
+      expect((result.details as { status?: string }).status).toBe("accepted");
+      expect(getChildSessionKey()?.startsWith("agent:bobby-digital:subagent:")).toBe(true);
+    });
+  });
+
+  it("resolves teamId + role alias the same way", async () => {
+    await withStateDirEnv("sessions-spawn-team-role-", async () => {
+      await seedRegistryFixture();
+      setSessionsSpawnConfigOverride({
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          list: [
+            { id: "bobby-digital", subagents: { allowAgents: ["bobby-digital"] } },
+            { id: "ghostface" },
+          ],
+        },
+      });
+      const getChildSessionKey = mockAcceptedSpawn(1000);
+
+      const result = await executeTeamSpawn({
+        callId: "call-team-role",
+        teamId: "engineering",
+        role: "backend",
+      });
+
+      expect((result.details as { status?: string }).status).toBe("accepted");
+      expect(getChildSessionKey()?.startsWith("agent:bobby-digital:subagent:")).toBe(true);
+    });
   });
 });

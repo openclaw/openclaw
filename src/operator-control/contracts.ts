@@ -46,9 +46,14 @@ export const OPERATOR_EXTERNAL_RECEIPT_SCHEMAS = [
   "AngelaTaskReceiptV1",
 ] as const;
 
-export function canonicalizeOperatorExecutionTransport<
-  T extends (typeof OPERATOR_EXECUTION_TRANSPORTS)[number],
->(transport: T): Exclude<T, typeof LEGACY_DELEGATED_EXECUTION_TRANSPORT> | "delegated-http" {
+export function canonicalizeOperatorExecutionTransport(
+  transport: (typeof OPERATOR_EXECUTION_TRANSPORTS)[number],
+):
+  | Exclude<
+      (typeof OPERATOR_EXECUTION_TRANSPORTS)[number],
+      typeof LEGACY_DELEGATED_EXECUTION_TRANSPORT
+    >
+  | typeof CANONICAL_DELEGATED_EXECUTION_TRANSPORT {
   return transport === LEGACY_DELEGATED_EXECUTION_TRANSPORT
     ? CANONICAL_DELEGATED_EXECUTION_TRANSPORT
     : transport;
@@ -100,11 +105,22 @@ export const taskEnvelopeSchema = z.object({
     id: z.string().trim().min(1),
     kind: z.enum(OPERATOR_REQUESTER_KINDS).default("operator"),
   }),
-  target: z.object({
-    capability: z.string().trim().min(1),
-    team_id: z.string().trim().min(1).nullable().optional(),
-    alias: z.string().trim().min(1).nullable().optional(),
-  }),
+  target: z
+    .object({
+      capability: z.string().trim().optional().default(""),
+      role: z.string().trim().min(1).nullable().optional(),
+      team_id: z.string().trim().min(1).nullable().optional(),
+      alias: z.string().trim().min(1).nullable().optional(),
+    })
+    .superRefine((target, ctx) => {
+      if (!target.capability && !target.role) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "target capability or role is required",
+          path: ["capability"],
+        });
+      }
+    }),
   objective: z.string().trim().min(1),
   tier: z.enum(OPERATOR_TASK_TIERS).default("STANDARD"),
   inputs: z.record(z.string(), z.unknown()).default({}),

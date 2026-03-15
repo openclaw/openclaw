@@ -21,6 +21,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "sessions_list",
   "sessions_history",
   "sessions_send",
+  "sessions_schedule",
   "sessions_spawn",
   "sessions_yield",
   "subagents",

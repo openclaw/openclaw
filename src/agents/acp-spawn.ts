@@ -64,6 +64,9 @@ export type SpawnAcpParams = {
   task: string;
   label?: string;
   agentId?: string;
+  teamId?: string;
+  capability?: string;
+  role?: string;
   resumeSessionId?: string;
   cwd?: string;
   mode?: SpawnAcpMode;
@@ -73,6 +76,7 @@ export type SpawnAcpParams = {
 };
 
 export type SpawnAcpContext = {
+  cfg?: OpenClawConfig;
   agentSessionKey?: string;
   agentChannel?: string;
   agentAccountId?: string;
@@ -89,6 +93,10 @@ export type SpawnAcpResult = {
   streamLogPath?: string;
   note?: string;
   error?: string;
+  resolvedAgentId?: string;
+  teamId?: string | null;
+  capability?: string | null;
+  roleAliasUsed?: boolean;
 };
 
 export const ACP_SPAWN_ACCEPTED_NOTE =
@@ -404,7 +412,34 @@ export async function spawnAcpDirect(
   params: SpawnAcpParams,
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
-  const cfg = loadConfig();
+  const requestedAgentId = params.agentId?.trim();
+  const requestedTeamId = params.teamId?.trim();
+  const requestedCapability = params.capability?.trim();
+  const requestedRole = params.role?.trim();
+  if (requestedAgentId && (requestedTeamId || requestedCapability || requestedRole)) {
+    return {
+      status: "error",
+      error: "agentId cannot be combined with teamId, capability, or role",
+    };
+  }
+  if ((requestedCapability || requestedRole) && !requestedTeamId) {
+    return {
+      status: "error",
+      error: "capability/role requires teamId",
+    };
+  }
+  if (
+    requestedCapability &&
+    requestedRole &&
+    requestedCapability.toLowerCase() !== requestedRole.toLowerCase()
+  ) {
+    return {
+      status: "error",
+      error: "capability and role must match when both are provided",
+    };
+  }
+
+  const cfg = ctx.cfg ?? loadConfig();
   const requesterInternalKey = resolveRequesterInternalSessionKey({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -495,17 +530,45 @@ export async function spawnAcpDirect(
     requesterHeartbeatRelayRouteUsable;
   const effectiveStreamToParent = streamToParentRequested || implicitStreamToParent;
 
-  const targetAgentResult = resolveTargetAcpAgentId({
-    requestedAgentId: params.agentId,
-    cfg,
-  });
-  if (!targetAgentResult.ok) {
-    return {
-      status: "error",
-      error: targetAgentResult.error,
-    };
+  let resolvedTeamId: string | null = null;
+  let resolvedCapability: string | null = null;
+  let roleAliasUsed = false;
+  let targetAgentId: string;
+  if (requestedTeamId) {
+    const requesterAgentId = normalizeAgentId(parseAgentSessionKey(requesterInternalKey)?.agentId);
+    try {
+      const { resolveSpecialistTarget } =
+        await import("../operator-control/specialist-resolver.js");
+      const resolved = resolveSpecialistTarget({
+        requesterId: requesterAgentId,
+        teamId: requestedTeamId,
+        capability: requestedCapability,
+        role: requestedRole,
+        runtimePreference: "acp",
+      });
+      targetAgentId = normalizeAgentId(resolved.identityId);
+      resolvedTeamId = resolved.teamId;
+      resolvedCapability = resolved.capability;
+      roleAliasUsed = resolved.roleAliasUsed;
+    } catch (error) {
+      return {
+        status: "error",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  } else {
+    const targetAgentResult = resolveTargetAcpAgentId({
+      requestedAgentId: params.agentId,
+      cfg,
+    });
+    if (!targetAgentResult.ok) {
+      return {
+        status: "error",
+        error: targetAgentResult.error,
+      };
+    }
+    targetAgentId = targetAgentResult.agentId;
   }
-  const targetAgentId = targetAgentResult.agentId;
   const agentPolicyError = resolveAcpAgentPolicyError(cfg, targetAgentId);
   if (agentPolicyError) {
     return {
@@ -749,6 +812,10 @@ export async function spawnAcpDirect(
       mode: spawnMode,
       ...(streamLogPath ? { streamLogPath } : {}),
       note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+      resolvedAgentId: targetAgentId,
+      teamId: resolvedTeamId,
+      capability: resolvedCapability,
+      roleAliasUsed,
     };
   }
 
@@ -758,5 +825,9 @@ export async function spawnAcpDirect(
     runId: childRunId,
     mode: spawnMode,
     note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+    resolvedAgentId: targetAgentId,
+    teamId: resolvedTeamId,
+    capability: resolvedCapability,
+    roleAliasUsed,
   };
 }

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -48,6 +49,9 @@ export type SpawnSubagentParams = {
   task: string;
   label?: string;
   agentId?: string;
+  teamId?: string;
+  capability?: string;
+  role?: string;
   model?: string;
   thinking?: string;
   runTimeoutSeconds?: number;
@@ -66,6 +70,7 @@ export type SpawnSubagentParams = {
 };
 
 export type SpawnSubagentContext = {
+  cfg?: OpenClawConfig;
   agentSessionKey?: string;
   agentChannel?: string;
   agentAccountId?: string;
@@ -92,6 +97,10 @@ export type SpawnSubagentResult = {
   note?: string;
   modelApplied?: boolean;
   error?: string;
+  resolvedAgentId?: string;
+  teamId?: string | null;
+  capability?: string | null;
+  roleAliasUsed?: boolean;
   attachments?: {
     count: number;
     totalBytes: number;
@@ -261,6 +270,32 @@ export async function spawnSubagentDirect(
   const task = params.task;
   const label = params.label?.trim() || "";
   const requestedAgentId = params.agentId?.trim();
+  const requestedTeamId = params.teamId?.trim();
+  const requestedCapability = params.capability?.trim();
+  const requestedRole = params.role?.trim();
+
+  if (requestedAgentId && (requestedTeamId || requestedCapability || requestedRole)) {
+    return {
+      status: "error",
+      error: "agentId cannot be combined with teamId, capability, or role",
+    };
+  }
+  if ((requestedCapability || requestedRole) && !requestedTeamId) {
+    return {
+      status: "error",
+      error: "capability/role requires teamId",
+    };
+  }
+  if (
+    requestedCapability &&
+    requestedRole &&
+    requestedCapability.toLowerCase() !== requestedRole.toLowerCase()
+  ) {
+    return {
+      status: "error",
+      error: "capability and role must match when both are provided",
+    };
+  }
 
   // Reject malformed agentId before normalizeAgentId can mangle it.
   // Without this gate, error-message strings like "Agent not found: xyz" pass
@@ -300,7 +335,7 @@ export async function spawnSubagentDirect(
     threadId: ctx.agentThreadId,
   });
   const hookRunner = getGlobalHookRunner();
-  const cfg = loadConfig();
+  const cfg = ctx.cfg ?? loadConfig();
 
   // When agent omits runTimeoutSeconds, use the config default.
   // Falls back to 0 (no timeout) if config key is also unset,
@@ -353,7 +388,32 @@ export async function spawnSubagentDirect(
   const requesterAgentId = normalizeAgentId(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
-  const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  let resolvedTeamId: string | null = null;
+  let resolvedCapability: string | null = null;
+  let roleAliasUsed = false;
+  let targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  if (!requestedAgentId && requestedTeamId) {
+    try {
+      const { resolveSpecialistTarget } =
+        await import("../operator-control/specialist-resolver.js");
+      const resolved = resolveSpecialistTarget({
+        requesterId: requesterAgentId,
+        teamId: requestedTeamId,
+        capability: requestedCapability,
+        role: requestedRole,
+        runtimePreference: "subagent",
+      });
+      targetAgentId = normalizeAgentId(resolved.identityId);
+      resolvedTeamId = resolved.teamId;
+      resolvedCapability = resolved.capability;
+      roleAliasUsed = resolved.roleAliasUsed;
+    } catch (error) {
+      return {
+        status: "error",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
   if (targetAgentId !== requesterAgentId) {
     const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");
@@ -711,6 +771,10 @@ export async function spawnSubagentDirect(
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
+      resolvedAgentId: targetAgentId,
+      resolvedTeamId: resolvedTeamId,
+      resolvedCapability: resolvedCapability,
+      roleAliasUsed,
     });
   } catch (err) {
     if (attachmentAbsDir) {
@@ -783,6 +847,10 @@ export async function spawnSubagentDirect(
     mode: spawnMode,
     note,
     modelApplied: resolvedModel ? modelApplied : undefined,
+    resolvedAgentId: targetAgentId,
+    teamId: resolvedTeamId,
+    capability: resolvedCapability,
+    roleAliasUsed,
     attachments: attachmentsReceipt,
   };
 }

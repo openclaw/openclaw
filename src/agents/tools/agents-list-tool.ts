@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
+import { listVisibleSpecialistTeams } from "../../operator-control/specialist-resolver.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -87,11 +88,16 @@ export function createAgentsListTool(opts?: {
         name: configuredNameMap.get(id),
         configured: configuredIds.includes(id),
       }));
+      const teams = listVisibleSpecialistTeams({
+        requesterId: requesterAgentId,
+        configuredAgentIds: configuredIds,
+      });
 
       return jsonResult({
         requester: requesterAgentId,
         allowAny,
         agents,
+        teams,
       });
     },
   };

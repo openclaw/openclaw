@@ -18,6 +18,7 @@ export type CompiledOperatorAgentRecord = {
   triggers: string[];
   notes: string | null;
   teams: string[];
+  maxConcurrentSessions: number;
 };
 
 export type CompiledOperatorSkillOwnership = {
@@ -33,6 +34,8 @@ export type CompiledOperatorK8sRecord = {
   role: string | null;
   namespace: string | null;
   status: string | null;
+  triggers: string[];
+  maxConcurrentSessions: number;
 };
 
 export type CompiledOperatorIdentityRecord = {
@@ -40,8 +43,10 @@ export type CompiledOperatorIdentityRecord = {
   kind: "agent" | "runtime";
   name: string;
   role: string | null;
+  capabilities: string[];
   teamIds: string[];
   leadTeamIds: string[];
+  maxConcurrentSessions: number;
 };
 
 export type CompiledOperatorDelegatedTransportConfig = {
@@ -58,13 +63,16 @@ export type CompiledOperatorTeamRecord = {
   id: string;
   name: string;
   kind: string | null;
+  parentTeamId: string | null;
   lead: string | null;
   leadKind: "agent" | "runtime" | "external" | null;
   routeViaLead: boolean;
   mission: string | null;
   members: string[];
   runtimeIds: string[];
+  memberIdentityIds: string[];
   ownsCapabilities: string[];
+  maxParallel: number | null;
   dispatchTransport: string | null;
   dispatchEndpointEnv: string | null;
   dispatchPath: string | null;
@@ -73,6 +81,8 @@ export type CompiledOperatorTeamRecord = {
   dispatchDefaultAlias: string | null;
   routingPolicy: string | null;
   notes: string | null;
+  ancestorTeamIds: string[];
+  descendantTeamIds: string[];
 };
 
 export type CompiledOperatorAgentRegistry = {
@@ -127,6 +137,14 @@ function asStringArray(value: unknown): string[] {
 
 function asBoolean(value: unknown): boolean {
   return value === true;
+}
+
+function asPositiveInt(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  const normalized = Math.floor(value);
+  return normalized >= 1 ? normalized : null;
 }
 
 function ensureUnique(values: string[], label: string): string[] {
@@ -184,6 +202,7 @@ function compileAgentRecord(entry: unknown): CompiledOperatorAgentRecord {
     triggers: asStringArray(record.triggers),
     notes: asString(record.notes),
     teams: [],
+    maxConcurrentSessions: asPositiveInt(record.max_concurrent_sessions) ?? 1,
   };
 }
 
@@ -200,13 +219,16 @@ function compileTeamRecord(entry: unknown): CompiledOperatorTeamRecord {
     id,
     name: asString(record.name) ?? id,
     kind: asString(record.kind),
+    parentTeamId: asString(record.parent_team_id),
     lead: asString(record.lead),
     leadKind: null,
     routeViaLead: asBoolean(record.route_via_lead),
     mission: asString(record.mission),
     members: asStringArray(record.members),
     runtimeIds: asStringArray(record.runtime_ids),
+    memberIdentityIds: [],
     ownsCapabilities: asStringArray(record.owns_capabilities),
+    maxParallel: asPositiveInt(record.max_parallel),
     dispatchTransport: asString(record.dispatch_transport),
     dispatchEndpointEnv: asString(record.dispatch_endpoint_env),
     dispatchPath: asString(record.dispatch_path),
@@ -215,6 +237,8 @@ function compileTeamRecord(entry: unknown): CompiledOperatorTeamRecord {
     dispatchDefaultAlias: asString(record.dispatch_default_alias),
     routingPolicy: asString(record.routing_policy),
     notes: asString(record.notes),
+    ancestorTeamIds: [],
+    descendantTeamIds: [],
   };
 }
 
@@ -265,6 +289,8 @@ function compileK8sRecord(entry: unknown): CompiledOperatorK8sRecord {
     role: asString(record.role),
     namespace: asString(record.namespace),
     status: asString(record.status),
+    triggers: asStringArray(record.triggers),
+    maxConcurrentSessions: asPositiveInt(record.max_concurrent_sessions) ?? 1,
   };
 }
 
@@ -306,7 +332,7 @@ function buildIdentityDirectory(params: {
     }
 
     const leadKey = team.lead.toLowerCase();
-    if (team.members.some((member) => member.toLowerCase() === leadKey)) {
+    if (params.agents.some((agent) => agent.id.toLowerCase() === leadKey)) {
       const current = leadTeamIdsByAgent.get(leadKey) ?? [];
       if (!current.includes(team.id)) {
         current.push(team.id);
@@ -314,7 +340,7 @@ function buildIdentityDirectory(params: {
       leadTeamIdsByAgent.set(leadKey, current);
     }
 
-    if (team.runtimeIds.some((runtimeId) => runtimeId.toLowerCase() === leadKey)) {
+    if (params.k8sCluster.some((runtime) => runtime.id.toLowerCase() === leadKey)) {
       const current = leadTeamIdsByRuntime.get(leadKey) ?? [];
       if (!current.includes(team.id)) {
         current.push(team.id);
@@ -329,16 +355,24 @@ function buildIdentityDirectory(params: {
       kind: "agent" as const,
       name: agent.name,
       role: agent.role,
+      capabilities: Array.from(
+        new Set([...(agent.triggers ?? []), ...(agent.specialty ? [agent.specialty] : [])]),
+      ),
       teamIds: teamIdsByAgent.get(agent.id.toLowerCase()) ?? [],
       leadTeamIds: leadTeamIdsByAgent.get(agent.id.toLowerCase()) ?? [],
+      maxConcurrentSessions: agent.maxConcurrentSessions,
     })),
     ...params.k8sCluster.map((runtime) => ({
       id: runtime.id,
       kind: "runtime" as const,
       name: runtime.name ?? runtime.id,
       role: runtime.role,
+      capabilities: Array.from(
+        new Set([...(runtime.triggers ?? []), ...(runtime.role ? [runtime.role] : [])]),
+      ),
       teamIds: teamIdsByRuntime.get(runtime.id.toLowerCase()) ?? [],
       leadTeamIds: leadTeamIdsByRuntime.get(runtime.id.toLowerCase()) ?? [],
+      maxConcurrentSessions: runtime.maxConcurrentSessions,
     })),
   ];
 
@@ -373,6 +407,7 @@ export function compileOperatorAgentRegistry(params?: {
     compiledTeams.map((entry) => entry.id),
     "team id",
   );
+  const teamIds = new Set(compiledTeams.map((entry) => entry.id.toLowerCase()));
 
   const pipelineOrder = ensureUnique(
     asStringArray(parsed.pipeline_order).map((entry) => entry.trim()),
@@ -406,6 +441,9 @@ export function compileOperatorAgentRegistry(params?: {
     }
   }
   for (const team of compiledTeams) {
+    if (team.parentTeamId && !teamIds.has(team.parentTeamId.toLowerCase())) {
+      throw new Error(`team references unknown parent_team_id: ${team.parentTeamId}`);
+    }
     if (team.lead) {
       const leadKey = team.lead.toLowerCase();
       if (agentIds.has(leadKey)) {
@@ -443,6 +481,40 @@ export function compileOperatorAgentRegistry(params?: {
         throw new Error(`team references unknown runtime_id: ${runtimeId}`);
       }
     }
+    team.memberIdentityIds = Array.from(new Set([...team.members, ...team.runtimeIds]));
+  }
+
+  const teamsById = new Map(compiledTeams.map((entry) => [entry.id.toLowerCase(), entry]));
+  const visitTeam = (
+    team: CompiledOperatorTeamRecord,
+    visiting: Set<string>,
+    visited: Set<string>,
+  ) => {
+    const key = team.id.toLowerCase();
+    if (visited.has(key)) {
+      return;
+    }
+    if (visiting.has(key)) {
+      throw new Error(`team hierarchy contains a cycle at ${team.id}`);
+    }
+    visiting.add(key);
+    const parent = team.parentTeamId ? teamsById.get(team.parentTeamId.toLowerCase()) : undefined;
+    if (parent) {
+      visitTeam(parent, visiting, visited);
+      team.ancestorTeamIds = Array.from(new Set([...parent.ancestorTeamIds, parent.id]));
+    }
+    visiting.delete(key);
+    visited.add(key);
+  };
+  const visitedTeams = new Set<string>();
+  for (const team of compiledTeams) {
+    visitTeam(team, new Set<string>(), visitedTeams);
+  }
+  for (const team of compiledTeams) {
+    team.descendantTeamIds = compiledTeams
+      .filter((candidate) => candidate.ancestorTeamIds.includes(team.id))
+      .map((candidate) => candidate.id)
+      .toSorted((left, right) => left.localeCompare(right));
   }
   const snapshot: CompiledOperatorAgentRegistry = {
     schema: "OperatorAgentRegistryV1",

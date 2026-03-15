@@ -70,6 +70,7 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
  */
 const SUBAGENT_TOOL_DENY_LEAF = [
   "subagents",
+  "sessions_schedule",
   "sessions_list",
   "sessions_history",
   "sessions_spawn",

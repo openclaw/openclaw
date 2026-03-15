@@ -98,6 +98,28 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("passes team-based selectors through to subagent spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-team", {
+      task: "build frontend",
+      teamId: "frontend",
+      capability: "frontend",
+      role: "frontend",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: "frontend",
+        capability: "frontend",
+        role: "frontend",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("routes to ACP runtime when runtime=acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -198,6 +220,38 @@ describe("sessions_spawn tool", () => {
     expect(JSON.stringify(result)).toContain("resumeSessionId is only supported for runtime=acp");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects mixed agentId and team selectors", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-selector-mix", {
+      task: "mixed selectors",
+      agentId: "method-man",
+      teamId: "frontend",
+      capability: "frontend",
+    });
+
+    expect(JSON.stringify(result)).toContain(
+      "agentId cannot be combined with teamId, capability, or role",
+    );
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects capability without teamId", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-selector-missing-team", {
+      task: "bad selector",
+      capability: "frontend",
+    });
+
+    expect(JSON.stringify(result)).toContain("capability/role requires teamId");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("rejects attachments for ACP runtime", async () => {

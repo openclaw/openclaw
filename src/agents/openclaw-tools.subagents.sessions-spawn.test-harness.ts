@@ -55,7 +55,10 @@ export function setSessionsSpawnConfigOverride(next: SessionsSpawnTestConfig): v
 export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   // Dynamic import: ensure harness mocks are installed before tool modules load.
   const { createSessionsSpawnTool } = await import("./tools/sessions-spawn-tool.js");
-  return createSessionsSpawnTool(opts);
+  return createSessionsSpawnTool({
+    ...opts,
+    cfgOverride: hoisted.state.configOverride,
+  });
 }
 
 export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMockOptions): {

@@ -1,6 +1,8 @@
 import { Type } from "@sinclair/typebox";
+import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
+import { ACP_SPAWN_MODES, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
@@ -9,6 +11,7 @@ import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+const SESSIONS_SPAWN_STREAM_TARGETS = ["parent"] as const;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "target",
   "transport",
@@ -25,6 +28,9 @@ const SessionsSpawnToolSchema = Type.Object({
   label: Type.Optional(Type.String()),
   runtime: optionalStringEnum(SESSIONS_SPAWN_RUNTIMES),
   agentId: Type.Optional(Type.String()),
+  teamId: Type.Optional(Type.String()),
+  capability: Type.Optional(Type.String()),
+  role: Type.Optional(Type.String()),
   resumeSessionId: Type.Optional(
     Type.String({
       description:
@@ -41,7 +47,7 @@ const SessionsSpawnToolSchema = Type.Object({
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
-  streamTo: optionalStringEnum(ACP_SPAWN_STREAM_TARGETS),
+  streamTo: optionalStringEnum(SESSIONS_SPAWN_STREAM_TARGETS),
 
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -67,6 +73,7 @@ const SessionsSpawnToolSchema = Type.Object({
 
 export function createSessionsSpawnTool(
   opts?: {
+    cfgOverride?: OpenClawConfig;
     agentSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
@@ -97,6 +104,9 @@ export function createSessionsSpawnTool(
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
+      const requestedTeamId = readStringParam(params, "teamId");
+      const requestedCapability = readStringParam(params, "capability");
+      const requestedRole = readStringParam(params, "role");
       const resumeSessionId = readStringParam(params, "resumeSessionId");
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
@@ -127,6 +137,31 @@ export function createSessionsSpawnTool(
           }>)
         : undefined;
 
+      if (requestedAgentId && (requestedTeamId || requestedCapability || requestedRole)) {
+        return jsonResult({
+          status: "error",
+          error: "agentId cannot be combined with teamId, capability, or role",
+        });
+      }
+
+      if ((requestedCapability || requestedRole) && !requestedTeamId) {
+        return jsonResult({
+          status: "error",
+          error: "capability/role requires teamId",
+        });
+      }
+
+      if (
+        requestedCapability &&
+        requestedRole &&
+        requestedCapability.toLowerCase() !== requestedRole.toLowerCase()
+      ) {
+        return jsonResult({
+          status: "error",
+          error: "capability and role must match when both are provided",
+        });
+      }
+
       if (streamTo && runtime !== "acp") {
         return jsonResult({
           status: "error",
@@ -142,6 +177,7 @@ export function createSessionsSpawnTool(
       }
 
       if (runtime === "acp") {
+        const cfg = opts?.cfgOverride ?? loadConfig();
         if (Array.isArray(attachments) && attachments.length > 0) {
           return jsonResult({
             status: "error",
@@ -154,6 +190,9 @@ export function createSessionsSpawnTool(
             task,
             label: label || undefined,
             agentId: requestedAgentId,
+            teamId: requestedTeamId,
+            capability: requestedCapability,
+            role: requestedRole,
             resumeSessionId,
             cwd,
             mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
@@ -162,6 +201,7 @@ export function createSessionsSpawnTool(
             streamTo,
           },
           {
+            cfg,
             agentSessionKey: opts?.agentSessionKey,
             agentChannel: opts?.agentChannel,
             agentAccountId: opts?.agentAccountId,
@@ -173,11 +213,15 @@ export function createSessionsSpawnTool(
         return jsonResult(result);
       }
 
+      const cfg = opts?.cfgOverride ?? loadConfig();
       const result = await spawnSubagentDirect(
         {
           task,
           label: label || undefined,
           agentId: requestedAgentId,
+          teamId: requestedTeamId,
+          capability: requestedCapability,
+          role: requestedRole,
           model: modelOverride,
           thinking: thinkingOverrideRaw,
           runTimeoutSeconds,
@@ -193,6 +237,7 @@ export function createSessionsSpawnTool(
               : undefined,
         },
         {
+          cfg,
           agentSessionKey: opts?.agentSessionKey,
           agentChannel: opts?.agentChannel,
           agentAccountId: opts?.agentAccountId,

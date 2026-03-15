@@ -1174,6 +1174,10 @@ export function registerSubagentRun(params: {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  resolvedAgentId?: string;
+  resolvedTeamId?: string | null;
+  resolvedCapability?: string | null;
+  roleAliasUsed?: boolean;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -1207,6 +1211,10 @@ export function registerSubagentRun(params: {
     attachmentsDir: params.attachmentsDir,
     attachmentsRootDir: params.attachmentsRootDir,
     retainAttachmentsOnKeep: params.retainAttachmentsOnKeep,
+    resolvedAgentId: params.resolvedAgentId,
+    resolvedTeamId: params.resolvedTeamId,
+    resolvedCapability: params.resolvedCapability,
+    roleAliasUsed: params.roleAliasUsed,
   });
   ensureListener();
   persistSubagentRuns();

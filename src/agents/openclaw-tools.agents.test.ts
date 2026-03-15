@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 
 let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
@@ -19,6 +22,43 @@ import { createOpenClawTools } from "./openclaw-tools.js";
 
 describe("agents_list", () => {
   type AgentConfig = NonNullable<NonNullable<typeof configOverride.agents>["list"]>[number];
+
+  async function seedRegistryFixture(): Promise<void> {
+    const { resolveOperatorReferenceSourcePath } =
+      await import("../operator-control/reference-paths.js");
+    const { invalidateRegistryCache } = await import("../operator-control/agent-registry.js");
+    const sourcePath = resolveOperatorReferenceSourcePath("agents.yaml");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      [
+        "agents:",
+        "  - id: bobby-digital",
+        "    name: Bobby Digital",
+        "    specialty: Engineering",
+        "    triggers: [engineering]",
+        "  - id: method-man",
+        "    name: Method Man",
+        "    specialty: Frontend",
+        "    triggers: [frontend, ui]",
+        "teams:",
+        "  - id: engineering",
+        "    name: Engineering",
+        "    lead: bobby-digital",
+        "    members: [bobby-digital]",
+        "    route_via_lead: true",
+        "  - id: frontend",
+        "    name: Frontend",
+        "    parent_team_id: engineering",
+        "    lead: method-man",
+        "    members: [method-man]",
+        "    owns_capabilities: [frontend, ui]",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    invalidateRegistryCache({ sourcePath });
+  }
 
   function setConfigWithAgentList(agentList: AgentConfig[]) {
     configOverride = {
@@ -125,5 +165,39 @@ describe("agents_list", () => {
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
     const research = agents?.find((agent) => agent.id === "research");
     expect(research?.configured).toBe(false);
+  });
+
+  it("includes caller-scoped team metadata when the operator registry is available", async () => {
+    await withStateDirEnv("agents-list-teams-", async () => {
+      await seedRegistryFixture();
+      setConfigWithAgentList([
+        {
+          id: "bobby-digital",
+          name: "Bobby",
+          subagents: {
+            allowAgents: ["method-man"],
+          },
+        },
+        {
+          id: "method-man",
+          name: "Method",
+        },
+      ]);
+
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:bobby-digital:main",
+      }).find((candidate) => candidate.name === "agents_list");
+      if (!tool) {
+        throw new Error("missing agents_list tool");
+      }
+
+      const result = await tool.execute("call-teams", {});
+      expect((result as { details?: { teams?: unknown[] } }).details?.teams).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "engineering" }),
+          expect.objectContaining({ id: "frontend" }),
+        ]),
+      );
+    });
   });
 });

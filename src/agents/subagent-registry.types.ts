@@ -55,4 +55,8 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  resolvedAgentId?: string;
+  resolvedTeamId?: string | null;
+  resolvedCapability?: string | null;
+  roleAliasUsed?: boolean;
 };
