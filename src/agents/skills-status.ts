@@ -186,10 +186,10 @@ function buildSkillStatus(
       (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
     );
   const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
-  const bundled =
-    bundledNames && bundledNames.size > 0
-      ? bundledNames.has(entry.skill.name)
-      : entry.skill.source === "openclaw-bundled";
+  // Only mark as bundled if the actual source path is openclaw-bundled.
+  // Previously this checked bundledNames.has(entry.skill.name), which incorrectly
+  // marked workspace-installed skills as bundled when they shared names with bundled skills.
+  const bundled = entry.skill.source === "openclaw-bundled";
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
     evaluateEntryRequirementsForCurrentPlatform({
