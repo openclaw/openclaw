@@ -469,7 +469,7 @@
     },
     {
       "source": "/mac/release",
-      "destination": "/platforms/mac/release"
+      "destination": "/reference/RELEASING"
     },
     {
       "source": "/mac/remote",
@@ -1166,7 +1166,6 @@
                   "platforms/mac/permissions",
                   "platforms/mac/remote",
                   "platforms/mac/signing",
-                  "platforms/mac/release",
                   "platforms/mac/bundled-gateway",
                   "platforms/mac/xpc",
                   "platforms/mac/skills",
