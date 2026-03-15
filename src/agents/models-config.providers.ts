@@ -6,7 +6,13 @@ import {
 } from "../providers/github-copilot-token.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  resolveAuthProfileEligibility,
+  listProfilesForProvider,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
+import { findNormalizedProviderValue } from "./model-selection.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
@@ -879,6 +885,7 @@ export async function resolveImplicitProviders(
   if (!providers["github-copilot"]) {
     const implicitCopilot = await resolveImplicitCopilotProvider({
       agentDir: params.agentDir,
+      config: params.config,
       env,
     });
     if (implicitCopilot) {
@@ -910,6 +917,7 @@ export async function resolveImplicitProviders(
 
 export async function resolveImplicitCopilotProvider(params: {
   agentDir: string;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderConfig | null> {
   const env = params.env ?? process.env;
@@ -926,16 +934,90 @@ export async function resolveImplicitCopilotProvider(params: {
 
   let selectedGithubToken = githubToken;
   if (!selectedGithubToken && hasProfile) {
-    // Use the first available profile as a default for discovery (it will be
-    // re-resolved per-run by the embedded runner).
-    const profileId = listProfilesForProvider(authStore, "github-copilot")[0];
-    const profile = profileId ? authStore.profiles[profileId] : undefined;
-    if (profile && profile.type === "token") {
+    // Use the standard profile ordering so discovery respects auth.order and
+    // other auth-profile eligibility rules.
+    const orderedProfileIds = resolveAuthProfileOrder({
+      cfg: params.config,
+      store: authStore,
+      provider: "github-copilot",
+    });
+    const configuredOrder =
+      orderedProfileIds.length === 0
+        ? findNormalizedProviderValue(params.config?.auth?.order, "github-copilot")?.filter(
+            (profileId) =>
+              resolveAuthProfileEligibility({
+                cfg: params.config,
+                store: authStore,
+                provider: "github-copilot",
+                profileId,
+              }).eligible,
+          ) ?? []
+        : [];
+    const profileIds =
+      orderedProfileIds.length > 0
+        ? orderedProfileIds
+        : configuredOrder.length > 0
+          ? configuredOrder
+          : listProfilesForProvider(authStore, "github-copilot");
+    const seenProfileIds = new Set<string>();
+    for (const profileId of profileIds) {
+      if (seenProfileIds.has(profileId)) {
+        continue;
+      }
+      seenProfileIds.add(profileId);
+      if (
+        !resolveAuthProfileEligibility({
+          cfg: params.config,
+          store: authStore,
+          provider: "github-copilot",
+          profileId,
+        }).eligible
+      ) {
+        continue;
+      }
+      const profile = authStore.profiles[profileId];
+      if (!profile || profile.type !== "token") {
+        continue;
+      }
       selectedGithubToken = profile.token?.trim() ?? "";
       if (!selectedGithubToken) {
         const tokenRef = coerceSecretRef(profile.tokenRef);
         if (tokenRef?.source === "env" && tokenRef.id.trim()) {
           selectedGithubToken = (env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim();
+        }
+      }
+      if (selectedGithubToken) {
+        break;
+      }
+    }
+    if (!selectedGithubToken && orderedProfileIds.length === 0 && configuredOrder.length > 0) {
+      for (const profileId of listProfilesForProvider(authStore, "github-copilot")) {
+        if (seenProfileIds.has(profileId)) {
+          continue;
+        }
+        if (
+          !resolveAuthProfileEligibility({
+            cfg: params.config,
+            store: authStore,
+            provider: "github-copilot",
+            profileId,
+          }).eligible
+        ) {
+          continue;
+        }
+        const profile = authStore.profiles[profileId];
+        if (!profile || profile.type !== "token") {
+          continue;
+        }
+        selectedGithubToken = profile.token?.trim() ?? "";
+        if (!selectedGithubToken) {
+          const tokenRef = coerceSecretRef(profile.tokenRef);
+          if (tokenRef?.source === "env" && tokenRef.id.trim()) {
+            selectedGithubToken = (env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim();
+          }
+        }
+        if (selectedGithubToken) {
+          break;
         }
       }
     }
