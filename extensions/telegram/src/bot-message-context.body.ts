@@ -25,6 +25,7 @@ import type {
   TelegramTopicConfig,
 } from "../../../src/config/types.js";
 import { logVerbose } from "../../../src/globals.js";
+import { mediaKindFromMime } from "../../../src/media/constants.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed } from "./bot-access.js";
 import type {
@@ -166,9 +167,7 @@ export async function resolveTelegramInboundBody(params: {
   }
 
   let bodyText = rawBody;
-  const hasAudio = allMedia.some((media) =>
-    media.contentType?.split(";")[0]?.trim().toLowerCase().startsWith("audio/"),
-  );
+  const hasAudio = allMedia.some((media) => mediaKindFromMime(media.contentType) === "audio");
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;

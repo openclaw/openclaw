@@ -12,7 +12,7 @@ export function mediaKindFromMime(mime?: string | null): MediaKind | undefined {
   // Normalize casing and strip MIME parameters (e.g. "; codecs=opus") so
   // mixed-case values like "Audio/Ogg" match startsWith checks and
   // parameterized values like "application/pdf; charset=utf-8" match exact equality.
-  const normalized = mime.split(";")[0]?.trim().toLowerCase();
+  const normalized = mime.split(";")[0].trim().toLowerCase();
   if (!normalized) {
     return undefined;
   }
