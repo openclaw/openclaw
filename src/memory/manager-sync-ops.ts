@@ -683,12 +683,14 @@ export abstract class MemoryManagerSyncOps {
     if (params?.force) {
       return true;
     }
+    // Check needsFullReindex BEFORE reason-based early return to ensure
+    // session data is not silently dropped on gateway restart.
+    if (needsFullReindex) {
+      return true;
+    }
     const reason = params?.reason;
     if (reason === "session-start" || reason === "watch") {
       return false;
-    }
-    if (needsFullReindex) {
-      return true;
     }
     return this.sessionsDirty && this.sessionsDirtyFiles.size > 0;
   }
