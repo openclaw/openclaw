@@ -83,7 +83,7 @@ function buildButtonsBlock(raw: string, index: number): SlackBlock | null {
     block_id: `openclaw_reply_buttons_${index}`,
     elements: choices.map((choice, choiceIndex) => ({
       type: "button",
-      action_id: SLACK_REPLY_BUTTON_ACTION_ID,
+      action_id: `${SLACK_REPLY_BUTTON_ACTION_ID}:${index}_${choiceIndex}`,
       text: {
         type: "plain_text",
         text: truncateSlackText(choice.label, SLACK_PLAIN_TEXT_MAX),
@@ -114,7 +114,7 @@ function buildSelectBlock(raw: string, index: number): SlackBlock | null {
     elements: [
       {
         type: "static_select",
-        action_id: SLACK_REPLY_SELECT_ACTION_ID,
+        action_id: `${SLACK_REPLY_SELECT_ACTION_ID}:${index}`,
         placeholder: {
           type: "plain_text",
           text: truncateSlackText(placeholder, SLACK_PLAIN_TEXT_MAX),
