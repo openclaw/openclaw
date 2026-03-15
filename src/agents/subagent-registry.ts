@@ -57,6 +57,7 @@ import {
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { rehydrateSessionStoreEntries, routeResumedRun } from "./subagent-resume.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -534,18 +535,6 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     return false;
   }
   const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
-  const finalizeAnnounceCleanup = (didAnnounce: boolean) => {
-    void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce).catch((err) => {
-      defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
-      const current = subagentRuns.get(runId);
-      if (!current || current.cleanupCompletedAt) {
-        return;
-      }
-      current.cleanupHandled = false;
-      persistSubagentRuns();
-    });
-  };
-
   void runSubagentAnnounceFlow({
     childSessionKey: entry.childSessionKey,
     childRunId: entry.runId,
@@ -567,13 +556,13 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
   })
     .then((didAnnounce) => {
-      finalizeAnnounceCleanup(didAnnounce);
+      void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
     })
     .catch((error) => {
       defaultRuntime.log(
         `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
       );
-      finalizeAnnounceCleanup(false);
+      void finalizeSubagentCleanup(runId, entry.cleanup, false);
     });
   return true;
 }
@@ -650,14 +639,59 @@ function resumeSubagentRun(runId: string) {
     return;
   }
 
-  // Wait for completion again after restart.
+  // Classify the run and route to the appropriate recovery path.
   const cfg = loadConfig();
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, entry.runTimeoutSeconds);
+  const handled = routeResumedRun({
+    runId,
+    entry,
+    waitTimeoutMs,
+    onCompleteReplay: async (replayRunId, endedAt) => {
+      await completeSubagentRun({
+        runId: replayRunId,
+        endedAt,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
+        triggerCleanup: true,
+      });
+    },
+    onCompleteRedispatch: async (redispatchRunId, endedAt, outcome) => {
+      const runOutcome =
+        outcome.status === "error"
+          ? {
+              status: "error" as const,
+              error: (outcome as { status: string; error?: string }).error,
+            }
+          : outcome.status === "timeout"
+            ? { status: "timeout" as const }
+            : { status: "ok" as const };
+      await completeSubagentRun({
+        runId: redispatchRunId,
+        endedAt,
+        outcome: runOutcome,
+        reason:
+          outcome.status === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
+        sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
+        triggerCleanup: true,
+      });
+    },
+  });
+  if (handled) {
+    resumedRuns.add(runId);
+    return;
+  }
+
+  // Default: wait for completion (covers cases where the gateway dedupe cache
+  // still has a valid snapshot, or agent.wait returns a timeout result that
+  // completeSubagentRun can handle).
   void waitForSubagentCompletion(runId, waitTimeoutMs);
   resumedRuns.add(runId);
 }
 
-function restoreSubagentRunsOnce() {
+async function restoreSubagentRunsOnce(): Promise<void> {
   if (restoreAttempted) {
     return;
   }
@@ -670,6 +704,16 @@ function restoreSubagentRunsOnce() {
     if (restoredCount === 0) {
       return;
     }
+    // Ordering: rehydrateSessionStoreEntries MUST run before
+    // reconcileOrphanedRestoredRuns.  The rehydration step injects synthetic
+    // session-store entries for runs whose store write fell inside the ~400 ms
+    // race window between sessions_spawn returning and the first store write
+    // completing.  reconcileOrphanedRestoredRuns reads the session store to
+    // determine the orphan reason; if it runs first it will mis-classify these
+    // runs as "missing-session-entry" orphans and prune them incorrectly.
+    // rehydrateSessionStoreEntries is async (writes via updateSessionStore to
+    // serialise concurrent store writers during startup through the lock).
+    await rehydrateSessionStoreEntries(subagentRuns);
     if (reconcileOrphanedRestoredRuns()) {
       persistSubagentRuns();
     }
@@ -1174,6 +1218,7 @@ export function registerSubagentRun(params: {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  extraSystemPrompt?: string;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -1207,6 +1252,7 @@ export function registerSubagentRun(params: {
     attachmentsDir: params.attachmentsDir,
     attachmentsRootDir: params.attachmentsRootDir,
     retainAttachmentsOnKeep: params.retainAttachmentsOnKeep,
+    extraSystemPrompt: params.extraSystemPrompt,
   });
   ensureListener();
   persistSubagentRuns();
@@ -1481,5 +1527,5 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
 }
 
 export function initSubagentRegistry() {
-  restoreSubagentRunsOnce();
+  void restoreSubagentRunsOnce();
 }
