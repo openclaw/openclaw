@@ -12,7 +12,7 @@
   /* Background / Surface */
   --color-bg: #f5f5f4;
   --color-surface: #ffffff;
-  --color-sidebar-bg: #f5f5f4;
+  --color-sidebar-bg: #ebebea;
   --color-main-bg: #fafaf9;
   --color-surface-hover: #ececea;
   --color-surface-raised: #ffffff;
@@ -102,7 +102,7 @@
   /* Background / Surface */
   --color-bg: #0c0c0b;
   --color-surface: #161615;
-  --color-sidebar-bg: #141413;
+  --color-sidebar-bg: #0c0c0b;
   --color-main-bg: #161615;
   --color-surface-hover: #1e1e1c;
   --color-surface-raised: #1a1a18;
