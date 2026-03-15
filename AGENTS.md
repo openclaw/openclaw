@@ -290,6 +290,16 @@
 - Release guardrails: do not change version numbers without operator’s explicit consent; always ask permission before running any npm publish/release step.
 - Beta release guardrail: when using a beta Git tag (for example `vYYYY.M.D-beta.N`), publish npm with a matching beta version suffix (for example `YYYY.M.D-beta.N`) rather than a plain version on `--tag beta`; otherwise the plain version name gets consumed/blocked.
 
+### Gateway restart guidance for agents
+
+- When the agent is running **inside the Gateway process**, do **not** use `pkill -f openclaw-gateway` (or equivalent kill commands) directly to restart the Gateway. Shell pipelines like `pkill -f openclaw-gateway && sleep 2 && openclaw gateway ...` are unsafe in this context because they kill the Gateway (and the agent session) before the restart command can run.
+- Prefer the **Gateway restart tool** when available:
+  - Use the existing gateway tool `restart` action (see `src/agents/tools/gateway-tool.ts`) and ensure `commands.restart=true` in config.
+- When you must restart via shell (for example in some Docker or self-hosted setups), only call the **safe restart script**:
+  - Use `sh scripts/restart-gateway.sh` (or the equivalent path inside the container) instead of constructing your own `pkill` pipeline.
+  - The script is responsible for safely killing and restarting the Gateway from a detached child process so the restart can complete even if the current session is terminated.
+  - Do not invent new `pkill`-based restart chains; if restart behavior needs to change, update the script or gateway tool, not ad-hoc commands.
+
 ## NPM + 1Password (publish/verify)
 
 - Use the 1password skill; all `op` commands must run inside a fresh tmux session.

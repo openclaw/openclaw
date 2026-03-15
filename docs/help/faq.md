@@ -1694,6 +1694,7 @@ A full restart is required for `gateway`, `discovery`, and `canvasHost` changes.
 ### Is there an API RPC way to apply config
 
 Yes. `config.apply` validates + writes the full config and restarts the Gateway as part of the operation.
+When you need to restart the Gateway from a shell on the same host (for example after changing config or environment), prefer using the safe helper script `scripts/restart-gateway.sh` instead of hand-written `pkill` pipelines so the restart can complete even if the original shell session is terminated.
 
 ### configapply wiped my config How do I recover and avoid this
 
