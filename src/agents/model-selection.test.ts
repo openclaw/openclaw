@@ -7,6 +7,7 @@ import {
   parseModelRef,
   buildModelAliasIndex,
   normalizeModelSelection,
+  normalizeModelRef,
   normalizeProviderId,
   normalizeProviderIdForAuth,
   modelKey,
@@ -823,5 +824,37 @@ describe("normalizeModelSelection", () => {
     expect(normalizeModelSelection(undefined)).toBeUndefined();
     expect(normalizeModelSelection(null)).toBeUndefined();
     expect(normalizeModelSelection(42)).toBeUndefined();
+  });
+});
+
+describe("normalizeModelRef – Anthropic alias resolution (#45480)", () => {
+  it("resolves opus-4.6 alias to claude-opus-4-6", () => {
+    const ref = normalizeModelRef("anthropic", "opus-4.6");
+    expect(ref).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+  });
+
+  it("resolves opus-4.5 alias to claude-opus-4-5", () => {
+    const ref = normalizeModelRef("anthropic", "opus-4.5");
+    expect(ref).toEqual({ provider: "anthropic", model: "claude-opus-4-5" });
+  });
+
+  it("resolves sonnet-4.6 alias to claude-sonnet-4-6", () => {
+    const ref = normalizeModelRef("anthropic", "sonnet-4.6");
+    expect(ref).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+  });
+
+  it("resolves sonnet-4.5 alias to claude-sonnet-4-5", () => {
+    const ref = normalizeModelRef("anthropic", "sonnet-4.5");
+    expect(ref).toEqual({ provider: "anthropic", model: "claude-sonnet-4-5" });
+  });
+
+  it("passes through unrecognized model ids unchanged", () => {
+    const ref = normalizeModelRef("anthropic", "claude-sonnet-4-6");
+    expect(ref).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+  });
+
+  it("handles empty model string without throwing", () => {
+    const ref = normalizeModelRef("anthropic", "");
+    expect(ref).toEqual({ provider: "anthropic", model: "" });
   });
 });
