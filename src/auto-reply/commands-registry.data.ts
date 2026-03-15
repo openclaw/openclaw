@@ -559,6 +559,20 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "session",
     }),
     defineChatCommand({
+      key: "resume",
+      nativeName: "resume",
+      description: "Switch to a named DM session or list available sessions.",
+      textAlias: "/resume",
+      category: "session",
+      args: [
+        {
+          name: "name",
+          description: "Session name (or empty to list)",
+          type: "string",
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "compact",
       nativeName: "compact",
       description: "Compact the session context.",

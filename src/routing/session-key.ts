@@ -1,8 +1,9 @@
 import type { ChatType } from "../channels/chat-type.js";
-import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
+import { buildNamedDmSessionKey, parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-id.js";
 
 export {
+  buildNamedDmSessionKey,
   getSubagentDepth,
   isCronSessionKey,
   isAcpSessionKey,
@@ -250,4 +251,45 @@ export function resolveThreadSessionKeys(params: {
     ? `${params.baseSessionKey}:thread:${normalizedThreadId}`
     : params.baseSessionKey;
   return { sessionKey, parentSessionKey: params.parentSessionKey };
+}
+
+/**
+ * Apply named DM session routing (ETH-608).
+ * Checks if the main session entry has an activeNamedSession set, and if so,
+ * returns the named session key instead of the main session key.
+ *
+ * @param sessionKey - The resolved main session key (from routing)
+ * @param sessionStore - The loaded session store
+ * @param peerId - The DM peer ID
+ * @returns The session key to use (either named or main)
+ */
+export function resolveNamedDmSessionKey(params: {
+  sessionKey: string;
+  sessionStore: Record<string, import("../config/sessions.js").SessionEntry>;
+  peerId: string;
+}): string {
+  const mainEntry = params.sessionStore[params.sessionKey];
+  if (!mainEntry || !mainEntry.activeNamedSession) {
+    return params.sessionKey;
+  }
+
+  const parsed = parseAgentSessionKey(params.sessionKey);
+  if (!parsed) {
+    return params.sessionKey;
+  }
+
+  const name = mainEntry.activeNamedSession.trim();
+  if (!name) {
+    return params.sessionKey;
+  }
+
+  try {
+    return buildNamedDmSessionKey({
+      agentId: parsed.agentId,
+      peerId: params.peerId.toLowerCase(),
+      name,
+    });
+  } catch {
+    return params.sessionKey;
+  }
 }
