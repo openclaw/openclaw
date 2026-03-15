@@ -1,8 +1,11 @@
 import fs from "node:fs";
+import path from "node:path";
 import { loadConfig } from "../../config/config.js";
+import { parseSessionArchiveTimestamp } from "../../config/sessions/artifacts.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  resolveSessionTranscriptsDirForAgent,
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
@@ -70,6 +73,45 @@ function resolveSessionUsageFileOrRespond(
   sessionFile: string;
 } | null {
   const config = loadConfig();
+
+  // Handle archived transcript keys that embed the filename after `::`
+  // e.g. "agent:main:sess-foo::sess-foo.jsonl.reset.2026-03-13T10-00-00Z"
+  const archiveDelim = key.indexOf("::");
+  if (archiveDelim !== -1) {
+    const baseKey = key.slice(0, archiveDelim);
+    const archiveFilename = key.slice(archiveDelim + 2);
+    const parsed = parseAgentSessionKey(baseKey);
+    const agentId = parsed?.agentId;
+    const rawSessionId = parsed?.rest ?? baseKey;
+    const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+    const sessionFile = path.join(sessionsDir, archiveFilename);
+    // Guard against path traversal: the resolved file must remain inside sessionsDir
+    let realSessionsDir: string;
+    try {
+      realSessionsDir = fs.realpathSync(sessionsDir);
+    } catch {
+      // Sessions directory doesn't exist — use path.resolve as fallback base
+      // to still enforce containment against traversal attacks
+      realSessionsDir = path.resolve(sessionsDir);
+    }
+    const realSessionFile = path.resolve(sessionFile);
+    if (
+      !realSessionFile.startsWith(realSessionsDir + path.sep) &&
+      realSessionFile !== realSessionsDir
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `Invalid archived session key: ${key}`),
+      );
+      return null;
+    }
+    if (fs.existsSync(sessionFile)) {
+      return { config, entry: undefined, agentId, sessionId: rawSessionId, sessionFile };
+    }
+    // Fall through to normal resolution if the archived file no longer exists
+  }
+
   const { entry, storePath } = loadSessionEntry(key);
 
   // For discovered sessions (not in store), try using key as sessionId directly
@@ -90,7 +132,55 @@ function resolveSessionUsageFileOrRespond(
     return null;
   }
 
+  // When the primary transcript no longer exists (reset/deleted), fall back to
+  // the most recent archived transcript for the same session id so that
+  // detail/log/timeseries requests can still read historical data.
+  if (!fs.existsSync(sessionFile)) {
+    const fallback = findArchivedTranscript(sessionId, agentId);
+    if (fallback) {
+      sessionFile = fallback;
+    }
+  }
+
   return { config, entry, agentId, sessionId, sessionFile };
+}
+
+/**
+ * Scan the sessions directory for archived (reset/deleted) transcripts matching
+ * the given sessionId and return the path to the most recently modified one,
+ * or `null` if none are found.
+ */
+function findArchivedTranscript(sessionId: string, agentId: string | undefined): string | null {
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const prefix = `${sessionId}.jsonl.`;
+  try {
+    const candidates = fs.readdirSync(sessionsDir).filter((name) => {
+      if (!name.startsWith(prefix)) {
+        return false;
+      }
+      return (
+        parseSessionArchiveTimestamp(name, "reset") !== null ||
+        parseSessionArchiveTimestamp(name, "deleted") !== null
+      );
+    });
+    if (candidates.length === 0) {
+      return null;
+    }
+    const resolved = candidates
+      .map((name) => {
+        const full = path.join(sessionsDir, name);
+        try {
+          return { path: full, mtime: fs.statSync(full).mtimeMs };
+        } catch {
+          return null;
+        }
+      })
+      .filter((c): c is { path: string; mtime: number } => c !== null)
+      .toSorted((a, b) => b.mtime - a.mtime);
+    return resolved[0]?.path ?? null;
+  } catch {
+    return null;
+  }
 }
 
 const parseDateParts = (
@@ -408,54 +498,90 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     // Optimization: If a specific key is requested, skip full directory scan
     if (specificKey) {
-      const parsed = parseAgentSessionKey(specificKey);
-      const agentIdFromKey = parsed?.agentId;
-      const keyRest = parsed?.rest ?? specificKey;
-
-      // Prefer the store entry when available, even if the caller provides a discovered key
-      // (`agent:<id>:<sessionId>`) for a session that now has a canonical store key.
-      const storeBySessionId = buildStoreBySessionId(store);
-
-      const storeMatch = store[specificKey]
-        ? { key: specificKey, entry: store[specificKey] }
-        : null;
-      const storeByIdMatch = storeBySessionId.get(keyRest) ?? null;
-      const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? specificKey;
-      const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
-      const sessionId = storeEntry?.sessionId ?? keyRest;
-
-      // Resolve the session file path
-      let sessionFile: string;
-      try {
-        const pathOpts = resolveSessionFilePathOptions({
-          storePath: storePath !== "(multiple)" ? storePath : undefined,
-          agentId: agentIdFromKey,
-        });
-        sessionFile = resolveSessionFilePath(sessionId, storeEntry, pathOpts);
-      } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `Invalid session reference: ${specificKey}`),
-        );
-        return;
-      }
-
-      try {
-        const stats = fs.statSync(sessionFile);
-        if (stats.isFile()) {
-          mergedEntries.push({
-            key: resolvedStoreKey,
-            sessionId,
-            sessionFile,
-            label: storeEntry?.label,
-            updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
-            storeEntry,
-          });
+      // Archived keys use "::" to embed the transcript filename — delegate to
+      // resolveSessionUsageFileOrRespond which already handles traversal checks.
+      const specificArchiveDelim = specificKey.indexOf("::");
+      if (specificArchiveDelim !== -1) {
+        const resolved = resolveSessionUsageFileOrRespond(specificKey, respond);
+        if (!resolved) {
+          return; // respond already called
         }
-      } catch {
-        // File doesn't exist - no results for this key
-      }
+        try {
+          const stats = fs.statSync(resolved.sessionFile);
+          if (stats.isFile()) {
+            mergedEntries.push({
+              key: specificKey,
+              sessionId: resolved.sessionId,
+              sessionFile: resolved.sessionFile,
+              label: undefined,
+              updatedAt: stats.mtimeMs,
+            });
+          }
+        } catch {
+          // Archived file no longer exists — empty result
+        }
+      } else {
+        const parsed = parseAgentSessionKey(specificKey);
+        const agentIdFromKey = parsed?.agentId;
+        const keyRest = parsed?.rest ?? specificKey;
+
+        // Prefer the store entry when available, even if the caller provides a discovered key
+        // (`agent:<id>:<sessionId>`) for a session that now has a canonical store key.
+        const storeBySessionId = buildStoreBySessionId(store);
+
+        const storeMatch = store[specificKey]
+          ? { key: specificKey, entry: store[specificKey] }
+          : null;
+        const storeByIdMatch = storeBySessionId.get(keyRest) ?? null;
+        const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? specificKey;
+        const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
+        const sessionId = storeEntry?.sessionId ?? keyRest;
+
+        // Resolve the session file path
+        let sessionFile: string;
+        try {
+          const pathOpts = resolveSessionFilePathOptions({
+            storePath: storePath !== "(multiple)" ? storePath : undefined,
+            agentId: agentIdFromKey,
+          });
+          sessionFile = resolveSessionFilePath(sessionId, storeEntry, pathOpts);
+        } catch {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, `Invalid session reference: ${specificKey}`),
+          );
+          return;
+        }
+
+        try {
+          const stats = fs.statSync(sessionFile);
+          if (stats.isFile()) {
+            mergedEntries.push({
+              key: resolvedStoreKey,
+              sessionId,
+              sessionFile,
+              label: storeEntry?.label,
+              updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
+              storeEntry,
+            });
+          }
+        } catch {
+          // Primary transcript doesn't exist — try archived fallback
+          const fallback = findArchivedTranscript(sessionId, agentIdFromKey);
+          if (fallback) {
+            const fallbackStats = fs.statSync(fallback);
+            mergedEntries.push({
+              key: resolvedStoreKey,
+              sessionId,
+              sessionFile: fallback,
+              label: storeEntry?.label,
+              updatedAt: storeEntry?.updatedAt ?? fallbackStats.mtimeMs,
+              storeEntry,
+            });
+          }
+        }
+      } // close non-archived specific-key branch
     } else {
       // Full discovery for list view
       const discoveredSessions = await discoverAllSessionsForUsage({
@@ -480,10 +606,16 @@ export const usageHandlers: GatewayRequestHandlers = {
             storeEntry: storeMatch.entry,
           });
         } else {
-          // Unnamed session - use session ID as key, no label
+          // Unnamed session - use session ID as key, no label.
+          // For archived transcripts, embed the archive filename in the key so
+          // that multiple archived transcripts for the same base sessionId get
+          // distinct keys and can be individually resolved later.
+          const baseKey = `agent:${discovered.agentId}:${discovered.sessionId}`;
+          const key = discovered.archived
+            ? `${baseKey}::${path.basename(discovered.sessionFile)}`
+            : baseKey;
           mergedEntries.push({
-            // Keep agentId in the key so the dashboard can attribute sessions and later fetch logs.
-            key: `agent:${discovered.agentId}:${discovered.sessionId}`,
+            key,
             sessionId: discovered.sessionId,
             sessionFile: discovered.sessionFile,
             label: undefined, // No label for unnamed sessions
@@ -494,10 +626,10 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
 
     // Sort by most recent first
-    mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
+    const sortedEntries = mergedEntries.toSorted((a, b) => b.updatedAt - a.updatedAt);
 
     // Apply limit
-    const limitedEntries = mergedEntries.slice(0, limit);
+    const limitedEntries = sortedEntries.slice(0, limit);
 
     // Load usage for each session
     const sessions: SessionUsageEntry[] = [];

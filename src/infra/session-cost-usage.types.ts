@@ -143,6 +143,9 @@ export type DiscoveredSession = {
   sessionFile: string;
   mtime: number;
   firstUserMessage?: string;
+  /** When true, the transcript is an archived reset/deleted file. Callers
+   *  should use `sessionFile` directly instead of resolving via `sessionId`. */
+  archived?: boolean;
 };
 
 export type SessionUsageTimePoint = SharedSessionUsageTimePoint;
