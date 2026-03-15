@@ -36,11 +36,6 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
   },
-  // kimi-coding natively supports Anthropic tool framing (input_schema);
-  // converting to OpenAI format causes XML text fallback instead of tool_use blocks.
-  "kimi-coding": {
-    preserveAnthropicThinkingSignatures: false,
-  },
   mistral: {
     transcriptToolCallIdMode: "strict9",
     transcriptToolCallIdModelHints: [
@@ -63,10 +58,6 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   },
   "opencode-go": {
     openAiCompatTurnValidation: false,
-    geminiThoughtSignatureSanitization: true,
-    geminiThoughtSignatureModelHints: ["gemini"],
-  },
-  kilocode: {
     geminiThoughtSignatureSanitization: true,
     geminiThoughtSignatureModelHints: ["gemini"],
   },
