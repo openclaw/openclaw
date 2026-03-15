@@ -692,6 +692,10 @@ type SandboxToolParams = {
   bridge: SandboxFsBridge;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  /** Optional configured container working directory (e.g. "/work"). Forwarded
+   * to `createOpenClawReadTool` so that `isInboundMediaPath` can correctly
+   * classify file:// URLs that use a non-default workdir. */
+  containerWorkdir?: string;
 };
 
 export function createSandboxedReadTool(params: SandboxToolParams) {
@@ -701,6 +705,7 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
+    containerWorkdir: params.containerWorkdir,
   });
 }
 
