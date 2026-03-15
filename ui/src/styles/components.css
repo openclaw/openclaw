@@ -2515,6 +2515,10 @@
   display: none;
 }
 
+.chat-tool-card__summary::marker {
+  content: "";
+}
+
 .chat-tool-card__summary-meta {
   color: var(--muted);
   opacity: 0.7;
