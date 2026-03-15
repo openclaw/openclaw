@@ -69,6 +69,7 @@ async function pollForAccessToken(params: {
   deviceCode: string;
   intervalMs: number;
   expiresAt: number;
+  skipFirstDelay?: boolean;
 }): Promise<string> {
   const bodyBase = new URLSearchParams({
     client_id: CLIENT_ID,
@@ -77,13 +78,16 @@ async function pollForAccessToken(params: {
   });
 
   let intervalMs = params.intervalMs;
+  let first = true;
 
   while (Date.now() < params.expiresAt) {
-    // Always wait before polling — avoids immediate `authorization_pending`
-    // on the first request which triggers GitHub's slow_down backoff.
-    await new Promise((r) => setTimeout(r, intervalMs));
-
-    if (Date.now() >= params.expiresAt) break;
+    if (!first || !params.skipFirstDelay) {
+      // Wait before polling — avoids immediate `authorization_pending`
+      // on the first request which triggers GitHub's slow_down backoff.
+      await new Promise((r) => setTimeout(r, intervalMs));
+      if (Date.now() >= params.expiresAt) break;
+    }
+    first = false;
 
     const res = await fetch(ACCESS_TOKEN_URL, {
       method: "POST",
@@ -156,20 +160,20 @@ export async function githubCopilotLoginCommand(
   const device = await requestDeviceCode({ scope: "read:user" });
   spin.stop("Device code ready");
 
-  note(
-    [`Visit: ${device.verification_uri}`, `Code: ${device.user_code}`].join("\n"),
-    stylePromptTitle("Authorize"),
-  );
-
   if (opts.wait) {
-    // Print plain-text lines so the URL is easy to copy in terminals (e.g. WSL)
-    // where the clack box rendering prevents ctrl+click link detection.
+    // In WSL/remote terminals the clack box prevents ctrl+click link detection,
+    // so print plain text and skip the note() box to avoid showing it twice.
     process.stdout.write(`\n  URL:  ${device.verification_uri}\n  Code: ${device.user_code}\n\n`);
 
     const ready = await confirm({ message: "Have you authorized the code in your browser?" });
     if (isCancel(ready) || !ready) {
       throw new Error("GitHub login cancelled");
     }
+  } else {
+    note(
+      [`Visit: ${device.verification_uri}`, `Code: ${device.user_code}`].join("\n"),
+      stylePromptTitle("Authorize"),
+    );
   }
 
   const expiresAt = Date.now() + device.expires_in * 1000;
@@ -181,6 +185,7 @@ export async function githubCopilotLoginCommand(
     deviceCode: device.device_code,
     intervalMs,
     expiresAt,
+    skipFirstDelay: opts.wait,
   });
   polling.stop("GitHub access token acquired");
 
