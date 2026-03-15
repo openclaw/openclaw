@@ -76,6 +76,20 @@ describe("compactWithSafetyTimeout", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("ignores onCancel errors and still rejects with the timeout", async () => {
+    vi.useFakeTimers();
+    const compactPromise = compactWithSafetyTimeout(() => new Promise<never>(() => {}), 30, {
+      onCancel: () => {
+        throw new Error("abortCompaction failed");
+      },
+    });
+    const timeoutAssertion = expect(compactPromise).rejects.toThrow("Compaction timed out");
+
+    await vi.advanceTimersByTimeAsync(30);
+    await timeoutAssertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe("resolveCompactionTimeoutMs", () => {
