@@ -797,7 +797,14 @@ export async function startGatewayServer(
   // Tool approvals share the same manager type but use a separate instance
   // so pending IDs do not collide between exec and tool approval namespaces.
   const toolApprovalManager = new ExecApprovalManager();
-  const toolApprovalForwarder = createExecApprovalForwarder();
+  const toolApprovalForwarder = createExecApprovalForwarder({
+    getConfig: () => {
+      const cfg = loadConfig();
+      // Map the tool forwarding config into the exec slot so the shared
+      // forwarder reads tool-specific settings instead of exec settings.
+      return { ...cfg, approvals: { ...cfg.approvals, exec: cfg.approvals?.tool } };
+    },
+  });
   const toolApprovalHandlers = createToolApprovalHandlers(toolApprovalManager, {
     forwarder: toolApprovalForwarder,
   });

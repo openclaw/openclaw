@@ -254,7 +254,7 @@ export function createOpenClawTools(
   const gatedPluginTools = needsToolApprovalGate
     ? pluginTools.map((tool) =>
         withToolApprovalGate(tool, {
-          config: options?.config,
+          policy: toolPolicy,
           agentId: toolApprovalAgentId,
           sessionKey: options?.agentSessionKey,
           turnSourceChannel: options?.agentChannel,

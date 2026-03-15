@@ -14,10 +14,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   evaluateToolApprovalPolicy,
-  resolveToolApprovalPolicy,
+  type ResolvedToolApprovalPolicy,
 } from "../../infra/tool-approval-policy.js";
 import { DEFAULT_TOOL_APPROVAL_TIMEOUT_MS } from "../../infra/tool-approvals.js";
 import type { AnyAgentTool } from "./common.js";
@@ -27,8 +26,11 @@ import { callGatewayTool } from "./gateway.js";
 // Timeout for the gateway RPC call itself (not the approval wait).
 const APPROVAL_REQUEST_TIMEOUT_MS = 10_000;
 
+// Runtime set of tool names that have been granted allow-always during this
+// process lifetime. This avoids re-prompting for the same tool within a session.
+const runtimeAllowedTools = new Set<string>();
+
 export type ToolApprovalGateOptions = {
-  config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
   turnSourceChannel?: string;
@@ -44,23 +46,13 @@ export type ToolApprovalGateOptions = {
  */
 export function withToolApprovalGate(
   tool: AnyAgentTool,
-  opts: ToolApprovalGateOptions,
+  opts: ToolApprovalGateOptions & { policy: ResolvedToolApprovalPolicy },
 ): AnyAgentTool {
   if (!tool) {
     return tool;
   }
 
-  const config = opts.config;
-  const policy = resolveToolApprovalPolicy({
-    cfg: config ?? ({} as OpenClawConfig),
-    agentId: opts.agentId,
-  });
-
-  // Fast path: default permissive policy needs no wrapping.
-  if (policy.security === "full" && policy.ask === "off") {
-    return tool;
-  }
-
+  const { policy } = opts;
   const originalExecute = tool.execute;
 
   return {
@@ -69,6 +61,11 @@ export function withToolApprovalGate(
       const toolName = tool.name || "";
       if (!toolName) {
         // Let the original tool handle the missing name.
+        return originalExecute(toolCallId, args);
+      }
+
+      // Runtime allow-always: skip approval if previously granted.
+      if (runtimeAllowedTools.has(toolName)) {
         return originalExecute(toolCallId, args);
       }
 
@@ -98,8 +95,11 @@ export function withToolApprovalGate(
           turnSourceThreadId: opts.turnSourceThreadId,
         });
 
-        if (approvalDecision === "allow-once" || approvalDecision === "allow-always") {
-          // Approved. Proceed with the call.
+        if (approvalDecision === "allow-always") {
+          runtimeAllowedTools.add(toolName);
+          return originalExecute(toolCallId, args);
+        }
+        if (approvalDecision === "allow-once") {
           return originalExecute(toolCallId, args);
         }
 

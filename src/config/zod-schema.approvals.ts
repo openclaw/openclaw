@@ -37,20 +37,23 @@ const ToolAllowlistEntrySchema = z
   })
   .strict();
 
+const ToolSecuritySchema = z.enum(["deny", "allowlist", "full"]);
+const ToolAskSchema = z.enum(["off", "on-miss", "always"]);
+
 const ToolApprovalsAgentSchema = z
   .object({
-    security: z.string().optional(),
-    ask: z.string().optional(),
-    askFallback: z.string().optional(),
+    security: ToolSecuritySchema.optional(),
+    ask: ToolAskSchema.optional(),
+    askFallback: ToolSecuritySchema.optional(),
     allowlist: z.array(ToolAllowlistEntrySchema).optional(),
   })
   .strict();
 
 const ToolApprovalsToolConfigSchema = z
   .object({
-    security: z.string().optional(),
-    ask: z.string().optional(),
-    askFallback: z.string().optional(),
+    security: ToolSecuritySchema.optional(),
+    ask: ToolAskSchema.optional(),
+    askFallback: ToolSecuritySchema.optional(),
     agents: z.record(z.string(), ToolApprovalsAgentSchema).optional(),
     allowlist: z.array(ToolAllowlistEntrySchema).optional(),
   })
