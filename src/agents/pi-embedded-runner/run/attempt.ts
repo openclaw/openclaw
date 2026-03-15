@@ -650,7 +650,8 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
     return;
   }
 
-  const usedIds = new Set<string>();
+  // First pass: collect all existing non-empty IDs so fallback generation avoids collisions.
+  const existingIds = new Set<string>();
   for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
@@ -663,9 +664,12 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
     if (!trimmedId) {
       continue;
     }
-    usedIds.add(trimmedId);
+    existingIds.add(trimmedId);
   }
 
+  // Second pass: assign IDs. Track which IDs have been claimed so duplicates
+  // within the same message get a unique fallback ID.
+  const assignedIds = new Set<string>();
   let fallbackIndex = 1;
   for (const block of content) {
     if (!block || typeof block !== "object") {
@@ -677,21 +681,22 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
     }
     if (typeof typedBlock.id === "string") {
       const trimmedId = typedBlock.id.trim();
-      if (trimmedId) {
+      if (trimmedId && !assignedIds.has(trimmedId)) {
         if (typedBlock.id !== trimmedId) {
           typedBlock.id = trimmedId;
         }
-        usedIds.add(trimmedId);
+        assignedIds.add(trimmedId);
         continue;
       }
     }
 
+    // Empty, blank, or duplicate ID — generate a unique fallback.
     let fallbackId = "";
-    while (!fallbackId || usedIds.has(fallbackId)) {
+    while (!fallbackId || existingIds.has(fallbackId) || assignedIds.has(fallbackId)) {
       fallbackId = `call_auto_${fallbackIndex++}`;
     }
     typedBlock.id = fallbackId;
-    usedIds.add(fallbackId);
+    assignedIds.add(fallbackId);
   }
 }
 
