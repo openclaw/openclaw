@@ -157,6 +157,7 @@ export function createSessionsSpawnTool(
             resumeSessionId,
             cwd,
             mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
+            model: modelOverride,
             thread,
             sandbox,
             streamTo,
