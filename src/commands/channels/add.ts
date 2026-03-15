@@ -267,15 +267,20 @@ export async function channelsAddCommand(
     return;
   }
 
-  const previousTelegramToken =
-    channel === "telegram"
-      ? (await import("../../../extensions/telegram/src/accounts.js"))
-          .resolveTelegramAccount({
-            cfg: nextConfig,
-            accountId,
-          })
-          .token.trim()
-      : "";
+  let previousTelegramToken = "";
+  let resolveTelegramAccount:
+    | ((
+        params: Parameters<
+          typeof import("../../../extensions/telegram/src/accounts.js").resolveTelegramAccount
+        >[0],
+      ) => ReturnType<
+        typeof import("../../../extensions/telegram/src/accounts.js").resolveTelegramAccount
+      >)
+    | undefined;
+  if (channel === "telegram") {
+    ({ resolveTelegramAccount } = await import("../../../extensions/telegram/src/accounts.js"));
+    previousTelegramToken = resolveTelegramAccount({ cfg: nextConfig, accountId }).token.trim();
+  }
 
   if (accountId !== DEFAULT_ACCOUNT_ID) {
     nextConfig = moveSingleAccountChannelSectionToDefaultAccount({
@@ -291,11 +296,9 @@ export async function channelsAddCommand(
     input,
   });
 
-  if (channel === "telegram") {
-    const [{ resolveTelegramAccount }, { deleteTelegramUpdateOffset }] = await Promise.all([
-      import("../../../extensions/telegram/src/accounts.js"),
-      import("../../../extensions/telegram/src/update-offset-store.js"),
-    ]);
+  if (channel === "telegram" && resolveTelegramAccount) {
+    const { deleteTelegramUpdateOffset } =
+      await import("../../../extensions/telegram/src/update-offset-store.js");
     const nextTelegramToken = resolveTelegramAccount({ cfg: nextConfig, accountId }).token.trim();
     if (previousTelegramToken !== nextTelegramToken) {
       // Clear stale polling offsets after Telegram token rotation.
