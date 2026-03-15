@@ -248,8 +248,8 @@ describe("msteams monitor handler authz", () => {
       },
     } as OpenClawConfig);
 
-    const handler = createMSTeamsMessageHandler(deps);
-    await handler(createAttackerGroupActivity({ text: "" }));
+    const { handleTeamsMessage } = createMSTeamsMessageHandler(deps);
+    await handleTeamsMessage(createAttackerGroupActivity({ text: "" }));
 
     expect(readAllowFromStore).toHaveBeenCalledWith({
       channel: "msteams",
@@ -277,8 +277,8 @@ describe("msteams monitor handler authz", () => {
       },
     } as OpenClawConfig);
 
-    const handler = createMSTeamsMessageHandler(deps);
-    await handler(
+    const { handleTeamsMessage } = createMSTeamsMessageHandler(deps);
+    await handleTeamsMessage(
       createAttackerGroupActivity({
         channelData: {
           team: { id: "team123", name: "Team 123" },

@@ -4,17 +4,24 @@ import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   dispatchReplyFromConfigWithSettledDispatcher,
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  logInboundDrop,
   evaluateSenderGroupAccessForPolicy,
   filterSupplementalContextItems,
-  recordPendingHistoryEntryIfEnabled,
-  resolveChannelContextVisibilityMode,
-  resolveDualTextControlCommandGate,
-  resolveInboundSessionEnvelopeContext,
-  shouldIncludeSupplementalContext,
+
   formatAllowlistMatchMeta,
   type HistoryEntry,
+  isDangerousNameMatchingEnabled,
+  logInboundDrop,
+  readStoreAllowFromForDmPolicy,
+  recordPendingHistoryEntryIfEnabled,
+  resolveChannelContextVisibilityMode,
+  resolveDefaultGroupPolicy,
+  resolveDmGroupAccessWithLists,
+  resolveDualTextControlCommandGate,
+  resolveEffectiveAllowFromLists,
+  resolveInboundSessionEnvelopeContext,
+  resolveMentionGating,
+  resolveSenderScopedGroupPolicy,
+  shouldIncludeSupplementalContext,
 } from "../../runtime-api.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
@@ -945,7 +952,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     },
   });
 
-  return async function handleTeamsMessage(context: MSTeamsTurnContext) {
+  const handleTeamsMessage = async (context: MSTeamsTurnContext) => {
     const activity = context.activity;
     const attachments = Array.isArray(activity.attachments)
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
@@ -969,5 +976,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       wasMentioned,
       implicitMentionKinds,
     });
+  };
+
+  return {
+    handleTeamsMessage,
+    unregisterDebouncer: inboundDebouncer.unregister,
   };
 }

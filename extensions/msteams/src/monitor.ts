@@ -11,7 +11,7 @@ import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
-import { registerMSTeamsHandlers, type MSTeamsActivityHandler } from "./monitor-handler.js";
+import { type MSTeamsActivityHandler, registerMSTeamsHandlers } from "./monitor-handler.js";
 import { createMSTeamsPollStoreFs, type MSTeamsPollStore } from "./polls.js";
 import {
   resolveMSTeamsChannelAllowlist,
@@ -116,12 +116,19 @@ export async function monitorMSTeamsProvider(
         .filter((entry) => entry && entry !== "*");
       if (groupEntries.length > 0) {
         const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
-        groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
+        groupAllowFrom = mergeAllowlist({
+          existing: groupAllowFrom,
+          additions,
+        });
       }
     }
 
     if (teamsConfig && Object.keys(teamsConfig).length > 0) {
-      const entries: Array<{ input: string; teamKey: string; channelKey?: string }> = [];
+      const entries: Array<{
+        input: string;
+        teamKey: string;
+        channelKey?: string;
+      }> = [];
       for (const [teamKey, teamCfg] of Object.entries(teamsConfig)) {
         if (teamKey === "*") {
           continue;
@@ -170,7 +177,11 @@ export async function monitorMSTeamsProvider(
             ...sourceTeam.channels,
             ...existing.channels,
           };
-          const mergedTeam = { ...sourceTeam, ...existing, channels: mergedChannels };
+          const mergedTeam = {
+            ...sourceTeam,
+            ...existing,
+            channels: mergedChannels,
+          };
           nextTeams[entry.teamId] = mergedTeam;
           if (source.channelKey && entry.channelId) {
             const sourceChannel = sourceTeam.channels?.[source.channelKey];
@@ -251,8 +262,8 @@ export async function monitorMSTeamsProvider(
   }
 
   // Build a simple ActivityHandler-compatible object
-  const handler = buildActivityHandler();
-  registerMSTeamsHandlers(handler, {
+  const activityHandler = buildActivityHandler();
+  const { handler, unregisterDebouncer } = registerMSTeamsHandlers(activityHandler, {
     cfg,
     runtime,
     appId,
@@ -318,7 +329,7 @@ export async function monitorMSTeamsProvider(
   const configuredPath = msteamsCfg.webhook?.path ?? "/api/messages";
   const messageHandler = (req: Request, res: Response) => {
     void adapter
-      .process(req, res, (context: unknown) => handler.run!(context))
+      .process(req, res, (context: unknown) => handler.run?.(context))
       .catch((err: unknown) => {
         log.error("msteams webhook failed", { error: formatUnknownError(err) });
       });
@@ -359,6 +370,7 @@ export async function monitorMSTeamsProvider(
 
   const shutdown = async () => {
     log.info("shutting down msteams provider");
+    unregisterDebouncer();
     return new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {

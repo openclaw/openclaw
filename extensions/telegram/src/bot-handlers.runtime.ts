@@ -123,7 +123,7 @@ export const registerTelegramHandlers = ({
   processMessage,
   logger,
   telegramDeps = defaultTelegramBotDeps,
-}: RegisterTelegramHandlerParams) => {
+}: RegisterTelegramHandlerParams): { unregisterDebouncer: () => void } => {
   const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
     cfg,
     accountId,
@@ -2025,4 +2025,6 @@ export const registerTelegramHandlers = ({
       errorMessage: "channel_post handler failed",
     });
   });
+
+  return { unregisterDebouncer: inboundDebouncer.unregister };
 };

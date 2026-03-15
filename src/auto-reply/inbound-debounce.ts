@@ -16,6 +16,8 @@ type DebouncerFlushResult = {
 type DebouncerFlushHandle = {
   flushAll: (options?: { deadlineMs?: number }) => Promise<DebouncerFlushResult>;
   unregister: () => void;
+  /** Epoch ms of last enqueue or creation, whichever is more recent. */
+  lastActivityMs: number;
 };
 const INBOUND_DEBOUNCERS_KEY = Symbol.for("openclaw.inboundDebouncers");
 const INBOUND_DEBOUNCERS = resolveGlobalMap<symbol, DebouncerFlushHandle>(INBOUND_DEBOUNCERS_KEY);
@@ -27,25 +29,35 @@ export function clearInboundDebouncerRegistry(): void {
   INBOUND_DEBOUNCERS.clear();
 }
 
+/** Debouncers idle longer than this are auto-removed during flush as a safety
+ *  net against channels that forget to call unregister() on teardown. */
+const STALE_DEBOUNCER_MS = 5 * 60 * 1000; // 5 minutes
+
 /**
  * Flush all registered inbound debouncers immediately. Called during SIGUSR1
  * restart to push buffered messages into the session before reinitializing.
  * Returns the number of debounce buffers actually flushed so restart logic can
  * skip followup draining when there was no buffered work.
+ *
+ * Stale debouncers (no enqueue activity for >5 minutes) are auto-evicted as a
+ * safety net in case a channel monitor forgot to call unregister() on teardown.
  */
 export async function flushAllInboundDebouncers(options?: { timeoutMs?: number }): Promise<number> {
   const entries = [...INBOUND_DEBOUNCERS.entries()];
   if (entries.length === 0) {
     return 0;
   }
+  const now = Date.now();
   const deadlineMs =
     typeof options?.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
-      ? Date.now() + Math.max(0, Math.trunc(options.timeoutMs))
+      ? now + Math.max(0, Math.trunc(options.timeoutMs))
       : undefined;
   const flushedCounts = await Promise.all(
     entries.map(async ([_key, handle]) => {
       const result = await handle.flushAll({ deadlineMs });
-      if (result.drained) {
+      // Remove drained debouncers, and auto-evict stale entries whose
+      // owning channel never called unregister() (e.g. after reconnect).
+      if (result.drained || now - handle.lastActivityMs >= STALE_DEBOUNCER_MS) {
         handle.unregister();
       }
       return result.flushedCount;
@@ -220,6 +232,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   };
 
   const enqueue = async (item: T) => {
+    handle.lastActivityMs = Date.now();
     const key = params.buildKey(item);
     const debounceMs = resolveDebounceMs(item);
     const canDebounce = debounceMs > 0 && (params.shouldDebounce?.(item) ?? true);
@@ -342,10 +355,12 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const unregister = () => {
     INBOUND_DEBOUNCERS.delete(registryKey);
   };
-  INBOUND_DEBOUNCERS.set(registryKey, {
+  const handle: DebouncerFlushHandle = {
     flushAll: flushAllInternal,
     unregister,
-  });
+    lastActivityMs: Date.now(),
+  };
+  INBOUND_DEBOUNCERS.set(registryKey, handle);
 
   return { enqueue, flushKey, flushAll, unregister };
 }
