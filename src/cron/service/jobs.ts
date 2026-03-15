@@ -231,7 +231,20 @@ function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "d
 }
 
 export function findJobOrThrow(state: CronServiceState, id: string) {
-  const job = state.store?.jobs.find((j) => j.id === id);
+  // Exact match first
+  let job = state.store?.jobs.find((j) => j.id === id);
+  if (!job) {
+    // Prefix match (like git short hashes)
+    const matches = state.store?.jobs.filter((j) => j.id.startsWith(id)) ?? [];
+    if (matches.length === 1) {
+      job = matches[0];
+    } else if (matches.length > 1) {
+      const ids = matches.map((j) => j.id).join(", ");
+      throw new Error(
+        `ambiguous cron job id prefix "${id}" matches ${matches.length} jobs: ${ids}`,
+      );
+    }
+  }
   if (!job) {
     throw new Error(`unknown cron job id: ${id}`);
   }
