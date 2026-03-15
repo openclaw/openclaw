@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { compileSafeRegex } from "../security/safe-regex.js";
+import { compileConfigRegex } from "../security/config-regex.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { replacePatternBounded } from "./redact-bounded.js";
 
@@ -55,9 +55,9 @@ function parsePattern(raw: string): RegExp | null {
   const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
   if (match) {
     const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
-    return compileSafeRegex(match[1], flags);
+    return compileConfigRegex(match[1], flags)?.regex ?? null;
   }
-  return compileSafeRegex(raw, "gi");
+  return compileConfigRegex(raw, "gi")?.regex ?? null;
 }
 
 function resolvePatterns(value?: string[]): RegExp[] {
