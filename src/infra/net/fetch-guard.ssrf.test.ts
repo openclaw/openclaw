@@ -307,6 +307,7 @@ describe("trusted_env_proxy + policy enforcement", () => {
 
   it("allows fetch when trusted proxy mode is active and allowlist matches", async () => {
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+    type LookupFn = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
     const lookupFn = vi.fn(async () => [{ address: "1.2.3.4", family: 4 }]) as unknown as LookupFn;
 
     const result = await fetchWithSsrFGuard({
