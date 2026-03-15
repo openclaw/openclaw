@@ -641,10 +641,16 @@ describe("send", () => {
       mockSendResponse({ data: { guid: "msg-uuid-refreshed" } });
 
       const result = await sendMessageBlueBubbles("+15551234567", "Threaded reply", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
         replyToMessageGuid: "reply-guid-456",
         replyToPartIndex: 0,
+        cfg: {
+          channels: {
+            bluebubbles: {
+              serverUrl: "http://localhost:1234",
+              password: "test",
+            },
+          },
+        },
       });
 
       expect(result.messageId).toBe("msg-uuid-refreshed");
@@ -674,10 +680,16 @@ describe("send", () => {
       mockSendResponse({ data: { guid: "msg-uuid-custom-timeout" } });
 
       await sendMessageBlueBubbles("+15551234567", "Threaded reply", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
         replyToMessageGuid: "reply-guid-timeout",
         timeoutMs: 30000,
+        cfg: {
+          channels: {
+            bluebubbles: {
+              serverUrl: "http://localhost:1234",
+              password: "test",
+            },
+          },
+        },
       });
 
       expect(fetchServerInfoMock).toHaveBeenCalledWith(
@@ -741,6 +753,25 @@ describe("send", () => {
       expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
     });
 
+    it("skips lazy-refresh when credentials come only from opts (not account-bound)", async () => {
+      // When account config has no serverUrl and credentials come only from opts,
+      // the cache key (accountId) doesn't correspond to these credentials.
+      // Lazy-refresh should be skipped to avoid poisoning the account-scoped cache.
+      fetchServerInfoMock.mockClear();
+      privateApiStatusMock.mockReturnValue(null);
+
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-uuid-opts-only" } });
+
+      await sendMessageBlueBubbles("+15551234567", "Threaded reply", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+        replyToMessageGuid: "reply-guid-opts-only",
+      });
+
+      expect(fetchServerInfoMock).not.toHaveBeenCalled();
+    });
+
     it("degrades to plain send when lazy-refresh fails to restore Private API", async () => {
       // If fetchBlueBubblesServerInfo returns null (server unreachable),
       // privateApiStatus stays null and the reply should degrade gracefully.
@@ -755,9 +786,15 @@ describe("send", () => {
 
       try {
         const result = await sendMessageBlueBubbles("+15551234567", "Fallback reply", {
-          serverUrl: "http://localhost:1234",
-          password: "test",
           replyToMessageGuid: "reply-guid-789",
+          cfg: {
+            channels: {
+              bluebubbles: {
+                serverUrl: "http://localhost:1234",
+                password: "test",
+              },
+            },
+          },
         });
 
         expect(result.messageId).toBe("msg-uuid-degraded");
