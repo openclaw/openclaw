@@ -92,13 +92,21 @@ function rebuildQueuedPromptWithMediaUnderstanding(params: {
     stripped = stripLeadingMediaReplyHint(stripped);
   }
 
-  // Strip pre-existing file blocks from the prompt when the updated body
+  // Strip pre-existing file blocks from the body region when the updated body
   // contains new file blocks.  Mixed messages (audio + PDF) can arrive with
   // file extraction already applied in the primary path; without this strip
   // the old block stays in the prompt while the updated body adds a new one,
   // duplicating potentially large file payloads.
+  // Scope stripping to the body segment so quoted/replied text and thread
+  // history above the body retain any legitimate <file> blocks.
   if (params.updatedBody && FILE_BLOCK_RE.test(params.updatedBody)) {
-    stripped = stripExistingFileBlocks(stripped);
+    const bodyTarget = params.originalBody?.trim();
+    const bodyIdx = bodyTarget ? stripped.lastIndexOf(bodyTarget) : -1;
+    if (bodyIdx >= 0) {
+      stripped = stripped.slice(0, bodyIdx) + stripExistingFileBlocks(stripped.slice(bodyIdx));
+    } else {
+      stripped = stripExistingFileBlocks(stripped);
+    }
   }
 
   const updatedBody = normalizeUpdatedBody({
@@ -176,6 +184,9 @@ export async function applyDeferredMediaUnderstandingToQueuedRun(
   queued: FollowupRun,
   params: { logLabel?: string } = {},
 ): Promise<void> {
+  // NOTE: collect-mode and overflow-summary queue drains create synthetic
+  // followup runs without mediaContext — those paths are not covered here
+  // and rely on their own prompt-building logic in queue/drain.ts.
   const mediaContext = queued.mediaContext;
   if (!mediaContext || mediaContext.DeferredMediaApplied) {
     return;
@@ -191,10 +202,13 @@ export async function applyDeferredMediaUnderstandingToQueuedRun(
 
   const resolvedOriginalBody =
     mediaContext.CommandBody ?? mediaContext.RawBody ?? mediaContext.Body;
-  const bodyAlreadyHasFileBlock =
-    FILE_BLOCK_RE.test(resolvedOriginalBody ?? "") || FILE_BLOCK_RE.test(mediaContext.Body ?? "");
+  // Detect file extraction from the primary path by checking whether Body was
+  // mutated AND contains file blocks.  This avoids false-positives when a user
+  // message literally contains "<file name=" text.
+  const fileExtractionAlreadyApplied =
+    mediaContext.Body !== resolvedOriginalBody && FILE_BLOCK_RE.test(mediaContext.Body ?? "");
 
-  if (bodyAlreadyHasFileBlock && hasOnlyFileLikeAttachments(mediaContext)) {
+  if (fileExtractionAlreadyApplied && hasOnlyFileLikeAttachments(mediaContext)) {
     mediaContext.DeferredMediaApplied = true;
     return;
   }
@@ -227,7 +241,7 @@ export async function applyDeferredMediaUnderstandingToQueuedRun(
       muResult.appliedAudio ||
       muResult.appliedImage ||
       muResult.appliedVideo ||
-      (muResult.appliedFile && !bodyAlreadyHasFileBlock);
+      (muResult.appliedFile && !fileExtractionAlreadyApplied);
 
     if (shouldRebuildPrompt) {
       const newMediaNote = buildInboundMediaNote(mediaCtx);

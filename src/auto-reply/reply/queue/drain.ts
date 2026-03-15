@@ -85,7 +85,9 @@ async function resolveSummaryLines(items: FollowupRun[]): Promise<string[]> {
   const summaryLines: string[] = [];
   for (const item of items) {
     await applyDeferredMediaUnderstandingToQueuedRun(item, { logLabel: "followup queue" });
-    summaryLines.push(buildQueueSummaryLine(item.summaryLine?.trim() || item.prompt.trim()));
+    // After deferred media, prefer the updated prompt (which includes transcripts)
+    // over the original summaryLine (which may just be the caption text).
+    summaryLines.push(buildQueueSummaryLine(item.prompt.trim() || item.summaryLine?.trim() || ""));
   }
   return summaryLines;
 }
