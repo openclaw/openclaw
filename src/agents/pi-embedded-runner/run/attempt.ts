@@ -1431,16 +1431,26 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
-      await resolveBootstrapContextForRun({
-        workspaceDir: effectiveWorkspace,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
-        contextMode: params.bootstrapContextMode,
-        runKind: params.bootstrapContextRunKind,
-      });
+    // When contextInjection is "first-message-only", skip re-injecting workspace
+    // files on subsequent messages to reduce token waste by ~93% (#9157).
+    const contextInjection = params.config?.agents?.defaults?.contextInjection ?? "always";
+    const skipContextInjection =
+      contextInjection === "first-message-only" &&
+      (await fs
+        .stat(params.sessionFile)
+        .then(() => true)
+        .catch(() => false));
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = skipContextInjection
+      ? { bootstrapFiles: [], contextFiles: [] }
+      : await resolveBootstrapContextForRun({
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+          contextMode: params.bootstrapContextMode,
+          runKind: params.bootstrapContextRunKind,
+        });
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({

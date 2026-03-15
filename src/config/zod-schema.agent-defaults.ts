@@ -38,6 +38,7 @@ export const AgentDefaultsSchema = z
     workspace: z.string().optional(),
     repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
+    contextInjection: z.union([z.literal("always"), z.literal("first-message-only")]).optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     bootstrapPromptTruncationWarning: z
