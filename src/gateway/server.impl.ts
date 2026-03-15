@@ -1,3 +1,4 @@
+import net from "node:net";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
@@ -31,6 +32,7 @@ import {
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
+import { GatewayLockError } from "../infra/gateway-lock.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
@@ -268,6 +270,86 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  // Fast preflight: check port availability before any heavy initialization.
+  // Honors CLI overrides (opts.host / opts.bind) first, then falls back to the
+  // config file for the bind mode so the probe targets the same address the
+  // gateway will actually use.
+  {
+    let preflightHost: string | null = opts.host ?? null;
+    if (!preflightHost) {
+      // CLI --bind flag takes priority over config file for the bind mode,
+      // but we always need the config snapshot for custom bind hosts since
+      // the CLI passes only --bind custom without the actual address.
+      let bindMode = opts.bind;
+      let customBindHost: string | undefined;
+      try {
+        const snap = await readConfigFileSnapshot();
+        // Read bind mode even from invalid snapshots — the gateway.bind
+        // field is a literal string unaffected by ${ENV} substitution, so
+        // it is usable even when other config values failed validation.
+        if (!bindMode) {
+          bindMode = snap.config.gateway?.bind;
+        }
+        customBindHost = snap.config.gateway?.customBindHost;
+      } catch {
+        // Config unreadable — fall back to loopback probe.
+      }
+      const mode = bindMode ?? "loopback";
+      if (mode === "custom" && customBindHost) {
+        preflightHost = customBindHost;
+      } else if (mode === "lan") {
+        preflightHost = "0.0.0.0";
+      } else if (mode === "tailnet") {
+        // Tailnet IP requires network discovery that defeats the purpose of
+        // a cheap preflight. Skip the probe — the real bind will surface the
+        // conflict later with full context.
+        preflightHost = null;
+      } else {
+        preflightHost = "127.0.0.1";
+      }
+    }
+    if (preflightHost) {
+      // Align with the bind retry policy in http-listen.ts: the real listener
+      // retries EADDRINUSE up to 4 times at 500ms intervals to tolerate
+      // TIME_WAIT sockets from a prior instance. The preflight probe must be
+      // at least as tolerant, otherwise it rejects startups that the real
+      // bind path would have survived.
+      const PREFLIGHT_MAX_RETRIES = 4;
+      const PREFLIGHT_RETRY_MS = 500;
+      const probeHost = preflightHost;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const probe = net.createServer();
+            probe.once("error", (err: NodeJS.ErrnoException) => {
+              reject(err);
+            });
+            probe.once("listening", () => {
+              probe.close(() => resolve());
+            });
+            probe.listen(port, probeHost);
+          });
+          break; // port is free
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === "EADDRINUSE" && attempt < PREFLIGHT_MAX_RETRIES) {
+            await new Promise<void>((r) => setTimeout(r, PREFLIGHT_RETRY_MS));
+            continue;
+          }
+          if (code === "EADDRINUSE") {
+            throw new GatewayLockError(
+              `another gateway instance is already listening on ws://${probeHost}:${port}`,
+              err,
+            );
+          }
+          // Non-EADDRINUSE errors (e.g. ERR_SOCKET_BAD_PORT) are config
+          // issues, not lock contention — surface them without wrapping.
+          throw err;
+        }
+      }
+    }
+  }
+
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 

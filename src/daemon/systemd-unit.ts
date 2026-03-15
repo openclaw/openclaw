@@ -54,6 +54,10 @@ export function buildSystemdUnit({
     descriptionLine,
     "After=network-online.target",
     "Wants=network-online.target",
+    // Prevent infinite crash loops (e.g. port conflict) from exhausting system
+    // resources. After 5 failures within 120s, systemd stops retrying.
+    "StartLimitIntervalSec=120",
+    "StartLimitBurst=5",
     "",
     "[Service]",
     `ExecStart=${execStart}`,
