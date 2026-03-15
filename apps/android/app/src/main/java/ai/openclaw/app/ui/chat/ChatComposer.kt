@@ -128,7 +128,15 @@ fun ChatComposer(
           }
         }
 
-        DropdownMenu(expanded = showThinkingMenu, onDismissRequest = { showThinkingMenu = false }) {
+        DropdownMenu(
+          expanded = showThinkingMenu,
+          onDismissRequest = { showThinkingMenu = false },
+          shape = RoundedCornerShape(16.dp),
+          containerColor = mobileCardSurface,
+          tonalElevation = 0.dp,
+          shadowElevation = 8.dp,
+          border = BorderStroke(1.dp, mobileBorder),
+        ) {
           ThinkingMenuItem("off", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
           ThinkingMenuItem("low", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
           ThinkingMenuItem("medium", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
