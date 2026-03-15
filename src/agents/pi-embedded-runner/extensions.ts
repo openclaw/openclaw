@@ -10,6 +10,10 @@ import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runti
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../pi-extensions/context-pruning/tools.js";
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
+import slidingWindowExtension, {
+  DEFAULT_MAX_EXCHANGES,
+  setSlidingWindowRuntime,
+} from "../pi-extensions/sliding-window.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 
 function resolveContextWindowTokens(params: {
@@ -96,6 +100,18 @@ export function buildEmbeddedExtensionFactories(params: {
   if (pruningFactory) {
     factories.push(pruningFactory);
   }
+
+  // Sliding window: cap history to the most recent N user exchanges.
+  // Only activate when explicitly configured (opt-in).
+  const slidingWindowCfg = params.cfg?.agents?.defaults?.slidingWindow;
+  const maxExchanges = slidingWindowCfg != null
+    ? (slidingWindowCfg.maxExchanges ?? DEFAULT_MAX_EXCHANGES)
+    : 0;
+  if (maxExchanges > 0) {
+    setSlidingWindowRuntime(params.sessionManager, { maxExchanges });
+    factories.push(slidingWindowExtension);
+  }
+
   return factories;
 }
 
