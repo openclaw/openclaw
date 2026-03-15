@@ -370,7 +370,11 @@ export function createAgentEventHandler({
     }
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
-    if (now - last < 150) {
+    // Increase throttle to 300ms to buffer short fragments from MiniMax M2.5,
+    // which sends very short chunks (single chars/words) that would otherwise
+    // be sent as separate Telegram messages. This allows the chunker to collect
+    // more meaningful text before sending.
+    if (now - last < 300) {
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
