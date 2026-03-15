@@ -734,7 +734,16 @@ export function attachGatewayWsMessageHandler(params: {
           };
           const requirePairing = async (
             reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade",
+            paired?: { deviceId: string },
           ) => {
+            // Auto-approve (silent) for local clients (using the refined local
+            // check) and for already-paired devices requesting scope/role upgrades.
+            // The device identity is already cryptographically verified at this
+            // point, so upgrades are safe to auto-approve. Without this,
+            // non-loopback clients (e.g. LAN-bound gateways) hit a deadlock:
+            // the CLI needs the new scopes to connect, but can't connect to
+            // approve them.
+            const isUpgrade = reason === "scope-upgrade" || reason === "role-upgrade";
             const allowSilentLocalPairing = shouldAllowSilentLocalPairing({
               isLocalClient,
               hasBrowserOriginHeader,
@@ -742,18 +751,19 @@ export function attachGatewayWsMessageHandler(params: {
               isWebchat,
               reason,
             });
+            const silent = allowSilentLocalPairing || (isUpgrade && paired != null);
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
               ...clientPairingMetadata,
-              silent: allowSilentLocalPairing,
+              silent,
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
               const approved = await approveDevicePairing(pairing.request.requestId);
               if (approved) {
                 logGateway.info(
-                  `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
+                  `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"} reason=${reason}`,
                 );
                 context.broadcast(
                   "device.pair.resolved",
@@ -842,13 +852,13 @@ export function attachGatewayWsMessageHandler(params: {
             const allowedRoles = new Set(pairedRoles);
             if (allowedRoles.size === 0) {
               logUpgradeAudit("role-upgrade", pairedRoles, pairedScopes);
-              const ok = await requirePairing("role-upgrade");
+              const ok = await requirePairing("role-upgrade", paired);
               if (!ok) {
                 return;
               }
             } else if (!allowedRoles.has(role)) {
               logUpgradeAudit("role-upgrade", pairedRoles, pairedScopes);
-              const ok = await requirePairing("role-upgrade");
+              const ok = await requirePairing("role-upgrade", paired);
               if (!ok) {
                 return;
               }
@@ -857,7 +867,7 @@ export function attachGatewayWsMessageHandler(params: {
             if (scopes.length > 0) {
               if (pairedScopes.length === 0) {
                 logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
-                const ok = await requirePairing("scope-upgrade");
+                const ok = await requirePairing("scope-upgrade", paired);
                 if (!ok) {
                   return;
                 }
@@ -869,7 +879,7 @@ export function attachGatewayWsMessageHandler(params: {
                 });
                 if (!scopesAllowed) {
                   logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
-                  const ok = await requirePairing("scope-upgrade");
+                  const ok = await requirePairing("scope-upgrade", paired);
                   if (!ok) {
                     return;
                   }
