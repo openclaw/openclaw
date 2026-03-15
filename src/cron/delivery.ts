@@ -21,10 +21,26 @@ export type CronDeliveryPlan = {
 };
 
 function normalizeChannel(value: unknown): CronMessageChannel | undefined {
-  if (typeof value !== "string") {
+  // Cron jobs are persisted as JSON and can be edited by multiple clients.
+  // Be liberal in what we accept: some callers may serialize channel values
+  // as `{ id: "telegram" }` instead of a plain string.
+  const raw = (() => {
+    if (typeof value === "string") {
+      return value;
+    }
+    if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      const candidate = record.id;
+      if (typeof candidate === "string") {
+        return candidate;
+      }
+    }
+    return undefined;
+  })();
+  if (typeof raw !== "string") {
     return undefined;
   }
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = raw.trim().toLowerCase();
   if (!trimmed) {
     return undefined;
   }

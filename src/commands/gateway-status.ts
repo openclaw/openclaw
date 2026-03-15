@@ -288,8 +288,10 @@ export async function gatewayStatusCommand(
             tunnel: p.target.tunnel ?? null,
             connect: {
               ok: isProbeReachable(p.probe),
-              rpcOk: p.probe.ok,
-              scopeLimited: isScopeLimitedProbeFailure(p.probe),
+              rpcOk: (p.probe as { rpcOk?: boolean }).rpcOk ?? p.probe.ok,
+              scopeLimited:
+                (p.probe as { scopeLimited?: boolean }).scopeLimited ??
+                isScopeLimitedProbeFailure(p.probe),
               latencyMs: p.probe.connectLatencyMs,
               error: p.probe.error,
               close: p.probe.close,

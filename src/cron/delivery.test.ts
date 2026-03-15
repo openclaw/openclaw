@@ -84,6 +84,22 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.to).toBe("123");
     expect(plan.accountId).toBe("bot-a");
   });
+
+  it("accepts object-shaped delivery.channel values from loosely-typed clients (#46899)", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: { id: "telegram" } as never,
+          to: "123",
+        },
+      }),
+    );
+    expect(plan.mode).toBe("announce");
+    expect(plan.requested).toBe(true);
+    expect(plan.channel).toBe("telegram");
+    expect(plan.to).toBe("123");
+  });
 });
 
 describe("resolveFailureDestination", () => {

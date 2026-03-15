@@ -327,8 +327,20 @@ export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
 }
 
 export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
-  if (probe.ok || probe.connectLatencyMs == null) {
+  // Back-compat: older probes reported ok=false for RPC failures even when connect succeeded.
+  if (!probe.ok && probe.connectLatencyMs != null) {
+    return MISSING_SCOPE_PATTERN.test(probe.error ?? "");
+  }
+
+  // New semantics: ok=true indicates connect succeeded; rpcOk captures detailed calls.
+  if (!probe.ok) {
     return false;
+  }
+  if (probe.rpcOk) {
+    return false;
+  }
+  if (probe.scopeLimited) {
+    return true;
   }
   return MISSING_SCOPE_PATTERN.test(probe.error ?? "");
 }
@@ -338,21 +350,21 @@ export function isProbeReachable(probe: GatewayProbeResult): boolean {
 }
 
 export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
-  if (probe.ok) {
-    const latency =
-      typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
+  const detail = probe.error ? ` - ${probe.error}` : "";
+
+  if (!probe.ok) {
+    return `${colorize(rich, theme.error, "Connect: failed")}${detail}`;
+  }
+
+  const latency =
+    typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
+
+  if (probe.rpcOk) {
     return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${colorize(rich, theme.success, "RPC: ok")}`;
   }
 
-  const detail = probe.error ? ` - ${probe.error}` : "";
-  if (probe.connectLatencyMs != null) {
-    const latency =
-      typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
-    const rpcStatus = isScopeLimitedProbeFailure(probe)
-      ? colorize(rich, theme.warn, "RPC: limited")
-      : colorize(rich, theme.error, "RPC: failed");
-    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${rpcStatus}${detail}`;
-  }
-
-  return `${colorize(rich, theme.error, "Connect: failed")}${detail}`;
+  const rpcStatus = probe.scopeLimited
+    ? colorize(rich, theme.warn, "RPC: limited")
+    : colorize(rich, theme.error, "RPC: failed");
+  return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${rpcStatus}${detail}`;
 }
