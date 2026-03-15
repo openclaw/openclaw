@@ -203,14 +203,14 @@ describe("exec host env validation", () => {
     }
   });
 
-  it("defaults to sandbox when sandbox runtime is unavailable", async () => {
+  it("fails closed when implicit exec host resolves to sandbox without sandbox runtime", async () => {
     const tool = createExecTool({ security: "full", ask: "off" });
 
-    const result = await tool.execute("call1", {
-      command: "echo ok",
-    });
-    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
-    expect(text).toContain("ok");
+    await expect(
+      tool.execute("call1", {
+        command: "echo ok",
+      }),
+    ).rejects.toThrow(/sandbox runtime is unavailable/);
 
     const err = await tool
       .execute("call2", {

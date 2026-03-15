@@ -867,20 +867,27 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
 
 function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const globalExecHost = cfg.tools?.exec?.host;
+  const globalExecHost = cfg.tools?.exec?.host ?? "sandbox";
   const defaultSandboxMode = resolveSandboxConfigForAgent(cfg).mode;
-  const defaultHostIsExplicitSandbox = globalExecHost === "sandbox";
+  const defaultHostResolvesToSandbox = globalExecHost === "sandbox";
+  const defaultsNeedSandboxWarning =
+    defaultHostResolvesToSandbox &&
+    (defaultSandboxMode === "off" || defaultSandboxMode === "non-main");
 
-  if (defaultHostIsExplicitSandbox && defaultSandboxMode === "off") {
+  if (defaultsNeedSandboxWarning) {
+    const defaultsDetail =
+      defaultSandboxMode === "off"
+        ? "tools.exec.host resolves to sandbox while agents.defaults.sandbox.mode=off. " +
+          "Exec will fail closed unless sandbox mode is enabled or tools.exec.host is switched to gateway/node."
+        : "tools.exec.host resolves to sandbox while agents.defaults.sandbox.mode=non-main. " +
+          "Agent main sessions stay unsandboxed in non-main mode, so exec will fail closed there unless sandbox mode is switched to all or tools.exec.host is changed to gateway/node.";
     findings.push({
       checkId: "tools.exec.host_sandbox_no_sandbox_defaults",
       severity: "warn",
-      title: "Exec host is sandbox but sandbox mode is off",
-      detail:
-        "tools.exec.host is explicitly set to sandbox while agents.defaults.sandbox.mode=off. " +
-        "In this mode, exec runs directly on the gateway host.",
+      title: "Exec host resolves to sandbox while some sessions are unsandboxed",
+      detail: defaultsDetail,
       remediation:
-        'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway" with approvals.',
+        'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway"/"node" with the intended approvals policy.',
     });
   }
 
@@ -891,8 +898,13 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
         entry &&
         typeof entry === "object" &&
         typeof entry.id === "string" &&
-        entry.tools?.exec?.host === "sandbox" &&
-        resolveSandboxConfigForAgent(cfg, entry.id).mode === "off",
+        resolveSandboxConfigForAgent(cfg, entry.id).mode !== "all" &&
+        (entry.tools?.exec?.host ?? globalExecHost) === "sandbox" &&
+        !(
+          defaultsNeedSandboxWarning &&
+          entry.tools?.exec?.host == null &&
+          entry.sandbox?.mode == null
+        ),
     )
     .map((entry) => entry.id)
     .slice(0, 5);
@@ -901,12 +913,12 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     findings.push({
       checkId: "tools.exec.host_sandbox_no_sandbox_agents",
       severity: "warn",
-      title: "Agent exec host uses sandbox while sandbox mode is off",
+      title: "Agent exec host resolves to sandbox while some sessions are unsandboxed",
       detail:
-        `agents.list.*.tools.exec.host is set to sandbox for: ${riskyAgents.join(", ")}. ` +
-        "With sandbox mode off, exec runs directly on the gateway host.",
+        `agents.list.*.tools.exec.host resolves to sandbox for: ${riskyAgents.join(", ")}. ` +
+        "With sandbox mode off, exec will fail closed unless sandbox mode is enabled or host is changed.",
       remediation:
-        'Enable sandbox mode for these agents (`agents.list[].sandbox.mode`) or set their tools.exec.host to "gateway".',
+        'Enable sandbox mode for these agents (`agents.list[].sandbox.mode`) or set their tools.exec.host to "gateway"/"node".',
     });
   }
 
