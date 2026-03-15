@@ -266,11 +266,19 @@ export function loadPluginManifestRegistry(params: {
       // Check whether both candidates point to the same physical directory
       // (e.g. via symlinks or different path representations). If so, this
       // is a false-positive duplicate and can be silently skipped.
-      const samePath = existing.candidate.rootDir === candidate.rootDir;
+      const sameRootDir = existing.candidate.rootDir === candidate.rootDir;
+      const sameSource = existing.candidate.source === candidate.source;
       const samePlugin = (() => {
-        if (samePath) {
+        // If both rootDir and source are identical, it's definitely the same plugin
+        if (sameRootDir && sameSource) {
           return true;
         }
+        // If rootDir matches exactly (even if source differs), treat as same plugin
+        // This handles cases where the same plugin is specified multiple ways
+        if (sameRootDir) {
+          return true;
+        }
+        // Check realpath for symlink resolution
         const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
         const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
         return Boolean(existingReal && candidateReal && existingReal === candidateReal);

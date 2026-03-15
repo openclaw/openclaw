@@ -310,6 +310,30 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
+  it("suppresses duplicate warning when candidates have identical rootDir AND source (exact duplicates)", () => {
+    const dir = makeTempDir();
+    const manifest = { id: "exact-duplicate-plugin", configSchema: { type: "object" } };
+    writeManifest(dir, manifest);
+
+    // Both candidates are exactly the same - same rootDir AND same source
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "exact-duplicate-plugin",
+        rootDir: dir,
+        sourceName: "index.ts",
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "exact-duplicate-plugin",
+        rootDir: dir,
+        sourceName: "index.ts",
+        origin: "global",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+  });
+
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
     const dir = makeTempDir();
     mkdirSafe(path.join(dir, "sub"));
