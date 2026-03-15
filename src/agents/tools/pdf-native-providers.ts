@@ -60,20 +60,29 @@ export async function anthropicAnalyzePdf(params: {
   content.push({ type: "text", text: params.prompt });
 
   const baseUrl = (params.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
-  const res = await fetch(`${baseUrl}/v1/messages`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "pdfs-2024-09-25",
-    },
-    body: JSON.stringify({
-      model: params.modelId,
-      max_tokens: params.maxTokens ?? 4096,
-      messages: [{ role: "user", content }],
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "pdfs-2024-09-25",
+      },
+      body: JSON.stringify({
+        model: params.modelId,
+        max_tokens: params.maxTokens ?? 4096,
+        messages: [{ role: "user", content }],
+      }),
+      signal: AbortSignal.timeout(120_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `Anthropic PDF request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -142,13 +151,22 @@ export async function geminiAnalyzePdf(params: {
     .replace(/\/v1beta$/, "");
   const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts }],
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts }],
+      }),
+      signal: AbortSignal.timeout(120_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `Gemini PDF request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
