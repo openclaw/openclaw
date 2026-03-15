@@ -981,8 +981,19 @@ export function attachGatewayUpgradeHandler(opts: {
   rateLimiter?: AuthRateLimiter;
   /** Optional audit logger for recording security events. */
   authAuditLogger?: AuthAuditLogger;
+  /** Optional per-IP request rate limiter. */
+  requestRateLimiter?: RequestRateLimiter;
 }) {
-  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter, authAuditLogger } = opts;
+  const {
+    httpServer,
+    wss,
+    canvasHost,
+    clients,
+    resolvedAuth,
+    rateLimiter,
+    authAuditLogger,
+    requestRateLimiter,
+  } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
       // IP access control for WebSocket upgrades.
@@ -1004,6 +1015,18 @@ export function attachGatewayUpgradeHandler(opts: {
         socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
         socket.destroy();
         return;
+      }
+
+      // Per-IP request rate limiting for WebSocket upgrades.
+      if (requestRateLimiter) {
+        const rlCheck = requestRateLimiter.check(upgradeClientIp);
+        if (!rlCheck.allowed) {
+          authAuditLogger?.log({ event: "rate_limited", clientIp: upgradeClientIp ?? undefined });
+          const retryAfter = rlCheck.retryAfterMs ? Math.ceil(rlCheck.retryAfterMs / 1000) : 1;
+          socket.write(`HTTP/1.1 429 Too Many Requests\r\nRetry-After: ${retryAfter}\r\n\r\n`);
+          socket.destroy();
+          return;
+        }
       }
 
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
