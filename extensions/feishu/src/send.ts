@@ -472,3 +472,74 @@ export async function editMessageFeishu(params: {
     throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
   }
 }
+export async function listFeishuThreadMessages(params: {
+  cfg: ClawdbotConfig;
+  threadId: string;
+  currentMessageId?: string;
+  /** Exclude the root message (already provided separately as ThreadStarterBody). */
+  rootMessageId?: string;
+  limit?: number;
+  accountId?: string;
+}): Promise<FeishuThreadMessageInfo[]> {
+  const { cfg, threadId, currentMessageId, rootMessageId, limit = 20, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const client = createFeishuClient(account);
+
+  const response = (await client.im.message.list({
+    params: {
+      container_id_type: "thread",
+      container_id: threadId,
+      // Fetch newest messages first so long threads keep the most recent turns.
+      // Results are reversed below to restore chronological order.
+      sort_type: "ByCreateTimeDesc",
+      page_size: Math.min(limit + 1, 50),
+    },
+  })) as {
+    code?: number;
+    msg?: string;
+    data?: {
+      items?: Array<
+        {
+          message_id?: string;
+          root_id?: string;
+          parent_id?: string;
+        } & FeishuMessageGetItem
+      >;
+    };
+  };
+
+  if (response.code !== 0) {
+    throw new Error(
+      `Feishu thread list failed: code=${response.code} msg=${response.msg ?? "unknown"}`,
+    );
+  }
+
+  const items = response.data?.items ?? [];
+  const results: FeishuThreadMessageInfo[] = [];
+
+  for (const item of items) {
+    if (currentMessageId && item.message_id === currentMessageId) continue;
+    if (rootMessageId && item.message_id === rootMessageId) continue;
+
+    const parsed = parseFeishuMessageItem(item);
+
+    results.push({
+      messageId: parsed.messageId,
+      senderId: parsed.senderId,
+      senderType: parsed.senderType,
+      content: parsed.content,
+      contentType: parsed.contentType,
+      createTime: parsed.createTime,
+    });
+
+    if (results.length >= limit) break;
+  }
+
+  // Restore chronological order (oldest first) since we fetched newest-first.
+  results.reverse();
+  return results;
+}
