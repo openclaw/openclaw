@@ -104,7 +104,7 @@ Control UIが読み込まれれば、Gatewayは使用可能な状態です。
 ## さらに詳しく
 
 <Columns>
-  <Card title="オンボーディングウィザード（詳細）" href="/start/wizard">
+  <Card title="オンボーディングウィザード（詳細）" href="/ja-JP/start/wizard">
     完全なCLIウィザードリファレンスと高度なオプション。
   </Card>
   <Card title="macOSアプリのオンボーディング" href="/start/onboarding">

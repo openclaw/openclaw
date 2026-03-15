@@ -37,13 +37,13 @@ x-i18n:
 </p>
 
 <Columns>
-  <Card title="入门指南" href="/start/getting-started" icon="rocket">
+  <Card title="入门指南" href="/zh-CN/start/getting-started" icon="rocket">
     安装 OpenClaw 并在几分钟内启动 Gateway 网关。
   </Card>
-  <Card title="运行向导" href="/start/wizard" icon="sparkles">
+  <Card title="运行向导" href="/zh-CN/start/wizard" icon="sparkles">
     通过 `openclaw onboard` 和配对流程进行引导式设置。
   </Card>
-  <Card title="打开控制界面" href="/web/control-ui" icon="layout-dashboard">
+  <Card title="打开控制界面" href="/zh-CN/web/control-ui" icon="layout-dashboard">
     启动浏览器仪表板，管理聊天、配置和会话。
   </Card>
 </Columns>
@@ -145,22 +145,20 @@ Gateway 网关启动后，打开浏览器控制界面。
 ## 从这里开始
 
 <Columns>
-  <Card title="文档中心" href="/start/hubs" icon="book-open">
+  <Card title="文档中心" href="/zh-CN/start/hubs" icon="book-open">
     所有文档和指南，按用例分类。
   </Card>
-  <Card title="配置" href="/gateway/configuration" icon="settings">
+  <Card title="配置" href="/zh-CN/gateway/configuration" icon="settings">
     核心 Gateway 网关设置、令牌和提供商配置。
   </Card>
-  <Card title="远程访问" href="/gateway/remote" icon="globe">
+  <Card title="远程访问" href="/zh-CN/gateway/remote" icon="globe">
     SSH 和 tailnet 访问模式。
   </Card>
-  <Card title="渠道" href="/channels/telegram" icon="message-square">
-    WhatsApp、Telegram、Discord 等渠道的具体设置。
-  </Card>
-  <Card title="节点" href="/nodes" icon="smartphone">
+  <Card title="安全" href="/zh-CN/gateway/authentication" icon="shield">
+  <Card title="节点" href="/zh-CN/nodes" icon="smartphone">
     iOS 和 Android 节点的配对与 Canvas 功能。
   </Card>
-  <Card title="帮助" href="/help" icon="life-buoy">
+  <Card title="帮助" href="/zh-CN/help" icon="life-buoy">
     常见修复方法和故障排除入口。
   </Card>
 </Columns>
@@ -168,19 +166,19 @@ Gateway 网关启动后，打开浏览器控制界面。
 ## 了解更多
 
 <Columns>
-  <Card title="完整功能列表" href="/concepts/features" icon="list">
+  <Card title="完整功能列表" href="/zh-CN/concepts/features" icon="list">
     全部渠道、路由和媒体功能。
   </Card>
-  <Card title="多智能体路由" href="/concepts/multi-agent" icon="route">
+  <Card title="多智能体路由" href="/zh-CN/concepts/multi-agent" icon="route">
     工作区隔离和按智能体的会话管理。
   </Card>
-  <Card title="安全" href="/gateway/security" icon="shield">
+  <Card title="安全" href="/zh-CN/gateway/security" icon="shield">
     令牌、白名单和安全控制。
   </Card>
-  <Card title="故障排除" href="/gateway/troubleshooting" icon="wrench">
+  <Card title="故障排除" href="/zh-CN/gateway/troubleshooting" icon="wrench">
     Gateway 网关诊断和常见错误。
   </Card>
-  <Card title="关于与致谢" href="/reference/credits" icon="info">
+  <Card title="关于与致谢" href="/zh-CN/reference/credits" icon="info">
     项目起源、贡献者和许可证。
   </Card>
 </Columns>

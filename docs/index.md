@@ -73,22 +73,22 @@ The Gateway is the single source of truth for sessions, routing, and channel con
 ## Key capabilities
 
 <Columns>
-  <Card title="Multi-channel gateway" icon="network">
+  <Card title="Multi-channel gateway" icon="network" href="/channels">
     WhatsApp, Telegram, Discord, and iMessage with a single Gateway process.
   </Card>
-  <Card title="Plugin channels" icon="plug">
+  <Card title="Plugin channels" icon="plug" href="/tools/plugin">
     Add Mattermost and more with extension packages.
   </Card>
-  <Card title="Multi-agent routing" icon="route">
+  <Card title="Multi-agent routing" icon="route" href="/concepts/multi-agent">
     Isolated sessions per agent, workspace, or sender.
   </Card>
-  <Card title="Media support" icon="image">
+  <Card title="Media support" icon="image" href="/nodes/images">
     Send and receive images, audio, and documents.
   </Card>
-  <Card title="Web Control UI" icon="monitor">
+  <Card title="Web Control UI" icon="monitor" href="/web/control-ui">
     Browser dashboard for chat, config, sessions, and nodes.
   </Card>
-  <Card title="Mobile nodes" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone" href="/nodes">
     Pair iOS and Android nodes for Canvas, camera, and voice-enabled workflows.
   </Card>
 </Columns>
