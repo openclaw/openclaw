@@ -847,12 +847,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
     };
 
-    if (!enableState.enabled) {
+    const registrationMode = enableState.enabled
+      ? "full"
+      : !validateOnly && manifestRecord.channels.length > 0
+        ? "setup-only"
+        : null;
+
+    if (!registrationMode) {
       record.status = "disabled";
       record.error = enableState.reason;
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       continue;
+    }
+    if (!enableState.enabled) {
+      record.status = "disabled";
+      record.error = enableState.reason;
     }
 
     if (record.format === "bundle") {
@@ -878,10 +888,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       seenIds.set(pluginId, candidate.origin);
       continue;
     }
-
     // Fast-path bundled memory plugins that are guaranteed disabled by slot policy.
     // This avoids opening/importing heavy memory plugin modules that will never register.
-    if (candidate.origin === "bundled" && manifestRecord.kind === "memory") {
+    if (
+      registrationMode === "full" &&
+      candidate.origin === "bundled" &&
+      manifestRecord.kind === "memory"
+    ) {
       const earlyMemoryDecision = resolveMemorySlotDecision({
         id: record.id,
         kind: "memory",
@@ -966,24 +979,26 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       memorySlotMatched = true;
     }
 
-    const memoryDecision = resolveMemorySlotDecision({
-      id: record.id,
-      kind: record.kind,
-      slot: memorySlot,
-      selectedId: selectedMemoryPluginId,
-    });
+    if (registrationMode === "full") {
+      const memoryDecision = resolveMemorySlotDecision({
+        id: record.id,
+        kind: record.kind,
+        slot: memorySlot,
+        selectedId: selectedMemoryPluginId,
+      });
 
-    if (!memoryDecision.enabled) {
-      record.enabled = false;
-      record.status = "disabled";
-      record.error = memoryDecision.reason;
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      continue;
-    }
+      if (!memoryDecision.enabled) {
+        record.enabled = false;
+        record.status = "disabled";
+        record.error = memoryDecision.reason;
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        continue;
+      }
 
-    if (memoryDecision.selected && record.kind === "memory") {
-      selectedMemoryPluginId = record.id;
+      if (memoryDecision.selected && record.kind === "memory") {
+        selectedMemoryPluginId = record.id;
+      }
     }
 
     const validatedConfig = validatePluginConfig({
@@ -1014,6 +1029,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       config: cfg,
       pluginConfig: validatedConfig.value,
       hookPolicy: entry?.hooks,
+      registrationMode,
     });
 
     try {
