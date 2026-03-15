@@ -356,6 +356,15 @@ describe("failover-error", () => {
     );
   });
 
+  it("classifies OpenRouter generic 'Provider returned error' as timeout (#45834)", () => {
+    expect(resolveFailoverReasonFromError({ message: "Provider returned error" })).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "Provider returned error: upstream service failure",
+      }),
+    ).toBe("timeout");
+  });
+
   it("treats AbortError reason=abort as timeout", () => {
     const err = Object.assign(new Error("aborted"), {
       name: "AbortError",
