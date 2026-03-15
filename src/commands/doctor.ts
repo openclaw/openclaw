@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { collectModelConfigWarnings } from "../config/validation.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
@@ -241,6 +242,13 @@ export async function doctorCommand(
     deep: options.deep === true,
   });
 
+  // Warn about model references not found in the current catalog.
+  const modelCatalog = await loadModelCatalog({ config: cfg });
+  const modelWarnings = collectModelConfigWarnings(cfg, modelCatalog);
+  if (modelWarnings.length > 0) {
+    note(modelWarnings.map((w) => `- ${w.path}: ${w.message}`).join("\n"), "Model config");
+  }
+
   if (cfg.hooks?.gmail?.model?.trim()) {
     const hooksModelRef = resolveHooksGmailModel({
       cfg,
@@ -254,10 +262,9 @@ export async function doctorCommand(
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
       });
-      const catalog = await loadModelCatalog({ config: cfg });
       const status = getModelRefStatus({
         cfg,
-        catalog,
+        catalog: modelCatalog,
         ref: hooksModelRef,
         defaultProvider,
         defaultModel,
