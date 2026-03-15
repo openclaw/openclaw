@@ -485,16 +485,20 @@ function resolveCandidateDuplicateRank(params: {
       env: params.env,
     });
 
-  switch (params.candidate.origin) {
-    case "config":
-      return 0;
-    case "workspace":
-      return 1;
-    case "global":
-      return isExplicitInstall ? 2 : 4;
-    case "bundled":
-      return 3;
+  if (params.candidate.origin === "config") {
+    return 0;
   }
+  if (params.candidate.origin === "global" && isExplicitInstall) {
+    return 1;
+  }
+  if (params.candidate.origin === "bundled") {
+    // Bundled plugin ids stay reserved unless the operator configured an override.
+    return 2;
+  }
+  if (params.candidate.origin === "workspace") {
+    return 3;
+  }
+  return 4;
 }
 
 function compareDuplicateCandidateOrder(params: {
