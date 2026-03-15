@@ -53,9 +53,59 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
 }
 
+/**
+ * Fallback reader for workspace bootstrap files that are symlinks pointing
+ * outside the workspace boundary.  Resolves the real path, opens a file
+ * descriptor, then validates via fstat and reads from the same fd to
+ * eliminate TOCTOU races (the target cannot be swapped between stat and read).
+ */
+async function readSymlinkedWorkspaceFile(filePath: string): Promise<WorkspaceGuardedReadResult> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    const realPath = await fs.realpath(filePath);
+    handle = await fs.open(realPath, "r");
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      return { ok: false, reason: "validation" };
+    }
+    if (stat.size > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+      return { ok: false, reason: "validation" };
+    }
+    // Reject hardlinked targets so that the symlink fallback cannot bypass
+    // the hardlink rejection enforced by the primary boundary reader.
+    if (stat.nlink > 1) {
+      return { ok: false, reason: "validation" };
+    }
+
+    const identity = workspaceFileIdentity(stat, realPath);
+    const cached = workspaceFileCache.get(filePath);
+    if (cached && cached.identity === identity) {
+      return { ok: true, content: cached.content };
+    }
+
+    const content = await handle.readFile("utf-8");
+    workspaceFileCache.set(filePath, { content, identity });
+    return { ok: true, content };
+  } catch (error) {
+    workspaceFileCache.delete(filePath);
+    const code =
+      typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") {
+      return { ok: false, reason: "path", error };
+    }
+    return { ok: false, reason: "io", error };
+  } finally {
+    await handle?.close();
+  }
+}
+
 async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
+  /** When true, symlinks pointing outside the workspace boundary are followed
+   *  via the symlink fallback reader.  Should only be enabled for the fixed
+   *  set of top-level bootstrap files, not for extra/glob-resolved patterns. */
+  allowSymlinks?: boolean;
 }): Promise<WorkspaceGuardedReadResult> {
   const opened = await openBoundaryFile({
     absolutePath: params.filePath,
@@ -64,6 +114,22 @@ async function readWorkspaceFileWithGuards(params: {
     maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   });
   if (!opened.ok) {
+    // If the boundary check rejected the file (e.g. symlink pointing outside
+    // the workspace), fall back to reading via the fd-based symlink reader.
+    // This is only allowed for top-level bootstrap files (allowSymlinks=true)
+    // so that extra bootstrap file patterns cannot abuse the fallback.
+    // Only attempt the fallback when the path is actually a symlink so that
+    // hardlink rejections and other validation failures are preserved.
+    if (params.allowSymlinks && opened.reason === "validation") {
+      try {
+        const lstat = await fs.lstat(params.filePath);
+        if (lstat.isSymbolicLink()) {
+          return readSymlinkedWorkspaceFile(params.filePath);
+        }
+      } catch {
+        // lstat failed — fall through to the original failure
+      }
+    }
     workspaceFileCache.delete(params.filePath);
     return opened;
   }
@@ -525,6 +591,7 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     const loaded = await readWorkspaceFileWithGuards({
       filePath: entry.filePath,
       workspaceDir: resolvedDir,
+      allowSymlinks: true,
     });
     if (loaded.ok) {
       result.push({
