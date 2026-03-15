@@ -1,7 +1,11 @@
 import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+  toAgentModelListLike,
+} from "../../config/model-input.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadModelsConfig } from "./load-config.js";
@@ -85,10 +89,30 @@ export async function addFallbackCommand(
       ...cfg.agents?.defaults?.models,
     } as Record<string, AgentModelEntryConfig>;
     const targetKey = upsertCanonicalModelConfigEntry(nextModels, resolved);
+
+    // Ensure the primary model is in the allowlist so it isn't silently blocked.
+    // This runs before the duplicate check so that re-adding an existing fallback
+    // still backfills the primary when it was missing from a prior broken config.
+    const primaryRaw = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.[params.key]);
+    if (primaryRaw) {
+      const primaryResolved = resolveModelTarget({ raw: primaryRaw, cfg });
+      upsertCanonicalModelConfigEntry(nextModels, primaryResolved);
+    }
+
     const existing = getFallbacks(cfg, params.key);
     const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
     if (existingKeys.includes(targetKey)) {
-      return cfg;
+      // Even though the fallback is already present, persist any primary backfill.
+      return {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            models: nextModels,
+          },
+        },
+      };
     }
 
     return patchDefaultsFallbacks(cfg, {
