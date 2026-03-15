@@ -2,11 +2,27 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleSendChat, refreshChatAvatar, type ChatHost } from "./app-chat.ts";
+import type { UiSettings } from "./storage.ts";
 
-function makeHost(overrides?: Partial<ChatHost>): ChatHost {
+type TestChatHost = ChatHost & {
+  chatToolMessages: unknown[];
+  chatStreamSegments: Array<{ text: string; ts: number }>;
+  toolStreamById: Map<string, unknown>;
+  toolStreamOrder: string[];
+  toolStreamSyncTimer: number | null;
+  settings: UiSettings;
+  theme: "claw";
+  themeMode: "dark";
+  themeResolved: "dark";
+  applySessionKey: string;
+};
+
+function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
   return {
     client: null,
     chatMessages: [],
+    chatToolMessages: [],
+    chatStreamSegments: [],
     chatStream: null,
     connected: true,
     chatMessage: "",
@@ -22,6 +38,27 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatModelOverrides: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
+    toolStreamById: new Map<string, unknown>(),
+    toolStreamOrder: [],
+    toolStreamSyncTimer: null,
+    settings: {
+      gatewayUrl: "",
+      token: "",
+      sessionKey: "agent:main",
+      lastActiveSessionKey: "agent:main",
+      theme: "claw",
+      themeMode: "dark",
+      chatFocusMode: false,
+      chatShowThinking: false,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 280,
+      navGroupsCollapsed: {},
+    },
+    theme: "claw",
+    themeMode: "dark",
+    themeResolved: "dark",
+    applySessionKey: "agent:main",
     refreshSessionsAfterChat: new Set<string>(),
     updateComplete: Promise.resolve(),
     ...overrides,
@@ -71,6 +108,48 @@ describe("refreshChatAvatar", () => {
 describe("handleSendChat", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("cancels button-triggered new sessions when the user declines confirmation", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const request = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "keep this draft",
+    });
+
+    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Start a new session?\n\nUnsaved context in the current session will be lost.",
+    );
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("keep this draft");
+    expect(host.chatMessages).toEqual([]);
+  });
+
+  it("sends button-triggered new sessions when the user accepts confirmation", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "keep this draft",
+    });
+
+    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Start a new session?\n\nUnsaved context in the current session will be lost.",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main",
+        message: "/new",
+        deliver: false,
+      }),
+    );
   });
 
   it("keeps slash-command model changes in sync with the chat header cache", async () => {
