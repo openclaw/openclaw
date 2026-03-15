@@ -4,9 +4,19 @@ import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { logWarn } from "../logger.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
+
+/**
+ * Sanitize error messages to prevent control character injection in logs.
+ * Strips non-printable characters and truncates to reasonable length.
+ */
+function sanitizeErrorMessage(err: unknown, maxLen = 200): string {
+  const str = String(err).replace(/[\x00-\x1F\x7F-\x9F]/g, "");
+  return str.length > maxLen ? `${str.slice(0, maxLen)}...` : str;
+}
 
 type ChromeMcpStructuredPage = {
   id: number;
@@ -190,11 +200,13 @@ async function createRealSession(profileName: string): Promise<ChromeMcpSession>
         throw new Error("Chrome MCP server did not expose the expected navigation tools.");
       }
     } catch (err) {
-      await client.close().catch(() => {});
+      await client.close().catch((closeErr) => {
+        logWarn(`chrome-mcp: client close failed (non-fatal): ${sanitizeErrorMessage(closeErr)}`);
+      });
       throw new BrowserProfileUnavailableError(
         `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
-          `Make sure Chrome (v146+) is running. ` +
-          `Details: ${String(err)}`,
+          `Make sure Chrome (v146+) is running, enable chrome://inspect/#remote-debugging, and approve the connection. ` +
+          `Details: ${sanitizeErrorMessage(err)}`,
       );
     }
   })();
@@ -257,7 +269,9 @@ async function callTool(
   } catch (err) {
     // Transport/connection error — tear down session so it reconnects on next call
     sessions.delete(profileName);
-    await session.client.close().catch(() => {});
+    await session.client.close().catch((closeErr) => {
+      logWarn(`chrome-mcp: client close failed (non-fatal): ${sanitizeErrorMessage(closeErr)}`);
+    });
     throw err;
   }
   // Tool-level errors (element not found, script error, etc.) don't indicate a
@@ -274,7 +288,9 @@ async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T>
   try {
     return await fn(filePath);
   } finally {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(dir, { recursive: true, force: true }).catch((err) => {
+      logWarn(`chrome-mcp: temp dir cleanup failed (non-fatal): ${sanitizeErrorMessage(err)}`);
+    });
   }
 }
 
@@ -302,14 +318,18 @@ export async function closeChromeMcpSession(profileName: string): Promise<boolea
     return false;
   }
   sessions.delete(profileName);
-  await session.client.close().catch(() => {});
+  await session.client.close().catch((err) => {
+    logWarn(`chrome-mcp: session close failed for "${profileName}" (non-fatal): ${sanitizeErrorMessage(err)}`);
+  });
   return true;
 }
 
 export async function stopAllChromeMcpSessions(): Promise<void> {
   const names = [...sessions.keys()];
   for (const name of names) {
-    await closeChromeMcpSession(name).catch(() => {});
+    await closeChromeMcpSession(name).catch((err) => {
+      logWarn(`chrome-mcp: stop session failed for "${name}" (non-fatal): ${sanitizeErrorMessage(err)}`);
+    });
   }
 }
 
