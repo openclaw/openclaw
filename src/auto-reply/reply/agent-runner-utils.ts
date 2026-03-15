@@ -1,4 +1,7 @@
-import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
+import {
+  resolveEffectiveModelFallbacks,
+  resolveRunModelFallbacksOverride,
+} from "../../agents/agent-scope.js";
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { getChannelDock } from "../../channels/dock.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
@@ -155,16 +158,25 @@ export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string
   Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
+  const hasCompactionAutoOverride = run.authProfileIdSource === "auto";
+  const fallbacksOverride = hasCompactionAutoOverride
+    ? resolveEffectiveModelFallbacks({
+        cfg: run.config,
+        agentId: run.agentId,
+        hasSessionModelOverride: true,
+      })
+    : resolveRunModelFallbacksOverride({
+        cfg: run.config,
+        agentId: run.agentId,
+        sessionKey: run.sessionKey,
+      });
+
   return {
     cfg: run.config,
     provider: run.provider,
     model: run.model,
     agentDir: run.agentDir,
-    fallbacksOverride: resolveRunModelFallbacksOverride({
-      cfg: run.config,
-      agentId: run.agentId,
-      sessionKey: run.sessionKey,
-    }),
+    fallbacksOverride,
   };
 }
 
