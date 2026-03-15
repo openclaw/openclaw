@@ -1,4 +1,5 @@
 import { upsertAuthProfile } from "../../../agents/auth-profiles.js";
+import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -8,7 +9,6 @@ import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract
 import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
-import { configureOllamaNonInteractive } from "../../ollama-setup.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
@@ -29,6 +29,7 @@ import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { detectZaiEndpoint } from "../../zai-endpoint-detect.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
+import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 type ResolvedNonInteractiveApiKey = NonNullable<
   Awaited<ReturnType<typeof resolveNonInteractiveApiKey>>
@@ -83,6 +84,46 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...input,
       secretInputMode: requestedSecretInputMode,
     });
+  const toApiKeyCredential = (params: {
+    provider: string;
+    resolved: ResolvedNonInteractiveApiKey;
+    email?: string;
+    metadata?: Record<string, string>;
+  }): ApiKeyCredential | null => {
+    const storeSecretRef = requestedSecretInputMode === "ref" && params.resolved.source === "env"; // pragma: allowlist secret
+    if (storeSecretRef) {
+      if (!params.resolved.envVarName) {
+        runtime.error(
+          [
+            `--secret-input-mode ref requires an explicit environment variable for provider "${params.provider}".`,
+            "Set the provider API key env var and retry, or use --secret-input-mode plaintext.",
+          ].join("\n"),
+        );
+        runtime.exit(1);
+        return null;
+      }
+      return {
+        type: "api_key",
+        provider: params.provider,
+        keyRef: {
+          source: "env",
+          provider: resolveDefaultSecretProviderAlias(baseConfig, "env", {
+            preferFirstProviderForSource: true,
+          }),
+          id: params.resolved.envVarName,
+        },
+        ...(params.email ? { email: params.email } : {}),
+        ...(params.metadata ? { metadata: params.metadata } : {}),
+      };
+    }
+    return {
+      type: "api_key",
+      provider: params.provider,
+      key: params.resolved.key,
+      ...(params.email ? { email: params.email } : {}),
+      ...(params.metadata ? { metadata: params.metadata } : {}),
+    };
+  };
   const maybeSetResolvedApiKey = async (
     resolved: ResolvedNonInteractiveApiKey,
     setter: (value: SecretInput) => Promise<void> | void,
@@ -120,19 +161,22 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
-  if (authChoice === "vllm") {
-    runtime.error(
-      [
-        'Auth choice "vllm" requires interactive mode.',
-        "Use interactive onboard/configure to enter base URL, API key, and model ID.",
-      ].join("\n"),
-    );
-    runtime.exit(1);
-    return null;
-  }
-
-  if (authChoice === "ollama") {
-    return configureOllamaNonInteractive({ nextConfig, opts, runtime });
+  const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
+    nextConfig,
+    authChoice,
+    opts,
+    runtime,
+    baseConfig,
+    resolveApiKey: (input) =>
+      resolveApiKey({
+        ...input,
+        cfg: baseConfig,
+        runtime,
+      }),
+    toApiKeyCredential,
+  });
+  if (pluginProviderChoice !== undefined) {
+    return pluginProviderChoice;
   }
 
   if (authChoice === "token") {
@@ -247,6 +291,13 @@ export async function applyNonInteractiveAuthChoice(params: {
       endpoint = "global";
     } else if (authChoice === "zai-cn") {
       endpoint = "cn";
+    }
+
+    if (endpoint) {
+      const detected = await detectZaiEndpoint({ apiKey: resolved.key, endpoint });
+      if (detected) {
+        modelIdOverride = detected.modelId;
+      }
     } else {
       const detected = await detectZaiEndpoint({ apiKey: resolved.key });
       if (detected) {

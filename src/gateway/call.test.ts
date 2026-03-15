@@ -14,8 +14,14 @@ let lastClientOptions: {
   password?: string;
   tlsFingerprint?: string;
   scopes?: string[];
+  deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
+} | null = null;
+let lastRequestOptions: {
+  method?: string;
+  params?: unknown;
+  opts?: { expectFinal?: boolean; timeoutMs?: number | null };
 } | null = null;
 type StartMode = "hello" | "close" | "silent";
 let startMode: StartMode = "hello";
@@ -44,7 +50,12 @@ vi.mock("./client.js", () => ({
     }) {
       lastClientOptions = opts;
     }
-    async request() {
+    async request(
+      method: string,
+      params: unknown,
+      opts?: { expectFinal?: boolean; timeoutMs?: number | null },
+    ) {
+      lastRequestOptions = { method, params, opts };
       return { ok: true };
     }
     start() {
@@ -71,6 +82,7 @@ function resetGatewayCallMocks() {
   pickPrimaryTailnetIPv4.mockClear();
   pickPrimaryLanIPv4.mockClear();
   lastClientOptions = null;
+  lastRequestOptions = null;
   startMode = "hello";
   closeCode = 1006;
   closeReason = "";
@@ -195,6 +207,19 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions?.url).toBe("wss://override.example/ws");
     expect(lastClientOptions?.token).toBe("explicit-token");
+  });
+
+  it("does not attach device identity for local loopback shared-token auth", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceIdentity).toBeUndefined();
   });
 
   it("uses OPENCLAW_GATEWAY_URL env override in remote mode when remote URL is missing", async () => {
@@ -558,6 +583,25 @@ describe("callGateway error details", () => {
     await promise;
 
     expect(errMessage).toContain("gateway closed (1006");
+  });
+
+  it("forwards caller timeout to client requests", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "health", timeoutMs: 45_000 });
+
+    expect(lastRequestOptions?.method).toBe("health");
+    expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
+  });
+
+  it("does not inject wrapper timeout defaults into expectFinal requests", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "health", expectFinal: true });
+
+    expect(lastRequestOptions?.method).toBe("health");
+    expect(lastRequestOptions?.opts?.expectFinal).toBe(true);
+    expect(lastRequestOptions?.opts?.timeoutMs).toBeUndefined();
   });
 
   it("fails fast when remote mode is missing remote url", async () => {

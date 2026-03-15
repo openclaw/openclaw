@@ -42,15 +42,24 @@ describe("TAB_GROUPS", () => {
 
   it("does not expose unfinished settings slices in the sidebar", () => {
     const settings = navigation.TAB_GROUPS.find((group) => group.label === "settings");
-    expect(settings?.tabs).toEqual(["config", "debug", "logs"]);
+    expect(settings?.tabs).toEqual([
+      "config",
+      "communications",
+      "appearance",
+      "automation",
+      "infrastructure",
+      "aiAgents",
+      "debug",
+      "logs",
+    ]);
   });
 
-  it("does not route directly into unfinished settings slices", () => {
-    expect(navigation.tabFromPath("/communications")).toBeNull();
-    expect(navigation.tabFromPath("/appearance")).toBeNull();
-    expect(navigation.tabFromPath("/automation")).toBeNull();
-    expect(navigation.tabFromPath("/infrastructure")).toBeNull();
-    expect(navigation.tabFromPath("/ai-agents")).toBeNull();
+  it("routes every published settings slice", () => {
+    expect(navigation.tabFromPath("/communications")).toBe("communications");
+    expect(navigation.tabFromPath("/appearance")).toBe("appearance");
+    expect(navigation.tabFromPath("/automation")).toBe("automation");
+    expect(navigation.tabFromPath("/infrastructure")).toBe("infrastructure");
+    expect(navigation.tabFromPath("/ai-agents")).toBe("aiAgents");
     expect(navigation.tabFromPath("/config")).toBe("config");
   });
 });
