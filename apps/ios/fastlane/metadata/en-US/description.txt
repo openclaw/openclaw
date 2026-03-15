@@ -1,0 +1,18 @@
+OpenClaw is a personal AI assistant you run on your own devices.
+
+Pair this iPhone app with your OpenClaw Gateway to connect your phone as a secure node for voice, camera, and device automation.
+
+What you can do:
+- Chat with your assistant from iPhone
+- Use voice wake and push-to-talk
+- Capture photos and short clips on request
+- Record screen snippets for troubleshooting and workflows
+- Share text, links, and media directly from iOS into OpenClaw
+- Run location-aware and device-aware automations
+
+OpenClaw is local-first: you control your gateway, keys, and configuration.
+
+Getting started:
+1) Set up your OpenClaw Gateway
+2) Open the iOS app and pair with your gateway
+3) Start using commands and automations from your phone
