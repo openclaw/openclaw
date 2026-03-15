@@ -20,7 +20,9 @@ export function appendUniqueText(base: string, suffix: string): string {
 }
 
 export function getCommittedText<T extends TextStreamSegment>(segments: readonly T[]): string {
-  return segments.reduce((acc, segment) => appendUniqueText(acc, segment.text), "");
+  // Segments are incremental (non-cumulative), so plain concatenation is correct here.
+  // appendUniqueText would incorrectly collapse two identical consecutive segments into one.
+  return segments.map((s) => s.text).join("");
 }
 
 export function getIncrementalTextAgainstCommitted(committed: string, text: string): string {

@@ -17,6 +17,12 @@ describe("stream-dedupe", () => {
     );
   });
 
+  it("does not collapse two identical consecutive segments", () => {
+    // appendUniqueText("abc", "abc") returns "abc" due to overlap detection,
+    // but two incremental segments that happen to be identical must concatenate to "abcabc".
+    expect(getCommittedText([{ text: "abc" }, { text: "abc" }])).toBe("abcabc");
+  });
+
   it("extracts only the new suffix from a cumulative stream", () => {
     expect(
       getIncrementalStreamText([{ text: "我先改规则。" }], "我先改规则。build 已经开始了。"),
