@@ -40,6 +40,7 @@ export type AgentCliOpts = {
   thinking?: string;
   verbose?: string;
   json?: boolean;
+  omitSystemPrompt?: boolean;
   timeout?: string;
   deliver?: boolean;
   channel?: string;
@@ -155,7 +156,15 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   );
 
   if (opts.json) {
-    runtime.log(JSON.stringify(response, null, 2));
+    let output = response;
+    if (opts.omitSystemPrompt) {
+      output = structuredClone(response);
+      const meta = output?.result?.meta;
+      if (meta != null && typeof meta === "object" && "systemPromptReport" in meta) {
+        delete (meta as Record<string, unknown>).systemPromptReport;
+      }
+    }
+    runtime.log(JSON.stringify(output, null, 2));
     return response;
   }
 

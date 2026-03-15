@@ -120,6 +120,48 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("omits systemPromptReport from JSON output when --omit-system-prompt is set", async () => {
+    await withTempStore(async () => {
+      vi.mocked(callGateway).mockResolvedValue({
+        runId: "idem-1",
+        status: "ok",
+        result: {
+          payloads: [{ text: "hi" }],
+          meta: { systemPromptReport: "long prompt text", durationMs: 1 },
+        },
+      });
+
+      await agentCliCommand(
+        { message: "hi", to: "+1555", json: true, omitSystemPrompt: true },
+        runtime,
+      );
+
+      const logged = vi.mocked(runtime.log).mock.calls[0]?.[0] as string;
+      const parsed = JSON.parse(logged);
+      expect(parsed.result.meta.systemPromptReport).toBeUndefined();
+      expect(parsed.result.meta.durationMs).toBe(1);
+    });
+  });
+
+  it("preserves systemPromptReport in JSON output by default", async () => {
+    await withTempStore(async () => {
+      vi.mocked(callGateway).mockResolvedValue({
+        runId: "idem-1",
+        status: "ok",
+        result: {
+          payloads: [{ text: "hi" }],
+          meta: { systemPromptReport: "long prompt text" },
+        },
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555", json: true }, runtime);
+
+      const logged = vi.mocked(runtime.log).mock.calls[0]?.[0] as string;
+      const parsed = JSON.parse(logged);
+      expect(parsed.result.meta.systemPromptReport).toBe("long prompt text");
+    });
+  });
+
   it("skips gateway when --local is set", async () => {
     await withTempStore(async () => {
       mockLocalAgentReply();

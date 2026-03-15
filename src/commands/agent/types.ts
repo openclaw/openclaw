@@ -82,6 +82,8 @@ export type AgentCommandOpts = {
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
+  /** When true and json=true, strip systemPromptReport from JSON output. */
+  omitSystemPrompt?: boolean;
 };
 
 export type AgentCommandIngressOpts = Omit<AgentCommandOpts, "senderIsOwner"> & {
