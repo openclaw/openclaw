@@ -10,6 +10,7 @@ import type {
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { parseQwenEmbeddedToolCalls } from "./pi-embedded-utils.js";
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
   buildStreamErrorAssistantMessage,
@@ -359,7 +360,33 @@ export function buildAssistantMessage(
     }
   }
 
-  const hasToolCalls = toolCalls && toolCalls.length > 0;
+  // Qwen3.5 8B sometimes embeds tool calls as XML in text instead of using
+  // native tool_calls. Parse them out and promote to real toolCall blocks.
+  let hasToolCalls = toolCalls && toolCalls.length > 0;
+  if (!hasToolCalls && text) {
+    const parsed = parseQwenEmbeddedToolCalls(text);
+    if (parsed.toolCalls.length > 0) {
+      // Replace the text block with the remaining text (tool_call XML removed)
+      const textIdx = content.findIndex((c) => c.type === "text");
+      if (textIdx !== -1) {
+        if (parsed.remainingText) {
+          (content[textIdx] as TextContent).text = parsed.remainingText;
+        } else {
+          content.splice(textIdx, 1);
+        }
+      }
+      for (const tc of parsed.toolCalls) {
+        content.push({
+          type: "toolCall",
+          id: `ollama_call_${randomUUID()}`,
+          name: tc.name,
+          arguments: tc.arguments,
+        });
+      }
+      hasToolCalls = true;
+    }
+  }
+
   const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
 
   return buildStreamAssistantMessage({

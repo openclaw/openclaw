@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
   formatReasoningMessage,
+  parseQwenEmbeddedToolCalls,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
+  stripToolCallXml,
 } from "./pi-embedded-utils.js";
 
 function makeAssistantMessage(
@@ -135,17 +137,21 @@ describe("extractAssistantText", () => {
   });
 
   it("preserves response when errorMessage set from background failure (#13935)", () => {
-    const responseText = "Handle payment required errors in your API.";
     const msg = makeAssistantMessage({
       role: "assistant",
-      errorMessage: "insufficient credits for embedding model",
+      content: [
+        {
+          type: "text",
+          text: "Here is the result.",
+        },
+      ],
       stopReason: "stop",
-      content: [{ type: "text", text: responseText }],
+      errorMessage: "Background tool execution failed",
       timestamp: Date.now(),
     });
 
     const result = extractAssistantText(msg);
-    expect(result).toBe(responseText);
+    expect(result).toBe("Here is the result.");
   });
 
   it("strips Minimax tool invocations with extra attributes", () => {
@@ -597,11 +603,141 @@ describe("promoteThinkingTagsToBlocks", () => {
   });
 });
 
+describe("stripToolCallXml", () => {
+  it("strips <tool_call> blocks", () => {
+    const text = `Before<tool_call>
+{"name": "search", "arguments": {"query": "test"}}
+</tool_call>After`;
+    expect(stripToolCallXml(text)).toBe("BeforeAfter");
+  });
+
+  it("strips <tool_result> blocks", () => {
+    const text = `Before<tool_result>
+Spawned sub-agent coding (id: sa_01jt3cwwqb5rz7hqp6ghh5qc12)
+</tool_result>After`;
+    expect(stripToolCallXml(text)).toBe("BeforeAfter");
+  });
+
+  it("strips both tool_call and tool_result blocks", () => {
+    const text = `I'll help with that.
+<tool_call>
+{"name": "subagents", "arguments": {"action": "spawn"}}
+</tool_call>
+<tool_result>
+Spawned sub-agent coding
+</tool_result>
+Here is the result.`;
+    expect(stripToolCallXml(text)).toBe("I'll help with that.\n\n\nHere is the result.");
+  });
+
+  it("handles tags with attributes", () => {
+    const text = `Start<tool_call id="123" type="function">content</tool_call>End`;
+    expect(stripToolCallXml(text)).toBe("StartEnd");
+  });
+
+  it("handles stray unclosed tags", () => {
+    const text = "Some text<tool_call>more text";
+    expect(stripToolCallXml(text)).toBe("Some textmore text");
+  });
+
+  it("returns text unchanged when no tool tags present", () => {
+    const text = "Normal response without any tool markup.";
+    expect(stripToolCallXml(text)).toBe(text);
+  });
+
+  it("returns empty/falsy input unchanged", () => {
+    expect(stripToolCallXml("")).toBe("");
+  });
+});
+
+describe("extractAssistantText strips tool_call XML (#40879)", () => {
+  it("strips tool_call XML from assistant messages", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `I'll search for that.
+<tool_call>
+{"name": "search", "arguments": {"query": "test"}}
+</tool_call>
+<tool_result>
+Found 3 results.
+</tool_result>
+Here are the results.`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).not.toContain("<tool_call>");
+    expect(result).not.toContain("<tool_result>");
+    expect(result).toContain("I'll search for that.");
+    expect(result).toContain("Here are the results.");
+  });
+});
+
 describe("empty input handling", () => {
   it("returns empty string", () => {
     const helpers = [formatReasoningMessage, stripDowngradedToolCallText];
     for (const helper of helpers) {
       expect(helper("")).toBe("");
     }
+  });
+});
+
+describe("parseQwenEmbeddedToolCalls", () => {
+  it("parses single-param Qwen tool call (read)", () => {
+    const text = `看起来有一个语法错误。让我查看一下文件内容。\n\n<tool_call>\n<function=read>\n<parameter=path>\n/Users/zhao/.openclaw/workspace/mysql_connect.py\n</parameter>\n</function>\n</tool_call>`;
+    const result = parseQwenEmbeddedToolCalls(text);
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe("read");
+    expect(result.toolCalls[0].arguments.path).toBe(
+      "/Users/zhao/.openclaw/workspace/mysql_connect.py",
+    );
+    expect(result.remainingText).not.toContain("<tool_call>");
+  });
+
+  it("parses multi-param Qwen tool call (exec)", () => {
+    const text = `我已修复了代码，现在重新执行脚本：\n\n<tool_call>\n<function=exec>\n<parameter=command>\ncd /workspace && python test.py\n</parameter>\n<parameter=pty>\ntrue\n</parameter>\n<parameter=timeout>\n30\n</parameter>\n</function>\n</tool_call>`;
+    const result = parseQwenEmbeddedToolCalls(text);
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe("exec");
+    expect(result.toolCalls[0].arguments.command).toBe("cd /workspace && python test.py");
+    expect(result.toolCalls[0].arguments.pty).toBe(true);
+    expect(result.toolCalls[0].arguments.timeout).toBe(30);
+  });
+
+  it("parses write tool call with multiline content", () => {
+    const text = `<tool_call>\n<function=write>\n<parameter=path>\n/test.py\n</parameter>\n<parameter=content>\nprint("hello")\nprint("world")\n</parameter>\n</function>\n</tool_call>`;
+    const result = parseQwenEmbeddedToolCalls(text);
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe("write");
+    expect(result.toolCalls[0].arguments.path).toBe("/test.py");
+    expect(result.toolCalls[0].arguments.content).toContain('print("hello")');
+  });
+
+  it("returns unchanged text when no tool_call present", () => {
+    const text = "Normal response without any tool calls.";
+    const result = parseQwenEmbeddedToolCalls(text);
+    expect(result.toolCalls).toHaveLength(0);
+    expect(result.remainingText).toBe(text);
+  });
+
+  it("handles empty input", () => {
+    const result = parseQwenEmbeddedToolCalls("");
+    expect(result.toolCalls).toHaveLength(0);
+    expect(result.remainingText).toBe("");
+  });
+
+  it("preserves remaining text outside tool_call blocks", () => {
+    const text =
+      "Before text.\n\n<tool_call>\n<function=read>\n<parameter=path>\n/test.py\n</parameter>\n</function>\n</tool_call>\n\nAfter text.";
+    const result = parseQwenEmbeddedToolCalls(text);
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.remainingText).toContain("Before text.");
+    expect(result.remainingText).toContain("After text.");
+    expect(result.remainingText).not.toContain("<tool_call>");
   });
 });

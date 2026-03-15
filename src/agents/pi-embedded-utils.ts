@@ -23,13 +23,10 @@ export function stripMinimaxToolCallXml(text: string): string {
   if (!/minimax:tool_call/i.test(text)) {
     return text;
   }
-
   // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
   let cleaned = text.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
-
   // Remove stray minimax tool tags.
   cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
-
   return cleaned;
 }
 
@@ -47,7 +44,6 @@ export function stripMinimaxToolCallXml(text: string): string {
  */
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
-
 export function stripModelSpecialTokens(text: string): string {
   if (!text) {
     return text;
@@ -57,6 +53,99 @@ export function stripModelSpecialTokens(text: string): string {
   }
   MODEL_SPECIAL_TOKEN_RE.lastIndex = 0;
   return text.replace(MODEL_SPECIAL_TOKEN_RE, " ").replace(/  +/g, " ").trim();
+}
+
+/**
+ * Fix malformed XML from Qwen models that use <function=name> instead of <function name="name">.
+ * Qwen3.5 8B sometimes generates non-standard XML attribute syntax that breaks parsing.
+ * This normalizes:
+ * - <function=xxx> → <function name="xxx">
+ * - <parameter=xxx> → <parameter name="xxx">
+ */
+export function fixQwenMalformedXml(text: string): string {
+  if (!text) {
+    return text;
+  }
+  if (!/<(?:function|parameter)=/i.test(text)) {
+    return text;
+  }
+  return text.replace(/<(function|parameter)=([^>\s]+)>/gi, '<$1 name="$2">');
+}
+
+/**
+ * Strip <tool_call> and <tool_result> XML blocks from text content.
+ * Some models (e.g. Qwen) embed tool calls as XML in text instead of using
+ * native tool call structures. After parsing them in ollama-stream.ts,
+ * any remaining raw XML should be stripped from display text.
+ */
+export function stripToolCallXml(text: string): string {
+  if (!text) {
+    return text;
+  }
+  if (!/<tool_(?:call|result)/i.test(text)) {
+    return text;
+  }
+  let cleaned = text.replace(/<tool_call\b[^>]*>[\s\S]*?<\/tool_call>/gi, "");
+  cleaned = cleaned.replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, "");
+  cleaned = cleaned.replace(/<\/?tool_(?:call|result)\b[^>]*>/gi, "");
+  return cleaned;
+}
+
+/**
+ * Parse Qwen-style embedded tool calls from text content.
+ * Qwen3.5 8B sometimes embeds tool calls as XML in text instead of using
+ * the native Ollama tool_calls format. This extracts them into structured objects.
+ *
+ * Input format:
+ *   <tool_call>
+ *   <function=read>
+ *   <parameter=path>/some/file.py</parameter>
+ *   </function>
+ *   </tool_call>
+ */
+export function parseQwenEmbeddedToolCalls(text: string): {
+  remainingText: string;
+  toolCalls: { name: string; arguments: Record<string, unknown> }[];
+} {
+  if (!text || !/<tool_call>/i.test(text)) {
+    return { remainingText: text, toolCalls: [] };
+  }
+
+  // Normalize Qwen's malformed XML before parsing
+  const normalized = fixQwenMalformedXml(text);
+
+  const tryParseValue = (raw: string): unknown => {
+    const trimmed = raw.trim();
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return trimmed;
+    }
+  };
+
+  const toolCalls: { name: string; arguments: Record<string, unknown> }[] = [];
+  const blockRe = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = blockRe.exec(normalized)) !== null) {
+    const block = match[1];
+    const funcMatch = /<function[=\s](?:name=")?([^>"'\s]+)"?>/i.exec(block);
+    if (!funcMatch) continue;
+    const funcName = funcMatch[1];
+    const args: Record<string, unknown> = {};
+    const paramRe = /<parameter[=\s](?:name=")?([^>"'\s]+)"?>\s*([\s\S]*?)\s*<\/parameter>/gi;
+    let paramMatch: RegExpExecArray | null;
+    while ((paramMatch = paramRe.exec(block)) !== null) {
+      args[paramMatch[1]] = tryParseValue(paramMatch[2]);
+    }
+    toolCalls.push({ name: funcName, arguments: args });
+  }
+
+  if (toolCalls.length === 0) {
+    return { remainingText: text, toolCalls: [] };
+  }
+
+  const remainingText = text.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "").trim();
+  return { remainingText, toolCalls };
 }
 
 /**
@@ -95,7 +184,6 @@ export function stripDowngradedToolCallText(text: string): string {
     if (index >= input.length) {
       return null;
     }
-
     const startChar = input[index];
     if (startChar === "{" || startChar === "[") {
       let depth = 0;
@@ -130,7 +218,6 @@ export function stripDowngradedToolCallText(text: string): string {
       }
       return null;
     }
-
     if (startChar === '"') {
       let escape = false;
       for (let i = index + 1; i < input.length; i += 1) {
@@ -149,7 +236,6 @@ export function stripDowngradedToolCallText(text: string): string {
       }
       return null;
     }
-
     let end = index;
     while (end < input.length && input[end] !== "\n" && input[end] !== "\r") {
       end += 1;
@@ -212,15 +298,9 @@ export function stripDowngradedToolCallText(text: string): string {
     return result;
   };
 
-  // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
   let cleaned = stripToolCalls(text);
-
-  // Remove [Tool Result for ID ...] blocks and their content.
   cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
-
-  // Remove [Historical context: ...] markers (self-contained within brackets).
   cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
-
   return cleaned.trim();
 }
 
@@ -238,15 +318,13 @@ export function extractAssistantText(msg: AssistantMessage): string {
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+          stripDowngradedToolCallText(
+            stripModelSpecialTokens(stripMinimaxToolCallXml(stripToolCallXml(text))),
+          ),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
     }) ?? "";
-  // Only apply keyword-based error rewrites when the assistant message is actually an error.
-  // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
-  // Gate on stopReason only — a non-error response with an errorMessage set (e.g. from a
-  // background tool failure) should not have its content rewritten (#13935).
   const errorContext = msg.stopReason === "error";
   return sanitizeUserFacingText(extracted, { errorContext });
 }
@@ -275,10 +353,6 @@ export function formatReasoningMessage(text: string): string {
   if (!trimmed) {
     return "";
   }
-  // Show reasoning in italics (cursive) for markdown-friendly surfaces (Discord, etc.).
-  // Keep the plain "Reasoning:" prefix so existing parsing/detection keeps working.
-  // Note: Underscore markdown cannot span multiple lines on Telegram, so we wrap
-  // each non-empty line separately.
   const italicLines = trimmed
     .split("\n")
     .map((line) => (line ? `_${line}_` : line))
@@ -292,9 +366,6 @@ type ThinkTaggedSplitBlock =
 
 export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const trimmedStart = text.trimStart();
-  // Avoid false positives: only treat it as structured thinking when it begins
-  // with a think tag (common for local/OpenAI-compat providers that emulate
-  // reasoning blocks via tags).
   if (!trimmedStart.startsWith("<")) {
     return null;
   }
@@ -306,13 +377,11 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
   if (!closeRe.test(text)) {
     return null;
   }
-
   const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
   let inThinking = false;
   let cursor = 0;
   let thinkingStart = 0;
   const blocks: ThinkTaggedSplitBlock[] = [];
-
   const pushText = (value: string) => {
     if (!value) {
       return;
@@ -326,30 +395,25 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
     }
     blocks.push({ type: "thinking", thinking: cleaned });
   };
-
   for (const match of text.matchAll(scanRe)) {
     const index = match.index ?? 0;
     const isClose = Boolean(match[1]?.includes("/"));
-
     if (!inThinking && !isClose) {
       pushText(text.slice(cursor, index));
       thinkingStart = index + match[0].length;
       inThinking = true;
       continue;
     }
-
     if (inThinking && isClose) {
       pushThinking(text.slice(thinkingStart, index));
       cursor = index + match[0].length;
       inThinking = false;
     }
   }
-
   if (inThinking) {
     return null;
   }
   pushText(text.slice(cursor));
-
   const hasThinking = blocks.some((b) => b.type === "thinking");
   if (!hasThinking) {
     return null;
@@ -367,10 +431,8 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (hasThinkingBlock) {
     return;
   }
-
   const next: AssistantMessage["content"] = [];
   let changed = false;
-
   for (const block of message.content) {
     if (!block || typeof block !== "object" || !("type" in block)) {
       next.push(block);
@@ -397,7 +459,6 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
       }
     }
   }
-
   if (!changed) {
     return;
   }
@@ -432,7 +493,6 @@ export function extractThinkingFromTaggedStream(text: string): string {
   if (closed) {
     return closed;
   }
-
   const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
   const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
   const openMatches = [...text.matchAll(openRe)];
