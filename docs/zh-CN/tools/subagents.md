@@ -164,4 +164,4 @@ x-i18n:
 - 子智能体通告是**尽力而为**的。如果 Gateway 网关重启，待处理的"通告回复"工作会丢失。
 - 子智能体仍然共享相同的 Gateway 网关进程资源；将 `maxConcurrent` 视为安全阀。
 - `sessions_spawn` 始终是非阻塞的：它立即返回 `{ status: "accepted", runId, childSessionKey }`。
-- 子智能体上下文仅注入 `AGENTS.md` + `TOOLS.md`（无 `SOUL.md`、`IDENTITY.md`、`USER.md`、`HEARTBEAT.md` 或 `BOOTSTRAP.md`）。
+- 子智能体上下文注入 `AGENTS.md`、`TOOLS.md`、`SOUL.md`、`IDENTITY.md` 和 `USER.md`（不包含 `HEARTBEAT.md`、`BOOTSTRAP.md`、`MEMORY.md` 或 `memory/*.md`）。
