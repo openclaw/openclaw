@@ -360,6 +360,38 @@
         "src/runtime.js"
       ]
     },
+    "src/gateway/server-cron.ts": {
+      "purpose": "",
+      "exports": [
+        "buildGatewayCronService",
+        "GatewayCronState"
+      ],
+      "dependencies": [
+        "src/agents/agent-scope.js",
+        "src/cli/deps.js",
+        "src/cli/outbound-send-deps.js",
+        "src/config/config.js",
+        "src/config/sessions.js",
+        "src/config/sessions/paths.js",
+        "src/cron/delivery.js",
+        "src/cron/isolated-agent.js",
+        "src/cron/isolated-agent/delivery-target.js",
+        "src/cron/run-log.js",
+        "src/cron/service.js",
+        "src/cron/store.js",
+        "src/cron/webhook-url.js",
+        "src/infra/errors.js",
+        "src/infra/heartbeat-runner.js",
+        "src/infra/heartbeat-wake.js",
+        "src/infra/net/fetch-guard.js",
+        "src/infra/net/ssrf.js",
+        "src/infra/outbound/deliver.js",
+        "src/infra/system-events.js",
+        "src/logging.js",
+        "src/routing/session-key.js",
+        "src/runtime.js"
+      ]
+    },
     "src/hooks/": {
       "purpose": "Lifecycle hooks system — pre/post execution hooks for commands",
       "exports": [],
