@@ -23,6 +23,7 @@ type AgentsSetIdentityOptions = {
   workspace?: string;
   identityFile?: string;
   name?: string;
+  department?: string;
   emoji?: string;
   theme?: string;
   avatar?: string;
@@ -76,10 +77,13 @@ export async function agentsSetIdentityCommand(
 
   const agentRaw = coerceTrimmed(opts.agent);
   const nameRaw = coerceTrimmed(opts.name);
+  const departmentRaw = coerceTrimmed(opts.department);
   const emojiRaw = coerceTrimmed(opts.emoji);
   const themeRaw = coerceTrimmed(opts.theme);
   const avatarRaw = coerceTrimmed(opts.avatar);
-  const hasExplicitIdentity = Boolean(nameRaw || emojiRaw || themeRaw || avatarRaw);
+  const hasExplicitIdentity = Boolean(
+    nameRaw || departmentRaw || emojiRaw || themeRaw || avatarRaw,
+  );
 
   const identityFileRaw = coerceTrimmed(opts.identityFile);
   const workspaceRaw = coerceTrimmed(opts.workspace);
@@ -143,6 +147,9 @@ export async function agentsSetIdentityCommand(
     identityFromFile?.theme ?? identityFromFile?.creature ?? identityFromFile?.vibe ?? undefined;
   const incomingIdentity: IdentityConfig = {
     ...(nameRaw || identityFromFile?.name ? { name: nameRaw ?? identityFromFile?.name } : {}),
+    ...(departmentRaw || identityFromFile?.department
+      ? { department: departmentRaw ?? identityFromFile?.department }
+      : {}),
     ...(emojiRaw || identityFromFile?.emoji ? { emoji: emojiRaw ?? identityFromFile?.emoji } : {}),
     ...(themeRaw || fileTheme ? { theme: themeRaw ?? fileTheme } : {}),
     ...(avatarRaw || identityFromFile?.avatar
@@ -152,12 +159,13 @@ export async function agentsSetIdentityCommand(
 
   if (
     !incomingIdentity.name &&
+    !incomingIdentity.department &&
     !incomingIdentity.emoji &&
     !incomingIdentity.theme &&
     !incomingIdentity.avatar
   ) {
     runtime.error(
-      "No identity fields provided. Use --name/--emoji/--theme/--avatar or --from-identity.",
+      "No identity fields provided. Use --name/--department/--emoji/--theme/--avatar or --from-identity.",
     );
     runtime.exit(1);
     return;
@@ -217,6 +225,9 @@ export async function agentsSetIdentityCommand(
   runtime.log(`Agent: ${agentId}`);
   if (nextIdentity.name) {
     runtime.log(`Name: ${nextIdentity.name}`);
+  }
+  if (nextIdentity.department) {
+    runtime.log(`Department: ${nextIdentity.department}`);
   }
   if (nextIdentity.theme) {
     runtime.log(`Theme: ${nextIdentity.theme}`);

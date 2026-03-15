@@ -33,4 +33,18 @@ describe("parseIdentityMarkdown", () => {
       avatar: "avatars/openclaw.png",
     });
   });
+
+  it("parses department field", () => {
+    const content = `
+- **Name:** Knox
+- **Department:** Trust & Safety
+- **Emoji:** :lock:
+`;
+    const parsed = parseIdentityMarkdown(content);
+    expect(parsed).toEqual({
+      name: "Knox",
+      department: "Trust & Safety",
+      emoji: ":lock:",
+    });
+  });
 });

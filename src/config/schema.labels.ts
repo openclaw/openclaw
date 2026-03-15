@@ -55,6 +55,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.cacheTrace.includePrompt": "Cache Trace Include Prompt",
   "diagnostics.cacheTrace.includeSystem": "Cache Trace Include System",
   "agents.list.*.identity.avatar": "Identity Avatar",
+  "agents.list.*.identity.department": "Identity Department",
   "agents.list.*.skills": "Agent Skill Filter",
   "agents.list[].runtime": "Agent Runtime",
   "agents.list[].runtime.type": "Agent Runtime Type",
@@ -832,6 +833,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.imessage.cliPath": "iMessage CLI Path",
   "agents.list[].skills": "Agent Skill Filter",
   "agents.list[].identity.avatar": "Agent Avatar",
+  "agents.list[].identity.department": "Agent Department",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Agent Heartbeat Suppress Tool Error Warnings",
   "agents.list[].sandbox.browser.network": "Agent Sandbox Browser Network",

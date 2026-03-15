@@ -277,6 +277,7 @@ export const DmConfigSchema = z
 export const IdentitySchema = z
   .object({
     name: z.string().optional(),
+    department: z.string().optional(),
     theme: z.string().optional(),
     emoji: z.string().optional(),
     avatar: z.string().optional(),

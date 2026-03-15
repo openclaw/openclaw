@@ -1,5 +1,6 @@
 export type GatewayAgentIdentity = {
   name?: string;
+  department?: string;
   theme?: string;
   emoji?: string;
   avatar?: string;

@@ -86,6 +86,7 @@ Avatar paths resolve relative to the workspace root.
 `set-identity` writes fields into `agents.list[].identity`:
 
 - `name`
+- `department` (organizational department or team label)
 - `theme`
 - `emoji`
 - `avatar` (workspace-relative path, http(s) URL, or data URI)
@@ -112,6 +113,7 @@ Config sample:
         id: "main",
         identity: {
           name: "OpenClaw",
+          department: "Engineering",
           theme: "space lobster",
           emoji: "🦞",
           avatar: "avatars/openclaw.png",

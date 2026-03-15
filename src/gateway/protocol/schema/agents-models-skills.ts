@@ -20,6 +20,7 @@ export const AgentSummarySchema = Type.Object(
       Type.Object(
         {
           name: Type.Optional(NonEmptyString),
+          department: Type.Optional(NonEmptyString),
           theme: Type.Optional(NonEmptyString),
           emoji: Type.Optional(NonEmptyString),
           avatar: Type.Optional(NonEmptyString),

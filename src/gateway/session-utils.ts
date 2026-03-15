@@ -380,6 +380,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
     const identity = entry.identity
       ? {
           name: entry.identity.name?.trim() || undefined,
+          department: entry.identity.department?.trim() || undefined,
           theme: entry.identity.theme?.trim() || undefined,
           emoji: entry.identity.emoji?.trim() || undefined,
           avatar: entry.identity.avatar?.trim() || undefined,

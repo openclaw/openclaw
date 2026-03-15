@@ -203,12 +203,13 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
 
   agents
     .command("set-identity")
-    .description("Update an agent identity (name/theme/emoji/avatar)")
+    .description("Update an agent identity (name/department/theme/emoji/avatar)")
     .option("--agent <id>", "Agent id to update")
     .option("--workspace <dir>", "Workspace directory used to locate the agent + IDENTITY.md")
     .option("--identity-file <path>", "Explicit IDENTITY.md path to read")
     .option("--from-identity", "Read values from IDENTITY.md", false)
     .option("--name <name>", "Identity name")
+    .option("--department <department>", "Identity department or team label")
     .option("--theme <theme>", "Identity theme")
     .option("--emoji <emoji>", "Identity emoji")
     .option("--avatar <value>", "Identity avatar (workspace path, http(s) URL, or data URI)")
@@ -241,6 +242,7 @@ ${formatHelpExamples([
             identityFile: opts.identityFile as string | undefined,
             fromIdentity: Boolean(opts.fromIdentity),
             name: opts.name as string | undefined,
+            department: opts.department as string | undefined,
             theme: opts.theme as string | undefined,
             emoji: opts.emoji as string | undefined,
             avatar: opts.avatar as string | undefined,

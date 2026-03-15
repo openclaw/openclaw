@@ -4,6 +4,7 @@ import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
 
 export type AgentIdentityFile = {
   name?: string;
+  department?: string;
   emoji?: string;
   theme?: string;
   creature?: string;
@@ -58,6 +59,9 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
     if (label === "name") {
       identity.name = value;
     }
+    if (label === "department") {
+      identity.department = value;
+    }
     if (label === "emoji") {
       identity.emoji = value;
     }
@@ -80,6 +84,7 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
 export function identityHasValues(identity: AgentIdentityFile): boolean {
   return Boolean(
     identity.name ||
+    identity.department ||
     identity.emoji ||
     identity.theme ||
     identity.creature ||
