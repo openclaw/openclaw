@@ -1,7 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { flushPendingToolResultsAfterIdle } from "./pi-embedded-runner/wait-for-idle-before-flush.js";
+import {
+  flushPendingToolResultsAfterIdle,
+  PROBE_WAIT_FOR_IDLE_TIMEOUT_MS,
+  resolvePostRunIdleFlushTimeoutMs,
+} from "./pi-embedded-runner/wait-for-idle-before-flush.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 function assistantToolCall(id: string): AgentMessage {
@@ -137,5 +141,21 @@ describe("flushPendingToolResultsAfterIdle", () => {
       timeoutMs: 30_000,
     });
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("uses a short best-effort idle wait for probe sessions", () => {
+    expect(
+      resolvePostRunIdleFlushTimeoutMs({
+        sessionId: "probe-xai-123",
+        timeoutMs: 30_000,
+      }),
+    ).toBe(PROBE_WAIT_FOR_IDLE_TIMEOUT_MS);
+    expect(
+      resolvePostRunIdleFlushTimeoutMs({
+        sessionId: "session:test",
+        timeoutMs: 30_000,
+      }),
+    ).toBe(30_000);
+    expect(resolvePostRunIdleFlushTimeoutMs({ sessionId: "session:test" })).toBeUndefined();
   });
 });
