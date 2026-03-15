@@ -1,4 +1,6 @@
+import { execFile } from "node:child_process";
 import path from "node:path";
+import { promisify } from "node:util";
 import {
   DEFAULT_SAFE_BINS,
   analyzeShellCommand,
@@ -421,6 +423,7 @@ function collectAllowAlwaysPatterns(params: {
   platform?: string | null;
   depth: number;
   out: Set<string>;
+  unresolvedOut?: Set<string>;
 }) {
   if (params.depth >= 3) {
     return;
@@ -438,6 +441,7 @@ function collectAllowAlwaysPatterns(params: {
       platform: params.platform,
       depth: params.depth + 1,
       out: params.out,
+      unresolvedOut: params.unresolvedOut,
     });
   };
 
@@ -461,6 +465,9 @@ function collectAllowAlwaysPatterns(params: {
 
   const candidatePath = resolveAllowlistCandidatePath(params.segment.resolution, params.cwd);
   if (!candidatePath) {
+    if (params.unresolvedOut && params.segment.resolution?.executableName) {
+      params.unresolvedOut.add(params.segment.resolution.executableName);
+    }
     return;
   }
   if (!isShellWrapperSegment(params.segment)) {
@@ -495,6 +502,7 @@ function collectAllowAlwaysPatterns(params: {
       platform: params.platform,
       depth: params.depth + 1,
       out: params.out,
+      unresolvedOut: params.unresolvedOut,
     });
   }
 }
@@ -522,6 +530,73 @@ export function resolveAllowAlwaysPatterns(params: {
     });
   }
   return Array.from(patterns);
+}
+
+const execFileAsync = promisify(execFile);
+
+export async function resolveAllowAlwaysPatternsAsync(params: {
+  segments: ExecCommandSegment[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+}): Promise<{ patterns: string[]; unresolved: string[] }> {
+  const patterns = new Set<string>();
+  const unresolvedOut = new Set<string>();
+  for (const segment of params.segments) {
+    collectAllowAlwaysPatterns({
+      segment,
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+      depth: 0,
+      out: patterns,
+      unresolvedOut,
+    });
+  }
+
+  const unresolved = Array.from(unresolvedOut);
+  const stillUnresolved: string[] = [];
+
+  for (const cmd of unresolved) {
+    try {
+      const isWin = isWindowsPlatform(params.platform);
+      if (isWin) {
+        const { stdout } = await execFileAsync("where.exe", [cmd], {
+          cwd: params.cwd,
+          env: params.env,
+          timeout: 5000,
+        });
+        const lines = stdout
+          .split(/\r?\n/)
+          .map((l: string) => l.trim())
+          .filter(Boolean);
+        if (lines[0]) {
+          patterns.add(lines[0]);
+        } else {
+          stillUnresolved.push(cmd);
+        }
+      } else {
+        const { stdout } = await execFileAsync("which", [cmd], {
+          cwd: params.cwd,
+          env: params.env,
+          timeout: 5000,
+        });
+        const lines = stdout
+          .split(/\r?\n/)
+          .map((l: string) => l.trim())
+          .filter(Boolean);
+        if (lines[0] && lines[0].startsWith("/")) {
+          patterns.add(lines[0]);
+        } else {
+          stillUnresolved.push(cmd);
+        }
+      }
+    } catch {
+      stillUnresolved.push(cmd);
+    }
+  }
+
+  return { patterns: Array.from(patterns), unresolved: stillUnresolved };
 }
 
 /**
