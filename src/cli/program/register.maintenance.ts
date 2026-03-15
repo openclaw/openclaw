@@ -25,8 +25,23 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option("--deep", "Scan system services for extra gateway installs", false)
+    .option(
+      "--check-config",
+      "Deep config validation: schema + subsystem dry-run init (non-zero exit on failure)",
+      false,
+    )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        if (opts.checkConfig) {
+          const { runCheckConfig, formatCheckConfigResults } =
+            await import("../../commands/doctor-check-config.js");
+          const { results, hasFailures } = await runCheckConfig();
+          for (const line of formatCheckConfigResults(results)) {
+            defaultRuntime.log(line);
+          }
+          defaultRuntime.exit(hasFailures ? 1 : 0);
+          return;
+        }
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
           yes: Boolean(opts.yes),
