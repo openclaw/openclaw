@@ -141,8 +141,8 @@ For a gateway install, put these in `~/.openclaw/.env` (or your service environm
 ```
 
 `llm-context` returns extracted page chunks for grounding instead of standard Brave snippets.
-In this mode, `country` and `language` / `search_lang` still work, but `ui_lang`,
-`freshness`, `date_after`, and `date_before` are rejected.
+In this mode, `country`, `language` / `search_lang`, `freshness`, `date_after`, and
+`date_before` all work. Only `ui_lang` is not supported.
 
 **Perplexity Search:**
 

@@ -905,12 +905,12 @@ describe("web_search external content wrapping", () => {
     expect(details.sources?.[0]?.hostname).toBe("example.com");
   });
 
-  it("rejects freshness in Brave llm-context mode", async () => {
+  it("passes freshness to Brave llm-context endpoint", async () => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
     const mockFetch = installBraveLlmContextFetch({
-      title: "unused",
-      url: "https://example.com",
-      snippets: ["unused"],
+      title: "Context title",
+      url: "https://example.com/ctx",
+      snippets: ["snippet"],
     });
 
     const tool = createWebSearchTool({
@@ -928,31 +928,48 @@ describe("web_search external content wrapping", () => {
       },
       sandboxed: true,
     });
-    const result = await tool?.execute?.("call-1", { query: "test", freshness: "week" });
+    await tool?.execute?.("call-1", { query: "test", freshness: "week" });
 
-    expect(result?.details).toMatchObject({ error: "unsupported_freshness" });
-    expect(mockFetch).not.toHaveBeenCalled();
+    const requestUrl = new URL(mockFetch.mock.calls[0]?.[0] as string);
+    expect(requestUrl.pathname).toBe("/res/v1/llm/context");
+    expect(requestUrl.searchParams.get("freshness")).toBe("pw");
   });
 
-  it.each([
-    [
-      "rejects date_after/date_before in Brave llm-context mode",
-      {
-        query: "test",
-        date_after: "2025-01-01",
-        date_before: "2025-01-31",
+  it("passes date_after/date_before as freshness range to Brave llm-context endpoint", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch({
+      title: "Context title",
+      url: "https://example.com/ctx",
+      snippets: ["snippet"],
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              brave: {
+                mode: "llm-context",
+              },
+            },
+          },
+        },
       },
-      "unsupported_date_filter",
-    ],
-    [
-      "rejects ui_lang in Brave llm-context mode",
-      {
-        query: "test",
-        ui_lang: "de-DE",
-      },
-      "unsupported_ui_lang",
-    ],
-  ])("%s", async (_name, input, expectedError) => {
+      sandboxed: true,
+    });
+    await tool?.execute?.("call-1", {
+      query: "test",
+      date_after: "2025-01-01",
+      date_before: "2025-01-31",
+    });
+
+    const requestUrl = new URL(mockFetch.mock.calls[0]?.[0] as string);
+    expect(requestUrl.pathname).toBe("/res/v1/llm/context");
+    expect(requestUrl.searchParams.get("freshness")).toBe("2025-01-01to2025-01-31");
+  });
+
+  it("rejects ui_lang in Brave llm-context mode", async () => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
     const mockFetch = installBraveLlmContextFetch({
       title: "unused",
@@ -975,9 +992,9 @@ describe("web_search external content wrapping", () => {
       },
       sandboxed: true,
     });
-    const result = await tool?.execute?.("call-1", input);
+    const result = await tool?.execute?.("call-1", { query: "test", ui_lang: "de-DE" });
 
-    expect(result?.details).toMatchObject({ error: expectedError });
+    expect(result?.details).toMatchObject({ error: "unsupported_ui_lang" });
     expect(mockFetch).not.toHaveBeenCalled();
   });
 

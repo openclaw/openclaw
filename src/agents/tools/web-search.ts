@@ -1529,6 +1529,8 @@ async function runBraveLlmContextSearch(params: {
   country?: string;
   search_lang?: string;
   freshness?: string;
+  dateAfter?: string;
+  dateBefore?: string;
 }): Promise<{
   results: Array<{
     url: string;
@@ -1548,6 +1550,15 @@ async function runBraveLlmContextSearch(params: {
   }
   if (params.freshness) {
     url.searchParams.set("freshness", params.freshness);
+  } else if (params.dateAfter && params.dateBefore) {
+    url.searchParams.set("freshness", `${params.dateAfter}to${params.dateBefore}`);
+  } else if (params.dateAfter) {
+    url.searchParams.set(
+      "freshness",
+      `${params.dateAfter}to${new Date().toISOString().slice(0, 10)}`,
+    );
+  } else if (params.dateBefore) {
+    url.searchParams.set("freshness", `1970-01-01to${params.dateBefore}`);
   }
 
   return withTrustedWebSearchEndpoint(
@@ -1615,9 +1626,13 @@ async function runWebSearch(params: {
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
             : "";
+  // When dateAfter is set without dateBefore, the API uses today as end date;
+  // include today in the cache key so UTC day rollover invalidates stale entries.
+  const llmContextDateEnd =
+    params.dateBefore || (params.dateAfter ? new Date().toISOString().slice(0, 10) : "default");
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
-      ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
+      ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${llmContextDateEnd}`
       : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
@@ -1781,6 +1796,8 @@ async function runWebSearch(params: {
       country: params.country,
       search_lang: params.search_lang,
       freshness: params.freshness,
+      dateAfter: params.dateAfter,
+      dateBefore: params.dateBefore,
     });
 
     const mapped = llmResults.map((entry) => ({
@@ -2038,14 +2055,6 @@ export function createWebSearchTool(options?: {
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
-      if (rawFreshness && provider === "brave" && braveMode === "llm-context") {
-        return jsonResult({
-          error: "unsupported_freshness",
-          message:
-            "freshness filtering is not supported by Brave llm-context mode. Remove freshness or use Brave web mode.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        });
-      }
       const freshness = rawFreshness ? normalizeFreshness(rawFreshness, provider) : undefined;
       if (rawFreshness && !freshness) {
         return jsonResult({
@@ -2075,14 +2084,6 @@ export function createWebSearchTool(options?: {
             provider === "perplexity"
               ? "date_after/date_before are only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable them."
               : `date_after/date_before filtering is not supported by the ${provider} provider. Only Brave and Perplexity support date filtering.`,
-          docs: "https://docs.openclaw.ai/tools/web",
-        });
-      }
-      if ((rawDateAfter || rawDateBefore) && provider === "brave" && braveMode === "llm-context") {
-        return jsonResult({
-          error: "unsupported_date_filter",
-          message:
-            "date_after/date_before filtering is not supported by Brave llm-context mode. Use Brave web mode for date filters.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
