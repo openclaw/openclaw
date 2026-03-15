@@ -55,6 +55,8 @@ export function createGatewayReloadHandlers(params: {
     staleEventThresholdMs?: number;
     maxRestartsPerHour?: number;
   }) => ChannelHealthMonitor;
+  /** Called after setState during hot reload so fallback gateway context can be updated. */
+  onAfterHotReload?: () => void;
 }) {
   const applyHotReload = async (
     plan: GatewayReloadPlan,
@@ -159,6 +161,7 @@ export function createGatewayReloadHandlers(params: {
     }
 
     params.setState(nextState);
+    params.onAfterHotReload?.();
   };
 
   let restartPending = false;
