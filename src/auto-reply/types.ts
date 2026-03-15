@@ -70,6 +70,8 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Extra system prompt fragment injected by gateway auto-prefetch (memory context). */
+  runExtraSystemPrompt?: string;
 };
 
 export type ReplyPayload = {

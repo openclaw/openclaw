@@ -442,6 +442,17 @@ export type MemorySearchConfig = {
     /** Optional cap on cached embeddings (best-effort). */
     maxEntries?: number;
   };
+  /** Gateway auto-prefetch: run memory_search on incoming messages and inject results before the LLM sees them. */
+  autoPrefetch?: {
+    /** Enable gateway auto-prefetch (default: false). */
+    enabled?: boolean;
+    /** Minimum message length in characters to trigger prefetch (default: 20). */
+    minMessageLength?: number;
+    /** Maximum results to inject (default: 3). */
+    maxResults?: number;
+    /** Regex patterns for messages to skip (e.g. heartbeat markers). */
+    skipPatterns?: string[];
+  };
 };
 
 export type ToolsConfig = {
