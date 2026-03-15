@@ -18,6 +18,8 @@ pnpm mcp:defender --config ./config/radar-defender.example.json
 
 This is the simplest and safest transport for development because the operator supplies artifacts directly and the process boundary stays local.
 
+For fork maintenance, local work should branch from `radar/main`, not directly from `main`. Treat `main` as the upstream mirror branch and keep transport work isolated to Radar-specific layers wherever possible.
+
 ## Remote deployment later
 
 The next transport to support should be Streamable HTTP, not a separate generic REST layer.

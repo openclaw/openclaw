@@ -4,6 +4,12 @@
 
 Connect ChatGPT to `radar-claw-defender` through MCP-compatible tooling without changing the server into a generic API or execution platform.
 
+The branch strategy for this work should follow the evergreen model:
+
+- `main` mirrors upstream
+- `radar/main` is the stable Radar integration base
+- feature work for ChatGPT/MCP integration branches from `radar/main`
+
 ## Local first
 
 Start with:

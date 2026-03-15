@@ -19,6 +19,24 @@ Defensive MCP server for Radar Meseriași, built on top of the OpenClaw runtime.
 
 The primary integration boundary is MCP, not a generic REST API.
 
+## Evergreen fork model
+
+This fork should stay sustainable as OpenClaw evolves upstream.
+
+Branch model:
+
+- `main`: keep as close as possible to `upstream/main`
+- `radar/main`: long-lived Radar integration branch
+- `feature/*`: short-lived implementation branches created from `radar/main`
+
+Recommended flow:
+
+1. sync `upstream/main` into `main`
+2. merge `main` into `radar/main`
+3. branch feature work from `radar/main`
+
+See `docs/evergreen-fork-strategy.md` for the full workflow and `scripts/git/sync-radar-main.sh` for the helper script.
+
 ## What this fork is not
 
 This fork is not an offensive toolkit and must not be used for:
@@ -65,6 +83,15 @@ Radar Meseriași is a marketplace for homeowners and craftsmen built on:
 - planned or partial Stripe flows
 
 This fork is opinionated around reviewing the security boundaries of that stack rather than acting as a generic AI utility platform.
+
+To keep that maintainable, new Radar-specific customization should stay as isolated as possible inside:
+
+- `src/radar/*`
+- `src/mcp/*`
+- `config/radar/*`
+- `docs/radar/*`
+
+Avoid broad invasive edits to upstream core paths unless the change is intentionally upstreamable.
 
 ## Adjacent subsystem: skill security pipeline
 

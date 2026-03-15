@@ -23,6 +23,23 @@ Those are best expressed as small review tools with typed inputs and structured 
 - deterministic recommendation mapping in `src/policies/*`
 - MCP transport and tool registration in `src/mcp/*`
 
+## Fork maintenance boundary
+
+The MCP server should live inside an evergreen fork model:
+
+- `main` stays close to upstream OpenClaw
+- `radar/main` carries the long-lived Radar integration
+- `feature/*` branches start from `radar/main`
+
+This keeps MCP-specific customizations isolated from upstream sync work.
+
+When adding new Radar-specific logic, prefer additive layers such as:
+
+- `src/radar/*`
+- `src/mcp/*`
+- `config/radar/*`
+- `docs/radar/*`
+
 ## Transport
 
 Implemented:

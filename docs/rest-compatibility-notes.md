@@ -1,11 +1,11 @@
 # REST Compatibility Notes
 
-REST is not the primary architecture for `radar-claw-defender`.
+REST is optional future compatibility only.
 
-If a compatibility layer is added later, it should:
+For `radar-claw-defender`, MCP is the primary integration boundary.
 
-- wrap the MCP tool contracts
-- preserve the same narrow defensive surface
-- avoid adding execution or scanning capability
+V1 does not implement a REST-first architecture or a generic HTTP analysis service. If a compatibility layer is added later, it should:
 
-No REST server is implemented in v1.
+- expose the same narrow defensive tool surface
+- preserve the MCP-first trust model
+- avoid widening the capability boundary
