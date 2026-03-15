@@ -351,7 +351,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
       cfgForAgent = cfg;
       const now = Date.now();
-      const sessionId = entry?.sessionId ?? randomUUID();
+      const generatedSessionId = entry?.sessionId ?? randomUUID();
       const labelValue = request.label?.trim() || entry?.label;
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
       spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
@@ -373,68 +373,122 @@ export const agentHandlers: GatewayRequestHandlers = {
       resolvedGroupId = resolvedGroupId || inheritedGroup?.groupId;
       resolvedGroupChannel = resolvedGroupChannel || inheritedGroup?.groupChannel;
       resolvedGroupSpace = resolvedGroupSpace || inheritedGroup?.groupSpace;
-      const deliveryFields = normalizeSessionDeliveryFields(entry);
-      const nextEntryPatch: SessionEntry = {
-        sessionId,
-        updatedAt: now,
-        thinkingLevel: entry?.thinkingLevel,
-        fastMode: entry?.fastMode,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        systemSent: entry?.systemSent,
-        sendPolicy: entry?.sendPolicy,
-        skillsSnapshot: entry?.skillsSnapshot,
-        deliveryContext: deliveryFields.deliveryContext,
-        lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
-        lastTo: deliveryFields.lastTo ?? entry?.lastTo,
-        lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
-        modelOverride: entry?.modelOverride,
-        providerOverride: entry?.providerOverride,
-        label: labelValue,
-        spawnedBy: spawnedByValue,
-        spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
-        spawnDepth: entry?.spawnDepth,
-        channel: entry?.channel ?? request.channel?.trim(),
-        groupId: resolvedGroupId ?? entry?.groupId,
-        groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
-        space: resolvedGroupSpace ?? entry?.space,
-        cliSessionIds: entry?.cliSessionIds,
-        claudeCliSessionId: entry?.claudeCliSessionId,
-      };
-      sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
-      const sendPolicy = resolveSendPolicy({
-        cfg,
-        entry,
-        sessionKey: canonicalKey,
-        channel: entry?.channel,
-        chatType: entry?.chatType,
-      });
-      if (sendPolicy === "deny") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-        );
-        return;
-      }
-      resolvedSessionId = sessionId;
       const canonicalSessionKey = canonicalKey;
       resolvedSessionKey = canonicalSessionKey;
       const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       if (storePath) {
-        const persisted = await updateSessionStore(storePath, (store) => {
+        // Build entry inside updateSessionStore to use fresh store data.
+        // This avoids race conditions where sessions.patch sets modelOverride
+        // or sendPolicy between our initial read and this write (issue #5369).
+        const storeResult = await updateSessionStore(storePath, (store) => {
           const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
             cfg,
             key: requestedSessionKey,
             store,
           });
-          const merged = mergeSessionEntry(store[primaryKey], nextEntryPatch);
+          const freshEntry = store[primaryKey];
+          // Check send policy using fresh data to avoid stale policy decisions
+          const sendPolicy = resolveSendPolicy({
+            cfg,
+            entry: freshEntry,
+            sessionKey: canonicalKey,
+            channel: freshEntry?.channel,
+            chatType: freshEntry?.chatType,
+          });
+          if (sendPolicy === "deny") {
+            // Don't write to store, return denial indicator
+            return { denied: true as const };
+          }
+          const deliveryFields = normalizeSessionDeliveryFields(freshEntry);
+          const nextEntry: SessionEntry = {
+            sessionId: freshEntry?.sessionId ?? generatedSessionId,
+            updatedAt: now,
+            thinkingLevel: freshEntry?.thinkingLevel,
+            fastMode: freshEntry?.fastMode,
+            verboseLevel: freshEntry?.verboseLevel,
+            reasoningLevel: freshEntry?.reasoningLevel,
+            systemSent: freshEntry?.systemSent,
+            sendPolicy: freshEntry?.sendPolicy,
+            skillsSnapshot: freshEntry?.skillsSnapshot,
+            deliveryContext: deliveryFields.deliveryContext,
+            lastChannel: deliveryFields.lastChannel ?? freshEntry?.lastChannel,
+            lastTo: deliveryFields.lastTo ?? freshEntry?.lastTo,
+            lastAccountId: deliveryFields.lastAccountId ?? freshEntry?.lastAccountId,
+            modelOverride: freshEntry?.modelOverride,
+            providerOverride: freshEntry?.providerOverride,
+            label: labelValue ?? freshEntry?.label,
+            spawnedBy: spawnedByValue ?? freshEntry?.spawnedBy,
+            spawnedWorkspaceDir: freshEntry?.spawnedWorkspaceDir,
+            spawnDepth: freshEntry?.spawnDepth,
+            channel: freshEntry?.channel ?? request.channel?.trim(),
+            groupId: resolvedGroupId ?? freshEntry?.groupId,
+            groupChannel: resolvedGroupChannel ?? freshEntry?.groupChannel,
+            space: resolvedGroupSpace ?? freshEntry?.space,
+            cliSessionIds: freshEntry?.cliSessionIds,
+            claudeCliSessionId: freshEntry?.claudeCliSessionId,
+          };
+          // Use mergeSessionEntry to preserve extra fields (e.g. acp metadata)
+          const merged = mergeSessionEntry(freshEntry, nextEntry);
           store[primaryKey] = merged;
-          return merged;
+          return { denied: false as const, entry: merged };
         });
-        sessionEntry = persisted;
+        if (storeResult.denied) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+          );
+          return;
+        }
+        sessionEntry = storeResult.entry;
+      } else {
+        // No store path - use initial entry for policy check and build (fallback)
+        const sendPolicy = resolveSendPolicy({
+          cfg,
+          entry,
+          sessionKey: requestedSessionKey,
+          channel: entry?.channel,
+          chatType: entry?.chatType,
+        });
+        if (sendPolicy === "deny") {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+          );
+          return;
+        }
+        const deliveryFields = normalizeSessionDeliveryFields(entry);
+        sessionEntry = mergeSessionEntry(entry, {
+          sessionId: generatedSessionId,
+          updatedAt: now,
+          thinkingLevel: entry?.thinkingLevel,
+          fastMode: entry?.fastMode,
+          verboseLevel: entry?.verboseLevel,
+          reasoningLevel: entry?.reasoningLevel,
+          systemSent: entry?.systemSent,
+          sendPolicy: entry?.sendPolicy,
+          skillsSnapshot: entry?.skillsSnapshot,
+          deliveryContext: deliveryFields.deliveryContext,
+          lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
+          lastTo: deliveryFields.lastTo ?? entry?.lastTo,
+          lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
+          modelOverride: entry?.modelOverride,
+          providerOverride: entry?.providerOverride,
+          label: labelValue,
+          spawnedBy: spawnedByValue,
+          spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
+          spawnDepth: entry?.spawnDepth,
+          channel: entry?.channel ?? request.channel?.trim(),
+          groupId: resolvedGroupId ?? entry?.groupId,
+          groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
+          space: resolvedGroupSpace ?? entry?.space,
+          cliSessionIds: entry?.cliSessionIds,
+          claudeCliSessionId: entry?.claudeCliSessionId,
+        });
       }
+      resolvedSessionId = sessionEntry.sessionId;
       if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
         context.addChatRun(idem, {
           sessionKey: canonicalSessionKey,
