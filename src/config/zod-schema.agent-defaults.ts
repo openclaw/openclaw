@@ -196,6 +196,13 @@ export const AgentDefaultsSchema = z
         allowlist: z.array(z.string()).optional(),
       })
       .strict()
+      .transform((val) => ({
+        ...val,
+        // Resolve deprecated aliases: `allow` and `allowlist` are coerced into `allowAgents`
+        // so runtime enforcement in subagent-spawn.ts and agents-list-tool.ts only needs to
+        // read the canonical `allowAgents` field.
+        allowAgents: val.allowAgents ?? val.allow ?? val.allowlist,
+      }))
       .optional(),
     sandbox: AgentSandboxSchema,
   })
