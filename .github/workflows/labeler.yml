@@ -335,15 +335,38 @@ jobs:
               return;
             }
 
+            const countOpenPrsForAuthor = async () => {
+              let count = 0;
+              // Avoid the Search API here. GitHub App installation tokens only get a
+              // tiny search quota, and opening several PRs at once can exhaust it.
+              for await (const response of github.paginate.iterator(github.rest.pulls.list, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "open",
+                per_page: 100,
+              })) {
+                for (const candidate of response.data) {
+                  if (candidate.user?.login !== authorLogin) {
+                    continue;
+                  }
+                  count += 1;
+                  if (count > activePrLimit) {
+                    return count;
+                  }
+                }
+              }
+              return count;
+            };
+
             let openPrCount = 0;
             try {
-              const result = await github.rest.search.issuesAndPullRequests({
-                q: `repo:${context.repo.owner}/${context.repo.repo} is:pr is:open author:${authorLogin}`,
-                per_page: 1,
-              });
-              openPrCount = result?.data?.total_count ?? 0;
+              openPrCount = await countOpenPrsForAuthor();
             } catch (error) {
-              if (error?.status !== 422) {
+              const remaining = Number.parseInt(
+                String(error?.response?.headers?.["x-ratelimit-remaining"] ?? ""),
+                10,
+              );
+              if (error?.status !== 422 && !(error?.status === 403 && remaining === 0)) {
                 throw error;
               }
               core.warning(`Skipping open PR count for ${authorLogin}; treating as 0.`);
