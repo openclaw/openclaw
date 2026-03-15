@@ -156,7 +156,6 @@ export function createGatewayReloadHandlers(params: {
       Math.max(resolveAgentMaxConcurrent(nextConfig), resolveSubagentMaxConcurrent(nextConfig)),
     );
 
-
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
     } else if (plan.noopPaths.length > 0) {
