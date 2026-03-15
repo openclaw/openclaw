@@ -91,6 +91,7 @@ export type SpawnSubagentResult = {
   mode?: SpawnSubagentMode;
   note?: string;
   modelApplied?: boolean;
+  warning?: string;
   error?: string;
   attachments?: {
     count: number;
@@ -451,14 +452,20 @@ export async function spawnSubagentDirect(
     };
   }
 
+  let modelWarning: string | undefined;
   if (resolvedModel) {
     const modelPatchError = await patchChildSession({ model: resolvedModel });
     if (modelPatchError) {
-      return {
-        status: "error",
-        error: modelPatchError,
-        childSessionKey,
-      };
+      if (modelPatchError.includes("model not allowed") || modelPatchError.includes("invalid model")) {
+        // [#21556] Graceful fallback: log warning, task runs with default model
+        modelWarning = `${modelPatchError} — task will run with the default model instead`;
+      } else {
+        return {
+          status: "error",
+          error: modelPatchError,
+          childSessionKey,
+        };
+      }
     }
     modelApplied = true;
   }
@@ -784,5 +791,6 @@ export async function spawnSubagentDirect(
     note,
     modelApplied: resolvedModel ? modelApplied : undefined,
     attachments: attachmentsReceipt,
+    warning: modelWarning,
   };
 }
