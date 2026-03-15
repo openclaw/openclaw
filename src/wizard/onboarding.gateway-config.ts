@@ -1,8 +1,4 @@
 import {
-  promptSecretRefForOnboarding,
-  resolveSecretInputModeForEnvSelection,
-} from "../commands/auth-choice.apply-helpers.js";
-import {
   normalizeGatewayTokenInput,
   randomToken,
   validateGatewayPasswordInput,
@@ -17,11 +13,10 @@ import {
 } from "../config/types.secrets.js";
 import {
   maybeAddTailnetOriginToControlUiAllowedOrigins,
-  TAILSCALE_DOCS_LINES,
   TAILSCALE_EXPOSURE_OPTIONS,
-  TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
+import { cliT } from "../i18n/cli.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
@@ -54,6 +49,8 @@ export async function configureGatewayForOnboarding(
 ): Promise<ConfigureGatewayResult> {
   const { flow, localPort, quickstartGateway, prompter } = opts;
   let { nextConfig } = opts;
+  const t = (key: Parameters<typeof cliT>[0], vars?: Record<string, string | number>) =>
+    cliT(key, process.env, vars);
 
   const port =
     flow === "quickstart"
@@ -61,9 +58,10 @@ export async function configureGatewayForOnboarding(
       : Number.parseInt(
           String(
             await prompter.text({
-              message: "Gateway port",
+              message: t("wizard.gatewayPortQuestion"),
               initialValue: String(localPort),
-              validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
+              validate: (value) =>
+                Number.isFinite(Number(value)) ? undefined : t("wizard.invalidPortError"),
             }),
           ),
           10,
@@ -73,13 +71,13 @@ export async function configureGatewayForOnboarding(
     flow === "quickstart"
       ? quickstartGateway.bind
       : await prompter.select<GatewayWizardSettings["bind"]>({
-          message: "Gateway bind",
+          message: t("wizard.gatewayBindQuestion"),
           options: [
-            { value: "loopback", label: "Loopback (127.0.0.1)" },
-            { value: "lan", label: "LAN (0.0.0.0)" },
-            { value: "tailnet", label: "Tailnet (Tailscale IP)" },
-            { value: "auto", label: "Auto (Loopback → LAN)" },
-            { value: "custom", label: "Custom IP" },
+            { value: "loopback", label: t("wizard.gatewayBindLoopbackLabel") },
+            { value: "lan", label: t("wizard.gatewayBindLanLabel") },
+            { value: "tailnet", label: t("wizard.gatewayBindTailnetLabel") },
+            { value: "auto", label: t("wizard.gatewayBindAutoLabel") },
+            { value: "custom", label: t("wizard.gatewayBindCustomLabel") },
           ],
         });
 
@@ -88,8 +86,8 @@ export async function configureGatewayForOnboarding(
     const needsPrompt = flow !== "quickstart" || !customBindHost;
     if (needsPrompt) {
       const input = await prompter.text({
-        message: "Custom IP address",
-        placeholder: "192.168.1.100",
+        message: t("wizard.customIpAddressQuestion"),
+        placeholder: t("wizard.customIpAddressPlaceholder"),
         initialValue: customBindHost ?? "",
         validate: validateIPv4AddressInput,
       });
@@ -101,24 +99,46 @@ export async function configureGatewayForOnboarding(
     flow === "quickstart"
       ? quickstartGateway.authMode
       : ((await prompter.select({
-          message: "Gateway auth",
+          message: t("wizard.gatewayAuthQuestion"),
           options: [
             {
               value: "token",
-              label: "Token",
-              hint: "Recommended default (local + remote)",
+              label: t("wizard.gatewayAuthTokenLabel"),
+              hint: t("wizard.gatewayAuthTokenHint"),
             },
-            { value: "password", label: "Password" },
+            { value: "password", label: t("wizard.gatewayAuthPasswordLabel") },
           ],
           initialValue: "token",
         })) as GatewayAuthChoice);
+
+  const tailscaleExposureOptions = TAILSCALE_EXPOSURE_OPTIONS.map((option) => {
+    if (option.value === "off") {
+      return {
+        value: option.value,
+        label: t("wizard.tailscaleExposureOffLabel"),
+        hint: t("wizard.tailscaleExposureOffHint"),
+      };
+    }
+    if (option.value === "serve") {
+      return {
+        value: option.value,
+        label: t("wizard.tailscaleExposureServeLabel"),
+        hint: t("wizard.tailscaleExposureServeHint"),
+      };
+    }
+    return {
+      value: option.value,
+      label: t("wizard.tailscaleExposureFunnelLabel"),
+      hint: t("wizard.tailscaleExposureFunnelHint"),
+    };
+  });
 
   const tailscaleMode: GatewayWizardSettings["tailscaleMode"] =
     flow === "quickstart"
       ? quickstartGateway.tailscaleMode
       : await prompter.select<GatewayWizardSettings["tailscaleMode"]>({
-          message: "Tailscale exposure",
-          options: [...TAILSCALE_EXPOSURE_OPTIONS],
+          message: t("wizard.tailscaleExposureQuestion"),
+          options: tailscaleExposureOptions,
         });
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
@@ -127,16 +147,19 @@ export async function configureGatewayForOnboarding(
   if (tailscaleMode !== "off") {
     tailscaleBin = await findTailscaleBinary();
     if (!tailscaleBin) {
-      await prompter.note(TAILSCALE_MISSING_BIN_NOTE_LINES.join("\n"), "Tailscale Warning");
+      await prompter.note(
+        t("wizard.tailscaleMissingBinaryBody"),
+        t("wizard.tailscaleWarningTitle"),
+      );
     }
   }
 
   let tailscaleResetOnExit = flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
-    await prompter.note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
+    await prompter.note(t("wizard.tailscaleDocsBody"), t("wizard.tailscaleTitle"));
     tailscaleResetOnExit = Boolean(
       await prompter.confirm({
-        message: "Reset Tailscale serve/funnel on exit?",
+        message: t("wizard.tailscaleResetOnExitQuestion"),
         initialValue: false,
       }),
     );
@@ -146,19 +169,21 @@ export async function configureGatewayForOnboarding(
   // - Tailscale wants bind=loopback so we never expose a non-loopback server + tailscale serve/funnel at once.
   // - Funnel requires password auth.
   if (tailscaleMode !== "off" && bind !== "loopback") {
-    await prompter.note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
+    await prompter.note(t("wizard.tailscaleRequiresLoopbackNote"), t("wizard.noteTitle"));
     bind = "loopback";
     customBindHost = undefined;
   }
 
   if (tailscaleMode === "funnel" && authMode !== "password") {
-    await prompter.note("Tailscale funnel requires password auth.", "Note");
+    await prompter.note(t("wizard.tailscaleFunnelRequiresPasswordNote"), t("wizard.noteTitle"));
     authMode = "password";
   }
 
   let gatewayToken: string | undefined;
   let gatewayTokenInput: SecretInput | undefined;
   if (authMode === "token") {
+    const { promptSecretRefForOnboarding, resolveSecretInputModeForEnvSelection } =
+      await import("../commands/auth-choice.apply-helpers.js");
     const quickstartTokenString = normalizeSecretInputString(quickstartGateway.token);
     const quickstartTokenRef = resolveSecretInputRef({
       value: quickstartGateway.token,
@@ -210,8 +235,8 @@ export async function configureGatewayForOnboarding(
       gatewayTokenInput = gatewayToken;
     } else {
       const tokenInput = await prompter.text({
-        message: "Gateway token (blank to generate)",
-        placeholder: "Needed for multi-machine or non-loopback access",
+        message: t("wizard.gatewayTokenQuestion"),
+        placeholder: t("wizard.gatewayTokenPlaceholder"),
         initialValue:
           quickstartTokenString ??
           normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN) ??
@@ -226,13 +251,15 @@ export async function configureGatewayForOnboarding(
     let password: SecretInput | undefined =
       flow === "quickstart" && quickstartGateway.password ? quickstartGateway.password : undefined;
     if (!password) {
+      const { promptSecretRefForOnboarding, resolveSecretInputModeForEnvSelection } =
+        await import("../commands/auth-choice.apply-helpers.js");
       const selectedMode = await resolveSecretInputModeForEnvSelection({
         prompter,
         explicitMode: opts.secretInputMode,
         copy: {
-          modeMessage: "How do you want to provide the gateway password?",
-          plaintextLabel: "Enter password now",
-          plaintextHint: "Stores the password directly in OpenClaw config",
+          modeMessage: t("wizard.secretInputGatewayPasswordModeQuestion"),
+          plaintextLabel: t("wizard.secretInputEnterPasswordNowLabel"),
+          plaintextHint: t("wizard.secretInputEnterPasswordNowHint"),
         },
       });
       if (selectedMode === "ref") {
@@ -242,7 +269,7 @@ export async function configureGatewayForOnboarding(
           prompter,
           preferredEnvVar: "OPENCLAW_GATEWAY_PASSWORD",
           copy: {
-            sourceMessage: "Where is this gateway password stored?",
+            sourceMessage: t("wizard.secretInputGatewayPasswordSourceQuestion"),
             envVarPlaceholder: "OPENCLAW_GATEWAY_PASSWORD",
           },
         });
@@ -250,7 +277,7 @@ export async function configureGatewayForOnboarding(
       } else {
         password = String(
           (await prompter.text({
-            message: "Gateway password",
+            message: t("wizard.gatewayPasswordQuestion"),
             validate: validateGatewayPasswordInput,
           })) ?? "",
         ).trim();

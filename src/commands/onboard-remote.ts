@@ -1,14 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { isSecureWebSocketUrl } from "../gateway/net.js";
+import { cliT } from "../i18n/cli.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  promptSecretRefForOnboarding,
-  resolveSecretInputModeForEnvSelection,
-} from "./auth-choice.apply-helpers.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
@@ -19,12 +16,15 @@ function pickHost(beacon: GatewayBonjourBeacon): string | undefined {
   return beacon.host || beacon.tailnetDns || beacon.lanHost;
 }
 
-function buildLabel(beacon: GatewayBonjourBeacon): string {
+function buildLabel(
+  beacon: GatewayBonjourBeacon,
+  t: (key: Parameters<typeof cliT>[0], vars?: Record<string, string | number>) => string,
+): string {
   const host = pickHost(beacon);
   // Security: Prefer the resolved service endpoint port.
   const port = beacon.port ?? beacon.gatewayPort ?? 18789;
   const title = beacon.displayName ?? beacon.instanceName;
-  const hint = host ? `${host}:${port}` : "host unknown";
+  const hint = host ? `${host}:${port}` : t("wizard.remoteHostUnknown");
   return `${title} (${hint})`;
 }
 
@@ -36,20 +36,20 @@ function ensureWsUrl(value: string): string {
   return trimmed;
 }
 
-function validateGatewayWebSocketUrl(value: string): string | undefined {
+function validateGatewayWebSocketUrl(
+  value: string,
+  t: (key: Parameters<typeof cliT>[0], vars?: Record<string, string | number>) => string,
+): string | undefined {
   const trimmed = value.trim();
   if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
-    return "URL must start with ws:// or wss://";
+    return t("wizard.remoteWsUrlMustStartError");
   }
   if (
     !isSecureWebSocketUrl(trimmed, {
       allowPrivateWs: process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1",
     })
   ) {
-    return (
-      "Use wss:// for remote hosts, or ws://127.0.0.1/localhost via SSH tunnel. " +
-      "Break-glass: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 for trusted private networks."
-    );
+    return t("wizard.remoteWsUrlSecurityError");
   }
   return undefined;
 }
@@ -59,44 +59,44 @@ export async function promptRemoteGatewayConfig(
   prompter: WizardPrompter,
   options?: { secretInputMode?: SecretInputMode },
 ): Promise<OpenClawConfig> {
+  const t = (key: Parameters<typeof cliT>[0], vars?: Record<string, string | number>) =>
+    cliT(key, process.env, vars);
   let selectedBeacon: GatewayBonjourBeacon | null = null;
   let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
 
   const hasBonjourTool = (await detectBinary("dns-sd")) || (await detectBinary("avahi-browse"));
   const wantsDiscover = hasBonjourTool
     ? await prompter.confirm({
-        message: "Discover gateway on LAN (Bonjour)?",
+        message: t("wizard.remoteDiscoverLanQuestion"),
         initialValue: true,
       })
     : false;
 
   if (!hasBonjourTool) {
-    await prompter.note(
-      [
-        "Bonjour discovery requires dns-sd (macOS) or avahi-browse (Linux).",
-        "Docs: https://docs.openclaw.ai/gateway/discovery",
-      ].join("\n"),
-      "Discovery",
-    );
+    await prompter.note(t("wizard.discoveryRequirementBody"), t("wizard.discoveryTitle"));
   }
 
   if (wantsDiscover) {
     const wideAreaDomain = resolveWideAreaDiscoveryDomain({
       configDomain: cfg.discovery?.wideArea?.domain,
     });
-    const spin = prompter.progress("Searching for gateways…");
+    const spin = prompter.progress(t("wizard.discoverySearchingProgress"));
     const beacons = await discoverGatewayBeacons({ timeoutMs: 2000, wideAreaDomain });
-    spin.stop(beacons.length > 0 ? `Found ${beacons.length} gateway(s)` : "No gateways found");
+    spin.stop(
+      beacons.length > 0
+        ? t("wizard.discoveryFoundProgress", { count: beacons.length })
+        : t("wizard.discoveryNoneProgress"),
+    );
 
     if (beacons.length > 0) {
       const selection = await prompter.select({
-        message: "Select gateway",
+        message: t("wizard.remoteSelectGatewayQuestion"),
         options: [
           ...beacons.map((beacon, index) => ({
             value: String(index),
-            label: buildLabel(beacon),
+            label: buildLabel(beacon, t),
           })),
-          { value: "manual", label: "Enter URL manually" },
+          { value: "manual", label: t("wizard.remoteEnterUrlManuallyLabel") },
         ],
       });
       if (selection !== "manual") {
@@ -111,67 +111,69 @@ export async function promptRemoteGatewayConfig(
     const port = selectedBeacon.port ?? selectedBeacon.gatewayPort ?? 18789;
     if (host) {
       const mode = await prompter.select({
-        message: "Connection method",
+        message: t("wizard.remoteConnectionMethodQuestion"),
         options: [
           {
             value: "direct",
-            label: `Direct gateway WS (${host}:${port})`,
+            label: t("wizard.remoteConnectionDirectLabel", { host, port }),
           },
-          { value: "ssh", label: "SSH tunnel (loopback)" },
+          { value: "ssh", label: t("wizard.remoteConnectionSshLabel") },
         ],
       });
       if (mode === "direct") {
         suggestedUrl = `wss://${host}:${port}`;
         await prompter.note(
           [
-            "Direct remote access defaults to TLS.",
-            `Using: ${suggestedUrl}`,
-            "If your gateway is loopback-only, choose SSH tunnel and keep ws://127.0.0.1:18789.",
+            t("wizard.remoteDirectDefaultsToTlsLine"),
+            t("wizard.remoteDirectUsingLine", { url: suggestedUrl }),
+            t("wizard.remoteDirectLoopbackHintLine"),
           ].join("\n"),
-          "Direct remote",
+          t("wizard.directRemoteTitle"),
         );
       } else {
         suggestedUrl = DEFAULT_GATEWAY_URL;
         await prompter.note(
           [
-            "Start a tunnel before using the CLI:",
+            t("wizard.remoteSshStartTunnelLine"),
             `ssh -N -L 18789:127.0.0.1:18789 <user>@${host}${
               selectedBeacon.sshPort ? ` -p ${selectedBeacon.sshPort}` : ""
             }`,
-            "Docs: https://docs.openclaw.ai/gateway/remote",
+            t("wizard.remoteSshDocsLine"),
           ].join("\n"),
-          "SSH tunnel",
+          t("wizard.sshTunnelTitle"),
         );
       }
     }
   }
 
   const urlInput = await prompter.text({
-    message: "Gateway WebSocket URL",
+    message: t("wizard.remoteGatewayWsUrlQuestion"),
     initialValue: suggestedUrl,
-    validate: (value) => validateGatewayWebSocketUrl(String(value)),
+    validate: (value) => validateGatewayWebSocketUrl(String(value), t),
   });
   const url = ensureWsUrl(String(urlInput));
 
   const authChoice = await prompter.select({
-    message: "Gateway auth",
+    message: t("wizard.remoteGatewayAuthQuestion"),
     options: [
-      { value: "token", label: "Token (recommended)" },
-      { value: "password", label: "Password" },
-      { value: "off", label: "No auth" },
+      { value: "token", label: t("wizard.remoteGatewayAuthTokenRecommendedLabel") },
+      { value: "password", label: t("wizard.remoteGatewayAuthPasswordLabel") },
+      { value: "off", label: t("wizard.remoteGatewayAuthOffLabel") },
     ],
   });
 
   let token: SecretInput | undefined = cfg.gateway?.remote?.token;
   let password: SecretInput | undefined = cfg.gateway?.remote?.password;
   if (authChoice === "token") {
+    const { promptSecretRefForOnboarding, resolveSecretInputModeForEnvSelection } =
+      await import("./auth-choice.apply-helpers.js");
     const selectedMode = await resolveSecretInputModeForEnvSelection({
       prompter,
       explicitMode: options?.secretInputMode,
       copy: {
-        modeMessage: "How do you want to provide this gateway token?",
-        plaintextLabel: "Enter token now",
-        plaintextHint: "Stores the token directly in OpenClaw config",
+        modeMessage: t("wizard.secretInputGatewayTokenModeQuestion"),
+        plaintextLabel: t("wizard.secretInputEnterTokenNowLabel"),
+        plaintextHint: t("wizard.secretInputEnterTokenNowHint"),
       },
     });
     if (selectedMode === "ref") {
@@ -181,7 +183,7 @@ export async function promptRemoteGatewayConfig(
         prompter,
         preferredEnvVar: "OPENCLAW_GATEWAY_TOKEN",
         copy: {
-          sourceMessage: "Where is this gateway token stored?",
+          sourceMessage: t("wizard.secretInputGatewayTokenSourceQuestion"),
           envVarPlaceholder: "OPENCLAW_GATEWAY_TOKEN",
         },
       });
@@ -189,21 +191,23 @@ export async function promptRemoteGatewayConfig(
     } else {
       token = String(
         await prompter.text({
-          message: "Gateway token",
+          message: t("wizard.remoteGatewayTokenQuestion"),
           initialValue: typeof token === "string" ? token : undefined,
-          validate: (value) => (value?.trim() ? undefined : "Required"),
+          validate: (value) => (value?.trim() ? undefined : t("wizard.requiredFieldError")),
         }),
       ).trim();
     }
     password = undefined;
   } else if (authChoice === "password") {
+    const { promptSecretRefForOnboarding, resolveSecretInputModeForEnvSelection } =
+      await import("./auth-choice.apply-helpers.js");
     const selectedMode = await resolveSecretInputModeForEnvSelection({
       prompter,
       explicitMode: options?.secretInputMode,
       copy: {
-        modeMessage: "How do you want to provide this gateway password?",
-        plaintextLabel: "Enter password now",
-        plaintextHint: "Stores the password directly in OpenClaw config",
+        modeMessage: t("wizard.secretInputRemoteGatewayPasswordModeQuestion"),
+        plaintextLabel: t("wizard.secretInputEnterPasswordNowLabel"),
+        plaintextHint: t("wizard.secretInputEnterPasswordNowHint"),
       },
     });
     if (selectedMode === "ref") {
@@ -213,7 +217,7 @@ export async function promptRemoteGatewayConfig(
         prompter,
         preferredEnvVar: "OPENCLAW_GATEWAY_PASSWORD",
         copy: {
-          sourceMessage: "Where is this gateway password stored?",
+          sourceMessage: t("wizard.secretInputRemoteGatewayPasswordSourceQuestion"),
           envVarPlaceholder: "OPENCLAW_GATEWAY_PASSWORD",
         },
       });
@@ -221,9 +225,9 @@ export async function promptRemoteGatewayConfig(
     } else {
       password = String(
         await prompter.text({
-          message: "Gateway password",
+          message: t("wizard.remoteGatewayPasswordQuestion"),
           initialValue: typeof password === "string" ? password : undefined,
-          validate: (value) => (value?.trim() ? undefined : "Required"),
+          validate: (value) => (value?.trim() ? undefined : t("wizard.requiredFieldError")),
         }),
       ).trim();
     }
