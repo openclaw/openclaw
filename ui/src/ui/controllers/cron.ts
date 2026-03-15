@@ -139,7 +139,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     const timeoutRaw = form.timeoutSeconds.trim();
     if (timeoutRaw) {
       const timeout = toNumber(timeoutRaw, 0);
-      if (timeout <= 0) {
+      if (!Number.isFinite(Number(timeoutRaw)) || timeout < 0) {
         errors.timeoutSeconds = "cron.errors.timeoutInvalid";
       }
     }
@@ -575,9 +575,14 @@ export function buildCronPayload(form: CronFormState) {
   if (thinking) {
     payload.thinking = thinking;
   }
-  const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
-  if (timeoutSeconds > 0) {
-    payload.timeoutSeconds = timeoutSeconds;
+  const timeoutRaw = form.timeoutSeconds.trim();
+  const timeoutSeconds = toNumber(timeoutRaw, 0);
+  if (Number.isFinite(Number(timeoutRaw)) && timeoutRaw !== "") {
+    if (timeoutSeconds > 0) {
+      payload.timeoutSeconds = timeoutSeconds;
+    } else if (timeoutSeconds === 0) {
+      payload.timeoutSeconds = 0;
+    }
   }
   if (form.payloadLightContext) {
     payload.lightContext = true;
