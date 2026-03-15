@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
+- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, Perplexity or Querit Search API.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -36,6 +36,7 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 | **Grok**                  | AI-synthesized answers + citations | —                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
 | **Kimi**                  | AI-synthesized answers + citations | —                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
 | **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter` | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| **Querit**                | Fast, multilingual results for LLM | —                                            | Requires Querit API key                                                        | `QUERIT_API_KEY`                            |
 
 ### Auto-detection
 
@@ -238,6 +239,7 @@ Search the web using your configured provider.
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
   - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **Querit**: `QUERIT_API_KEY` or `tools.web.search.querit.apiKey`
 - All provider key fields above support SecretRef objects.
 
 ### Config

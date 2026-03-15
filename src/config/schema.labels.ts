@@ -231,6 +231,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.perplexity.apiKey": "Perplexity API Key", // pragma: allowlist secret
   "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
   "tools.web.search.perplexity.model": "Perplexity Model",
+  "tools.web.search.querit.apiKey": "Querit Search API Key", // pragma: allowlist secret
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.maxCharsCap": "Web Fetch Hard Max Chars",

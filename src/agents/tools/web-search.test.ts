@@ -24,6 +24,8 @@ const {
   extractKimiCitations,
   resolveBraveMode,
   mapBraveLlmContextResults,
+  resolveQueritApiKey,
+  resolveQueritConfig,
 } = __testing;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
@@ -139,34 +141,42 @@ describe("web_search brave language param normalization", () => {
 });
 
 describe("web_search freshness normalization", () => {
-  it("accepts Brave shortcut values and maps for Perplexity", () => {
+  it("accepts Brave shortcut values and maps for Perplexity and Querit", () => {
     expect(normalizeFreshness("pd", "brave")).toBe("pd");
     expect(normalizeFreshness("PW", "brave")).toBe("pw");
     expect(normalizeFreshness("pd", "perplexity")).toBe("day");
     expect(normalizeFreshness("pw", "perplexity")).toBe("week");
+    expect(normalizeFreshness("pd", "querit")).toBe("d1");
+    expect(normalizeFreshness("pw", "querit")).toBe("w1");
   });
 
-  it("accepts Perplexity values and maps for Brave", () => {
+  it("accepts Perplexity values and maps for Brave and Querit", () => {
     expect(normalizeFreshness("day", "perplexity")).toBe("day");
     expect(normalizeFreshness("week", "perplexity")).toBe("week");
     expect(normalizeFreshness("day", "brave")).toBe("pd");
     expect(normalizeFreshness("week", "brave")).toBe("pw");
+    expect(normalizeFreshness("day", "querit")).toBe("d1");
+    expect(normalizeFreshness("week", "querit")).toBe("w1");
   });
 
-  it("accepts valid date ranges for Brave", () => {
+  it("accepts valid date ranges for Brave and Querit", () => {
     expect(normalizeFreshness("2024-01-01to2024-01-31", "brave")).toBe("2024-01-01to2024-01-31");
+    expect(normalizeFreshness("2024-01-01to2024-01-31", "querit")).toBe("2024-01-01to2024-01-31");
   });
 
   it("rejects invalid values", () => {
     expect(normalizeFreshness("yesterday", "brave")).toBeUndefined();
     expect(normalizeFreshness("yesterday", "perplexity")).toBeUndefined();
+    expect(normalizeFreshness("yesterday", "querit")).toBeUndefined();
     expect(normalizeFreshness("2024-01-01to2024-01-31", "perplexity")).toBeUndefined();
   });
 
-  it("rejects invalid date ranges for Brave", () => {
+  it("rejects invalid date ranges for Brave and Querit", () => {
     expect(normalizeFreshness("2024-13-01to2024-01-31", "brave")).toBeUndefined();
     expect(normalizeFreshness("2024-02-30to2024-03-01", "brave")).toBeUndefined();
     expect(normalizeFreshness("2024-03-10to2024-03-01", "brave")).toBeUndefined();
+    expect(normalizeFreshness("2024-13-01to2024-01-31", "querit")).toBeUndefined();
+    expect(normalizeFreshness("2024-03-10to2024-03-01", "querit")).toBeUndefined();
   });
 });
 
@@ -466,5 +476,45 @@ describe("mapBraveLlmContextResults", () => {
       },
     });
     expect(results[0].siteName).toBeUndefined();
+  });
+});
+
+describe("web_search querit config resolution", () => {
+  const queritTestKey = "querit-test-key"; // pragma: allowlist secret
+  const queritEnvKey = "querit-env-key"; // pragma: allowlist secret
+  const queritConfigKey = "querit-config-key"; // pragma: allowlist secret
+
+  it("uses config apiKey when provided", () => {
+    expect(resolveQueritApiKey({ apiKey: queritTestKey })).toBe(queritTestKey);
+  });
+
+  it("falls back to QUERIT_API_KEY env var", () => {
+    withEnv({ QUERIT_API_KEY: queritEnvKey }, () => {
+      expect(resolveQueritApiKey({})).toBe(queritEnvKey);
+    });
+  });
+
+  it("config key takes precedence over env var", () => {
+    withEnv({ QUERIT_API_KEY: queritEnvKey }, () => {
+      expect(resolveQueritApiKey({ apiKey: queritConfigKey })).toBe(queritConfigKey);
+    });
+  });
+
+  it("returns undefined when no key is configured", () => {
+    withEnv({ QUERIT_API_KEY: undefined }, () => {
+      expect(resolveQueritApiKey({})).toBeUndefined();
+      expect(resolveQueritApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("extracts querit config from search config object", () => {
+    const config = resolveQueritConfig({ provider: "querit", querit: { apiKey: "querit-key" } }); // pragma: allowlist secret
+    expect(config).toEqual({ apiKey: "querit-key" }); // pragma: allowlist secret
+  });
+
+  it("returns empty object when querit key is absent from search config", () => {
+    expect(resolveQueritConfig({ provider: "brave" })).toEqual({});
+    expect(resolveQueritConfig({})).toEqual({});
+    expect(resolveQueritConfig(undefined)).toEqual({});
   });
 });
