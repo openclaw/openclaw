@@ -238,7 +238,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("sets disableBlockStreaming in replyOptions to prevent silent reply drops", async () => {
+  it("exposes onPartialReply for streaming updates", async () => {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -246,7 +246,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       chatId: "oc_chat",
     });
 
-    expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
+    expect(result.replyOptions).toHaveProperty("onPartialReply");
+    expect(typeof result.replyOptions.onPartialReply).toBe("function");
   });
 
   it("uses streaming session for auto mode markdown payloads", async () => {
@@ -387,6 +388,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    // Block deliver merges via mergeStreamingText: partial "hello" + block "lo world"
     expect(streamingInstances[0].close).toHaveBeenCalledWith("hellolo world", {
       note: "Agent: agent",
     });
@@ -656,6 +658,29 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         replyToMessageId: "om_msg",
         replyInThread: true,
       }),
+    );
+  });
+
+  it("resets blockOffset between reply turns so second turn text is not truncated", async () => {
+    const options = setupNonStreamingAutoDispatcher();
+
+    // Turn 1: block + final. The block advances blockOffset.
+    await options.onReplyStart?.();
+    await options.deliver({ text: "```md\nblock1 content\n```" }, { kind: "block" });
+    await options.deliver({ text: "```md\nblock1 content\n```\nfinal tail" }, { kind: "final" });
+    await options.onIdle?.();
+
+    // Turn 2: onReplyStart should reset blockOffset so this final
+    // is delivered in full, not sliced by the first turn's offset.
+    sendMessageFeishuMock.mockClear();
+    sendMarkdownCardFeishuMock.mockClear();
+    await options.onReplyStart?.();
+    await options.deliver({ text: "second turn answer" }, { kind: "final" });
+
+    // The full text should be delivered, not truncated
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "second turn answer" }),
     );
   });
 

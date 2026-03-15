@@ -16,7 +16,12 @@ import {
 } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
+import {
+  checkAndRecordCreateTime,
+  finalizeFeishuMessageProcessing,
+  tryRecordMessage,
+  tryRecordMessagePersistent,
+} from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
@@ -176,6 +181,9 @@ async function resolveFeishuSenderName(params: {
 }
 
 export type FeishuMessageEvent = {
+  // event_id is injected by the Lark SDK: EventDispatcher.parse() flattens the
+  // event header (containing event_id, event_type, etc.) into the callback data.
+  event_id?: string;
   sender: {
     sender_id: {
       open_id?: string;
@@ -250,17 +258,27 @@ function resolveFeishuGroupSession(params: {
 
   const normalizedThreadId = threadId?.trim();
   const normalizedRootId = rootId?.trim();
-  const threadReply = Boolean(normalizedThreadId || normalizedRootId);
-  const replyInThread =
-    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
-    threadReply;
+  const hasThreadContext = Boolean(normalizedThreadId || normalizedRootId);
+  const configReplyInThread =
+    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
 
+  // Resolve groupSessionScope early so we can use it to gate threadReply.
   const legacyTopicSessionMode =
     groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
   const groupSessionScope: GroupSessionScope =
     groupConfig?.groupSessionScope ??
     feishuCfg?.groupSessionScope ??
     (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
+
+  const isTopicScope =
+    groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender";
+
+  // Only honor thread context for topic-mode groups or when replyInThread is
+  // explicitly enabled.  In normal groups a user "replying" to the bot's
+  // message sets root_id, but we should NOT push the response into a Feishu
+  // topic thread — that makes the reply invisible in the main chat (#32980).
+  const threadReply = hasThreadContext && (isTopicScope || configReplyInThread);
+  const replyInThread = configReplyInThread || threadReply;
 
   // Keep topic session keys stable across the "first turn creates thread" flow:
   // first turn may only have message_id, while the next turn carries root_id/thread_id.
@@ -772,7 +790,8 @@ export function buildBroadcastSessionKey(
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
-  _botName?: string,
+  botName?: string,
+  log?: (...args: any[]) => void,
 ): FeishuMessageContext {
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
   const mentionedBot = checkBotMentioned(event, botOpenId);
@@ -901,7 +920,42 @@ export async function handleFeishuMessage(params: {
     return;
   }
 
-  let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
+  // Event-level dedup: Feishu's at-least-once delivery may re-push the same
+  // event with a DIFFERENT message_id on retries (15s, 5min, 1h, 6h).
+  // The Lark SDK's EventDispatcher.parse() flattens the header (including
+  // event_id) into the callback data, so we can use it for proper dedup.
+  if (event.event_id) {
+    const eventKey = `event:${account.accountId}:${event.event_id}`;
+    if (!tryRecordMessage(eventKey)) {
+      log(`feishu: skipping duplicate message ${messageId} (event_id dedup: ${event.event_id})`);
+      return;
+    }
+  }
+
+  // Time-based dedup: Feishu retries re-deliver with new message_id/event_id
+  // but preserve the original create_time. Reject messages whose create_time
+  // is older than or equal to the last processed message for this chat+sender.
+  const createTimeRaw = event.message.create_time;
+  const createTimeParsed = createTimeRaw ? parseInt(createTimeRaw, 10) : undefined;
+  const normalizedCreateTime =
+    createTimeParsed && createTimeParsed > 0
+      ? createTimeParsed < 1_000_000_000_000
+        ? createTimeParsed * 1000
+        : createTimeParsed
+      : undefined;
+  const senderForTimeDedup =
+    event.sender.sender_id.open_id?.trim() || event.sender.sender_id.user_id?.trim() || "";
+  const chatSenderTimeKey = `${account.accountId}:${event.message.chat_id}:${senderForTimeDedup}`;
+
+  if (!checkAndRecordCreateTime(chatSenderTimeKey, normalizedCreateTime)) {
+    log(
+      `feishu: skipping stale message ${messageId} ` +
+        `(create_time ${createTimeRaw} ≤ last processed for ${event.message.chat_id})`,
+    );
+    return;
+  }
+
+  let ctx = parseFeishuMessageEvent(event, botOpenId, botName, log);
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;

@@ -1689,7 +1689,7 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
-  it("forces thread replies when inbound message contains thread_id", async () => {
+  it("does NOT force thread replies in normal group even when inbound message contains thread_id", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -1722,8 +1722,8 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
-        replyInThread: true,
-        threadReply: true,
+        replyInThread: false,
+        threadReply: false,
       }),
     );
   });

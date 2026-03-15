@@ -159,6 +159,13 @@ async function resolveBinaryPath(binary: string): Promise<string> {
   }
 }
 
+function resolveInstallationRoot(cliEntrypoint: string): string {
+  if (/[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(cliEntrypoint)) {
+    return path.dirname(path.dirname(cliEntrypoint));
+  }
+  return path.dirname(cliEntrypoint);
+}
+
 async function resolveCliProgramArguments(params: {
   args: string[];
   dev?: boolean;
@@ -174,6 +181,7 @@ async function resolveCliProgramArguments(params: {
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
       programArguments: [nodePath, cliEntrypointPath, ...params.args],
+      workingDirectory: resolveInstallationRoot(cliEntrypointPath),
     };
   }
 
@@ -193,6 +201,7 @@ async function resolveCliProgramArguments(params: {
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
       programArguments: [bunPath, cliEntrypointPath, ...params.args],
+      workingDirectory: resolveInstallationRoot(cliEntrypointPath),
     };
   }
 
@@ -201,11 +210,15 @@ async function resolveCliProgramArguments(params: {
       const cliEntrypointPath = await resolveCliEntrypointPathForService();
       return {
         programArguments: [execPath, cliEntrypointPath, ...params.args],
+        workingDirectory: resolveInstallationRoot(cliEntrypointPath),
       };
     } catch (error) {
       // If running under bun or another runtime that can execute TS directly
       if (!isNodeRuntime(execPath)) {
-        return { programArguments: [execPath, ...params.args] };
+        return {
+          programArguments: [execPath, ...params.args],
+          workingDirectory: path.dirname(execPath),
+        };
       }
       throw error;
     }

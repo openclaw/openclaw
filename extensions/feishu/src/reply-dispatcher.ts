@@ -185,6 +185,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
+  let mentionEmitted = false; // only emit @mentions on first card per turn
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const formatReasoningPrefix = (thinking: string): string => {
@@ -283,8 +284,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     await partialUpdateQueue;
     if (streaming?.isActive()) {
       let text = buildCombinedStreamText(reasoningText, streamText);
-      if (mentionTargets?.length) {
+      if (mentionTargets?.length && !mentionEmitted) {
         text = buildMentionedCardContent(mentionTargets, text);
+        mentionEmitted = true;
       }
       const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
       await streaming.close(text, { note: finalNote });
@@ -338,6 +340,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
         deliveredFinalTexts.clear();
+        mentionEmitted = false;
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }

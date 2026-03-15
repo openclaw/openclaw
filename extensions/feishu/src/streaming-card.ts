@@ -325,15 +325,28 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) {
       return;
     }
-    const mergedInput = mergeStreamingText(this.pendingText ?? this.state.currentText, text);
-    if (!mergedInput || mergedInput === this.state.currentText) {
+    // The incoming text is CUMULATIVE (the full response so far from onPartialReply).
+    // Treat it as a direct replacement — no merging needed.
+    if (!text || text === this.state.currentText) {
       return;
     }
 
     // Throttle: skip if updated recently, but remember pending text
     const now = Date.now();
     if (now - this.lastUpdateTime < this.updateThrottleMs) {
-      this.pendingText = mergedInput;
+      this.pendingText = text;
+      // Schedule a flush after throttle interval if not already scheduled
+      if (!this.flushTimer) {
+        this.flushTimer = setTimeout(() => {
+          this.flushTimer = null;
+          if (this.pendingText && !this.closed) {
+            const pending = this.pendingText;
+            this.pendingText = null;
+            this.lastUpdateTime = Date.now();
+            this.enqueueUpdate(pending);
+          }
+        }, this.updateThrottleMs);
+      }
       return;
     }
     this.pendingText = null;
@@ -343,18 +356,24 @@ export class FeishuStreamingSession {
       this.flushTimer = null;
     }
 
+    this.enqueueUpdate(text);
+    // Don't await — let updates run in background so onPartialReply isn't blocked
+  }
+
+  private enqueueUpdate(text: string): void {
+    const updateText = text;
     this.queue = this.queue.then(async () => {
       if (!this.state || this.closed) {
         return;
       }
-      const mergedText = mergeStreamingText(this.state.currentText, mergedInput);
-      if (!mergedText || mergedText === this.state.currentText) {
+      if (updateText === this.state.currentText) {
         return;
       }
-      this.state.currentText = mergedText;
-      await this.updateCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`));
+      const delta = updateText.length - (this.state.currentText?.length ?? 0);
+      this.log?.(`streaming update: +${delta} chars (total ${updateText.length})`);
+      this.state.currentText = updateText;
+      await this.updateCardContent(updateText, (e) => this.log?.(`Update failed: ${String(e)}`));
     });
-    await this.queue;
   }
 
   private async updateNoteContent(note: string): Promise<void> {
@@ -397,8 +416,8 @@ export class FeishuStreamingSession {
     }
     await this.queue;
 
-    const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
-    const text = finalText ? mergeStreamingText(pendingMerged, finalText) : pendingMerged;
+    // Use finalText if provided, else pending, else current
+    const text = finalText ?? this.pendingText ?? this.state.currentText;
     const apiBase = resolveApiBase(this.creds.domain);
 
     // Only send final update if content differs from what's already displayed

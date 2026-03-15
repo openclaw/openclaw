@@ -124,5 +124,25 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey };
+  /** Remove items matching a predicate from all pending buffers.
+   *  Returns the number of items removed. If a buffer becomes empty after
+   *  removal its flush timer is cancelled. */
+  const removeFromBuffer = (predicate: (item: T) => boolean): number => {
+    let removed = 0;
+    for (const [key, buffer] of buffers) {
+      const before = buffer.items.length;
+      buffer.items = buffer.items.filter((item) => !predicate(item));
+      removed += before - buffer.items.length;
+      if (buffer.items.length === 0) {
+        if (buffer.timeout) {
+          clearTimeout(buffer.timeout);
+          buffer.timeout = null;
+        }
+        buffers.delete(key);
+      }
+    }
+    return removed;
+  };
+
+  return { enqueue, flushKey, removeFromBuffer };
 }

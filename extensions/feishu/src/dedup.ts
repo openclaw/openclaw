@@ -201,3 +201,31 @@ export async function warmupDedupFromDisk(
     log?.(`feishu-dedup: warmup disk error: ${String(error)}`);
   });
 }
+
+// --- Time-based stale message rejection ---
+// Per chat+sender last-processed create_time tracker.
+// Key: "account:chatId:senderId", Value: last processed create_time (ms)
+const lastProcessedCreateTime = new Map<string, number>();
+
+/**
+ * Check if a message is stale based on its create_time.
+ * Returns `true` if the message should be processed (is fresh).
+ * Returns `false` if the message is stale (create_time ≤ last processed).
+ *
+ * When createTimeMs is undefined/0, skip the check (allow processing)
+ * so synthetic events and messages without timestamps are unaffected.
+ */
+export function checkAndRecordCreateTime(
+  chatSenderKey: string,
+  createTimeMs: number | undefined,
+): boolean {
+  if (!createTimeMs || createTimeMs <= 0) {
+    return true;
+  }
+  const lastTime = lastProcessedCreateTime.get(chatSenderKey);
+  if (lastTime !== undefined && createTimeMs <= lastTime) {
+    return false;
+  }
+  lastProcessedCreateTime.set(chatSenderKey, createTimeMs);
+  return true;
+}
