@@ -645,6 +645,9 @@ export async function prepareSlackMessage(params: {
     isRoomish,
     channelInfo,
     channelConfig,
+    globalSystemPrompt: account.config?.systemPrompt ?? cfg.channels?.slack?.systemPrompt,
+    dmSystemPrompt: account.config?.dm?.systemPrompt ?? cfg.channels?.slack?.dm?.systemPrompt,
+    isDirectMessage,
   });
 
   const {
@@ -695,7 +698,7 @@ export async function prepareSlackMessage(params: {
     ChatType: isDirectMessage ? "direct" : "channel",
     ConversationLabel: envelopeFrom,
     GroupSubject: isRoomish ? roomLabel : undefined,
-    GroupSystemPrompt: isRoomish ? groupSystemPrompt : undefined,
+    GroupSystemPrompt: groupSystemPrompt,
     UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
     SenderName: senderName,
     SenderId: senderId,

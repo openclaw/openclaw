@@ -539,6 +539,9 @@ export async function registerSlackMonitorSlashCommands(params: {
         isRoomish,
         channelInfo,
         channelConfig,
+        globalSystemPrompt: account.config?.systemPrompt ?? cfg.channels?.slack?.systemPrompt,
+        dmSystemPrompt: account.config?.dm?.systemPrompt ?? cfg.channels?.slack?.dm?.systemPrompt,
+        isDirectMessage,
       });
 
       const { sessionKey, commandTargetSessionKey } = resolveNativeCommandSessionTargets({
@@ -573,7 +576,7 @@ export async function registerSlackMonitorSlashCommands(params: {
                 : `slack:group:${command.channel_id}`,
           }) ?? (isDirectMessage ? senderName : roomLabel),
         GroupSubject: isRoomish ? roomLabel : undefined,
-        GroupSystemPrompt: isRoomish ? groupSystemPrompt : undefined,
+        GroupSystemPrompt: groupSystemPrompt,
         UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
         SenderName: senderName,
         SenderId: command.user_id,
