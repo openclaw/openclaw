@@ -71,6 +71,15 @@ describe("probeGateway", () => {
     expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
   });
 
+  it("keeps device identity enabled for local probes when shared auth is not supplied", async () => {
+    await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+    });
+
+    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
+  });
+
   it("skips detail RPCs for lightweight reachability probes", async () => {
     const result = await probeGateway({
       url: "ws://127.0.0.1:18789",

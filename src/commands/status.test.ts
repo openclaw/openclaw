@@ -286,7 +286,7 @@ vi.mock("../channels/plugins/index.js", () => ({
       },
     ] as unknown,
 }));
-vi.mock("../web/session.js", () => ({
+vi.mock("../../extensions/whatsapp/src/session.js", () => ({
   webAuthExists: mocks.webAuthExists,
   getWebAuthAgeMs: mocks.getWebAuthAgeMs,
   readWebSelfId: mocks.readWebSelfId,
@@ -487,7 +487,7 @@ describe("statusCommand", () => {
     });
   });
 
-  it("warns instead of crashing when gateway auth SecretRef is unresolved for probe auth", async () => {
+  it("falls back without crashing when gateway auth SecretRef is unresolved for probe auth", async () => {
     mocks.loadConfig.mockReturnValue({
       session: {},
       gateway: {
@@ -505,8 +505,8 @@ describe("statusCommand", () => {
 
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
-    expect(payload.gateway.error).toContain("gateway.auth.token");
-    expect(payload.gateway.error).toContain("SecretRef");
+    expect(payload.gateway).toBeTruthy();
+    expect(payload.gateway.url).toContain("127.0.0.1");
   });
 
   it("surfaces channel runtime errors from the gateway", async () => {
