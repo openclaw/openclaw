@@ -143,7 +143,7 @@ describe("GatewayBrowserClient", () => {
       deviceId: "device-1",
       role: "operator",
       token: "stored-device-token",
-      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+      scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
     });
   });
 
