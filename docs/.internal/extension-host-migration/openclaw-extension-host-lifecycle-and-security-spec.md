@@ -41,6 +41,7 @@ What has been implemented:
 - low-risk runtime compatibility writes for channel, provider, gateway-method, HTTP-route, tool, CLI, service, command, context-engine, and hook registrations now delegate through `src/extension-host/registry-writes.ts`
 - context-engine registration and runtime resolution now delegate through `src/extension-host/context-engine-runtime.ts` while `src/context-engine/registry.ts` remains the compatibility facade
 - exclusive-slot selection and default-slot resolution now delegate through `src/extension-host/slot-arbitration.ts` while `src/plugins/slots.ts` remains the compatibility facade
+- ACP backend registration and runtime resolution now delegate through `src/extension-host/acp-runtime-backend-registry.ts` while `src/acp/runtime/registry.ts` remains the compatibility facade
 - legacy internal-hook bridging and typed prompt-injection compatibility policy now delegate through `src/extension-host/hook-compat.ts`
 - compatibility `OpenClawPluginApi` composition and logger shaping now delegate through `src/extension-host/plugin-api.ts`
 - compatibility plugin-registry facade ownership now delegates through `src/extension-host/plugin-registry.ts`
