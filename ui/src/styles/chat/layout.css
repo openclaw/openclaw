@@ -110,25 +110,20 @@
 
 /* New messages indicator - floating pill above compose */
 .chat-new-messages {
-  /* 1. FIX: Force absolute positioning. 
-     We don't want this button to be a flex child that stretches 
-     into a giant overlay because someone forgot how CSS works. */
+  /* 1. FIX: Absolute positioning to prevent flex stretch issues */
   position: absolute; 
   
-  /* 2. FIX: Anchor to the bottom-right corner.
-     Stop trying to center a button with `margin: auto` in a flex column 
-     and wondering why it explodes. This is UI basics, not rocket science. */
-  bottom: 80px; /* Avoids the compose box */
-  right: 20px;
+  /* 2. FIX: Centered positioning with safe bottom offset */
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
   
-  /* 3. FIX: Explicitly lock dimensions.
-     Using !important here because the global CSS pollution in this project 
-     is so bad that without it, this button would probably try to fill the entire viewport again. */
+  /* 3. FIX: Locked dimensions to prevent inheritance */
   width: auto !important;
   height: auto !important;
   max-width: 200px;
   
-  /* 4. Preserved original styles (sadly, the only part that was somewhat right) */
+  /* 4. Preserved styles */
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -142,10 +137,9 @@
   cursor: pointer;
   white-space: nowrap;
   
-  /* 5. Ensure it sits above the mess you've created */
-  z-index: 20;
+  /* 5. FIX: Lower z-index to stay below the compose box (z-index: 10) */
+  z-index: 9; 
   
-  /* 6. Transition for hover, because apparently we care about polish now? */
   transition:
     background 150ms ease-out,
     border-color 150ms ease-out;
