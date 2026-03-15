@@ -1,10 +1,25 @@
 import { listChannelSetupPlugins } from "../../channels/plugins/setup-registry.js";
+import { buildChannelOnboardingAdapterFromSetupWizard } from "../../channels/plugins/setup-wizard.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import type { ChannelOnboardingAdapter } from "./types.js";
+
+const setupWizardAdapters = new WeakMap<object, ChannelOnboardingAdapter>();
 
 function resolveChannelOnboardingAdapter(
   plugin: (typeof listChannelSetupPlugins)[number],
 ): ChannelOnboardingAdapter | undefined {
+  if (plugin.setupWizard) {
+    const cached = setupWizardAdapters.get(plugin);
+    if (cached) {
+      return cached;
+    }
+    const adapter = buildChannelOnboardingAdapterFromSetupWizard({
+      plugin,
+      wizard: plugin.setupWizard,
+    });
+    setupWizardAdapters.set(plugin, adapter);
+    return adapter;
+  }
   if (plugin.onboarding) {
     return plugin.onboarding;
   }
