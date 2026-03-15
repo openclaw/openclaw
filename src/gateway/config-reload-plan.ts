@@ -110,6 +110,10 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 let cachedReloadRules: ReloadRule[] | null = null;
 let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 
+function isProviderTransportRestartPath(path: string): boolean {
+  return /^models\.providers\.[^.]+\.(api|baseUrl)$/.test(path);
+}
+
 function listReloadRules(): ReloadRule[] {
   const registry = getActivePluginRegistry();
   if (registry !== cachedRegistry) {
@@ -196,6 +200,11 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
   };
 
   for (const path of changedPaths) {
+    if (isProviderTransportRestartPath(path)) {
+      plan.restartGateway = true;
+      plan.restartReasons.push(path);
+      continue;
+    }
     const rule = matchRule(path);
     if (!rule) {
       plan.restartGateway = true;
