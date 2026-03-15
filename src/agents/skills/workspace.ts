@@ -98,6 +98,7 @@ const DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE = 200;
 const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
 const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 30_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
+const TRUNCATED_SKILL_NAMES_NOTE_MAX_CHARS = 1_000;
 
 function sanitizeSkillCommandName(raw: string): string {
   const normalized = raw
@@ -528,6 +529,7 @@ function loadSkillEntries(
 
 function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawConfig }): {
   skillsForPrompt: Skill[];
+  omittedSkills: Skill[];
   truncated: boolean;
   truncatedReason: "count" | "chars" | null;
 } {
@@ -561,7 +563,58 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
     truncatedReason = "chars";
   }
 
-  return { skillsForPrompt, truncated, truncatedReason };
+  const omittedSkills = truncated ? params.skills.slice(skillsForPrompt.length) : [];
+  return { skillsForPrompt, omittedSkills, truncated, truncatedReason };
+}
+
+function formatTruncatedSkillNames(skills: Skill[]): string {
+  if (skills.length === 0) {
+    return "";
+  }
+
+  const names = skills.map((skill) => skill.name);
+  let remaining = names.length;
+  const included: string[] = [];
+
+  for (const name of names) {
+    const candidateNames = [...included, name];
+    const suffix = remaining > 1 ? ` (+${remaining - 1} more)` : "";
+    const candidate = candidateNames.join(", ") + suffix;
+    if (candidate.length > TRUNCATED_SKILL_NAMES_NOTE_MAX_CHARS) {
+      break;
+    }
+    included.push(name);
+    remaining -= 1;
+  }
+
+  if (included.length === 0) {
+    return `(+${skills.length} omitted)`;
+  }
+
+  return remaining > 0 ? `${included.join(", ")} (+${remaining} more)` : included.join(", ");
+}
+
+function buildSkillsTruncationNote(params: {
+  includedCount: number;
+  totalCount: number;
+  omittedSkills: Skill[];
+}): string {
+  if (params.includedCount >= params.totalCount) {
+    return "";
+  }
+
+  const omittedNames = formatTruncatedSkillNames(params.omittedSkills);
+  const omittedLine = omittedNames
+    ? `Additional installed skills not expanded here: ${omittedNames}.`
+    : "";
+
+  return [
+    `⚠️ Skills truncated: included ${params.includedCount} of ${params.totalCount}. Run \`openclaw skills check\` to audit.`,
+    omittedLine,
+    "If a listed skill name becomes relevant, inspect it with `openclaw skills info <name>` or `openclaw skills list` before deciding whether to read its SKILL.md.",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function buildWorkspaceSkillSnapshot(
@@ -620,12 +673,16 @@ function resolveWorkspaceSkillPromptState(
   );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
-  const { skillsForPrompt, truncated } = applySkillsPromptLimits({
+  const { skillsForPrompt, omittedSkills, truncated } = applySkillsPromptLimits({
     skills: resolvedSkills,
     config: opts?.config,
   });
   const truncationNote = truncated
-    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
+    ? buildSkillsTruncationNote({
+        includedCount: skillsForPrompt.length,
+        totalCount: resolvedSkills.length,
+        omittedSkills,
+      })
     : "";
   const prompt = [
     remoteNote,

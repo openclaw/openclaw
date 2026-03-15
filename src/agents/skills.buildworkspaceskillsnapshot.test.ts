@@ -174,7 +174,49 @@ describe("buildWorkspaceSkillSnapshot", () => {
     );
 
     expect(snapshot.prompt).toContain("⚠️ Skills truncated");
+    expect(snapshot.prompt).toContain("Additional installed skills not expanded here:");
+    expect(snapshot.prompt).toContain("skill-07");
+    expect(snapshot.prompt).toContain("openclaw skills info <name>");
     expect(snapshot.prompt.length).toBeLessThan(2000);
+  });
+
+  it("lists omitted skill names when maxSkillsInPrompt truncates the prompt", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "alpha-skill"),
+      name: "alpha-skill",
+      description: "Alpha",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "beta-skill"),
+      name: "beta-skill",
+      description: "Beta",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "wechat-reader"),
+      name: "wechat-reader",
+      description: "WeChat messages",
+    });
+
+    const snapshot = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: {
+          skills: {
+            limits: {
+              maxSkillsInPrompt: 1,
+              maxSkillsPromptChars: 5_000,
+            },
+          },
+        },
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      }),
+    );
+
+    expect(snapshot.prompt).toContain("included 1 of 3");
+    expect(snapshot.prompt).toContain("beta-skill");
+    expect(snapshot.prompt).toContain("wechat-reader");
+    expect(snapshot.prompt).toContain("openclaw skills list");
   });
 
   it("limits discovery for nested repo-style skills roots (dir/skills/*)", async () => {
