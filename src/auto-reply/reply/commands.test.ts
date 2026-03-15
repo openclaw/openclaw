@@ -1887,6 +1887,53 @@ describe("handleCommands subagents", () => {
     expect(waitCall).toBeDefined();
   });
 
+  it("blocks leaf subagents from sending to explicitly-owned child sessions", async () => {
+    const leafKey = "agent:main:subagent:leaf";
+    const childKey = `${leafKey}:subagent:child`;
+    const storePath = path.join(testWorkspaceDir, "sessions-subagents-send-scope.json");
+    await updateSessionStore(storePath, (store) => {
+      store[leafKey] = {
+        sessionId: "leaf-session",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      };
+      store[childKey] = {
+        sessionId: "child-session",
+        updatedAt: Date.now(),
+        spawnedBy: leafKey,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      };
+    });
+    addSubagentRunForTests({
+      runId: "run-child-send",
+      childSessionKey: childKey,
+      requesterSessionKey: leafKey,
+      requesterDisplayKey: leafKey,
+      task: "child follow-up target",
+      cleanup: "keep",
+      createdAt: Date.now() - 20_000,
+      startedAt: Date.now() - 20_000,
+      endedAt: Date.now() - 1_000,
+      outcome: { status: "ok" },
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    } as OpenClawConfig;
+    const params = buildParams("/subagents send 1 continue with follow-up details", cfg);
+    params.sessionKey = leafKey;
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Leaf subagents cannot control other sessions.");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("steers subagents via /steer alias", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
