@@ -11,6 +11,8 @@ type ViewportUpdateOptions = {
   resetBaseline?: boolean;
 };
 
+const IOS_KEYBOARD_DELTA_THRESHOLD = 120;
+
 function isIosDevice(): boolean {
   const { userAgent, platform, maxTouchPoints } = navigator;
   return /iPad|iPhone|iPod/.test(userAgent) || (platform === "MacIntel" && maxTouchPoints > 1);
@@ -64,8 +66,10 @@ export function attachMobileViewportFixes(
   let inputObserver: ResizeObserver | null = null;
   let observedInput: HTMLElement | null = null;
   let baselineViewportHeight = Math.round(viewport.height);
+  let shellLocked = false;
 
   const setShellLocked = (locked: boolean) => {
+    shellLocked = locked;
     root.toggleAttribute("data-ios-shell-lock", locked);
     body.toggleAttribute("data-ios-shell-lock", locked);
     host.toggleAttribute("data-ios-shell-lock", locked);
@@ -82,15 +86,18 @@ export function attachMobileViewportFixes(
     const textEntryFocused = isTextEntryElement(document.activeElement);
     if (resetBaseline) {
       baselineViewportHeight = height;
+    } else if (!textEntryFocused) {
+      baselineViewportHeight = height;
+    } else if (height > baselineViewportHeight) {
+      baselineViewportHeight = height;
     }
     // Freeze the pre-keyboard height only while a text control is focused and
     // the visual viewport has actually shrunk enough to indicate the keyboard.
-    const keyboardOpen = textEntryFocused && baselineViewportHeight - height > 120;
-    if (!keyboardOpen) {
-      baselineViewportHeight = height;
-    }
+    const keyboardOpen =
+      textEntryFocused && baselineViewportHeight - height > IOS_KEYBOARD_DELTA_THRESHOLD;
+    const layoutHeight = keyboardOpen ? baselineViewportHeight : height;
     root.style.setProperty("--mobile-viewport-height", `${height}px`);
-    root.style.setProperty("--mobile-layout-height", `${baselineViewportHeight}px`);
+    root.style.setProperty("--mobile-layout-height", `${layoutHeight}px`);
     setKeyboardOpen(keyboardOpen);
   };
 
@@ -122,11 +129,17 @@ export function attachMobileViewportFixes(
   };
 
   const restoreDocumentScroll = () => {
+    if (!shellLocked) {
+      return;
+    }
     if (restoreTimer != null) {
       clearTimeout(restoreTimer);
     }
     restoreTimer = window.setTimeout(() => {
       restoreTimer = null;
+      if (!shellLocked) {
+        return;
+      }
       if (isTextEntryElement(document.activeElement)) {
         return;
       }
@@ -158,6 +171,7 @@ export function attachMobileViewportFixes(
     if (!isTextEntryElement(event.target)) {
       return;
     }
+    updateViewportHeight({ resetBaseline: true });
     if (focusTimer != null) {
       clearTimeout(focusTimer);
     }

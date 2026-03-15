@@ -172,6 +172,31 @@ describe("attachMobileViewportFixes", () => {
     controller.cleanup();
   });
 
+  it("keeps the pre-keyboard baseline stable across incremental keyboard resizes", async () => {
+    const { host, textarea } = createHost();
+    const controller = attachMobileViewportFixes(host);
+    const viewport = window.visualViewport as unknown as MockVisualViewport;
+
+    textarea.focus();
+    expect(document.activeElement).toBe(textarea);
+
+    viewport.setSize(400, 730);
+    viewport.dispatchEvent(new Event("resize"));
+    await flushViewportWork();
+
+    expect(document.documentElement.hasAttribute("data-ios-keyboard-open")).toBe(false);
+    expect(document.documentElement.style.getPropertyValue("--mobile-layout-height")).toBe("730px");
+
+    viewport.setSize(400, 560);
+    viewport.dispatchEvent(new Event("resize"));
+    await flushViewportWork();
+
+    expect(document.documentElement.hasAttribute("data-ios-keyboard-open")).toBe(true);
+    expect(document.documentElement.style.getPropertyValue("--mobile-layout-height")).toBe("800px");
+
+    controller.cleanup();
+  });
+
   it("resets the keyboard baseline after orientation changes", async () => {
     const { host, textarea } = createHost();
     const controller = attachMobileViewportFixes(host);
@@ -193,6 +218,39 @@ describe("attachMobileViewportFixes", () => {
 
     expect(document.documentElement.hasAttribute("data-ios-keyboard-open")).toBe(false);
     expect(document.documentElement.style.getPropertyValue("--mobile-layout-height")).toBe("360px");
+
+    controller.cleanup();
+  });
+
+  it("does not snap document scroll when the shell lock is inactive", async () => {
+    const { host } = createHost();
+    const controller = attachMobileViewportFixes(host);
+    const viewport = window.visualViewport as unknown as MockVisualViewport;
+    const scrollingElement = document.scrollingElement ?? document.documentElement;
+
+    scrollingElement.scrollTop = 240;
+    viewport.dispatchEvent(new Event("scroll"));
+    await flushViewportWork();
+
+    expect(window.scrollTo).not.toHaveBeenCalled();
+    expect(scrollingElement.scrollTop).toBe(240);
+
+    controller.cleanup();
+  });
+
+  it("restores document scroll after iOS viewport changes while the shell is locked", async () => {
+    const { host } = createHost();
+    const controller = attachMobileViewportFixes(host);
+    const viewport = window.visualViewport as unknown as MockVisualViewport;
+    const scrollingElement = document.scrollingElement ?? document.documentElement;
+
+    controller.setShellLocked(true);
+    scrollingElement.scrollTop = 240;
+    viewport.dispatchEvent(new Event("scroll"));
+    await flushViewportWork();
+
+    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
+    expect(scrollingElement.scrollTop).toBe(0);
 
     controller.cleanup();
   });
