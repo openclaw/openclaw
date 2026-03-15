@@ -210,6 +210,28 @@ describe("docker-setup.sh", () => {
     expect(log).toContain("run --rm openclaw-cli config set gateway.bind lan");
   });
 
+  it("handles whitespace in OPENCLAW_CONFIG_DIR/OPENCLAW_WORKSPACE_DIR when writing docker-compose.extra.yml", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const configDir = join(activeSandbox.rootDir, "config dir with spaces");
+    const workspaceDir = join(activeSandbox.rootDir, "workspace dir with spaces");
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+      OPENCLAW_HOME_VOLUME: "openclaw-home",
+    });
+
+    expect(result.status).toBe(0);
+
+    const extraCompose = await readFile(
+      join(activeSandbox.rootDir, "docker-compose.extra.yml"),
+      "utf8",
+    );
+    // YAML volume entries should be quoted so whitespace is preserved.
+    expect(extraCompose).toContain(`'${configDir}:/home/node/.openclaw'`);
+    expect(extraCompose).toContain(`'${workspaceDir}:/home/node/.openclaw/workspace'`);
+  });
+
   it("precreates config identity dir for CLI device auth writes", async () => {
     const activeSandbox = requireSandbox(sandbox);
     const configDir = join(activeSandbox.rootDir, "config-identity");

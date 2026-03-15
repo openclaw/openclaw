@@ -150,9 +150,15 @@ validate_mount_path_value() {
   if contains_disallowed_chars "$value"; then
     fail "$label contains unsupported control characters."
   fi
-  if [[ "$value" =~ [[:space:]] ]]; then
-    fail "$label cannot contain whitespace."
-  fi
+  # Whitespace is valid in host paths. We'll quote YAML volume entries when rendering
+  # docker-compose.extra.yml.
+}
+
+yaml_quote() {
+  # YAML single-quote escaping: ' -> ''
+  local value="$1"
+  value=${value//"'"/"''"}
+  printf "'%s'" "$value"
 }
 
 validate_named_volume() {
@@ -169,8 +175,13 @@ validate_mount_spec() {
   fi
   # Keep mount specs strict to avoid YAML structure injection.
   # Expected format: source:target[:options]
-  if [[ ! "$mount" =~ ^[^[:space:],:]+:[^[:space:],:]+(:[^[:space:],:]+)?$ ]]; then
-    fail "Invalid mount format '$mount'. Expected source:target[:options] without spaces."
+  # - allow whitespace (we quote YAML volume entries)
+  # - disallow commas (used as OPENCLAW_EXTRA_MOUNTS separator)
+  if [[ "$mount" == *","* ]]; then
+    fail "Invalid mount format '$mount'. Commas are not allowed inside a mount spec."
+  fi
+  if [[ ! "$mount" =~ ^[^:]+:[^:]+(:[^:]+)?$ ]]; then
+    fail "Invalid mount format '$mount'. Expected source:target[:options]."
   fi
 }
 
@@ -297,14 +308,14 @@ YAML
     validate_mount_spec "$gateway_home_mount"
     validate_mount_spec "$gateway_config_mount"
     validate_mount_spec "$gateway_workspace_mount"
-    printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(yaml_quote "$gateway_home_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(yaml_quote "$gateway_config_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(yaml_quote "$gateway_workspace_mount")" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
     validate_mount_spec "$mount"
-    printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(yaml_quote "$mount")" >>"$EXTRA_COMPOSE_FILE"
   done
 
   cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
@@ -313,14 +324,14 @@ YAML
 YAML
 
   if [[ -n "$home_volume" ]]; then
-    printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(yaml_quote "$gateway_home_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(yaml_quote "$gateway_config_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(yaml_quote "$gateway_workspace_mount")" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
     validate_mount_spec "$mount"
-    printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(yaml_quote "$mount")" >>"$EXTRA_COMPOSE_FILE"
   done
 
   if [[ -n "$home_volume" && "$home_volume" != *"/"* ]]; then
