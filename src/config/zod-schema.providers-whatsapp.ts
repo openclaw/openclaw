@@ -110,6 +110,7 @@ function enforceAllowlistDmPolicyAllowFrom(params: {
 
 export const WhatsAppAccountSchema = WhatsAppSharedSchema.extend({
   name: z.string().optional(),
+  soulFile: z.string().optional(),
   enabled: z.boolean().optional(),
   /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
   authDir: z.string().optional(),

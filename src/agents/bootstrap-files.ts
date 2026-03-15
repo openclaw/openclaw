@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -10,8 +11,78 @@ import {
 import {
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
+  loadWorkspaceBootstrapFilesWithChannel,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
+
+/**
+ * Extract channel and accountId from sessionKey.
+ * Session key format: {channel}:{accountId}:{...}
+ */
+function extractChannelInfoFromSessionKey(sessionKey?: string): {
+  channel?: string;
+  accountId?: string;
+} {
+  if (!sessionKey?.trim()) {
+    return {};
+  }
+  const parsedAgentKey = parseAgentSessionKey(sessionKey);
+  const parts = (parsedAgentKey?.rest ?? sessionKey).split(":").filter(Boolean);
+  if (parts.length < 1) {
+    return {};
+  }
+  const channel = parts[0]?.trim().toLowerCase();
+  const accountIdCandidate = parts[1]?.trim().toLowerCase();
+  // Validate channel is a known channel
+  const validChannels = [
+    "telegram",
+    "discord",
+    "slack",
+    "whatsapp",
+    "signal",
+    "imessage",
+    "matrix",
+    "googlechat",
+    "line",
+    "msteams",
+    "irc",
+  ];
+  if (!channel || !validChannels.includes(channel)) {
+    return {};
+  }
+  const routeTokens = new Set(["main", "direct", "dm", "group", "channel", "thread", "topic"]);
+  const accountId =
+    accountIdCandidate && !routeTokens.has(accountIdCandidate) ? accountIdCandidate : undefined;
+  return { channel, accountId };
+}
+
+/**
+ * Resolve soulFile from config for a given channel/account.
+ */
+function resolveSoulFileFromConfig(params: {
+  config?: OpenClawConfig;
+  channel?: string;
+  accountId?: string;
+}): string | undefined {
+  const { config, channel, accountId } = params;
+  if (!config || !channel) {
+    return undefined;
+  }
+  const channelConfig = config.channels?.[channel as keyof typeof config.channels] as
+    | { soulFile?: string; accounts?: Record<string, { soulFile?: string }> }
+    | undefined;
+  if (!channelConfig) {
+    return undefined;
+  }
+  const accountSoulFile = accountId
+    ? (channelConfig.accounts as Record<string, { soulFile?: string }> | undefined)?.[accountId]
+        ?.soulFile
+    : undefined;
+  if (accountSoulFile) {
+    return accountSoulFile;
+  }
+  return channelConfig.soulFile;
+}
 
 export type BootstrapContextMode = "full" | "lightweight";
 export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
@@ -67,17 +138,44 @@ export async function resolveBootstrapFilesForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  channel?: string;
+  accountId?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
+
+  // Prefer explicit routing context from the inbound channel path.
+  // Session keys may collapse to agent:main:main for DM/main-session flows,
+  // which loses provider account identity.
+  const sessionDerived = extractChannelInfoFromSessionKey(sessionKey);
+  const channel = params.channel?.trim() || sessionDerived.channel;
+  const accountId = params.accountId?.trim() || sessionDerived.accountId;
+  const soulFile = resolveSoulFileFromConfig({
+    config: params.config,
+    channel,
+    accountId,
+  });
+
+  // Load bootstrap files with channel-specific SOUL support
   const rawFiles = params.sessionKey
     ? await getOrLoadBootstrapFiles({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
+        channel,
+        accountId,
+        soulFile,
       })
-    : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+    : channel || soulFile
+      ? await loadWorkspaceBootstrapFilesWithChannel({
+          dir: params.workspaceDir,
+          channel,
+          accountId,
+          soulFile,
+        })
+      : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+
   const bootstrapFiles = applyContextModeFilter({
     files: filterBootstrapFilesForSession(rawFiles, sessionKey),
     contextMode: params.contextMode,
@@ -101,6 +199,8 @@ export async function resolveBootstrapContextForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  channel?: string;
+  accountId?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;

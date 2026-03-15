@@ -13,6 +13,8 @@ export type SignalGroupConfig = {
 export type SignalAccountConfig = CommonChannelMessagingConfig & {
   /** Optional explicit E.164 account for signal-cli. */
   account?: string;
+  /** Optional custom SOUL file for this account (e.g., "SOUL.signal.md"). */
+  soulFile?: string;
   /** Optional account UUID for signal-cli (used for loop protection). */
   accountUuid?: string;
   /** Optional full base URL for signal-cli HTTP daemon. */

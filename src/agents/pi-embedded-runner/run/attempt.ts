@@ -1437,6 +1437,8 @@ export async function runEmbeddedAttempt(
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
+        channel: params.messageChannel ?? params.messageProvider,
+        accountId: params.agentAccountId,
         warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,

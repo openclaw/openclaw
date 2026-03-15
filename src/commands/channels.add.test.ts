@@ -1,4 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { msteamsPlugin } from "../../extensions/msteams/src/channel.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
 import { configMocks, offsetMocks } from "./channels.mock-harness.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -58,5 +61,64 @@ describe("channelsAddCommand", () => {
     );
 
     expect(offsetMocks.deleteTelegramUpdateOffset).not.toHaveBeenCalled();
+  });
+
+  it("stores a per-account soul file when --soul is provided", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await channelsAddCommand(
+      {
+        channel: "slack",
+        account: "work",
+        botToken: "xoxb-1",
+        appToken: "xapp-1",
+        soul: "SOUL.work.md",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(configMocks.writeConfigFile.mock.calls[0]?.[0]).toMatchObject({
+      channels: {
+        slack: {
+          accounts: {
+            work: {
+              botToken: "xoxb-1",
+              appToken: "xapp-1",
+              soulFile: "SOUL.work.md",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects --soul for channels without account-scoped soulFile support", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "msteams", plugin: msteamsPlugin, source: "test" }]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await channelsAddCommand(
+      {
+        channel: "msteams",
+        soul: "SOUL.msteams.md",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Channel msteams does not support account-scoped SOUL files via --soul in its current config shape.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 });

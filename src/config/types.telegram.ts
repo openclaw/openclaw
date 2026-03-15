@@ -73,6 +73,8 @@ export type TelegramCustomCommand = {
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Optional custom SOUL file for this account (e.g., "SOUL.fin.md"). */
+  soulFile?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: TelegramCapabilitiesConfig;
   /** Telegram-native exec approval delivery + approver authorization. */

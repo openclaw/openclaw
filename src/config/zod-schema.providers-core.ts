@@ -278,6 +278,8 @@ export const TelegramAccountSchemaBase = z
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    /** Custom SOUL file for this account (e.g., "SOUL.fin.md") */
+    soulFile: z.string().optional(),
   })
   .strict();
 
@@ -458,6 +460,7 @@ const DiscordVoiceSchema = z
 export const DiscordAccountSchema = z
   .object({
     name: z.string().optional(),
+    soulFile: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
@@ -842,6 +845,7 @@ const SlackReplyToModeByChatTypeSchema = z
 export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
+    soulFile: z.string().optional(),
     mode: z.enum(["socket", "http"]).optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
@@ -999,6 +1003,7 @@ const SignalGroupsSchema = z.record(z.string(), SignalGroupEntrySchema.optional(
 export const SignalAccountSchemaBase = z
   .object({
     name: z.string().optional(),
+    soulFile: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
@@ -1235,6 +1240,7 @@ export const IrcConfigSchema = IrcAccountSchemaBase.extend({
 export const IMessageAccountSchemaBase = z
   .object({
     name: z.string().optional(),
+    soulFile: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),

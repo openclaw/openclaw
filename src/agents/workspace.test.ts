@@ -15,6 +15,7 @@ import {
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
   resolveDefaultAgentWorkspaceDir,
+  resolveSoulFile,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
 
@@ -220,6 +221,24 @@ describe("loadWorkspaceBootstrapFiles", () => {
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveSoulFile", () => {
+  it("falls back to default SOUL.md when configured soulFile points to a directory", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: "SOUL.md", content: "default soul" });
+    await fs.mkdir(path.join(tempDir, "SOUL.custom.md"), { recursive: true });
+
+    const result = await resolveSoulFile({
+      workspaceDir: tempDir,
+      soulFile: "SOUL.custom.md",
+    });
+
+    expect(result).toEqual({
+      path: path.join(tempDir, "SOUL.md"),
+      usedFallback: true,
+    });
   });
 });
 

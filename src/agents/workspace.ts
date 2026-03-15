@@ -5,7 +5,11 @@ import path from "node:path";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  isCronSessionKey,
+  isSubagentSessionKey,
+} from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
@@ -197,6 +201,19 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<bo
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isReadableRegularFile(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile()) {
+      return false;
+    }
+    await fs.access(filePath, fs.constants.R_OK);
     return true;
   } catch {
     return false;
@@ -540,6 +557,70 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   return result;
 }
 
+/**
+ * Load workspace bootstrap files with channel-specific SOUL support.
+ *
+ * When channel and accountId are provided, this function will:
+ * 1. Try to load a channel-specific SOUL file (e.g., SOUL.telegram.fin.md)
+ * 2. Fall back to account-specific SOUL (e.g., SOUL.fin.md)
+ * 3. Fall back to default SOUL.md
+ *
+ * The loaded SOUL file replaces the default SOUL.md entry in the result.
+ */
+export async function loadWorkspaceBootstrapFilesWithChannel(params: {
+  dir: string;
+  channel?: string;
+  accountId?: string;
+  soulFile?: string;
+}): Promise<WorkspaceBootstrapFile[]> {
+  const { dir, channel, accountId, soulFile } = params;
+  const files = await loadWorkspaceBootstrapFiles(dir);
+
+  // If no channel/account context, return default files
+  if (!channel && !accountId && !soulFile) {
+    return files;
+  }
+
+  // Try to resolve channel-specific SOUL
+  const { path: soulPath } = await resolveSoulFile({
+    workspaceDir: resolveUserPath(dir),
+    channel,
+    accountId,
+    soulFile,
+  });
+
+  // If we're using the default SOUL.md, no changes needed
+  if (soulPath.endsWith(DEFAULT_SOUL_FILENAME) && !soulFile) {
+    return files;
+  }
+
+  // Load the channel-specific SOUL file
+  const resolvedDir = resolveUserPath(dir);
+  const loaded = await readWorkspaceFileWithGuards({
+    filePath: soulPath,
+    workspaceDir: resolvedDir,
+  });
+
+  // Replace or add the SOUL entry
+  const soulIndex = files.findIndex((f) => f.name === DEFAULT_SOUL_FILENAME);
+  const soulEntry: WorkspaceBootstrapFile = loaded.ok
+    ? {
+        name: DEFAULT_SOUL_FILENAME,
+        path: soulPath,
+        content: loaded.content,
+        missing: false,
+      }
+    : { name: DEFAULT_SOUL_FILENAME, path: soulPath, missing: true };
+
+  if (soulIndex >= 0) {
+    files[soulIndex] = soulEntry;
+  } else {
+    files.push(soulEntry);
+  }
+
+  return files;
+}
+
 const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_TOOLS_FILENAME,
@@ -638,4 +719,99 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     });
   }
   return { files, diagnostics };
+}
+
+/**
+ * Resolve the appropriate SOUL file path for a given channel/account.
+ *
+ * Priority:
+ * 1. Configured soulFile in account config
+ * 2. SOUL.{channel}.{account}.md (e.g., SOUL.telegram.fin.md)
+ * 3. SOUL.{account}.md (e.g., SOUL.fin.md)
+ * 4. SOUL.md (default)
+ *
+ * Security: Path traversal is prevented by normalizing and checking workspace boundary.
+ * Graceful degradation: Falls back to SOUL.md if any error occurs.
+ */
+export async function resolveSoulFile(params: {
+  workspaceDir: string;
+  channel?: string;
+  accountId?: string;
+  soulFile?: string;
+}): Promise<{ path: string; usedFallback: boolean }> {
+  const { workspaceDir, channel, accountId, soulFile } = params;
+  const candidates: string[] = [];
+
+  // 1. Configured soulFile (highest priority)
+  if (soulFile?.trim()) {
+    candidates.push(path.join(workspaceDir, soulFile.trim()));
+  }
+
+  // 2. Channel-specific SOUL: SOUL.{channel}.{account}.md
+  if (channel && accountId && accountId !== DEFAULT_ACCOUNT_ID) {
+    candidates.push(path.join(workspaceDir, `SOUL.${channel}.${accountId}.md`));
+  }
+
+  // 3. Account-specific SOUL: SOUL.{account}.md
+  if (accountId && accountId !== DEFAULT_ACCOUNT_ID) {
+    candidates.push(path.join(workspaceDir, `SOUL.${accountId}.md`));
+  }
+
+  // 4. Default SOUL.md
+  candidates.push(path.join(workspaceDir, DEFAULT_SOUL_FILENAME));
+
+  // Try each candidate in order
+  for (const candidate of candidates) {
+    try {
+      // Security: Prevent path traversal
+      const normalized = path.normalize(candidate);
+      const normalizedWorkspace = path.normalize(workspaceDir);
+      if (
+        !normalized.startsWith(normalizedWorkspace + path.sep) &&
+        normalized !== normalizedWorkspace
+      ) {
+        continue;
+      }
+
+      // Only accept suitable readable regular files so invalid configured candidates
+      // do not suppress fallback to the default SOUL.md.
+      if (await isReadableRegularFile(normalized)) {
+        const isDefault = normalized.endsWith(DEFAULT_SOUL_FILENAME);
+        return { path: normalized, usedFallback: isDefault && candidates.indexOf(candidate) > 0 };
+      }
+    } catch {
+      // Error checking file, try next candidate
+      continue;
+    }
+  }
+
+  // All candidates failed - return default path (may not exist, will use template)
+  const defaultPath = path.join(workspaceDir, DEFAULT_SOUL_FILENAME);
+  return { path: defaultPath, usedFallback: true };
+}
+
+/**
+ * Load SOUL content from the resolved path with graceful degradation.
+ */
+export async function loadSoulContent(params: {
+  workspaceDir: string;
+  channel?: string;
+  accountId?: string;
+  soulFile?: string;
+}): Promise<{ content: string; path: string; usedFallback: boolean }> {
+  const { path: soulPath, usedFallback } = await resolveSoulFile(params);
+
+  try {
+    const content = await fs.readFile(soulPath, "utf-8");
+    return { content, path: soulPath, usedFallback };
+  } catch {
+    // Try to load template as fallback
+    try {
+      const template = await loadTemplate(DEFAULT_SOUL_FILENAME);
+      return { content: template, path: soulPath, usedFallback: true };
+    } catch {
+      // Ultimate fallback: empty content
+      return { content: "", path: soulPath, usedFallback: true };
+    }
+  }
 }

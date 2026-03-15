@@ -114,6 +114,8 @@ export type WhatsAppAccountConfig = WhatsAppConfigCore &
   WhatsAppSharedConfig & {
     /** Optional display name for this account (used in CLI/UI lists). */
     name?: string;
+    /** Optional custom SOUL file for this account (e.g., "SOUL.whatsapp.md"). */
+    soulFile?: string;
     /** If false, do not start this WhatsApp account provider. Default: true. */
     enabled?: boolean;
     /** Override auth directory (Baileys multi-file auth state). */

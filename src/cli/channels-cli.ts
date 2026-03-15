@@ -51,6 +51,7 @@ const optionNamesAdd = [
   "code",
   "groupChannels",
   "dmAllowlist",
+  "soul",
   "autoDiscoverChannels",
 ] as const;
 
@@ -195,6 +196,7 @@ export function registerChannelsCli(program: Command) {
     .option("--code <code>", "Tlon login code")
     .option("--group-channels <list>", "Tlon group channels (comma-separated)")
     .option("--dm-allowlist <list>", "Tlon DM allowlist (comma-separated ships)")
+    .option("--soul <file>", "Custom SOUL file for this channel account")
     .option("--auto-discover-channels", "Tlon auto-discover group channels")
     .option("--no-auto-discover-channels", "Disable Tlon auto-discovery")
     .option("--use-env", "Use env token (default account only)", false)

@@ -14,6 +14,8 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 export type IMessageAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Optional custom SOUL file for this account (e.g., "SOUL.imessage.md"). */
+  soulFile?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
   /** Markdown formatting overrides (tables). */

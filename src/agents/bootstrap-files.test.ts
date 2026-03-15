@@ -7,6 +7,7 @@ import {
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { clearAllBootstrapSnapshots } from "./bootstrap-cache.js";
 import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -53,8 +54,14 @@ function registerMalformedBootstrapFileHook() {
 }
 
 describe("resolveBootstrapFilesForRun", () => {
-  beforeEach(() => clearInternalHooks());
-  afterEach(() => clearInternalHooks());
+  beforeEach(() => {
+    clearInternalHooks();
+    clearAllBootstrapSnapshots();
+  });
+  afterEach(() => {
+    clearInternalHooks();
+    clearAllBootstrapSnapshots();
+  });
 
   it("applies bootstrap hook overrides", async () => {
     registerExtraBootstrapFileHook();
@@ -80,6 +87,102 @@ describe("resolveBootstrapFilesForRun", () => {
     ).toBe(true);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
+  });
+
+  it("uses channel/account-specific SOUL when sessionKey is present", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "default soul", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.test2.md"), "test2 soul", "utf8");
+
+    const defaultFiles = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "telegram:default:anything",
+    });
+    const test2Files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "telegram:test2:anything",
+    });
+
+    const defaultSoul = defaultFiles.find((file) => file.name === "SOUL.md");
+    const test2Soul = test2Files.find((file) => file.name === "SOUL.md");
+
+    expect(path.basename(defaultSoul?.path ?? "")).toBe("SOUL.md");
+    expect(path.basename(test2Soul?.path ?? "")).toBe("SOUL.test2.md");
+    expect(defaultSoul?.content).toBe("default soul");
+    expect(test2Soul?.content).toBe("test2 soul");
+  });
+
+  it("prefers explicit channel/account over collapsed agent session keys", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "default soul", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.test2.md"), "test2 soul", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:main",
+      channel: "telegram",
+      accountId: "test2",
+      config: {
+        channels: {
+          telegram: {
+            accounts: {
+              default: { token: "x" },
+              test2: { token: "y", soulFile: "SOUL.test2.md" },
+            },
+          },
+        },
+      } as never,
+    });
+
+    const soul = files.find((file) => file.name === "SOUL.md");
+    expect(path.basename(soul?.path ?? "")).toBe("SOUL.test2.md");
+    expect(soul?.content).toBe("test2 soul");
+  });
+
+  it("parses routed agent session keys for channel/account-specific SOUL", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "default soul", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.test2.md"), "test2 soul", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:telegram:test2:direct:123456789",
+      config: {
+        channels: {
+          telegram: {
+            accounts: {
+              test2: { token: "x", soulFile: "SOUL.test2.md" },
+            },
+          },
+        },
+      } as never,
+    });
+
+    const soul = files.find((file) => file.name === "SOUL.md");
+    expect(path.basename(soul?.path ?? "")).toBe("SOUL.test2.md");
+    expect(soul?.content).toBe("test2 soul");
+  });
+
+  it("uses top-level channel soulFile when account map is absent", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "default soul", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.slack.md"), "slack soul", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:slack:channel:C123",
+      config: {
+        channels: {
+          slack: {
+            soulFile: "SOUL.slack.md",
+          },
+        },
+      } as never,
+    });
+
+    const soul = files.find((file) => file.name === "SOUL.md");
+    expect(path.basename(soul?.path ?? "")).toBe("SOUL.slack.md");
+    expect(soul?.content).toBe("slack soul");
   });
 });
 
