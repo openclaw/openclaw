@@ -221,6 +221,29 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             label: senderName,
           });
         }
+        // Persist conversation reference so --notify can reach this user
+        // even though the message itself is dropped.
+        const agent = activity.recipient;
+        const pairingConvRef: StoredConversationReference = {
+          activityId: activity.id,
+          user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
+          agent,
+          bot: agent ? { id: agent.id, name: agent.name } : undefined,
+          conversation: {
+            id: conversationId,
+            conversationType,
+            tenantId: conversation?.tenantId,
+          },
+          teamId,
+          channelId: activity.channelId,
+          serviceUrl: activity.serviceUrl,
+          locale: activity.locale,
+        };
+        conversationStore.upsert(conversationId, pairingConvRef).catch((err) => {
+          log.debug?.("failed to save conversation reference", {
+            error: formatUnknownError(err),
+          });
+        });
       }
       log.debug?.("dropping dm (not allowlisted)", {
         sender: senderId,
