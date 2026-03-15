@@ -67,4 +67,29 @@ describe("feishu_doc account selection", () => {
 
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
   });
+
+  test("registers provider-friendly feishu_doc parameters for embedded sessions", () => {
+    const cfg = createDocEnabledConfig();
+    const { api, resolveTool } = createToolFactoryHarness(cfg);
+    registerFeishuDocTools(api);
+
+    const docTool = resolveTool("feishu_doc", { agentAccountId: "a" });
+    const schema = docTool.parameters as {
+      type?: unknown;
+      anyOf?: unknown;
+      properties?: Record<string, { enum?: unknown; description?: unknown }>;
+      required?: unknown;
+    };
+
+    expect(schema.type).toBe("object");
+    expect(schema.anyOf).toBeUndefined();
+    expect(schema.required).toEqual(["action"]);
+    expect(schema.properties?.action?.enum).toEqual(
+      expect.arrayContaining(["read", "create", "list_blocks", "upload_image"]),
+    );
+    expect(schema.properties?.action?.description).toEqual(expect.stringContaining("create_table"));
+    expect(schema.properties?.doc_token?.description).toEqual(
+      expect.stringContaining("Required for all actions except create"),
+    );
+  });
 });

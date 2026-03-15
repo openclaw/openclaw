@@ -17,6 +17,13 @@ const WIKI_ACCESS_HINT =
   "To grant wiki access: Open wiki space → Settings → Members → Add the bot. " +
   "See: https://open.feishu.cn/document/server-docs/docs/wiki-v2/wiki-qa#a40ad4ca";
 
+function requireParam(value: string | undefined, label: string): string {
+  if (value) {
+    return value;
+  }
+  throw new Error(`${label} is required for this action.`);
+}
+
 async function listSpaces(client: Lark.Client) {
   const res = await client.wiki.space.list({});
   if (res.code !== 0) {
@@ -192,9 +199,15 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
               case "spaces":
                 return jsonToolResult(await listSpaces(client));
               case "nodes":
-                return jsonToolResult(await listNodes(client, p.space_id, p.parent_node_token));
+                return jsonToolResult(
+                  await listNodes(
+                    client,
+                    requireParam(p.space_id, "space_id"),
+                    p.parent_node_token,
+                  ),
+                );
               case "get":
-                return jsonToolResult(await getNode(client, p.token));
+                return jsonToolResult(await getNode(client, requireParam(p.token, "token")));
               case "search":
                 return jsonToolResult({
                   error:
@@ -202,20 +215,33 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
                 });
               case "create":
                 return jsonToolResult(
-                  await createNode(client, p.space_id, p.title, p.obj_type, p.parent_node_token),
+                  await createNode(
+                    client,
+                    requireParam(p.space_id, "space_id"),
+                    requireParam(p.title, "title"),
+                    p.obj_type,
+                    p.parent_node_token,
+                  ),
                 );
               case "move":
                 return jsonToolResult(
                   await moveNode(
                     client,
-                    p.space_id,
-                    p.node_token,
+                    requireParam(p.space_id, "space_id"),
+                    requireParam(p.node_token, "node_token"),
                     p.target_space_id,
                     p.target_parent_token,
                   ),
                 );
               case "rename":
-                return jsonToolResult(await renameNode(client, p.space_id, p.node_token, p.title));
+                return jsonToolResult(
+                  await renameNode(
+                    client,
+                    requireParam(p.space_id, "space_id"),
+                    requireParam(p.node_token, "node_token"),
+                    requireParam(p.title, "title"),
+                  ),
+                );
               default:
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
                 return unknownToolActionResult((p as { action?: unknown }).action);

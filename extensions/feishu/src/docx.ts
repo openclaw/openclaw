@@ -33,6 +33,13 @@ function json(data: unknown) {
   };
 }
 
+function requireParam(value: string | undefined, label: string): string {
+  if (value) {
+    return value;
+  }
+  throw new Error(`${label} is required for this action.`);
+}
+
 /** Extract image URLs from markdown content */
 function extractImageUrls(markdown: string): string[] {
   const regex = /!\[[^\]]*\]\(([^)]+)\)/g;
@@ -1276,13 +1283,13 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
               const client = getClient(p, defaultAccountId);
               switch (p.action) {
                 case "read":
-                  return json(await readDoc(client, p.doc_token));
+                  return json(await readDoc(client, requireParam(p.doc_token, "doc_token")));
                 case "write":
                   return json(
                     await writeDoc(
                       client,
-                      p.doc_token,
-                      p.content,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.content, "content"),
                       getMediaMaxBytes(p, defaultAccountId),
                       api.logger,
                     ),
@@ -1291,8 +1298,8 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                   return json(
                     await appendDoc(
                       client,
-                      p.doc_token,
-                      p.content,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.content, "content"),
                       getMediaMaxBytes(p, defaultAccountId),
                       api.logger,
                     ),
@@ -1301,9 +1308,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                   return json(
                     await insertDoc(
                       client,
-                      p.doc_token,
-                      p.content,
-                      p.after_block_id,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.content, "content"),
+                      requireParam(p.after_block_id, "after_block_id"),
                       getMediaMaxBytes(p, defaultAccountId),
                       api.logger,
                     ),
@@ -1316,18 +1323,37 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                     }),
                   );
                 case "list_blocks":
-                  return json(await listBlocks(client, p.doc_token));
+                  return json(await listBlocks(client, requireParam(p.doc_token, "doc_token")));
                 case "get_block":
-                  return json(await getBlock(client, p.doc_token, p.block_id));
+                  return json(
+                    await getBlock(
+                      client,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.block_id, "block_id"),
+                    ),
+                  );
                 case "update_block":
-                  return json(await updateBlock(client, p.doc_token, p.block_id, p.content));
+                  return json(
+                    await updateBlock(
+                      client,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.block_id, "block_id"),
+                      requireParam(p.content, "content"),
+                    ),
+                  );
                 case "delete_block":
-                  return json(await deleteBlock(client, p.doc_token, p.block_id));
+                  return json(
+                    await deleteBlock(
+                      client,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.block_id, "block_id"),
+                    ),
+                  );
                 case "create_table":
                   return json(
                     await createTable(
                       client,
-                      p.doc_token,
+                      requireParam(p.doc_token, "doc_token"),
                       p.row_size,
                       p.column_size,
                       p.parent_block_id,
@@ -1336,13 +1362,18 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                   );
                 case "write_table_cells":
                   return json(
-                    await writeTableCells(client, p.doc_token, p.table_block_id, p.values),
+                    await writeTableCells(
+                      client,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.table_block_id, "table_block_id"),
+                      p.values,
+                    ),
                   );
                 case "create_table_with_values":
                   return json(
                     await createTableWithValues(
                       client,
-                      p.doc_token,
+                      requireParam(p.doc_token, "doc_token"),
                       p.row_size,
                       p.column_size,
                       p.values,
@@ -1354,7 +1385,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                   return json(
                     await uploadImageBlock(
                       client,
-                      p.doc_token,
+                      requireParam(p.doc_token, "doc_token"),
                       getMediaMaxBytes(p, defaultAccountId),
                       p.url,
                       p.file_path,
@@ -1368,7 +1399,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                   return json(
                     await uploadFileBlock(
                       client,
-                      p.doc_token,
+                      requireParam(p.doc_token, "doc_token"),
                       getMediaMaxBytes(p, defaultAccountId),
                       p.url,
                       p.file_path,
@@ -1377,19 +1408,38 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                     ),
                   );
                 case "color_text":
-                  return json(await updateColorText(client, p.doc_token, p.block_id, p.content));
+                  return json(
+                    await updateColorText(
+                      client,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.block_id, "block_id"),
+                      requireParam(p.content, "content"),
+                    ),
+                  );
                 case "insert_table_row":
-                  return json(await insertTableRow(client, p.doc_token, p.block_id, p.row_index));
+                  return json(
+                    await insertTableRow(
+                      client,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.block_id, "block_id"),
+                      p.row_index,
+                    ),
+                  );
                 case "insert_table_column":
                   return json(
-                    await insertTableColumn(client, p.doc_token, p.block_id, p.column_index),
+                    await insertTableColumn(
+                      client,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.block_id, "block_id"),
+                      p.column_index,
+                    ),
                   );
                 case "delete_table_rows":
                   return json(
                     await deleteTableRows(
                       client,
-                      p.doc_token,
-                      p.block_id,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.block_id, "block_id"),
                       p.row_start,
                       p.row_count,
                     ),
@@ -1398,8 +1448,8 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                   return json(
                     await deleteTableColumns(
                       client,
-                      p.doc_token,
-                      p.block_id,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.block_id, "block_id"),
                       p.column_start,
                       p.column_count,
                     ),
@@ -1408,8 +1458,8 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                   return json(
                     await mergeTableCells(
                       client,
-                      p.doc_token,
-                      p.block_id,
+                      requireParam(p.doc_token, "doc_token"),
+                      requireParam(p.block_id, "block_id"),
                       p.row_start,
                       p.row_end,
                       p.column_start,
