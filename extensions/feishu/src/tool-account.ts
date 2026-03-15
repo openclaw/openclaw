@@ -1,6 +1,7 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
-import { resolveFeishuAccount } from "./accounts.js";
+import { listFeishuAccountIds, resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveToolsConfig } from "./tools-config.js";
 import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
@@ -9,6 +10,11 @@ type AccountAwareParams = { accountId?: string };
 
 function normalizeOptionalAccountId(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeOptionalMessageChannel(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().toLowerCase();
   return trimmed ? trimmed : undefined;
 }
 
@@ -21,10 +27,24 @@ function readConfiguredDefaultAccountId(config: OpenClawPluginApi["config"]): st
   return normalizeOptionalAccountId(value);
 }
 
+function readInheritedFeishuAccountId(
+  config: OpenClawPluginApi["config"],
+  value: string | undefined,
+): string | undefined {
+  const normalized = normalizeOptionalAccountId(value);
+  if (!normalized || !config) {
+    return undefined;
+  }
+  const inheritedAccountId = normalizeAccountId(normalized);
+  const knownIds = new Set(listFeishuAccountIds(config).map((id) => normalizeAccountId(id)));
+  return knownIds.has(inheritedAccountId) ? inheritedAccountId : undefined;
+}
+
 export function resolveFeishuToolAccount(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
+  messageChannel?: string;
 }): ResolvedFeishuAccount {
   if (!params.api.config) {
     throw new Error("Feishu config unavailable");
@@ -33,8 +53,10 @@ export function resolveFeishuToolAccount(params: {
     cfg: params.api.config,
     accountId:
       normalizeOptionalAccountId(params.executeParams?.accountId) ??
-      readConfiguredDefaultAccountId(params.api.config) ??
-      normalizeOptionalAccountId(params.defaultAccountId),
+      (normalizeOptionalMessageChannel(params.messageChannel) === "feishu"
+        ? readInheritedFeishuAccountId(params.api.config, params.defaultAccountId)
+        : undefined) ??
+      readConfiguredDefaultAccountId(params.api.config),
   });
 }
 
@@ -42,6 +64,7 @@ export function createFeishuToolClient(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
+  messageChannel?: string;
 }): Lark.Client {
   return createFeishuClient(resolveFeishuToolAccount(params));
 }

@@ -135,6 +135,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
   api.registerTool(
     (ctx) => {
       const defaultAccountId = ctx.agentAccountId;
+      const messageChannel = ctx.messageChannel;
       return {
         name: "feishu_perm",
         label: "Feishu Perm",
@@ -147,6 +148,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
               api,
               executeParams: p,
               defaultAccountId,
+              messageChannel,
             });
             switch (p.action) {
               case "list":

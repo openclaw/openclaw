@@ -546,15 +546,22 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
 
   type AccountAwareParams = { accountId?: string };
 
-  const getClient = (params: AccountAwareParams | undefined, defaultAccountId?: string) =>
-    createFeishuToolClient({ api, executeParams: params, defaultAccountId });
+  const getClient = (
+    params: AccountAwareParams | undefined,
+    defaultAccountId?: string,
+    messageChannel?: string,
+  ) => createFeishuToolClient({ api, executeParams: params, defaultAccountId, messageChannel });
 
   const registerBitableTool = <TParams extends AccountAwareParams>(params: {
     name: string;
     label: string;
     description: string;
     parameters: unknown;
-    execute: (args: { params: TParams; defaultAccountId?: string }) => Promise<unknown>;
+    execute: (args: {
+      params: TParams;
+      defaultAccountId?: string;
+      messageChannel?: string;
+    }) => Promise<unknown>;
   }) => {
     api.registerTool(
       (ctx) => ({
@@ -568,6 +575,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
               await params.execute({
                 params: rawParams as TParams,
                 defaultAccountId: ctx.agentAccountId,
+                messageChannel: ctx.messageChannel,
               }),
             );
           } catch (err) {
@@ -585,8 +593,8 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     description:
       "Parse a Bitable URL and get app_token, table_id, and table list. Use this first when given a /wiki/ or /base/ URL.",
     parameters: GetMetaSchema,
-    async execute({ params, defaultAccountId }) {
-      return getBitableMeta(getClient(params, defaultAccountId), params.url);
+    async execute({ params, defaultAccountId, messageChannel }) {
+      return getBitableMeta(getClient(params, defaultAccountId, messageChannel), params.url);
     },
   });
 
@@ -595,8 +603,12 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable List Fields",
     description: "List all fields (columns) in a Bitable table with their types and properties",
     parameters: ListFieldsSchema,
-    async execute({ params, defaultAccountId }) {
-      return listFields(getClient(params, defaultAccountId), params.app_token, params.table_id);
+    async execute({ params, defaultAccountId, messageChannel }) {
+      return listFields(
+        getClient(params, defaultAccountId, messageChannel),
+        params.app_token,
+        params.table_id,
+      );
     },
   });
 
@@ -611,9 +623,9 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable List Records",
     description: "List records (rows) from a Bitable table with pagination support",
     parameters: ListRecordsSchema,
-    async execute({ params, defaultAccountId }) {
+    async execute({ params, defaultAccountId, messageChannel }) {
       return listRecords(
-        getClient(params, defaultAccountId),
+        getClient(params, defaultAccountId, messageChannel),
         params.app_token,
         params.table_id,
         params.page_size,
@@ -632,9 +644,9 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable Get Record",
     description: "Get a single record by ID from a Bitable table",
     parameters: GetRecordSchema,
-    async execute({ params, defaultAccountId }) {
+    async execute({ params, defaultAccountId, messageChannel }) {
       return getRecord(
-        getClient(params, defaultAccountId),
+        getClient(params, defaultAccountId, messageChannel),
         params.app_token,
         params.table_id,
         params.record_id,
@@ -652,9 +664,9 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable Create Record",
     description: "Create a new record (row) in a Bitable table",
     parameters: CreateRecordSchema,
-    async execute({ params, defaultAccountId }) {
+    async execute({ params, defaultAccountId, messageChannel }) {
       return createRecord(
-        getClient(params, defaultAccountId),
+        getClient(params, defaultAccountId, messageChannel),
         params.app_token,
         params.table_id,
         params.fields,
@@ -673,9 +685,9 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable Update Record",
     description: "Update an existing record (row) in a Bitable table",
     parameters: UpdateRecordSchema,
-    async execute({ params, defaultAccountId }) {
+    async execute({ params, defaultAccountId, messageChannel }) {
       return updateRecord(
-        getClient(params, defaultAccountId),
+        getClient(params, defaultAccountId, messageChannel),
         params.app_token,
         params.table_id,
         params.record_id,
@@ -689,11 +701,16 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable Create App",
     description: "Create a new Bitable (multidimensional table) application",
     parameters: CreateAppSchema,
-    async execute({ params, defaultAccountId }) {
-      return createApp(getClient(params, defaultAccountId), params.name, params.folder_token, {
-        debug: (msg) => api.logger.debug?.(msg),
-        warn: (msg) => api.logger.warn?.(msg),
-      });
+    async execute({ params, defaultAccountId, messageChannel }) {
+      return createApp(
+        getClient(params, defaultAccountId, messageChannel),
+        params.name,
+        params.folder_token,
+        {
+          debug: (msg) => api.logger.debug?.(msg),
+          warn: (msg) => api.logger.warn?.(msg),
+        },
+      );
     },
   });
 
@@ -709,9 +726,9 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable Create Field",
     description: "Create a new field (column) in a Bitable table",
     parameters: CreateFieldSchema,
-    async execute({ params, defaultAccountId }) {
+    async execute({ params, defaultAccountId, messageChannel }) {
       return createField(
-        getClient(params, defaultAccountId),
+        getClient(params, defaultAccountId, messageChannel),
         params.app_token,
         params.table_id,
         params.field_name,

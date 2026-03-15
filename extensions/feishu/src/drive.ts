@@ -186,6 +186,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
   api.registerTool(
     (ctx) => {
       const defaultAccountId = ctx.agentAccountId;
+      const messageChannel = ctx.messageChannel;
       return {
         name: "feishu_drive",
         label: "Feishu Drive",
@@ -199,6 +200,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
               api,
               executeParams: p,
               defaultAccountId,
+              messageChannel,
             });
             switch (p.action) {
               case "list":
