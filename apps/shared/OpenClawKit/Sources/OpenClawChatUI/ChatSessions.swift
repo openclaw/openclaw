@@ -48,6 +48,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
 
     public let key: String
     public let kind: String?
+    public let label: String?
     public let displayName: String?
     public let surface: String?
     public let subject: String?
@@ -89,5 +90,28 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         self.count = count
         self.defaults = defaults
         self.sessions = sessions
+    }
+}
+
+// MARK: - Session labels
+
+public extension OpenClawChatSessionEntry {
+    /// Preferred label for showing this session in UI.
+    ///
+    /// Resolution order:
+    /// 1. `label` — explicit label set in gateway config or sessions store (most specific)
+    /// 2. `displayName` — channel-derived display name
+    /// 3. `key` — raw session key as last resort
+    var preferredLabel: String {
+        return Self.preferredLabel(forKey: self.key, label: self.label, displayName: self.displayName)
+    }
+
+    static func preferredLabel(forKey key: String, label: String? = nil, displayName: String?) -> String {
+        if let label = label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            return label
+        }
+        let trimmed = (displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return key
     }
 }
