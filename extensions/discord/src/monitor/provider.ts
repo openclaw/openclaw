@@ -45,6 +45,7 @@ import { getPluginCommandSpecs } from "../../../../src/plugins/commands.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../../../src/runtime.js";
 import { summarizeStringEntries } from "../../../../src/shared/string-sample.js";
 import { resolveDiscordAccount } from "../accounts.js";
+import { attachFetchToCarbonRequestClient } from "../carbon-rest-proxy.js";
 import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
@@ -763,6 +764,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
       clientPlugins,
     );
+    if (rawDiscordCfg.proxy?.trim()) {
+      attachFetchToCarbonRequestClient(client.rest, discordRestFetch);
+    }
     const earlyGatewayErrorGuard = attachEarlyGatewayErrorGuard(client);
     releaseEarlyGatewayErrorGuard = earlyGatewayErrorGuard.release;
 

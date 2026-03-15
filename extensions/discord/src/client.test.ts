@@ -1,7 +1,15 @@
 import type { RequestClient } from "@buape/carbon";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { createDiscordRestClient } from "./client.js";
+
+const { attachProxyToCarbonRequestClientMock } = vi.hoisted(() => ({
+  attachProxyToCarbonRequestClientMock: vi.fn((rest: RequestClient) => rest),
+}));
+
+vi.mock("./carbon-rest-proxy.js", () => ({
+  attachProxyToCarbonRequestClient: attachProxyToCarbonRequestClientMock,
+}));
 
 describe("createDiscordRestClient", () => {
   const fakeRest = {} as RequestClient;
@@ -87,5 +95,27 @@ describe("createDiscordRestClient", () => {
         cfg,
       ),
     ).toThrow(/unresolved SecretRef/i);
+  });
+
+  it("attaches discord account proxy to the created Carbon rest client", () => {
+    attachProxyToCarbonRequestClientMock.mockClear();
+
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot configured-token",
+          proxy: "http://127.0.0.1:7897",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = createDiscordRestClient({}, cfg);
+
+    expect(result.token).toBe("configured-token");
+    expect(attachProxyToCarbonRequestClientMock).toHaveBeenCalledTimes(1);
+    expect(attachProxyToCarbonRequestClientMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "http://127.0.0.1:7897",
+    );
   });
 });

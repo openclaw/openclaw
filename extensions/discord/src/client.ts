@@ -8,6 +8,7 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { attachProxyToCarbonRequestClient } from "./carbon-rest-proxy.js";
 import { normalizeDiscordToken } from "./token.js";
 
 export type DiscordClientOpts = {
@@ -29,8 +30,11 @@ function resolveToken(params: { accountId: string; fallbackToken?: string }) {
   return fallback;
 }
 
-function resolveRest(token: string, rest?: RequestClient) {
-  return rest ?? new RequestClient(token);
+function resolveRest(token: string, proxyUrl: string | undefined, rest?: RequestClient) {
+  if (rest) {
+    return rest;
+  }
+  return attachProxyToCarbonRequestClient(new RequestClient(token), proxyUrl);
 }
 
 function resolveAccountWithoutToken(params: {
@@ -66,7 +70,7 @@ export function createDiscordRestClient(
       accountId: account.accountId,
       fallbackToken: account.token,
     });
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveRest(token, account.config.proxy, opts.rest);
   return { token, rest, account };
 }
 
