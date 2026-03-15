@@ -163,4 +163,29 @@ describe("pi-embedded runner run registry", () => {
     clearActiveEmbeddedRun("session-snapshot", handle);
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
   });
+  it("clears stale snapshots when replacing an active run for the same session", () => {
+    const firstHandle = {
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+    const secondHandle = {
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+
+    setActiveEmbeddedRun("session-replaced", firstHandle);
+    updateActiveEmbeddedRunSnapshot("session-replaced", {
+      transcriptLeafId: "assistant-old",
+      messages: [{ role: "user", content: [{ type: "text", text: "old" }], timestamp: 1 }],
+      inFlightPrompt: "old prompt",
+    });
+
+    setActiveEmbeddedRun("session-replaced", secondHandle);
+
+    expect(getActiveEmbeddedRunSnapshot("session-replaced")).toBeUndefined();
+  });
 });

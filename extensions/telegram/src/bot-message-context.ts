@@ -392,6 +392,7 @@ export const buildTelegramMessageContext = async ({
           },
         })
       : null;
+  const normalizedAckReaction = ackReaction.replace(/\uFE0F/g, "");
 
   // When status reactions are enabled, setQueued() replaces the simple ack reaction
   const ackReactionPromise = statusReactionController
@@ -404,12 +405,14 @@ export const buildTelegramMessageContext = async ({
     : shouldAckReaction() &&
         msg.message_id &&
         reactionApi &&
-        isTelegramSupportedReactionEmoji(ackReaction)
+        normalizedAckReaction &&
+        isTelegramSupportedReactionEmoji(normalizedAckReaction)
       ? withTelegramApiErrorLogging({
           operation: "setMessageReaction",
           fn: () => {
-            const normalizedAck = ackReaction.replace(/\uFE0F/g, "");
-            return reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: normalizedAck }]);
+            return reactionApi(chatId, msg.message_id, [
+              { type: "emoji", emoji: normalizedAckReaction },
+            ]);
           },
         }).then(
           () => true,

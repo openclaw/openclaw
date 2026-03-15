@@ -176,6 +176,13 @@ export const registerTelegramHandlers = ({
   };
   const documentBatchBuffer = new Map<string, DocumentBatchEntry>();
   let documentBatchProcessing: Promise<void> = Promise.resolve();
+  const telegramMediaResolveTransport =
+    opts.proxyFetch || typeof globalThis.fetch !== "function"
+      ? telegramTransport
+      : {
+          ...telegramTransport,
+          sourceFetch: globalThis.fetch,
+        };
 
   type TextFragmentEntry = {
     key: string;
@@ -422,7 +429,7 @@ export const registerTelegramHandlers = ({
       for (const { ctx } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport);
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramMediaResolveTransport);
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;
@@ -567,7 +574,7 @@ export const registerTelegramHandlers = ({
       for (const { ctx, msg } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport);
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramMediaResolveTransport);
         } catch (mediaErr) {
           // Send the same oversize warning the non-batched path sends
           if (isMediaSizeLimitError(mediaErr)) {
@@ -602,9 +609,8 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      // Skip agent turn when every document failed to resolve (oversize, network, etc.)
       if (allMedia.length === 0) {
-        runtime.log?.(warn("document batch: all files failed to resolve, skipping agent turn"));
+        logger.warn({ chatId }, "document batch: all files failed to resolve, skipping agent turn");
         return;
       }
 
@@ -1168,14 +1174,13 @@ export const registerTelegramHandlers = ({
 
     // Document batch handling – documents sent in quick succession lack media_group_id,
     // so we buffer them per-chat+sender and flush as a single processMessage call.
-    // Skip batching when sender is unknown (channel posts, anonymous admins) to avoid
-    // merging unrelated documents under a shared "unknown" key.
     const docSenderId = msg.from?.id != null ? String(msg.from.id) : null;
     if (
       !mediaGroupId &&
       msg.document &&
       documentBatchWindowMs > 0 &&
       docSenderId &&
+      !msg.sender_chat &&
       !skipDocumentBatch
     ) {
       const docBatchKey = `doc:${chatId}:${docSenderId}:${resolvedThreadId ?? "f"}:${dmThreadId ?? "d"}`;
@@ -1872,13 +1877,8 @@ export const registerTelegramHandlers = ({
       chatId,
       isGroup: true,
       isForum: false,
-      senderId:
-        post.sender_chat?.id != null
-          ? String(post.sender_chat.id)
-          : post.from?.id != null
-            ? String(post.from.id)
-            : "",
-      senderUsername: post.sender_chat?.username ?? post.from?.username ?? "",
+      senderId: String(syntheticMsg.from?.id ?? ""),
+      senderUsername: syntheticMsg.from?.username ?? "",
       requireConfiguredGroup: true,
       sendOversizeWarning: false,
       oversizeLogMessage: "channel post media exceeds size limit",

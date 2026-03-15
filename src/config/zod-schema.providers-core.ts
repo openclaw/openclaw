@@ -202,6 +202,7 @@ export const TelegramAccountSchemaBase = z
     // Legacy key kept for automatic migration to `streaming`.
     streamMode: z.enum(["off", "partial", "block"]).optional(),
     mediaMaxMb: z.number().positive().optional(),
+    documentBatchWindowMs: z.number().int().min(0).optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     retry: RetryConfigSchema,
     network: z
@@ -278,7 +279,6 @@ export const TelegramAccountSchemaBase = z
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
-    documentBatchWindowMs: z.number().int().min(0).optional(),
   })
   .strict();
 
