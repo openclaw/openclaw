@@ -169,17 +169,25 @@ export function createHttpApprovalHandlers(
         );
       }
 
-      const decision = await decisionPromise;
-      respond(
-        true,
-        {
-          id: record.id,
-          decision,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-        },
-        undefined,
-      );
+      try {
+        const decision = await decisionPromise;
+        respond(
+          true,
+          {
+            id: record.id,
+            decision,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          },
+          undefined,
+        );
+      } finally {
+        // Clean up the HTTP request cache entry so timed-out (decision=null)
+        // approvals don't accumulate for the life of the gateway process.
+        // Resolved approvals are already deleted in http.approval.resolve, but
+        // this covers the timeout and any other non-resolve exit path.
+        httpRequests.delete(record.id);
+      }
     },
 
     "http.approval.waitDecision": async ({ params, respond }) => {
