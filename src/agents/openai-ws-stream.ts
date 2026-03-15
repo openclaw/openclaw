@@ -251,12 +251,24 @@ function parseReasoningItem(value: unknown): Extract<InputItem, { type: "reasoni
   }
   return {
     type: "reasoning",
-    ...(typeof record.content === "string" ? { content: record.content } : {}),
+    ...(typeof record.content === "string" ? { content: sanitizeJsonString(record.content) } : {}),
     ...(typeof record.encrypted_content === "string"
       ? { encrypted_content: record.encrypted_content }
       : {}),
-    ...(typeof record.summary === "string" ? { summary: record.summary } : {}),
+    ...(typeof record.summary === "string" ? { summary: sanitizeJsonString(record.summary) } : {}),
   };
+}
+
+/**
+ * Remove invalid JSON control characters from a string.
+ * Control characters (U+0000 through U+001F) are invalid in JSON strings
+ * except for tab (\t), newline (\n), and carriage return (\r).
+ * This sanitization prevents oMLX/Pydantic JSON parse errors when models
+ * like Qwen return reasoning_content with invalid characters.
+ */
+function sanitizeJsonString(input: string): string {
+  // eslint-disable-next-line no-control-regex
+  return input.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
 }
 
 function parseThinkingSignature(value: unknown): Extract<InputItem, { type: "reasoning" }> | null {
