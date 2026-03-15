@@ -1,14 +1,10 @@
+import { GroqAsrEngine } from "../../../asr/engines/groq.js";
 import type { MediaUnderstandingProvider } from "../../types.js";
-import { transcribeOpenAiCompatibleAudio } from "../openai/audio.js";
 
-const DEFAULT_GROQ_AUDIO_BASE_URL = "https://api.groq.com/openai/v1";
+const engine = new GroqAsrEngine();
 
 export const groqProvider: MediaUnderstandingProvider = {
   id: "groq",
   capabilities: ["audio"],
-  transcribeAudio: (req) =>
-    transcribeOpenAiCompatibleAudio({
-      ...req,
-      baseUrl: req.baseUrl ?? DEFAULT_GROQ_AUDIO_BASE_URL,
-    }),
+  transcribeAudio: (req) => engine.transcribe(req),
 };

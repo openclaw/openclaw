@@ -1,8 +1,10 @@
+import { DeepgramAsrEngine } from "../../../asr/engines/deepgram.js";
 import type { MediaUnderstandingProvider } from "../../types.js";
-import { transcribeDeepgramAudio } from "./audio.js";
+
+const engine = new DeepgramAsrEngine();
 
 export const deepgramProvider: MediaUnderstandingProvider = {
   id: "deepgram",
   capabilities: ["audio"],
-  transcribeAudio: transcribeDeepgramAudio,
+  transcribeAudio: (req) => engine.transcribe(req),
 };

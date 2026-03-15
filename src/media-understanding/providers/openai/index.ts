@@ -1,10 +1,12 @@
+import { OpenAiAsrEngine } from "../../../asr/engines/openai.js";
 import type { MediaUnderstandingProvider } from "../../types.js";
 import { describeImageWithModel } from "../image.js";
-import { transcribeOpenAiCompatibleAudio } from "./audio.js";
+
+const asrEngine = new OpenAiAsrEngine();
 
 export const openaiProvider: MediaUnderstandingProvider = {
   id: "openai",
   capabilities: ["image", "audio"],
   describeImage: describeImageWithModel,
-  transcribeAudio: transcribeOpenAiCompatibleAudio,
+  transcribeAudio: (req) => asrEngine.transcribe(req),
 };
