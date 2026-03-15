@@ -81,6 +81,8 @@ export type ClaudeCodeRunRecord = {
   requesterDisplayKey?: string;
   label?: string;
   cleanup: "delete" | "keep";
+  /** Internal: tracks whether finalizeRun has been called to prevent double-finalization */
+  _finalized?: boolean;
 };
 
 const activeRuns = new Map<string, ClaudeCodeRunRecord>();
@@ -137,6 +139,12 @@ export function spawnClaudeCodeProcess(params: {
   }
 
   const env = { ...process.env, ...params.env };
+  // Delete empty string values (used by clearEnv to unset variables)
+  for (const [key, value] of Object.entries(params.env)) {
+    if (value === "") {
+      delete env[key];
+    }
+  }
 
   try {
     const childProcess = spawn(params.command, params.args, {
@@ -191,20 +199,22 @@ export function spawnClaudeCodeProcess(params: {
       }
       processesByRunId.delete(params.runId);
 
-      record.endedAt = Date.now();
-      record.output = stdout;
+      const alreadyFinalized = record.status === "timeout" || record.status === "error";
 
-      if (record.status === "timeout" || record.status === "error") {
-        // Already finalized by timeout or abort handler — preserve existing outcome
-      } else if (code === 0) {
-        record.status = "completed";
-        record.outcome = { status: "ok" };
-      } else if (signal) {
-        record.status = "error";
-        record.outcome = { status: "error", error: `Process killed by signal: ${signal}` };
-      } else {
-        record.status = "error";
-        record.outcome = { status: "error", error: stderr || `Process exited with code ${code}` };
+      if (!alreadyFinalized) {
+        record.endedAt = Date.now();
+        record.output = stdout;
+
+        if (code === 0) {
+          record.status = "completed";
+          record.outcome = { status: "ok" };
+        } else if (signal) {
+          record.status = "error";
+          record.outcome = { status: "error", error: `Process killed by signal: ${signal}` };
+        } else {
+          record.status = "error";
+          record.outcome = { status: "error", error: stderr || `Process exited with code ${code}` };
+        }
       }
 
       void finalizeRun(params.runId);
@@ -237,6 +247,7 @@ export function spawnClaudeCodeProcess(params: {
 
 /**
  * Finalize a run and trigger announce callback.
+ * Idempotent: subsequent calls are no-ops if already finalized.
  */
 async function finalizeRun(runId: string): Promise<void> {
   const record = activeRuns.get(runId);
@@ -244,6 +255,13 @@ async function finalizeRun(runId: string): Promise<void> {
     log.debug(`finalizeRun: no record found for runId ${runId}`);
     return;
   }
+
+  // Idempotency check: prevent double-finalization
+  if (record._finalized) {
+    log.debug(`finalizeRun: runId ${runId} already finalized, skipping`);
+    return;
+  }
+  record._finalized = true;
 
   log.debug(
     `finalizeRun: runId=${runId}, status=${record.status}, output length=${record.output?.length ?? 0}`,
