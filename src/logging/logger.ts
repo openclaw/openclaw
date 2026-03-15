@@ -223,13 +223,20 @@ export function getChildLogger(
   opts?: { level?: LogLevel },
 ): TsLogger<LogObj> {
   const base = getLogger();
-  const minLevel = opts?.level ? levelToMinLevel(opts.level) : undefined;
   const name = bindings ? JSON.stringify(bindings) : undefined;
-  return base.getSubLogger({
+  // Only include minLevel when an explicit override is provided.
+  // Passing minLevel: undefined into getSubLogger() causes tslog's shallow
+  // merge to overwrite the parent's configured minLevel with undefined, which
+  // then falls back to 0 (SILLY) in the constructor — effectively bypassing
+  // the global logging.level setting for all child loggers.
+  const subSettings: Parameters<TsLogger<LogObj>["getSubLogger"]>[0] = {
     name,
-    minLevel,
     prefix: bindings ? [name ?? ""] : [],
-  });
+  };
+  if (opts?.level) {
+    subSettings.minLevel = levelToMinLevel(opts.level);
+  }
+  return base.getSubLogger(subSettings);
 }
 
 // Baileys expects a pino-like logger shape. Provide a lightweight adapter.

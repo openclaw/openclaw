@@ -47,8 +47,16 @@ export async function resolveAnnounceTarget(params: {
     const accountId =
       (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
       (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined);
+    // threadId may be stored as a number in deliveryContext; coerce to string for the
+    // gateway send handler which expects typeof threadId === "string".
+    const rawThreadId =
+      deliveryContext?.threadId != null
+        ? deliveryContext.threadId
+        : (match as Record<string, unknown> | undefined)?.lastThreadId;
+    const threadId =
+      rawThreadId != null ? String(rawThreadId as string | number) : undefined;
     if (channel && to) {
-      return { channel, to, accountId };
+      return { channel, to, accountId, threadId };
     }
   } catch {
     // ignore
