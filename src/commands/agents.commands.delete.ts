@@ -1,3 +1,4 @@
+import path from "node:path";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -79,6 +80,9 @@ export async function agentsDeleteCommand(
   await moveToTrash(workspaceDir, quietRuntime);
   await moveToTrash(agentDir, quietRuntime);
   await moveToTrash(sessionsDir, quietRuntime);
+
+  const agentParentDir = path.dirname(agentDir);
+  await moveToTrash(agentParentDir, quietRuntime);
 
   if (opts.json) {
     runtime.log(
