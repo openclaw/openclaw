@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { sandboxExplainCommand } from "../commands/sandbox-explain.js";
+import { sandboxRunCommand } from "../commands/sandbox-run.js";
 import { sandboxListCommand, sandboxRecreateCommand } from "../commands/sandbox.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -17,8 +18,7 @@ const SANDBOX_EXAMPLES = {
     ["openclaw sandbox list", "List all sandbox containers."],
     ["openclaw sandbox list --browser", "List only browser containers."],
     ["openclaw sandbox recreate --all", "Recreate all containers."],
-    ["openclaw sandbox recreate --session main", "Recreate a specific session."],
-    ["openclaw sandbox recreate --agent mybot", "Recreate agent containers."],
+    ['openclaw sandbox run "ls -la"', "Run a command in the default sandbox."],
     ["openclaw sandbox explain", "Explain effective sandbox config."],
   ],
   list: [
@@ -29,7 +29,7 @@ const SANDBOX_EXAMPLES = {
   recreate: [
     ["openclaw sandbox recreate --all", "Recreate all containers."],
     ["openclaw sandbox recreate --session main", "Recreate a specific session."],
-    ["openclaw sandbox recreate --agent mybot", "Recreate a specific agent (includes sub-agents)."],
+    ["openclaw sandbox recreate --agent mybot", "Recreate agent containers."],
     ["openclaw sandbox recreate --browser --all", "Recreate only browser containers."],
     ["openclaw sandbox recreate --all --force", "Skip confirmation."],
   ],
@@ -38,6 +38,11 @@ const SANDBOX_EXAMPLES = {
     ["openclaw sandbox explain --session agent:main:main", "Explain a specific session."],
     ["openclaw sandbox explain --agent work", "Explain an agent sandbox."],
     ["openclaw sandbox explain --json", "JSON output."],
+  ],
+  run: [
+    ['openclaw sandbox run "npm test"', "Run tests in the sandbox."],
+    ['openclaw sandbox run "ls" --agent coder', "Run in a specific agent's sandbox."],
+    ['openclaw sandbox run "pwd" --workdir /tmp', "Run in a specific directory."],
   ],
 } as const;
 
@@ -71,6 +76,35 @@ export function registerSandboxCli(program: Command) {
     )
     .action(() => {
       sandbox.help({ error: true });
+    });
+
+  // --- Run Command ---
+
+  sandbox
+    .command("run <command>")
+    .description("Run a command in a sandbox container")
+    .option("--session <key>", "Session key to use (affects which container is used)")
+    .option("--agent <id>", "Agent ID to use for config/session resolution")
+    .option("--workdir <path>", "Working directory inside the sandbox (or host path to resolve)")
+    .addHelpText(
+      "after",
+      () => `\n${theme.heading("Examples:")}\n${formatHelpExamples(SANDBOX_EXAMPLES.run)}\n`,
+    )
+    .action(async (cmd, opts) => {
+      try {
+        await sandboxRunCommand(
+          {
+            command: cmd,
+            session: opts.session as string | undefined,
+            agent: opts.agent as string | undefined,
+            workdir: opts.workdir as string | undefined,
+          },
+          defaultRuntime,
+        );
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
     });
 
   // --- List Command ---
