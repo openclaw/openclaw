@@ -279,6 +279,7 @@ COMPOSE_ARGS=()
 write_extra_compose() {
   local home_volume="$1"
   shift
+  local -a mounts=("$@")
   local mount
   local gateway_home_mount
   local gateway_config_mount
