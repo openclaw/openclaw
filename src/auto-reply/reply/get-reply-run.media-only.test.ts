@@ -224,6 +224,22 @@ describe("runPreparedReply media-only handling", () => {
     expect(resetNoticeCall?.payload?.text).not.toContain("env:");
   });
 
+  it("sends reset notice with mirror disabled to avoid orphaned assistant messages", async () => {
+    await runPreparedReply(
+      baseParams({
+        resetTriggered: true,
+      }),
+    );
+
+    const resetNoticeCall = vi.mocked(routeReply).mock.calls[0]?.[0] as
+      | { mirror?: boolean }
+      | undefined;
+    // The reset notice must NOT be mirrored into the session transcript.
+    // Mirroring inserts an orphaned assistant message (no preceding user turn)
+    // which breaks providers that enforce strict role ordering (#39830).
+    expect(resetNoticeCall?.mirror).toBe(false);
+  });
+
   it("skips reset notice when only webchat fallback routing is available", async () => {
     await runPreparedReply(
       baseParams({

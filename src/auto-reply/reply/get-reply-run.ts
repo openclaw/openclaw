@@ -121,6 +121,13 @@ async function sendResetSessionNotice(params: {
     accountId: params.accountId,
     threadId: params.threadId,
     cfg: params.cfg,
+    // The reset notice is a transient UI notification, not part of the
+    // conversation.  Mirroring it into the session transcript inserts an
+    // orphaned assistant message (no preceding user turn) which corrupts
+    // the message history for providers that enforce strict role ordering
+    // (e.g. LM Studio / llama.cpp jinja templates).  This caused the
+    // Discord /new command to break all subsequent messages (#39830).
+    mirror: false,
   });
 }
 
