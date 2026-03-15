@@ -217,7 +217,6 @@ describe("FeishuConfigSchema optimization flags", () => {
   });
 });
 
-<<<<<<< HEAD
 describe("FeishuConfigSchema actions", () => {
   it("accepts top-level reactions action gate", () => {
     const result = FeishuConfigSchema.parse({
