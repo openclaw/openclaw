@@ -306,6 +306,7 @@ export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
                         id: { type: "string" },
                       },
                       required: ["source", "provider", "id"],
+                      additionalProperties: false,
                     },
                   ],
                 },

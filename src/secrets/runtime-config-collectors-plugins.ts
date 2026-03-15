@@ -22,6 +22,9 @@ export function collectPluginConfigAssignments(params: {
     return;
   }
 
+  // When the top-level plugins surface is disabled, all entries are inactive
+  const pluginSurfaceEnabled = params.config.plugins?.enabled !== false;
+
   for (const [pluginId, entry] of Object.entries(entries)) {
     if (!isRecord(entry)) {
       continue;
@@ -30,8 +33,7 @@ export function collectPluginConfigAssignments(params: {
     if (!isRecord(pluginConfig)) {
       continue;
     }
-    // Skip disabled plugin entries (same pattern as skills/providers)
-    const pluginActive = entry.enabled !== false;
+    const pluginActive = pluginSurfaceEnabled && entry.enabled !== false;
     collectMcpServerEnvAssignments({
       pluginId,
       pluginConfig,
@@ -71,7 +73,7 @@ function collectMcpServerEnvAssignments(params: {
         defaults: params.defaults,
         context: params.context,
         active: params.active,
-        inactiveReason: "plugin entry is disabled.",
+        inactiveReason: "plugin surface or entry is disabled.",
         apply: (value) => {
           env[envKey] = value;
         },

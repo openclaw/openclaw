@@ -188,6 +188,29 @@ describe("McpServerConfig SecretInput env values", () => {
       expect(result.success).toBe(true);
     });
 
+    it("rejects SecretRef env values with extra keys", () => {
+      const schema = createAcpxPluginConfigSchema();
+      if (!schema.safeParse) {
+        throw new Error("acpx config schema missing safeParse");
+      }
+      const result = schema.safeParse({
+        mcpServers: {
+          "test-server": {
+            command: "/usr/bin/test",
+            env: {
+              API_KEY: {
+                source: "env",
+                provider: "default",
+                id: "MCP_API_KEY",
+                extra: "not-allowed",
+              },
+            },
+          },
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+
     it("rejects non-string non-SecretRef env values", () => {
       const schema = createAcpxPluginConfigSchema();
       if (!schema.safeParse) {
