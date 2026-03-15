@@ -126,4 +126,88 @@ describe("msteams archive deleted-channel cleanup", () => {
     });
     expect(pruneConversation).not.toHaveBeenCalled();
   });
+
+  it("uses tenant-specific tokens and caches Graph team resolution per team", async () => {
+    const pruneConversation = vi.fn();
+    const getAccessToken = vi.fn(async (tenantId?: string) => `token:${tenantId ?? "default"}`);
+    const resolveGraphTeamId = vi.fn(async () => "00000000-0000-0000-0000-000000000999");
+    const channelExists = vi.fn(async () => true);
+
+    const result = await runArchiveCleanupSweep({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      store: {
+        listChannelArchives: async () => [
+          {
+            archiveKey: "a",
+            conversationId: "19:ops-1@thread.tacv2",
+            messageFile: "messages/a.jsonl",
+            messageCount: 1,
+            createdAt: 1,
+            updatedAt: 2,
+            conversationType: "channel",
+            tenantId: "tenant-a",
+            teamId: "runtime-team-key",
+            channelId: "channel-1",
+          },
+          {
+            archiveKey: "b",
+            conversationId: "19:ops-2@thread.tacv2",
+            messageFile: "messages/b.jsonl",
+            messageCount: 1,
+            createdAt: 1,
+            updatedAt: 2,
+            conversationType: "channel",
+            tenantId: "tenant-a",
+            teamId: "runtime-team-key",
+            channelId: "channel-2",
+          },
+          {
+            archiveKey: "c",
+            conversationId: "19:ops-3@thread.tacv2",
+            messageFile: "messages/c.jsonl",
+            messageCount: 1,
+            createdAt: 1,
+            updatedAt: 2,
+            conversationType: "channel",
+            tenantId: "tenant-b",
+            teamId: "runtime-team-key-b",
+            channelId: "channel-3",
+          },
+        ],
+        pruneConversation,
+      },
+      defaultTenantId: "tenant-default",
+      getAccessToken,
+      channelExists,
+      resolveGraphTeamId,
+    });
+
+    expect(result).toEqual({
+      scanned: 3,
+      pruned: 0,
+      skipped: 0,
+    });
+    expect(getAccessToken).toHaveBeenCalledTimes(2);
+    expect(getAccessToken).toHaveBeenNthCalledWith(1, "tenant-a");
+    expect(getAccessToken).toHaveBeenNthCalledWith(2, "tenant-b");
+    expect(resolveGraphTeamId).toHaveBeenCalledTimes(2);
+    expect(channelExists).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ accessToken: "token:tenant-a", channelId: "channel-1" }),
+    );
+    expect(channelExists).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ accessToken: "token:tenant-a", channelId: "channel-2" }),
+    );
+    expect(channelExists).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ accessToken: "token:tenant-b", channelId: "channel-3" }),
+    );
+    expect(pruneConversation).not.toHaveBeenCalled();
+  });
 });

@@ -96,6 +96,7 @@ export type AttachmentSearchParams = {
 
 export type ArchiveChannelEntry = ArchiveIndexEntry & {
   conversationType?: string;
+  tenantId?: string;
   teamId?: string;
   teamName?: string;
   channelId?: string;

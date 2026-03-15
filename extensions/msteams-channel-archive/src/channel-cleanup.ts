@@ -1,15 +1,19 @@
-import type {
-  Logger,
-  OpenClawConfig,
-  OpenClawPluginApi,
-  OpenClawPluginService,
-} from "openclaw/plugin-sdk";
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
+  type OpenClawConfig,
+  type OpenClawPluginApi,
+  type OpenClawPluginService,
   type MSTeamsConfig,
 } from "openclaw/plugin-sdk/msteams";
 import type { MSTeamsChannelArchiveStore } from "./archive-store.js";
+
+type Logger = {
+  info?: (message: string, meta?: Record<string, unknown>) => void;
+  warn?: (message: string, meta?: Record<string, unknown>) => void;
+  error?: (message: string, meta?: Record<string, unknown>) => void;
+  debug?: (message: string, meta?: Record<string, unknown>) => void;
+};
 
 export type MSTeamsChannelArchivePluginConfig = {
   cleanup?: {
@@ -55,7 +59,8 @@ type GraphTeamResolver = (params: {
 type CleanupSweepDeps = {
   logger: Logger;
   store: Pick<MSTeamsChannelArchiveStore, "listChannelArchives" | "pruneConversation">;
-  getAccessToken: () => Promise<string>;
+  getAccessToken: (tenantId?: string) => Promise<string>;
+  defaultTenantId?: string;
   channelExists: ChannelExistenceChecker;
   resolveGraphTeamId?: GraphTeamResolver;
 };
@@ -85,6 +90,7 @@ export function createChannelArchiveCleanupService(params: {
 }): OpenClawPluginService {
   const { api, store } = params;
   let cleanupTimer: NodeJS.Timeout | null = null;
+  let cleanupInFlight: Promise<void> | null = null;
 
   return {
     id: "msteams-channel-archive-cleanup",
@@ -106,30 +112,46 @@ export function createChannelArchiveCleanupService(params: {
       }
 
       const runSweep = async (): Promise<void> => {
-        const result = await runArchiveCleanupSweep({
-          logger: api.logger,
-          store,
-          getAccessToken: async () => await fetchGraphAccessToken(credentials),
-          channelExists: async (sweepParams) => await fetchGraphChannelExists(sweepParams),
-        });
-        api.logger.info?.(
-          "msteams-channel-archive: deleted-channel cleanup sweep finished",
-          result,
-        );
+        if (cleanupInFlight) {
+          await cleanupInFlight;
+          return;
+        }
+        cleanupInFlight = (async () => {
+          const result = await runArchiveCleanupSweep({
+            logger: api.logger,
+            store,
+            defaultTenantId: credentials.tenantId,
+            getAccessToken: async (tenantId) =>
+              await fetchGraphAccessToken({
+                ...credentials,
+                tenantId: tenantId?.trim() || credentials.tenantId,
+              }),
+            channelExists: async (sweepParams) => await fetchGraphChannelExists(sweepParams),
+          });
+          api.logger.info?.(
+            `msteams-channel-archive: deleted-channel cleanup sweep finished (scanned=${result.scanned}, pruned=${result.pruned}, skipped=${result.skipped})`,
+          );
+        })();
+
+        try {
+          await cleanupInFlight;
+        } finally {
+          cleanupInFlight = null;
+        }
       };
 
       try {
         await runSweep();
       } catch (error: unknown) {
-        api.logger.warn?.("msteams-channel-archive: initial deleted-channel cleanup sweep failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        api.logger.warn?.(
+          `msteams-channel-archive: initial deleted-channel cleanup sweep failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
       cleanupTimer = setInterval(() => {
         void runSweep().catch((error: unknown) => {
-          api.logger.warn?.("msteams-channel-archive: deleted-channel cleanup sweep failed", {
-            error: error instanceof Error ? error.message : String(error),
-          });
+          api.logger.warn?.(
+            `msteams-channel-archive: deleted-channel cleanup sweep failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
         });
       }, settings.intervalMs);
       cleanupTimer.unref?.();
@@ -150,16 +172,17 @@ export async function runArchiveCleanupSweep(
     logger,
     store,
     getAccessToken,
+    defaultTenantId,
     channelExists,
     resolveGraphTeamId = resolveGraphTeamIdForArchive,
   } = params;
   const archives = await store.listChannelArchives();
 
-  let accessToken: string | null = null;
   let pruned = 0;
   let skipped = 0;
-  // Cache: runtimeTeamId/channelId → resolved Graph team GUID, shared across the whole sweep
-  // to avoid repeating a full-tenant team+channel scan for each archived channel.
+  const accessTokenCache = new Map<string, Promise<string>>();
+  // Cache runtime/graph team ids per tenant so multiple archived channels from the same
+  // team reuse one Graph team resolution instead of rescanning the tenant every time.
   const graphTeamIdCache = new Map<string, string | null>();
 
   for (const archive of archives) {
@@ -175,8 +198,18 @@ export async function runArchiveCleanupSweep(
     }
 
     try {
-      accessToken ??= await getAccessToken();
-      const cacheKey = `${archive.teamId}::${archive.channelId}`;
+      const tenantId = archive.tenantId?.trim() || defaultTenantId;
+      const tokenCacheKey = tenantId || "__default__";
+      let accessTokenPromise = accessTokenCache.get(tokenCacheKey);
+      if (!accessTokenPromise) {
+        accessTokenPromise = getAccessToken(tenantId).catch((error) => {
+          accessTokenCache.delete(tokenCacheKey);
+          throw error;
+        });
+        accessTokenCache.set(tokenCacheKey, accessTokenPromise);
+      }
+      const accessToken = await accessTokenPromise;
+      const cacheKey = `${tenantId || "default"}::${archive.teamId}`;
       let graphTeamId: string | null;
       if (graphTeamIdCache.has(cacheKey)) {
         graphTeamId = graphTeamIdCache.get(cacheKey) ?? null;
@@ -193,6 +226,7 @@ export async function runArchiveCleanupSweep(
           "msteams-channel-archive: unable to resolve Graph team id for archived channel",
           {
             conversationId: archive.conversationId,
+            tenantId,
             teamId: archive.teamId,
             channelId: archive.channelId,
           },
@@ -212,6 +246,7 @@ export async function runArchiveCleanupSweep(
       skipped += 1;
       logger.warn?.("msteams-channel-archive: deleted-channel cleanup check failed", {
         conversationId: archive.conversationId,
+        tenantId: archive.tenantId?.trim() || defaultTenantId,
         teamId: archive.teamId,
         channelId: archive.channelId,
         error: error instanceof Error ? error.message : String(error),

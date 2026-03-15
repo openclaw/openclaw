@@ -66,4 +66,40 @@ describe("msteams channel archive plugin", () => {
 
     expect(archiveStoreMock.pruneConversation).toHaveBeenCalledWith("19:deleted@thread.tacv2");
   });
+
+  it("preserves empty mediaTypes slots when archiving channel messages", async () => {
+    const plugin = (await import("./index.js")).default;
+    plugin.register(api as never);
+
+    await hooks.message_received(
+      {
+        content: "archive this",
+        timestamp: 1710000000000,
+        metadata: {
+          provider: "msteams",
+          chatType: "channel",
+          mediaPaths: ["/tmp/a.png", "/tmp/b.pdf", "/tmp/c.txt"],
+          mediaTypes: ["image/png", "", "text/plain"],
+          providerMetadata: {
+            conversationType: "channel",
+            tenantId: "tenant-1",
+            teamId: "team-1",
+            channelId: "channel-1",
+          },
+        },
+      },
+      {
+        channelId: "msteams",
+        conversationId: "conversation:19:alerts@thread.tacv2",
+      },
+    );
+
+    expect(archiveStoreMock.archiveMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "19:alerts@thread.tacv2",
+        mediaPaths: ["/tmp/a.png", "/tmp/b.pdf", "/tmp/c.txt"],
+        mediaTypes: ["image/png", "", "text/plain"],
+      }),
+    );
+  });
 });

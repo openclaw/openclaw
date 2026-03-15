@@ -14,11 +14,12 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function readStringArray(value: unknown): string[] {
+function readStringArray(value: unknown, options?: { preserveEmpty?: boolean }): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  const normalized = value.map((entry) => (typeof entry === "string" ? entry.trim() : ""));
+  return options?.preserveEmpty ? normalized : normalized.filter(Boolean);
 }
 
 function normalizeConversationId(value: string | undefined): string | undefined {
@@ -106,7 +107,8 @@ const plugin = {
         senderId: readString(metadata?.senderId),
         senderName: readString(metadata?.senderName),
         mediaPaths: readStringArray(metadata?.mediaPaths),
-        mediaTypes: readStringArray(metadata?.mediaTypes),
+        // Keep empty MIME slots so mediaTypes stays index-aligned with mediaPaths.
+        mediaTypes: readStringArray(metadata?.mediaTypes, { preserveEmpty: true }),
       });
     });
 

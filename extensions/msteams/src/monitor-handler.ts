@@ -489,7 +489,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
             hasChannelDeletedHooks,
           });
 
-          if (conversationId && hasChannelDeletedHooks) {
+          if (conversationId && hookRunner && hasChannelDeletedHooks) {
             await hookRunner.runChannelDeleted(
               {
                 conversationId,

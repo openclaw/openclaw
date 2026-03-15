@@ -374,6 +374,7 @@ export class MSTeamsChannelArchiveStore {
       results.push({
         ...entry,
         conversationType,
+        tenantId: latestMessage?.tenantId,
         teamId: latestMessage?.teamId,
         teamName: latestMessage?.teamName,
         channelId: latestMessage?.channelId,
