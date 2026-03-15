@@ -6,12 +6,17 @@ export type MatrixRoomInfo = {
   altAliases: string[];
 };
 
+type CachedRoomInfo = MatrixRoomInfo & { cachedAt: number };
+
+const ROOM_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
+const ROOM_INFO_CACHE_MAX_SIZE = 500;
+
 export function createMatrixRoomInfoResolver(client: MatrixClient) {
-  const roomInfoCache = new Map<string, MatrixRoomInfo>();
+  const roomInfoCache = new Map<string, CachedRoomInfo>();
 
   const getRoomInfo = async (roomId: string): Promise<MatrixRoomInfo> => {
     const cached = roomInfoCache.get(roomId);
-    if (cached) {
+    if (cached && Date.now() - cached.cachedAt < ROOM_INFO_CACHE_TTL_MS) {
       return cached;
     }
     let name: string | undefined;
@@ -32,7 +37,13 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
     } catch {
       // ignore
     }
-    const info = { name, canonicalAlias, altAliases };
+    const info: CachedRoomInfo = { name, canonicalAlias, altAliases, cachedAt: Date.now() };
+    if (!roomInfoCache.has(roomId) && roomInfoCache.size >= ROOM_INFO_CACHE_MAX_SIZE) {
+      const firstKey = roomInfoCache.keys().next().value;
+      if (firstKey !== undefined) {
+        roomInfoCache.delete(firstKey);
+      }
+    }
     roomInfoCache.set(roomId, info);
     return info;
   };

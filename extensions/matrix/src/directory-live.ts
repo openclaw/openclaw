@@ -1,3 +1,4 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/matrix";
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/matrix";
 import { resolveMatrixAuth } from "./matrix/client.js";
 
@@ -38,19 +39,32 @@ async function fetchMatrixJson<T>(params: {
   method?: "GET" | "POST";
   body?: unknown;
 }): Promise<T> {
-  const res = await fetch(`${params.homeserver}${params.path}`, {
-    method: params.method ?? "GET",
-    headers: {
-      Authorization: `Bearer ${params.accessToken}`,
-      "Content-Type": "application/json",
+  // The homeserver URL is operator-configured and trusted, so we allow private
+  // network targets (RFC1918/localhost) to support self-hosted Matrix instances.
+  const { response: res, release } = await fetchWithSsrFGuard({
+    url: `${params.homeserver}${params.path}`,
+    init: {
+      method: params.method ?? "GET",
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: params.body ? JSON.stringify(params.body) : undefined,
     },
-    body: params.body ? JSON.stringify(params.body) : undefined,
+    policy: { allowPrivateNetwork: true },
+    auditContext: "matrix.directory",
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Matrix API ${params.path} failed (${res.status}): ${text || "unknown error"}`);
+  try {
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(
+        `Matrix API ${params.path} failed (${res.status}): ${text || "unknown error"}`,
+      );
+    }
+    return (await res.json()) as T;
+  } finally {
+    await release();
   }
-  return (await res.json()) as T;
 }
 
 function normalizeQuery(value?: string | null): string {
