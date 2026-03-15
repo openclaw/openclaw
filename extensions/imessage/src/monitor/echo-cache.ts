@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export type SentMessageLookup = {
   text?: string;
   messageId?: string;
@@ -8,10 +10,16 @@ export type SentMessageCache = {
   has: (scope: string, lookup: SentMessageLookup) => boolean;
 };
 
-// Keep the text fallback short so repeated user replies like "ok" are not
-// suppressed for long; delayed reflections should match the stronger message-id key.
-const SENT_MESSAGE_TEXT_TTL_MS = 5_000;
-const SENT_MESSAGE_ID_TTL_MS = 60_000;
+/**
+ * Bounded set of recently sent messages used for echo detection.
+ * Uses SHA-256 for text keys so storage is fixed-size; no TTL so delayed
+ * reflections (e.g. after slow LLM reply) still match.
+ */
+const MAX_ENTRIES = 200;
+
+function sha256Hex(input: string): string {
+  return createHash("sha256").update(input, "utf8").digest("hex");
+}
 
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
@@ -33,50 +41,66 @@ function normalizeEchoMessageIdKey(messageId: string | undefined): string | null
 }
 
 class DefaultSentMessageCache implements SentMessageCache {
-  private textCache = new Map<string, number>();
-  private messageIdCache = new Map<string, number>();
+  private entries: Array<{ scope: string; kind: "text" | "id"; key: string }> = [];
+  private index = new Set<string>();
+
+  private toStoreKey(scope: string, kind: "text" | "id", key: string): string {
+    return `${scope}:${kind}:${key}`;
+  }
 
   remember(scope: string, lookup: SentMessageLookup): void {
     const textKey = normalizeEchoTextKey(lookup.text);
     if (textKey) {
-      this.textCache.set(`${scope}:${textKey}`, Date.now());
+      const hashed = sha256Hex(textKey);
+      const storeKey = this.toStoreKey(scope, "text", hashed);
+      if (!this.index.has(storeKey)) {
+        this.entries.push({ scope, kind: "text", key: hashed });
+        this.index.add(storeKey);
+        this.evict();
+      }
     }
     const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
     if (messageIdKey) {
-      this.messageIdCache.set(`${scope}:${messageIdKey}`, Date.now());
+      const storeKey = this.toStoreKey(scope, "id", messageIdKey);
+      if (!this.index.has(storeKey)) {
+        this.entries.push({ scope, kind: "id", key: messageIdKey });
+        this.index.add(storeKey);
+        this.evict();
+      }
     }
-    this.cleanup();
   }
 
   has(scope: string, lookup: SentMessageLookup): boolean {
-    this.cleanup();
     const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
     if (messageIdKey) {
-      const idTimestamp = this.messageIdCache.get(`${scope}:${messageIdKey}`);
-      if (idTimestamp && Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS) {
+      const storeKey = this.toStoreKey(scope, "id", messageIdKey);
+      if (this.index.has(storeKey)) {
         return true;
       }
     }
     const textKey = normalizeEchoTextKey(lookup.text);
     if (textKey) {
-      const textTimestamp = this.textCache.get(`${scope}:${textKey}`);
-      if (textTimestamp && Date.now() - textTimestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
+      const hashed = sha256Hex(textKey);
+      const storeKey = this.toStoreKey(scope, "text", hashed);
+      if (this.index.has(storeKey)) {
+        this.index.delete(storeKey);
+        const idx = this.entries.findIndex(
+          (e) => e.scope === scope && e.kind === "text" && e.key === hashed,
+        );
+        if (idx >= 0) {
+          this.entries.splice(idx, 1);
+        }
         return true;
       }
     }
     return false;
   }
 
-  private cleanup(): void {
-    const now = Date.now();
-    for (const [key, timestamp] of this.textCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
-        this.textCache.delete(key);
-      }
-    }
-    for (const [key, timestamp] of this.messageIdCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_ID_TTL_MS) {
-        this.messageIdCache.delete(key);
+  private evict(): void {
+    while (this.entries.length > MAX_ENTRIES) {
+      const e = this.entries.shift();
+      if (e) {
+        this.index.delete(this.toStoreKey(e.scope, e.kind, e.key));
       }
     }
   }
