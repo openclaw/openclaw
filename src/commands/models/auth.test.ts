@@ -51,7 +51,7 @@ vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: mocks.resolveDefaultAgentWorkspaceDir,
 }));
 
-vi.mock("../../plugins/providers.js", () => ({
+vi.mock("./auth.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
 }));
 
