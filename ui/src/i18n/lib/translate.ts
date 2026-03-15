@@ -17,8 +17,11 @@ class I18nManager {
   private translations: Partial<Record<Locale, TranslationMap>> = { [DEFAULT_LOCALE]: en };
   private subscribers: Set<Subscriber> = new Set();
 
+  /** Resolves once the initial (persisted / navigator-derived) locale is loaded. */
+  public readonly ready: Promise<void>;
+
   constructor() {
-    this.loadLocale();
+    this.ready = this.loadLocale();
   }
 
   private readStoredLocale(): string | null {
@@ -55,7 +58,7 @@ class I18nManager {
     return resolveNavigatorLocale(language ?? "");
   }
 
-  private loadLocale() {
+  private async loadLocale(): Promise<void> {
     const initialLocale = this.resolveInitialLocale();
     if (initialLocale === DEFAULT_LOCALE) {
       this.locale = DEFAULT_LOCALE;
@@ -63,7 +66,7 @@ class I18nManager {
     }
     // Use the normal locale setter so startup locale loading follows the same
     // translation-loading + notify path as manual locale changes.
-    void this.setLocale(initialLocale);
+    await this.setLocale(initialLocale);
   }
 
   public getLocale(): Locale {
