@@ -1304,8 +1304,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         await deps.fs.promises.rename(tmp, configPath);
       } catch (err) {
         const code = (err as { code?: string }).code;
-        // Windows doesn't reliably support atomic replace via rename when dest exists.
-        if (code === "EPERM" || code === "EEXIST") {
+        // Rename can fail on Windows (EPERM/EEXIST) and on Linux when the temp
+        // file and config path reside on different mount points or involve
+        // symlinks across filesystems (EXDEV).  Fall back to copy + unlink.
+        if (code === "EPERM" || code === "EEXIST" || code === "EXDEV") {
           await deps.fs.promises.copyFile(tmp, configPath);
           await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
             // best-effort
@@ -1318,9 +1320,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           await appendWriteAudit("copy-fallback");
           return;
         }
+        // Rename failed for an unexpected reason — clean up the temp file and
+        // ensure the original config still exists.  If it was removed (e.g. a
+        // non-POSIX-compliant filesystem performed a non-atomic replace that
+        // unlinked the destination before failing), restore from the backup
+        // that was created moments earlier.
         await deps.fs.promises.unlink(tmp).catch(() => {
           // best-effort
         });
+        if (!deps.fs.existsSync(configPath) && deps.fs.existsSync(`${configPath}.bak`)) {
+          await deps.fs.promises.copyFile(`${configPath}.bak`, configPath).catch(() => {
+            // best-effort — already throwing the original error below
+          });
+        }
         throw err;
       }
       logConfigOverwrite();

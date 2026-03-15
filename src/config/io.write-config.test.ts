@@ -548,4 +548,105 @@ describe("config io write", () => {
       expect(last.watchCommand).toBe("gateway --force");
     });
   });
+
+  it("falls back to copy when rename fails with EXDEV (cross-device link)", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const initialConfig = { gateway: { mode: "local" as const, port: 18789 } };
+      await fs.writeFile(configPath, JSON.stringify(initialConfig, null, 2), "utf-8");
+
+      const realFsSync = await import("node:fs");
+      const realRename = realFsSync.promises.rename;
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+        fs: {
+          ...realFsSync,
+          promises: {
+            ...realFsSync.promises,
+            rename: async (src: string, dest: string) => {
+              if (String(dest).endsWith("openclaw.json")) {
+                const err = new Error(
+                  "EXDEV: cross-device link not permitted",
+                ) as NodeJS.ErrnoException;
+                err.code = "EXDEV";
+                throw err;
+              }
+              return realRename(src, dest);
+            },
+          },
+        } as typeof realFsSync,
+      });
+
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+
+      const next = {
+        ...snapshot.config,
+        gateway: { ...snapshot.config.gateway, bind: "lan" as const },
+      };
+      await io.writeConfigFile(next);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+      const gw = persisted.gateway as Record<string, unknown>;
+      expect(gw.bind).toBe("lan");
+      expect(gw.mode).toBe("local");
+    });
+  });
+
+  it("restores config from .bak when rename fails and config disappears", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const initialConfig = { gateway: { mode: "local" as const, port: 18789 } };
+      await fs.writeFile(configPath, JSON.stringify(initialConfig, null, 2), "utf-8");
+
+      const realFsSync = await import("node:fs");
+      const realRename = realFsSync.promises.rename;
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+        fs: {
+          ...realFsSync,
+          promises: {
+            ...realFsSync.promises,
+            rename: async (src: string, dest: string) => {
+              if (String(dest).endsWith("openclaw.json") && !String(dest).includes(".bak")) {
+                // Simulate a non-atomic filesystem that unlinks the destination
+                // before failing the rename, leaving the config file missing.
+                await realFsSync.promises.unlink(dest).catch(() => {});
+                const err = new Error("EIO: i/o error") as NodeJS.ErrnoException;
+                err.code = "EIO";
+                throw err;
+              }
+              return realRename(src, dest);
+            },
+          },
+        } as typeof realFsSync,
+      });
+
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+
+      const next = {
+        ...snapshot.config,
+        gateway: { ...snapshot.config.gateway, bind: "lan" as const },
+      };
+      await expect(io.writeConfigFile(next)).rejects.toThrow();
+
+      // The original config should have been restored from .bak
+      const restored = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+      const gw = restored.gateway as Record<string, unknown>;
+      expect(gw.mode).toBe("local");
+    });
+  });
 });
