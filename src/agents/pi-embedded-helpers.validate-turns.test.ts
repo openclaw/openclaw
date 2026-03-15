@@ -360,6 +360,26 @@ describe("mergeConsecutiveUserTurns", () => {
 });
 
 describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
+  it("strips dangling toolCall blocks in pi-agent-core transcripts", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "tool-1", name: "test", arguments: {} },
+          { type: "text", text: "I'll check that" },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "Hello" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([{ type: "text", text: "I'll check that" }]);
+  });
+
   it("should strip tool_use blocks without matching tool_result", () => {
     // Simulates: user asks -> assistant has tool_use -> user responds without tool_result
     // This happens after compaction trims history
