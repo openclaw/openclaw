@@ -125,6 +125,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly cfg: OpenClawConfig;
   protected abstract readonly agentId: string;
   protected abstract readonly workspaceDir: string;
+  protected abstract readonly userId?: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
   protected fallbackFrom?: EmbeddingProviderId;
@@ -684,6 +685,7 @@ export abstract class MemoryManagerSyncOps {
       this.workspaceDir,
       this.settings.extraPaths,
       this.settings.multimodal,
+      this.userId,
     );
     const fileEntries = (
       await runWithConcurrency(

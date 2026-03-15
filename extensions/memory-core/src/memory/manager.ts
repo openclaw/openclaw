@@ -81,6 +81,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
+  protected readonly userId: string | undefined;
   protected provider: EmbeddingProvider | null;
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
@@ -155,16 +156,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   static async get(params: {
     cfg: OpenClawConfig;
     agentId: string;
+    userId?: string;
     purpose?: "default" | "status";
   }): Promise<MemoryIndexManager | null> {
-    const { cfg, agentId } = params;
+    const { cfg, agentId, userId } = params;
     const settings = resolveMemorySearchConfig(cfg, agentId);
     if (!settings) {
       return null;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const purpose = params.purpose === "status" ? "status" : "default";
-    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}`;
+    // Include userId in cache key when isolation is enabled and userId is provided
+    const isolationKey = settings.isolation.enabled && userId ? `:${userId}` : "";
+    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}${isolationKey}`;
     const statusOnly = params.purpose === "status";
     return await getOrCreateManagedCacheEntry({
       cache: INDEX_CACHE,
@@ -179,6 +183,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           workspaceDir,
           settings,
           purpose: params.purpose,
+          userId: settings.isolation.enabled ? userId : undefined,
         }),
     });
   }
@@ -191,6 +196,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     settings: ResolvedMemorySearchConfig;
     providerResult?: EmbeddingProviderResult;
     purpose?: "default" | "status";
+    userId?: string;
   }) {
     super();
     this.cacheKey = params.cacheKey;
@@ -198,6 +204,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
     this.settings = params.settings;
+    this.userId = params.userId;
     this.provider = null;
     this.requestedProvider = params.settings.provider;
     if (params.providerResult) {
@@ -686,6 +693,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       relPath: params.relPath,
       from: params.from,
       lines: params.lines,
+      userId: this.userId,
     });
   }
 

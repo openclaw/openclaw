@@ -4,10 +4,28 @@ export type MemoryBackend = "builtin" | "qmd";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
+/**
+ * Memory isolation configuration.
+ * When enabled, memory files are stored in user-specific subdirectories.
+ */
+export type MemoryIsolationConfig = {
+  /**
+   * Enable user-specific memory isolation.
+   * - true (default): Memory files stored in memory/{userId}/YYYY-MM-DD.md
+   * - false: All sessions share memory/ directory (legacy behavior)
+   */
+  enabled?: boolean;
+};
+
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  /**
+   * User-specific memory isolation settings.
+   * When enabled, each user gets their own memory subdirectory.
+   */
+  isolation?: MemoryIsolationConfig;
 };
 
 export type MemoryQmdConfig = {
