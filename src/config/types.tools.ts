@@ -471,6 +471,8 @@ export type ToolsConfig = {
       brave?: {
         /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
         mode?: "web" | "llm-context";
+        /** Custom base URL for Brave Search API. Useful for routing through a proxy (e.g. Cloudflare Worker) when datacenter IPs receive degraded results. Must serve the same API contract as api.search.brave.com. Default: "https://api.search.brave.com". */
+        baseUrl?: string;
       };
       /** Gemini-specific configuration (used when provider="gemini"). */
       gemini?: {

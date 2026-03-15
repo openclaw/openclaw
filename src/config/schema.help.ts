@@ -672,6 +672,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
   "tools.web.search.brave.mode":
     'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
+  "tools.web.search.brave.baseUrl":
+    "Custom base URL for Brave Search API requests. Useful for routing through a proxy when datacenter IPs receive degraded results. Must serve the same API contract as api.search.brave.com. Default: https://api.search.brave.com.",
   "tools.web.search.gemini.apiKey":
     "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
   "tools.web.search.gemini.model": 'Gemini model override (default: "gemini-2.5-flash").',
