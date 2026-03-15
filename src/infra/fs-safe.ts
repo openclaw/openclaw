@@ -415,7 +415,9 @@ export async function openWritableFileWithinRoot(params: {
     }
   }
 
-  const fileMode = params.mode ?? 0o600;
+  // Default to POSIX-conventional creation mode and let process umask/default ACLs apply.
+  // Callers can still override via params.mode for stricter files.
+  const fileMode = params.mode ?? 0o666;
 
   let handle: FileHandle;
   let createdForWrite = false;
@@ -756,7 +758,7 @@ async function writeFileWithinRootLegacy(params: {
       tempPath,
       data: params.data,
       encoding: params.encoding,
-      mode: targetMode || 0o600,
+      mode: targetMode ?? 0o666,
     });
     await fs.rename(tempPath, destinationPath);
     tempPath = null;
