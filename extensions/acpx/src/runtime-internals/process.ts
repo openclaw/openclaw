@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
+import path from "node:path";
 import type {
   WindowsSpawnProgram,
   WindowsSpawnProgramCandidate,
@@ -122,6 +123,27 @@ function createAbortError(): Error {
   return error;
 }
 
+export function ensurePlatformPathDefaults(
+  env: NodeJS.ProcessEnv,
+  runtimePlatform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const nextEnv = { ...env };
+  if (runtimePlatform === "darwin") {
+    const current = nextEnv.PATH ?? "";
+    const parts = current
+      .split(path.delimiter)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    for (const required of ["/usr/sbin", "/sbin"]) {
+      if (!parts.includes(required)) {
+        parts.push(required);
+      }
+    }
+    nextEnv.PATH = parts.join(path.delimiter);
+  }
+  return nextEnv;
+}
+
 export function spawnWithResolvedCommand(
   params: {
     command: string;
@@ -139,9 +161,11 @@ export function spawnWithResolvedCommand(
     options,
   );
 
-  const childEnv = omitEnvKeysCaseInsensitive(
-    process.env,
-    params.stripProviderAuthEnvVars ? listKnownProviderAuthEnvVarNames() : [],
+  const childEnv = ensurePlatformPathDefaults(
+    omitEnvKeysCaseInsensitive(
+      process.env,
+      params.stripProviderAuthEnvVars ? listKnownProviderAuthEnvVarNames() : [],
+    ),
   );
   childEnv.OPENCLAW_SHELL = "acp";
 
