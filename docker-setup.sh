@@ -19,7 +19,8 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
       _env_val="${_env_val%"'"}"
       _env_val="${_env_val#"'"}"
     fi
-    if [[ -n "$_env_key" && -z "${!_env_key+x}" ]]; then
+    # Skip invalid identifiers (indented comments, "export KEY=val" lines, keys with hyphens, etc.)
+    if [[ "$_env_key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ && -z "${!_env_key+x}" ]]; then
       export "$_env_key=$_env_val"
     fi
   done < "$ROOT_DIR/.env"
