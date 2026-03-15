@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWindowsCmdShimFixture } from "../../../shared/windows-cmd-shim-test-fixtures.js";
+import { applySkillEnvOverridesFromSnapshot } from "../../../../src/agents/skills/env-overrides.js";
 import {
+  resolveAcpxSpawnEnv,
   resolveSpawnCommand,
   spawnAndCollect,
   type SpawnCommandCache,
@@ -41,6 +43,34 @@ afterEach(async () => {
       retryDelay: 8,
     });
   }
+});
+
+describe("resolveAcpxSpawnEnv", () => {
+  it("sets OPENCLAW_SHELL marker and preserves unrelated env", () => {
+    const env = resolveAcpxSpawnEnv({
+      PATH: "/usr/bin",
+      USER: "openclaw",
+    });
+
+    expect(env.OPENCLAW_SHELL).toBe("acp");
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.USER).toBe("openclaw");
+  });
+
+  it("strips skill-injected env keys before spawning", () => {
+    const env = resolveAcpxSpawnEnv(
+      {
+        OPENAI_API_KEY: "openai-test-value", // pragma: allowlist secret
+        ANTHROPIC_API_KEY: "anthropic-test-value", // pragma: allowlist secret
+        OPENCLAW_SHELL: "wrong",
+      },
+      { stripKeys: new Set(["OPENAI_API_KEY", "OPENCLAW_SHELL"]) },
+    );
+
+    expect(env.OPENCLAW_SHELL).toBe("acp");
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBe("anthropic-test-value");
+  });
 });
 
 describe("resolveSpawnCommand", () => {
@@ -376,5 +406,50 @@ describe("spawnAndCollect", () => {
     expect(parsed.hf).toBe("hf-secret");
     expect(parsed.openclaw).toBe("keep-me");
     expect(parsed.shell).toBe("acp");
+  });
+
+  it("strips active skill-injected env vars from spawned acpx children", async () => {
+    const revert = applySkillEnvOverridesFromSnapshot({
+      snapshot: {
+        prompt: "",
+        skills: [{ name: "skill-test" }],
+      },
+      config: {
+        skills: {
+          entries: {
+            "skill-test": {
+              env: {
+                SKILL_TEST_VALUE: "from-skill",
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    try {
+      expect(process.env.SKILL_TEST_VALUE).toBe("from-skill");
+
+      const result = await spawnAndCollect({
+        command: process.execPath,
+        args: [
+          "-e",
+          "process.stdout.write(JSON.stringify({custom:process.env.SKILL_TEST_VALUE,shell:process.env.OPENCLAW_SHELL}))",
+        ],
+        cwd: process.cwd(),
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.error).toBeNull();
+
+      const parsed = JSON.parse(result.stdout) as {
+        custom?: string;
+        shell?: string;
+      };
+      expect(parsed.custom).toBeUndefined();
+      expect(parsed.shell).toBe("acp");
+    } finally {
+      revert();
+    }
   });
 });
