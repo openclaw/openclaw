@@ -414,8 +414,16 @@ export function applyJobResult(
         }
       }
     } else if (result.status === "error" && job.enabled) {
-      // Apply exponential backoff for errored jobs to prevent retry storms.
-      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
+      const retryConfig = resolveRetryConfig(state.deps.cronConfig);
+      const transient = isTransientCronError(result.error, retryConfig.retryOn);
+      // Use full backoff ladder by default for recurring jobs (retry-storm protection).
+      // Only use custom schedule when cronConfig.retry.backoffMs is explicitly set.
+      const backoffSchedule =
+        Array.isArray(state.deps.cronConfig?.retry?.backoffMs) &&
+        state.deps.cronConfig.retry.backoffMs.length > 0
+          ? state.deps.cronConfig.retry.backoffMs
+          : DEFAULT_BACKOFF_SCHEDULE_MS;
+      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1, backoffSchedule);
       let normalNext: number | undefined;
       try {
         normalNext =
@@ -429,12 +437,28 @@ export function applyJobResult(
         recordScheduleComputeError({ state, job, err });
       }
       const backoffNext = result.endedAt + backoff;
-      // Use whichever is later: the natural next run or the backoff delay.
-      job.state.nextRunAtMs =
-        normalNext !== undefined ? Math.max(normalNext, backoffNext) : backoffNext;
+      if (transient) {
+        // Transient error (network, timeout, rate-limit, 5xx): retry soon with
+        // backoff regardless of schedule interval. Without this, long-period jobs
+        // (hourly, daily) would wait until the next natural schedule time even
+        // when the error is self-healing (e.g. a brief network blip).
+        // Force runs (preserveSchedule) keep the intended cadence instead of
+        // scheduling an immediate backoff retry.
+        if (opts?.preserveSchedule && normalNext !== undefined) {
+          job.state.nextRunAtMs = Math.max(normalNext, backoffNext);
+        } else {
+          job.state.nextRunAtMs = backoffNext;
+        }
+      } else {
+        // Permanent error: respect natural schedule. Math.max ensures short-interval
+        // jobs still observe the backoff cool-down and don't form retry storms.
+        job.state.nextRunAtMs =
+          normalNext !== undefined ? Math.max(normalNext, backoffNext) : backoffNext;
+      }
       state.deps.log.info(
         {
           jobId: job.id,
+          transient,
           consecutiveErrors: job.state.consecutiveErrors,
           backoffMs: backoff,
           nextRunAtMs: job.state.nextRunAtMs,
