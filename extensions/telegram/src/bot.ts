@@ -72,6 +72,24 @@ export type TelegramBotOptions = {
 
 export { getTelegramSequentialKey };
 
+/**
+ * Hard request timeout for `getUpdates` long-poll requests (ms).
+ *
+ * Telegram long-polling holds the connection for up to `timeout` seconds
+ * (default 30) before responding.  On VPS / cloud hosts whose NAT or
+ * firewall silently drops idle TCP connections before that window elapses,
+ * the HTTP request hangs indefinitely.  The polling-session watchdog
+ * (`POLL_STALL_THRESHOLD_MS = 90 s`) eventually catches this, but it
+ * introduces 90–120 s of avoidable dead time per stall cycle.
+ *
+ * This constant sets a per-request `setTimeout` on the fetch
+ * `AbortController` so a dropped connection aborts cleanly in ≤ 60 s,
+ * letting the grammY runner retry immediately.
+ *
+ * Value = Telegram poll timeout (30 s) + 30 s network buffer.
+ */
+const GET_UPDATES_REQUEST_TIMEOUT_MS = 60_000;
+
 type TelegramFetchInput = Parameters<NonNullable<ApiClientOptions["fetch"]>>[0];
 type TelegramFetchInit = Parameters<NonNullable<ApiClientOptions["fetch"]>>[1];
 type GlobalFetchInput = Parameters<typeof globalThis.fetch>[0];
@@ -178,10 +196,25 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           init.signal.addEventListener("abort", onRequestAbort);
         }
       }
+      // Apply a hard request timeout for getUpdates to detect silently-dropped
+      // TCP connections.  VPS/cloud NAT may kill idle connections before the
+      // Telegram long-poll server-side timeout elapses, leaving the request
+      // hanging until the polling stall watchdog fires (90 s+).  This timeout
+      // lets the runner retry much sooner.
+      let requestTimer: ReturnType<typeof setTimeout> | undefined;
+      if (extractTelegramApiMethod(input) === "getUpdates") {
+        requestTimer = setTimeout(
+          () => controller.abort(new Error("getUpdates request timeout")),
+          GET_UPDATES_REQUEST_TIMEOUT_MS,
+        );
+      }
       return callFetch(input as GlobalFetchInput, {
         ...(init as GlobalFetchInit),
         signal: controller.signal,
       }).finally(() => {
+        if (requestTimer) {
+          clearTimeout(requestTimer);
+        }
         shutdownSignal.removeEventListener("abort", onShutdown);
         if (init?.signal && onRequestAbort) {
           init.signal.removeEventListener("abort", onRequestAbort);
