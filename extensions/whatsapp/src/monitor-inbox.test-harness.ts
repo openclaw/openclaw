@@ -137,6 +137,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
   const createAuthDir = opts?.authDir ?? true;
 
   beforeEach(async () => {
+    sock.ev = new EventEmitter();
     vi.clearAllMocks();
     mockLoadConfig.mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
     readAllowFromStoreMock.mockResolvedValue([]);
