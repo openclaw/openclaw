@@ -215,6 +215,7 @@ export type AgentDefaultsConfig = {
    */
   imageMaxDimensionPx?: number;
   typingIntervalSeconds?: number;
+  typingTtlSeconds?: number;
   /** Typing indicator start mode (never|instant|thinking|message). */
   typingMode?: TypingMode;
   /** Periodic background heartbeat runs. */

@@ -160,6 +160,7 @@ export const AgentDefaultsSchema = z
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
+    typingTtlSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,
     maxConcurrent: z.number().int().positive().optional(),
