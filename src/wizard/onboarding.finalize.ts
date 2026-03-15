@@ -513,12 +513,17 @@ export async function finalizeOnboardingWizard(
     } else if (!hasKey) {
       await prompter.note(
         [
-          `Provider ${label} is selected but no API key was found.`,
-          "web_search will not work until a key is added.",
+          webSearchProvider === "duckduckgo"
+            ? `Provider ${label} is selected. DuckDuckGo does not require an API key.`
+            : `Provider ${label} is selected but no API key was found.`,
+          webSearchProvider === "duckduckgo"
+            ? "web_search should work without additional setup."
+            : "web_search will not work until a key is added.",
           `  ${formatCliCommand("openclaw configure --section web")}`,
           "",
-          `Get your key at: ${entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web"}`,
-          "Docs: https://docs.openclaw.ai/tools/web",
+          webSearchProvider === "duckduckgo"
+            ? "Docs: https://docs.openclaw.ai/tools/web"
+            : `Get your key at: ${entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web"}`,
         ].join("\n"),
         "Web search",
       );

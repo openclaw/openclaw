@@ -10,11 +10,18 @@ import {
   type SecretDefaults,
 } from "./runtime-shared.js";
 
-const WEB_SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
-const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
+const WEB_SEARCH_PROVIDERS = [
+  "brave",
+  "gemini",
+  "grok",
+  "kimi",
+  "perplexity",
+  "duckduckgo",
+] as const;
+const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai"; // pragma: allowlist secret
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
-const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
-const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
+const PERPLEXITY_KEY_PREFIXES = ["pplx-"]; // pragma: allowlist secret
+const OPENROUTER_KEY_PREFIXES = ["sk-or-"]; // pragma: allowlist secret
 
 type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
 
@@ -84,6 +91,7 @@ function normalizeProvider(value: unknown): WebSearchProvider | undefined {
   const normalized = value.trim().toLowerCase();
   if (
     normalized === "brave" ||
+    normalized === "duckduckgo" ||
     normalized === "gemini" ||
     normalized === "grok" ||
     normalized === "kimi" ||
@@ -320,6 +328,9 @@ function envVarsForProvider(provider: WebSearchProvider): string[] {
   if (provider === "brave") {
     return ["BRAVE_API_KEY"];
   }
+  if (provider === "duckduckgo") {
+    return [];
+  }
   if (provider === "gemini") {
     return ["GEMINI_API_KEY"];
   }
@@ -411,6 +422,17 @@ export async function resolveRuntimeWebTools(params: {
     for (const provider of candidates) {
       const path =
         provider === "brave" ? "tools.web.search.apiKey" : `tools.web.search.${provider}.apiKey`;
+
+      if (provider === "duckduckgo") {
+        selectedProvider = provider;
+        selectedResolution = {
+          source: "missing",
+          secretRefConfigured: false,
+          fallbackUsedAfterRefFailure: false,
+        };
+        break;
+      }
+
       const value = resolveProviderKeyValue(search, provider);
       const resolution = await resolveSecretInputWithEnvFallback({
         sourceConfig: params.sourceConfig,
@@ -510,7 +532,7 @@ export async function resolveRuntimeWebTools(params: {
 
     if (selectedProvider) {
       searchMetadata.selectedProvider = selectedProvider;
-      searchMetadata.selectedProviderKeySource = selectedResolution?.source;
+      searchMetadata.selectedProviderKeySource = selectedResolution?.source ?? "missing";
       if (!configuredProvider) {
         searchMetadata.providerSource = "auto-detect";
       }

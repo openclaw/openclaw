@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = "brave" | "duckduckgo" | "gemini" | "grok" | "kimi" | "perplexity";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -29,6 +29,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     envKeys: ["BRAVE_API_KEY"],
     placeholder: "BSA...",
     signupUrl: "https://brave.com/search/api/",
+  },
+  {
+    value: "duckduckgo",
+    label: "DuckDuckGo",
+    hint: "Keyless HTML search · lightweight results",
+    envKeys: [],
+    placeholder: "No API key required",
+    signupUrl: "https://duckduckgo.com/",
   },
   {
     value: "gemini",
@@ -73,6 +81,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
   switch (provider) {
     case "brave":
       return search?.apiKey;
+    case "duckduckgo":
+      return undefined;
     case "gemini":
       return search?.gemini?.apiKey;
     case "grok":
@@ -198,7 +208,7 @@ export async function setupSearch(
   await prompter.note(
     [
       "Web search lets your agent look things up online.",
-      "Choose a provider and paste your API key.",
+      "Choose a provider. Some providers need an API key; DuckDuckGo does not.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -253,6 +263,10 @@ export async function setupSearch(
       ? applySearchKey(config, choice, existingKey)
       : applyProviderOnly(config, choice);
     return preserveDisabledState(config, result);
+  }
+
+  if (choice === "duckduckgo") {
+    return preserveDisabledState(config, applyProviderOnly(config, choice));
   }
 
   const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret

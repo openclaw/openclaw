@@ -266,6 +266,7 @@ export const ToolsWebSearchSchema = z
     provider: z
       .union([
         z.literal("brave"),
+        z.literal("duckduckgo"),
         z.literal("perplexity"),
         z.literal("grok"),
         z.literal("gemini"),

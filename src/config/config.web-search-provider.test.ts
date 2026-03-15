@@ -51,6 +51,16 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts duckduckgo provider with no extra config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "duckduckgo",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts brave llm-context mode config", () => {
     const res = validateConfigObject(
       buildWebSearchProviderConfig({
@@ -98,8 +108,8 @@ describe("web search provider auto-detection", () => {
     vi.restoreAllMocks();
   });
 
-  it("falls back to brave when no keys available", () => {
-    expect(resolveSearchProvider({})).toBe("brave");
+  it("falls back to duckduckgo when no keys available", () => {
+    expect(resolveSearchProvider({})).toBe("duckduckgo");
   });
 
   it("auto-detects brave when only BRAVE_API_KEY is set", () => {
@@ -171,5 +181,13 @@ describe("web search provider auto-detection", () => {
         typeof resolveSearchProvider
       >[0]),
     ).toBe("gemini");
+  });
+
+  it("accepts explicit duckduckgo provider", () => {
+    expect(
+      resolveSearchProvider({ provider: "duckduckgo" } as unknown as Parameters<
+        typeof resolveSearchProvider
+      >[0]),
+    ).toBe("duckduckgo");
   });
 });
