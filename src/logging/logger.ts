@@ -143,11 +143,28 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   if (isRollingPath(settings.file)) {
     pruneOldRollingLogs(path.dirname(settings.file));
   }
+  const isRolling = isRollingPath(settings.file);
+  let currentFile = settings.file;
   let currentFileBytes = getCurrentLogFileBytes(settings.file);
   let warnedAboutSizeCap = false;
 
   logger.attachTransport((logObj: LogObj) => {
     try {
+      // Rotate to the new day's log file when the date changes.
+      if (isRolling) {
+        const todayFile = defaultRollingPathForToday();
+        if (todayFile !== currentFile) {
+          fs.mkdirSync(path.dirname(todayFile), { recursive: true });
+          pruneOldRollingLogs(path.dirname(todayFile));
+          currentFile = todayFile;
+          currentFileBytes = getCurrentLogFileBytes(todayFile);
+          warnedAboutSizeCap = false;
+          // Invalidate cached logger so future getLogger() calls rebuild with the new path.
+          loggingState.cachedLogger = null;
+          loggingState.cachedSettings = null;
+        }
+      }
+
       const time = formatLocalIsoWithOffset(logObj.date ?? new Date());
       const line = JSON.stringify({ ...logObj, time });
       const payload = `${line}\n`;
@@ -160,16 +177,16 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
             time: formatLocalIsoWithOffset(new Date()),
             level: "warn",
             subsystem: "logging",
-            message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
+            message: `log file size cap reached; suppressing writes file=${currentFile} maxFileBytes=${settings.maxFileBytes}`,
           });
-          appendLogLine(settings.file, `${warningLine}\n`);
+          appendLogLine(currentFile, `${warningLine}\n`);
           process.stderr.write(
-            `[openclaw] log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
+            `[openclaw] log file size cap reached; suppressing writes file=${currentFile} maxFileBytes=${settings.maxFileBytes}\n`,
           );
         }
         return;
       }
-      if (appendLogLine(settings.file, payload)) {
+      if (appendLogLine(currentFile, payload)) {
         currentFileBytes = nextBytes;
       }
     } catch {
