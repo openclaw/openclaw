@@ -84,6 +84,7 @@ const OPEN_DM_POLICY_ALLOW_FROM_RE =
   /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
+const LASTGOOD_SUFFIX = ".lastgood";
 const loggedInvalidConfigs = new Set<string>();
 
 type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
@@ -639,6 +640,31 @@ function resolveConfigPathForDeps(deps: Required<ConfigIoDeps>): string {
   return resolveConfigPath(deps.env, resolveStateDir(deps.env, deps.homedir));
 }
 
+function lastGoodPathFor(configPath: string): string {
+  return `${configPath}${LASTGOOD_SUFFIX}`;
+}
+
+function saveLastKnownGoodConfig(
+  configPath: string,
+  raw: string,
+  ioFs: typeof fs,
+  logger: Pick<typeof console, "error">,
+): void {
+  const dest = lastGoodPathFor(configPath);
+  const tmp = `${dest}.${process.pid}.tmp`;
+  try {
+    ioFs.writeFileSync(tmp, raw, { encoding: "utf-8", mode: 0o600 });
+    ioFs.renameSync(tmp, dest);
+  } catch (err) {
+    try {
+      ioFs.unlinkSync(tmp);
+    } catch {
+      // best-effort cleanup
+    }
+    logger.error(`Failed to save last-known-good config: ${String(err)}`);
+  }
+}
+
 function normalizeDeps(overrides: ConfigIoDeps = {}): Required<ConfigIoDeps> {
   return {
     fs: overrides.fs ?? fs,
@@ -831,6 +857,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         });
       }
 
+      // Config loaded and validated successfully — persist as last-known-good
+      saveLastKnownGoodConfig(configPath, raw, deps.fs, deps.logger);
+
       const pendingSecret = AUTO_OWNER_DISPLAY_SECRET_BY_PATH.get(configPath);
       const ownerDisplaySecretResolution = ensureOwnerDisplaySecret(
         cfg,
@@ -872,6 +901,46 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         deps.logger.error(err.message);
         throw err;
       }
+
+      // Attempt to recover from last-known-good config
+      const lastGoodFile = lastGoodPathFor(configPath);
+      if (deps.fs.existsSync(lastGoodFile)) {
+        try {
+          const fallbackRaw = deps.fs.readFileSync(lastGoodFile, "utf-8");
+          const fallbackParsed = deps.json5.parse(fallbackRaw);
+          const fallbackResolved = resolveConfigIncludes(fallbackParsed, configPath, {
+            readFile: (p) => deps.fs.readFileSync(p, "utf-8"),
+            parseJson: (r) => deps.json5.parse(r),
+          });
+          if (fallbackResolved && typeof fallbackResolved === "object" && "env" in fallbackResolved) {
+            applyConfigEnv(fallbackResolved as OpenClawConfig, deps.env);
+          }
+          const fallbackSubstituted = resolveConfigEnvVars(fallbackResolved, deps.env);
+          const fallbackValidated = validateConfigObjectWithPlugins(fallbackSubstituted);
+          if (fallbackValidated.ok) {
+            deps.logger.warn(
+              `Current config invalid, falling back to last-known-good config (${lastGoodFile})`,
+            );
+            const cfg = applyModelDefaults(
+              applyCompactionDefaults(
+                applyContextPruningDefaults(
+                  applyAgentDefaults(
+                    applySessionDefaults(
+                      applyLoggingDefaults(applyMessageDefaults(fallbackValidated.config)),
+                    ),
+                  ),
+                ),
+              ),
+            );
+            normalizeConfigPaths(cfg);
+            applyConfigEnv(cfg, deps.env);
+            return applyConfigOverrides(cfg);
+          }
+        } catch {
+          // Last-known-good also failed — fall through to empty config
+        }
+      }
+
       const error = err as { code?: string };
       if (error?.code === "INVALID_CONFIG") {
         // Fail closed so invalid configs cannot silently fall back to permissive defaults.
@@ -999,6 +1068,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
 
       warnIfConfigFromFuture(validated.config, deps.logger);
+
+      // Snapshot validated successfully — persist as last-known-good
+      saveLastKnownGoodConfig(configPath, raw, deps.fs, deps.logger);
+
       const snapshotConfig = normalizeConfigPaths(
         applyTalkApiKey(
           applyTalkConfigNormalization(
