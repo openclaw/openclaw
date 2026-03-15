@@ -205,6 +205,9 @@ export async function statusCommand(
                 gatewayProbe?.error,
                 gatewayProbeAuthWarning,
                 (() => {
+                  if (gatewayProbeAuthWarning) {
+                    return null;
+                  }
                   const mode = cfg.gateway?.auth?.mode;
                   if (mode === "token" && !gatewayProbeAuth?.token) {
                     return "gateway.auth.token SecretRef is unresolved in this command path; probing without configured auth credentials.";
@@ -293,7 +296,8 @@ export async function statusCommand(
             const latency = formatDuration(gatewayProbe?.connectLatencyMs);
             if (gatewayProbe && !gatewayProbe.rpcOk) {
               const reason = gatewayProbe.error ? ` (${gatewayProbe.error})` : "";
-              return ok(`reachable ${latency}`) + muted(` · scope-limited${reason}`);
+              const label = gatewayProbe.scopeLimited ? "scope-limited" : "rpc-failed";
+              return ok(`reachable ${latency}`) + muted(` · ${label}${reason}`);
             }
             return ok(`reachable ${latency}`);
           })()
