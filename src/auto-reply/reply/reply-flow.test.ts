@@ -1968,16 +1968,40 @@ describe("resolveReplyToMode", () => {
       },
     } as OpenClawConfig;
 
+    // Telegram per-chat-type config: explicit overrides per chat type.
+    const tgChatTypeCfg = {
+      channels: {
+        telegram: {
+          replyToMode: "first",
+          replyToModeByChatType: { direct: "all", group: "off" },
+        },
+      },
+    } as OpenClawConfig;
+    // Telegram: replyToModeByChatType set but no global replyToMode;
+    // uncovered chat types should fall back to platform default.
+    const tgPartialChatTypeCfg = {
+      channels: {
+        telegram: {
+          replyToModeByChatType: { group: "first" },
+        },
+      },
+    } as OpenClawConfig;
+
     const cases: Array<{
       cfg: OpenClawConfig;
-      channel?: "telegram" | "discord" | "slack";
+      channel?: "telegram" | "discord" | "slack" | "whatsapp";
       chatType?: "direct" | "group" | "channel";
       expected: "off" | "all" | "first";
     }> = [
       { cfg: emptyCfg, channel: "telegram", expected: "off" },
+      { cfg: emptyCfg, channel: "telegram", chatType: "direct", expected: "off" },
       { cfg: emptyCfg, channel: "discord", expected: "off" },
       { cfg: emptyCfg, channel: "slack", expected: "off" },
-      { cfg: emptyCfg, channel: undefined, expected: "all" },
+      { cfg: emptyCfg, channel: undefined, expected: "off" },
+      { cfg: emptyCfg, channel: undefined, chatType: "direct", expected: "off" },
+      { cfg: emptyCfg, channel: undefined, chatType: "group", expected: "all" },
+      { cfg: emptyCfg, channel: "whatsapp", chatType: "direct", expected: "off" },
+      { cfg: emptyCfg, channel: "whatsapp", chatType: "group", expected: "all" },
       { cfg: configuredCfg, channel: "telegram", expected: "all" },
       { cfg: configuredCfg, channel: "discord", expected: "first" },
       { cfg: configuredCfg, channel: "slack", expected: "all" },
@@ -1989,6 +2013,18 @@ describe("resolveReplyToMode", () => {
       { cfg: topLevelFallbackCfg, channel: "slack", chatType: "channel", expected: "first" },
       { cfg: legacyDmCfg, channel: "slack", chatType: "direct", expected: "all" },
       { cfg: legacyDmCfg, channel: "slack", chatType: "channel", expected: "off" },
+      // Telegram replyToModeByChatType: per-chat-type overrides take priority.
+      { cfg: tgChatTypeCfg, channel: "telegram", chatType: "direct", expected: "all" },
+      { cfg: tgChatTypeCfg, channel: "telegram", chatType: "group", expected: "off" },
+      // Uncovered chat type falls back to global replyToMode.
+      { cfg: tgChatTypeCfg, channel: "telegram", chatType: "channel", expected: "first" },
+      // No chatType falls back to global replyToMode.
+      { cfg: tgChatTypeCfg, channel: "telegram", chatType: undefined, expected: "first" },
+      // Partial replyToModeByChatType: covered type uses override.
+      { cfg: tgPartialChatTypeCfg, channel: "telegram", chatType: "group", expected: "first" },
+      // Partial: uncovered type with no global replyToMode falls to platform default.
+      { cfg: tgPartialChatTypeCfg, channel: "telegram", chatType: "direct", expected: "off" },
+      { cfg: tgPartialChatTypeCfg, channel: "telegram", chatType: "channel", expected: "all" },
     ];
     for (const testCase of cases) {
       expect(resolveReplyToMode(testCase.cfg, testCase.channel, null, testCase.chatType)).toBe(
@@ -2026,9 +2062,45 @@ describe("createReplyToModeFilter", () => {
     }
   });
 
-  it("keeps only the first replyToId when mode is first", () => {
+  it("keeps only the first replyToId per target when mode is first", () => {
+    const filter = createReplyToModeFilter("first");
+    // First payload to target "1" — threaded.
+    expect(filter({ text: "hi", replyToId: "1" }).replyToId).toBe("1");
+    // Second payload to same target "1" — stripped.
+    expect(filter({ text: "next", replyToId: "1" }).replyToId).toBeUndefined();
+  });
+
+  it("threads the first reply to each distinct target in first mode", () => {
+    const filter = createReplyToModeFilter("first");
+    // First reply to message "A" — threaded.
+    expect(filter({ text: "reply-a1", replyToId: "A" }).replyToId).toBe("A");
+    // First reply to message "B" — also threaded (different target).
+    expect(filter({ text: "reply-b1", replyToId: "B" }).replyToId).toBe("B");
+    // Second reply to "A" — stripped.
+    expect(filter({ text: "reply-a2", replyToId: "A" }).replyToId).toBeUndefined();
+    // Second reply to "B" — stripped.
+    expect(filter({ text: "reply-b2", replyToId: "B" }).replyToId).toBeUndefined();
+    // First reply to "C" — threaded.
+    expect(filter({ text: "reply-c1", replyToId: "C" }).replyToId).toBe("C");
+  });
+
+  it("preserves explicit reply tags regardless of prior threading in first mode", () => {
+    const filter = createReplyToModeFilter("first");
+    // Thread to target "1".
+    expect(filter({ text: "hi", replyToId: "1" }).replyToId).toBe("1");
+    // Explicit tag to same target — still stripped in first mode (tag doesn't override).
+    expect(filter({ text: "tagged", replyToId: "1", replyToTag: true }).replyToId).toBeUndefined();
+  });
+
+  it("passes through payloads without replyToId in first mode", () => {
     const filter = createReplyToModeFilter("first");
     expect(filter({ text: "hi", replyToId: "1" }).replyToId).toBe("1");
-    expect(filter({ text: "next", replyToId: "1" }).replyToId).toBeUndefined();
+    // No replyToId — unchanged, does not affect tracking.
+    const noId = filter({ text: "no-id" });
+    expect(noId.replyToId).toBeUndefined();
+    // Next payload to "1" — still stripped.
+    expect(filter({ text: "again", replyToId: "1" }).replyToId).toBeUndefined();
+    // New target — threaded.
+    expect(filter({ text: "new", replyToId: "2" }).replyToId).toBe("2");
   });
 });

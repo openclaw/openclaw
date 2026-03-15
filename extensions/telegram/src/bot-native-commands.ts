@@ -127,7 +127,7 @@ type RegisterTelegramNativeCommandsParams = {
   telegramCfg: TelegramAccountConfig;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
-  replyToMode: ReplyToMode;
+  replyToMode?: ReplyToMode;
   textLimit: number;
   useAccessGroups: boolean;
   nativeEnabled: boolean;
@@ -518,6 +518,7 @@ export const registerTelegramNativeCommands = ({
   };
   const buildCommandDeliveryBaseOptions = (params: {
     chatId: string | number;
+    currentMessageId?: string;
     accountId: string;
     sessionKeyForInternalHooks?: string;
     mirrorIsGroup?: boolean;
@@ -528,6 +529,7 @@ export const registerTelegramNativeCommands = ({
     chunkMode: ReturnType<typeof resolveChunkMode>;
   }) => ({
     chatId: String(params.chatId),
+    currentMessageId: params.currentMessageId,
     accountId: params.accountId,
     sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
     mirrorIsGroup: params.mirrorIsGroup,
@@ -673,6 +675,7 @@ export const registerTelegramNativeCommands = ({
             });
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
+            currentMessageId: String(msg.message_id),
             accountId: route.accountId,
             sessionKeyForInternalHooks: commandSessionKey,
             mirrorIsGroup: isGroup,
@@ -847,6 +850,7 @@ export const registerTelegramNativeCommands = ({
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
+            currentMessageId: String(msg.message_id),
             accountId: route.accountId,
             sessionKeyForInternalHooks: route.sessionKey,
             mirrorIsGroup: isGroup,

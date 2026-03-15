@@ -43,13 +43,16 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
 
 export function normalizeReplyPayloadsForDelivery(
   payloads: readonly ReplyPayload[],
+  options: { currentMessageId?: string } = {},
 ): ReplyPayload[] {
   const normalized: ReplyPayload[] = [];
   for (const payload of payloads) {
     if (shouldSuppressReasoningPayload(payload)) {
       continue;
     }
-    const parsed = parseReplyDirectives(payload.text ?? "");
+    const parsed = parseReplyDirectives(payload.text ?? "", {
+      currentMessageId: options.currentMessageId,
+    });
     const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
     const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;
     const mergedMedia = mergeMediaUrls(

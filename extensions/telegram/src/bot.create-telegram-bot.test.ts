@@ -1630,6 +1630,39 @@ describe("createTelegramBot", () => {
       ).toBeUndefined();
     }
   });
+  it("threads group replies by default when replyToMode is not configured", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+    replySpy.mockResolvedValue({ text: "group reply" });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    await handler({
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 123456789, username: "user" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 222,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      -100123456789,
+      expect.any(String),
+      expect.objectContaining({ reply_to_message_id: 222 }),
+    );
+  });
   it("prefixes final replies with responsePrefix", async () => {
     replySpy.mockResolvedValue({ text: "final reply" });
     loadConfig.mockReturnValue({

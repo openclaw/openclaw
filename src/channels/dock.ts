@@ -24,6 +24,7 @@ import {
 } from "../plugin-sdk/channel-config-helpers.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import { resolveTelegramReplyToMode } from "../../extensions/telegram/src/accounts.js";
 import { normalizeE164 } from "../utils.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -260,7 +261,8 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveTelegramGroupToolPolicy,
     },
     threading: {
-      resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "off",
+      resolveReplyToMode: ({ cfg, accountId, chatType }) =>
+        resolveTelegramReplyToMode(cfg, accountId, chatType),
       buildToolContext: ({ context, hasRepliedRef }) => {
         // Telegram auto-threading should only use actual thread/topic IDs.
         // ReplyToId is a message ID and causes invalid message_thread_id in DMs.

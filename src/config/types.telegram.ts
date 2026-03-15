@@ -1,3 +1,4 @@
+import type { ChatType } from "../channels/chat-type.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -100,6 +101,12 @@ export type TelegramAccountConfig = {
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
+  /**
+   * Optional per-chat-type reply threading overrides.
+   * Example: { direct: "off", group: "all" }.
+   * Fallback order: replyToModeByChatType.<chatType> > replyToMode > platform default.
+   */
+  replyToModeByChatType?: Partial<Record<ChatType, ReplyToMode>>;
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
   direct?: Record<string, TelegramDirectConfig>;

@@ -11,23 +11,28 @@ export function resolveReplyToMode(
   accountId?: string | null,
   chatType?: string | null,
 ): ReplyToMode {
+  const normalizedChatType = chatType?.trim().toLowerCase();
+  const defaultMode: ReplyToMode =
+    normalizedChatType && normalizedChatType !== "direct" ? "all" : "off";
   const provider = normalizeChannelId(channel);
   if (!provider) {
-    return "all";
+    return defaultMode;
   }
   const resolved = getChannelDock(provider)?.threading?.resolveReplyToMode?.({
     cfg,
     accountId,
     chatType,
   });
-  return resolved ?? "all";
+  return resolved ?? defaultMode;
 }
 
 export function createReplyToModeFilter(
   mode: ReplyToMode,
   opts: { allowExplicitReplyTagsWhenOff?: boolean } = {},
 ) {
-  let hasThreaded = false;
+  // Track which replyToId values have already been threaded so the first
+  // reply to each distinct target gets a native reply reference.
+  const threadedIds = new Set<string>();
   return (payload: ReplyPayload): ReplyPayload => {
     if (!payload.replyToId) {
       return payload;
@@ -42,10 +47,11 @@ export function createReplyToModeFilter(
     if (mode === "all") {
       return payload;
     }
-    if (hasThreaded) {
+    // "first": allow the first payload per distinct replyToId.
+    if (threadedIds.has(payload.replyToId)) {
       return { ...payload, replyToId: undefined };
     }
-    hasThreaded = true;
+    threadedIds.add(payload.replyToId);
     return payload;
   };
 }

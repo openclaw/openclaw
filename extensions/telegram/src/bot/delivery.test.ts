@@ -150,6 +150,7 @@ describe("deliverReplies", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("null or undefined"));
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls[0]?.[1]).toBe("hello");
   });
@@ -314,6 +315,87 @@ describe("deliverReplies", () => {
         }),
       }),
       expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
+  });
+
+  it("parses inline MEDIA directives in telegram replies and sends photo instead of text", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn();
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 22, chat: { id: "123" } });
+    const bot = createBot({ sendMessage, sendPhoto });
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ text: "Here you go\nMEDIA:./photo.jpg" }],
+      runtime,
+      bot,
+      mediaLocalRoots: ["."],
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
+    expect(sendPhoto).toHaveBeenCalledWith(
+      "123",
+      expect.anything(),
+      expect.objectContaining({
+        caption: "Here you go",
+        parse_mode: "HTML",
+      }),
+    );
+    expect(loadWebMedia).toHaveBeenCalledWith("./photo.jpg", {
+      localRoots: ["."],
+    });
+  });
+
+  it("parses reply tags from telegram reply text before delivery", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 23, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "[[reply_to:42]] hello" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "all",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("hello"),
+      expect.objectContaining({
+        reply_to_message_id: 42,
+      }),
+    );
+  });
+
+  it("resolves [[reply_to_current]] using currentMessageId in telegram delivery", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 24, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "[[reply_to_current]] hello" }],
+      currentMessageId: "77",
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "all",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("hello"),
+      expect.objectContaining({
+        reply_to_message_id: 77,
+      }),
     );
   });
 
@@ -564,7 +646,7 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("throws when formatted and plain fallback text are both empty", async () => {
+  it("skips whitespace-only replies after normalization", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn();
     const bot = { api: { sendMessage } } as unknown as Bot;
@@ -579,7 +661,7 @@ describe("deliverReplies", () => {
         replyToMode: "off",
         textLimit: 4000,
       }),
-    ).rejects.toThrow("empty formatted text and empty plain fallback");
+    ).resolves.toEqual({ delivered: false });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -766,6 +848,58 @@ describe("deliverReplies", () => {
     for (const call of sendMessage.mock.calls) {
       expect(call[2]).toEqual(expect.objectContaining({ reply_to_message_id: 800 }));
     }
+  });
+
+  it("keeps explicit reply targets when replyToMode is off", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 22,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "explicit reply", replyToId: "801", replyToTag: true }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({ reply_to_message_id: 801 }),
+    );
+  });
+
+  it("keeps explicit replyToId targets when replyToMode is off", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 23,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "explicit id reply", replyToId: "802" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({ reply_to_message_id: 802 }),
+    );
   });
 
   it("replyToMode 'first' only applies reply-to to first media item", async () => {

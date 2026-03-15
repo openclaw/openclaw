@@ -16,6 +16,7 @@ import {
   toPluginMessageSentEvent,
 } from "../../../../src/hooks/message-hook-mappers.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { normalizeReplyPayloadsForDelivery } from "../../../../src/infra/outbound/payloads.js";
 import { buildOutboundMediaLoadOptions } from "../../../../src/media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../../../src/media/mime.js";
 import { getGlobalHookRunner } from "../../../../src/plugins/hook-runner-global.js";
@@ -57,6 +58,16 @@ type TelegramReplyChannelData = {
 };
 
 type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
+
+function resolveReplyToModeForDelivery(params: {
+  configuredReplyToMode?: ReplyToMode;
+  thread?: TelegramThreadSpec | null;
+}): ReplyToMode {
+  if (params.configuredReplyToMode) {
+    return params.configuredReplyToMode;
+  }
+  return params.thread?.scope === "dm" ? "off" : "all";
+}
 
 function buildChunkTextResolver(params: {
   textLimit: number;
@@ -539,6 +550,7 @@ function emitMessageSentHooks(params: {
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
+  currentMessageId?: string;
   chatId: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
@@ -548,7 +560,7 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   bot: Bot;
   mediaLocalRoots?: readonly string[];
-  replyToMode: ReplyToMode;
+  replyToMode?: ReplyToMode;
   textLimit: number;
   thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
@@ -568,12 +580,27 @@ export async function deliverReplies(params: {
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
+  const effectiveReplyToMode = resolveReplyToModeForDelivery({
+    configuredReplyToMode: params.replyToMode,
+    thread: params.thread,
+  });
   const chunkText = buildChunkTextResolver({
     textLimit: params.textLimit,
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
   });
-  for (const originalReply of params.replies) {
+  const validReplies: ReplyPayload[] = [];
+  for (const reply of params.replies) {
+    if (!reply) {
+      params.runtime.error?.(danger("reply is null or undefined"));
+      continue;
+    }
+    validReplies.push(reply);
+  }
+
+  for (const originalReply of normalizeReplyPayloadsForDelivery(validReplies, {
+    currentMessageId: params.currentMessageId,
+  })) {
     let reply = originalReply;
     const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls
@@ -620,8 +647,12 @@ export async function deliverReplies(params: {
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
+      const explicitReplyOverride =
+        Boolean(reply.replyToTag) || Boolean(reply.replyToCurrent);
       const replyToId =
-        params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+        effectiveReplyToMode === "off" && !explicitReplyOverride
+          ? undefined
+          : resolveTelegramReplyId(reply.replyToId);
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const shouldPinFirstMessage = telegramData?.pin === true;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
@@ -638,7 +669,7 @@ export async function deliverReplies(params: {
           replyQuoteText: params.replyQuoteText,
           linkPreview: params.linkPreview,
           replyToId,
-          replyToMode: params.replyToMode,
+          replyToMode: effectiveReplyToMode,
           progress,
         });
       } else {
@@ -657,7 +688,7 @@ export async function deliverReplies(params: {
           replyQuoteText: params.replyQuoteText,
           replyMarkup,
           replyToId,
-          replyToMode: params.replyToMode,
+          replyToMode: effectiveReplyToMode,
           progress,
         });
       }

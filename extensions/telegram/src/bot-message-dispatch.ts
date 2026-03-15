@@ -30,6 +30,7 @@ import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
+import { resolveTelegramReplyToMode } from "./accounts.js";
 import { deliverReplies } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -106,7 +107,7 @@ type DispatchTelegramMessageParams = {
   bot: Bot;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
-  replyToMode: ReplyToMode;
+  replyToMode?: ReplyToMode;
   streamMode: TelegramStreamMode;
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
@@ -114,6 +115,18 @@ type DispatchTelegramMessageParams = {
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
+
+function resolveTelegramReplyToModeForContext(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  configuredReplyToMode?: ReplyToMode;
+  chatType?: string | null;
+}): ReplyToMode {
+  if (params.configuredReplyToMode) {
+    return params.configuredReplyToMode;
+  }
+  return resolveTelegramReplyToMode(params.cfg, params.accountId, params.chatType);
+}
 
 function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
@@ -193,8 +206,16 @@ export const dispatchTelegramMessage = async ({
   const canStreamAnswerDraft =
     previewStreamingEnabled && !accountBlockStreamingEnabled && !forceBlockStreamingForReasoning;
   const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
+  const effectiveReplyToMode = resolveTelegramReplyToModeForContext({
+    cfg,
+    accountId: route.accountId,
+    configuredReplyToMode: replyToMode,
+    chatType: isGroup ? "group" : (ctxPayload.Chat?.Type ?? undefined),
+  });
   const draftReplyToMessageId =
-    replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
+    effectiveReplyToMode !== "off" && typeof msg.message_id === "number"
+      ? msg.message_id
+      : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
   // Keep DM preview lanes on real message transport. Native draft previews still
   // require a draft->message materialize hop, and that overlap keeps reintroducing
@@ -449,6 +470,7 @@ export const dispatchTelegramMessage = async ({
   };
   const deliveryBaseOptions = {
     chatId: String(chatId),
+    currentMessageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
     accountId: route.accountId,
     sessionKeyForInternalHooks: ctxPayload.SessionKey,
     mirrorIsGroup: isGroup,
@@ -457,7 +479,7 @@ export const dispatchTelegramMessage = async ({
     runtime,
     bot,
     mediaLocalRoots,
-    replyToMode,
+    replyToMode: effectiveReplyToMode,
     textLimit,
     thread: threadSpec,
     tableMode,
