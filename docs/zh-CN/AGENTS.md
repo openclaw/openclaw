@@ -31,6 +31,7 @@ go run scripts/docs-i18n/main.go -mode segment docs/channels/matrix.md
 注意事项：
 
 - doc 模式用于整页翻译；segment 模式用于小范围修补（依赖 TM）。
+- 新增技术术语、页面标题或短导航标签时，先更新 `docs/.i18n/glossary.zh-CN.json`，再跑 `doc` 模式；不要指望模型自行保留英文术语或固定译名。
 - 超大文件若超时，优先做**定点替换**或拆分后再跑。
 - 翻译后检查中文引号、CJK-Latin 间距和术语一致性。
 
