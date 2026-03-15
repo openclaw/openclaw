@@ -23,13 +23,22 @@ function buildMediaLocalRoots(
 ): string[] {
   const resolvedStateDir = path.resolve(stateDir);
   const preferredTmpDir = options.preferredTmpDir ?? resolveCachedPreferredTmpDir();
-  return [
+  const roots = [
     preferredTmpDir,
     path.join(resolvedStateDir, "media"),
     path.join(resolvedStateDir, "agents"),
     path.join(resolvedStateDir, "workspace"),
     path.join(resolvedStateDir, "sandboxes"),
   ];
+  // On macOS, /tmp is a symlink to /private/tmp. Add /private/tmp so
+  // clipboard screenshots and other files saved to /tmp are accessible.
+  if (process.platform === "darwin") {
+    const privateTmp = "/private/tmp";
+    if (!roots.includes(privateTmp)) {
+      roots.push(privateTmp);
+    }
+  }
+  return roots;
 }
 
 export function getDefaultMediaLocalRoots(): readonly string[] {
