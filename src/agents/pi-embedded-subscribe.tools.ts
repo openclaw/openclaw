@@ -193,19 +193,23 @@ export function filterToolResultMediaUrls(
  * returns base64 image data but no file path; those need a different delivery
  * path like saving to a temp file).
  */
-export function extractToolResultMediaPaths(result: unknown): string[] {
+export function extractToolResultMedia(result: unknown): {
+  mediaUrls: string[];
+  audioAsVoice: boolean;
+} {
   if (!result || typeof result !== "object") {
-    return [];
+    return { mediaUrls: [], audioAsVoice: false };
   }
   const record = result as Record<string, unknown>;
   const content = Array.isArray(record.content) ? record.content : null;
   if (!content) {
-    return [];
+    return { mediaUrls: [], audioAsVoice: false };
   }
 
   // Extract MEDIA: paths from text content blocks using the shared parser so
   // directive matching and validation stay in sync with outbound reply parsing.
   const paths: string[] = [];
+  let audioAsVoice = false;
   let hasImageContent = false;
   for (const item of content) {
     if (!item || typeof item !== "object") {
@@ -218,6 +222,9 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
     }
     if (entry.type === "text" && typeof entry.text === "string") {
       const parsed = splitMediaFromOutput(entry.text);
+      if (parsed.audioAsVoice) {
+        audioAsVoice = true;
+      }
       if (parsed.mediaUrls?.length) {
         paths.push(...parsed.mediaUrls);
       }
@@ -225,7 +232,7 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
   }
 
   if (paths.length > 0) {
-    return paths;
+    return { mediaUrls: paths, audioAsVoice };
   }
 
   // Fall back to details.path when image content exists but no MEDIA: text.
@@ -233,11 +240,16 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
     const details = record.details as Record<string, unknown> | undefined;
     const p = typeof details?.path === "string" ? details.path.trim() : "";
     if (p) {
-      return [p];
+      return { mediaUrls: [p], audioAsVoice: false };
     }
   }
 
-  return [];
+  return { mediaUrls: [], audioAsVoice: false };
+}
+
+// Backward-compatible helper for callers that only care about media paths.
+export function extractToolResultMediaPaths(result: unknown): string[] {
+  return extractToolResultMedia(result).mediaUrls;
 }
 
 export function isToolResultError(result: unknown): boolean {

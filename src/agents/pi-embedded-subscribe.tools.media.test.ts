@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { extractToolResultMediaPaths } from "./pi-embedded-subscribe.tools.js";
+import {
+  extractToolResultMedia,
+  extractToolResultMediaPaths,
+} from "./pi-embedded-subscribe.tools.js";
 
 describe("extractToolResultMediaPaths", () => {
   it("returns empty array for null/undefined", () => {
@@ -29,6 +32,10 @@ describe("extractToolResultMediaPaths", () => {
       details: { path: "/tmp/screenshot.png" },
     };
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/screenshot.png"]);
+    expect(extractToolResultMedia(result)).toEqual({
+      mediaUrls: ["/tmp/screenshot.png"],
+      audioAsVoice: false,
+    });
   });
 
   it("extracts MEDIA: path with extra text in the block", () => {
@@ -206,16 +213,20 @@ describe("extractToolResultMediaPaths", () => {
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/indented.png"]);
   });
 
-  it("extracts valid MEDIA: line while ignoring <media:audio> on another line", () => {
+  it("extracts audio MEDIA: lines and preserves audioAsVoice directives", () => {
     const result = {
       content: [
         {
           type: "text",
-          text: "<media:audio> was transcribed\nMEDIA:/tmp/tts-output.opus\nDone",
+          text: "[[audio_as_voice]]\n<media:audio> was transcribed\nMEDIA:/tmp/tts-output.opus\nDone",
         },
       ],
     };
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/tts-output.opus"]);
+    expect(extractToolResultMedia(result)).toEqual({
+      mediaUrls: ["/tmp/tts-output.opus"],
+      audioAsVoice: true,
+    });
   });
 
   it("extracts multiple MEDIA: lines from a single text block", () => {

@@ -15,7 +15,7 @@ import type {
 import {
   extractMessagingToolSend,
   extractToolErrorMessage,
-  extractToolResultMediaPaths,
+  extractToolResultMedia,
   extractToolResultText,
   filterToolResultMediaUrls,
   isToolResultError,
@@ -284,12 +284,16 @@ async function emitToolResultOutput(params: {
 
   // emitToolOutput() already handles MEDIA: directives when enabled; this path
   // only sends raw media URLs for non-verbose delivery mode.
-  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
+  const extracted = extractToolResultMedia(result);
+  const mediaPaths = filterToolResultMediaUrls(toolName, extracted.mediaUrls);
   if (mediaPaths.length === 0) {
     return;
   }
   try {
-    void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+    void ctx.params.onToolResult({
+      mediaUrls: mediaPaths,
+      ...(extracted.audioAsVoice ? { audioAsVoice: true } : {}),
+    });
   } catch {
     // ignore delivery failures
   }
