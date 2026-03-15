@@ -43,7 +43,7 @@ import {
 import {
   type OutboundSendDeps,
   resolveOutboundSendDep,
-} from "../../../src/infra/outbound/deliver.js";
+} from "../../../src/infra/outbound/send-deps.js";
 import { getTelegramRuntime } from "./runtime.js";
 
 type TelegramSendFn = ReturnType<
@@ -96,6 +96,7 @@ function buildTelegramSendOptions(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean | null;
+  forceDocument?: boolean | null;
 }): TelegramSendOptions {
   return {
     verbose: false,
@@ -106,6 +107,7 @@ function buildTelegramSendOptions(params: {
     replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
     accountId: params.accountId ?? undefined,
     silent: params.silent ?? undefined,
+    forceDocument: params.forceDocument ?? undefined,
   };
 }
 
@@ -386,6 +388,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       replyToId,
       threadId,
       silent,
+      forceDocument,
     }) => {
       const send =
         resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
@@ -401,6 +404,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
           replyToId,
           threadId,
           silent,
+          forceDocument,
         }),
       });
       return { channel: "telegram", ...result };

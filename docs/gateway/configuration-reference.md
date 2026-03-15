@@ -655,12 +655,12 @@ See the full channel index: [Channels](/channels).
 
 ### Group chat mention gating
 
-Group messages default to **require mention** (metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
+Group messages default to **require mention** (metadata mention or safe regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
 
 **Mention types:**
 
 - **Metadata mentions**: Native platform @-mentions. Ignored in WhatsApp self-chat mode.
-- **Text patterns**: Regex patterns in `agents.list[].groupChat.mentionPatterns`. Always checked.
+- **Text patterns**: Safe regex patterns in `agents.list[].groupChat.mentionPatterns`. Invalid patterns and unsafe nested repetition are ignored.
 - Mention gating is enforced only when detection is possible (native mentions or at least one pattern).
 
 ```json5
@@ -975,6 +975,7 @@ Periodic heartbeat runs.
         model: "openai/gpt-5.2-mini",
         includeReasoning: false,
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
+        isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
         session: "main",
         to: "+15555550123",
         directPolicy: "allow", // allow (default) | block
@@ -992,6 +993,7 @@ Periodic heartbeat runs.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
+- `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
@@ -2368,6 +2370,7 @@ See [Plugins](/tools/plugin).
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` when unset (trusted-network model).
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: false` for strict public-only browser navigation.
+- In strict mode, remote CDP profile endpoints (`profiles.*.cdpUrl`) are subject to the same private-network blocking during reachability/discovery checks.
 - `ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 - In strict mode, use `ssrfPolicy.hostnameAllowlist` and `ssrfPolicy.allowedHostnames` for explicit exceptions.
 - Remote profiles are attach-only (start/stop/reset disabled).
