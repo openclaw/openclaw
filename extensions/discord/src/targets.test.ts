@@ -1,12 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { listDiscordDirectoryPeersLive } from "./directory-live.js";
+import * as directoryLive from "./directory-live.js";
 import { normalizeDiscordMessagingTarget } from "./normalize.js";
 import { parseDiscordTarget, resolveDiscordChannelId, resolveDiscordTarget } from "./targets.js";
-
-vi.mock("./directory-live.js", () => ({
-  listDiscordDirectoryPeersLive: vi.fn(),
-}));
 
 describe("parseDiscordTarget", () => {
   it("parses user mention and prefixes", () => {
@@ -73,14 +69,15 @@ describe("resolveDiscordChannelId", () => {
 
 describe("resolveDiscordTarget", () => {
   const cfg = { channels: { discord: {} } } as OpenClawConfig;
-  const listPeers = vi.mocked(listDiscordDirectoryPeersLive);
 
   beforeEach(() => {
-    listPeers.mockClear();
+    vi.restoreAllMocks();
   });
 
   it("returns a resolved user for usernames", async () => {
-    listPeers.mockResolvedValueOnce([{ kind: "user", id: "user:999", name: "Jane" } as const]);
+    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([
+      { kind: "user", id: "user:999", name: "Jane" } as const,
+    ]);
 
     await expect(
       resolveDiscordTarget("jane", { cfg, accountId: "default" }),
@@ -88,14 +85,14 @@ describe("resolveDiscordTarget", () => {
   });
 
   it("falls back to parsing when lookup misses", async () => {
-    listPeers.mockResolvedValueOnce([]);
+    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([]);
     await expect(
       resolveDiscordTarget("general", { cfg, accountId: "default" }),
     ).resolves.toMatchObject({ kind: "channel", id: "general" });
   });
 
   it("does not call directory lookup for explicit user ids", async () => {
-    listPeers.mockResolvedValueOnce([]);
+    const listPeers = vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive");
     await expect(
       resolveDiscordTarget("user:123", { cfg, accountId: "default" }),
     ).resolves.toMatchObject({ kind: "user", id: "123" });
