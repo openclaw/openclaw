@@ -6,7 +6,34 @@ import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
 
-function normalizePossibleLocalImagePath(text: string | undefined): string | null {
+/**
+ * Supported file extensions for auto-detecting local file paths in plain text.
+ * Includes images and common document/media types supported by Feishu upload API.
+ */
+const AUTO_SEND_EXTENSIONS = new Set([
+  // Images
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".bmp",
+  ".ico",
+  ".tiff",
+  // Documents
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  // Audio/Video
+  ".opus",
+  ".mp4",
+]);
+
+function normalizePossibleLocalFilePath(text: string | undefined): string | null {
   const raw = text?.trim();
   if (!raw) return null;
 
@@ -19,10 +46,7 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   if (/^(https?:\/\/|data:|file:\/\/)/i.test(raw)) return null;
 
   const ext = path.extname(raw).toLowerCase();
-  const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
-    ext,
-  );
-  if (!isImageExt) return null;
+  if (!AUTO_SEND_EXTENSIONS.has(ext)) return null;
 
   if (!path.isAbsolute(raw)) return null;
   if (!fs.existsSync(raw)) return null;
@@ -93,22 +117,22 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   }) => {
     const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
     // Scheme A compatibility shim:
-    // when upstream accidentally returns a local image path as plain text,
-    // auto-upload and send as Feishu image message instead of leaking path text.
-    const localImagePath = normalizePossibleLocalImagePath(text);
-    if (localImagePath) {
+    // when upstream accidentally returns a local file path as plain text,
+    // auto-upload and send as Feishu file/image message instead of leaking path text.
+    const localFilePath = normalizePossibleLocalFilePath(text);
+    if (localFilePath) {
       try {
         const result = await sendMediaFeishu({
           cfg,
           to,
-          mediaUrl: localImagePath,
+          mediaUrl: localFilePath,
           accountId: accountId ?? undefined,
           replyToMessageId,
           mediaLocalRoots,
         });
         return { channel: "feishu", ...result };
       } catch (err) {
-        console.error(`[feishu] local image path auto-send failed:`, err);
+        console.error(`[feishu] local file path auto-send failed:`, err);
         // fall through to plain text as last resort
       }
     }
