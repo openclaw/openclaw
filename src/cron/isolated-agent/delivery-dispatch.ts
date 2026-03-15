@@ -289,7 +289,7 @@ async function retryTransientDirectCronDelivery<T>(params: {
  */
 const RAW_ERROR_OUTPUT_PATTERNS: readonly RegExp[] = [
   /^\s*\{[\s\S]*"(?:type|error|code)":\s*"(?:error|server_error|invalid_request)/,
-  /^\s*(?:Error|TypeError|RangeError|SyntaxError|ReferenceError):/,
+  /^\s*(?:TypeError|RangeError|SyntaxError|ReferenceError):/,
   /^\s*\{[\s\S]*"(?:message|error)":\s*"An error occurred/,
   /\berror"?:\s*\{[\s\S]*"(?:type|code)":\s*"(?:server_error|invalid_request|rate_limit)/,
 ];

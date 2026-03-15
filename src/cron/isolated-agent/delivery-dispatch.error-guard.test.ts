@@ -134,9 +134,13 @@ describe("isLikelyRawErrorOutput", () => {
   it("detects JS runtime exceptions", () => {
     expect(isLikelyRawErrorOutput("TypeError: Cannot read properties of undefined")).toBe(true);
     expect(isLikelyRawErrorOutput("RangeError: Maximum call stack size exceeded")).toBe(true);
-    expect(isLikelyRawErrorOutput("Error: ECONNREFUSED")).toBe(true);
     expect(isLikelyRawErrorOutput("SyntaxError: Unexpected token")).toBe(true);
     expect(isLikelyRawErrorOutput("ReferenceError: x is not defined")).toBe(true);
+  });
+
+  it("does not flag bare Error: prefix (could be legitimate monitoring prose)", () => {
+    expect(isLikelyRawErrorOutput("Error: ECONNREFUSED")).toBe(false);
+    expect(isLikelyRawErrorOutput("Error: API latency exceeded threshold")).toBe(false);
   });
 
   it("detects common provider error messages in JSON", () => {
@@ -248,7 +252,7 @@ describe("dispatchCronDelivery — error output guard", () => {
   });
 
   it("preserves summary and outputText in the returned state even when skipping", async () => {
-    const errorText = "Error: ECONNREFUSED 127.0.0.1:18789";
+    const errorText = "TypeError: Cannot read properties of undefined (reading 'send')";
     const params = makeBaseParams({ synthesizedText: errorText });
     const state = await dispatchCronDelivery(params);
 
