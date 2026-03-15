@@ -7,6 +7,7 @@ import type { ResolverContext } from "./runtime-shared.js";
 export function collectConfigAssignments(params: {
   config: OpenClawConfig;
   context: ResolverContext;
+  loadablePluginIds?: ReadonlySet<string>;
 }): void {
   const defaults = params.context.sourceConfig.secrets?.defaults;
 
@@ -26,5 +27,6 @@ export function collectConfigAssignments(params: {
     config: params.config,
     defaults,
     context: params.context,
+    loadablePluginIds: params.loadablePluginIds,
   });
 }

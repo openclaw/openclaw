@@ -12,11 +12,17 @@ import { isRecord } from "./shared.js";
  * env vars. Without this, SecretRefs in paths like
  * `plugins.entries.acpx.config.mcpServers.*.env.*` are never resolved and
  * remain as raw objects at runtime.
+ *
+ * When `loadablePluginIds` is provided, entries whose ID is not in the set
+ * are treated as inactive (stale config entries for plugins that are no longer
+ * installed). This prevents resolution failures for SecretRefs belonging to
+ * non-loadable plugins from blocking gateway startup.
  */
 export function collectPluginConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
+  loadablePluginIds?: ReadonlySet<string>;
 }): void {
   const entries = params.config.plugins?.entries;
   if (!isRecord(entries)) {
@@ -37,6 +43,20 @@ export function collectPluginConfigAssignments(params: {
     if (!isRecord(pluginConfig)) {
       continue;
     }
+
+    // Skip stale/non-loadable entries when the caller supplies a known-plugin set.
+    if (params.loadablePluginIds && !params.loadablePluginIds.has(pluginId)) {
+      collectMcpServerEnvAssignments({
+        pluginId,
+        pluginConfig,
+        active: false,
+        inactiveReason: "plugin is not loadable (stale config entry).",
+        defaults: params.defaults,
+        context: params.context,
+      });
+      continue;
+    }
+
     const enableState = resolveEnableState(pluginId, "config", normalizedConfig);
     collectMcpServerEnvAssignments({
       pluginId,

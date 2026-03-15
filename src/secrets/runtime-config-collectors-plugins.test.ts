@@ -322,4 +322,74 @@ describe("collectPluginConfigAssignments", () => {
 
     expect(context.assignments).toHaveLength(0);
   });
+
+  it("skips stale entries not in loadablePluginIds", () => {
+    const config = asConfig({
+      plugins: {
+        entries: {
+          loadable: {
+            config: {
+              mcpServers: {
+                s1: { command: "node", env: { K1: envRef("K1") } },
+              },
+            },
+          },
+          stale: {
+            config: {
+              mcpServers: {
+                s2: { command: "node", env: { K2: envRef("K2") } },
+              },
+            },
+          },
+        },
+      },
+    });
+    const context = makeContext(config);
+    const loadablePluginIds = new Set(["loadable"]);
+
+    collectPluginConfigAssignments({ config, defaults: undefined, context, loadablePluginIds });
+
+    // Only the loadable plugin should produce an assignment
+    expect(context.assignments).toHaveLength(1);
+    expect(context.assignments[0]?.path).toBe(
+      "plugins.entries.loadable.config.mcpServers.s1.env.K1",
+    );
+    // The stale entry should emit an inactive-surface warning
+    expect(
+      context.warnings.some(
+        (w) =>
+          w.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE" &&
+          w.path === "plugins.entries.stale.config.mcpServers.s2.env.K2",
+      ),
+    ).toBe(true);
+  });
+
+  it("collects all entries when loadablePluginIds is not provided", () => {
+    const config = asConfig({
+      plugins: {
+        entries: {
+          pluginA: {
+            config: {
+              mcpServers: {
+                s1: { command: "node", env: { K1: envRef("K1") } },
+              },
+            },
+          },
+          pluginB: {
+            config: {
+              mcpServers: {
+                s2: { command: "node", env: { K2: envRef("K2") } },
+              },
+            },
+          },
+        },
+      },
+    });
+    const context = makeContext(config);
+
+    // No loadablePluginIds means no filtering
+    collectPluginConfigAssignments({ config, defaults: undefined, context });
+
+    expect(context.assignments).toHaveLength(2);
+  });
 });
