@@ -233,6 +233,8 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
         }
       } catch (e: Throwable) {
         handleDisconnect("Connect failed: ${e.message}", epoch)
+      } finally {
+        pendingRequests.remove(idStr)
       }
     }
   }
