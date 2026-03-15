@@ -51,6 +51,7 @@ export type RecoverySummary = {
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
+  deferredTransient: number;
 };
 
 function resolveQueueDir(stateDir?: string): string {
@@ -165,6 +166,30 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   const raw = await fs.promises.readFile(filePath, "utf-8");
   const entry: QueuedDelivery = JSON.parse(raw);
   entry.retryCount += 1;
+  entry.lastAttemptAt = Date.now();
+  entry.lastError = error;
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await fs.promises.rename(tmp, filePath);
+}
+
+/**
+ * Update a queue entry after an attempt that should NOT consume a retry.
+ *
+ * Used for transient startup readiness errors (for example, channels that are
+ * still connecting) so recovery doesn't burn through MAX_RETRIES.
+ */
+async function noteDeliveryAttemptNoRetry(
+  id: string,
+  error: string,
+  stateDir?: string,
+): Promise<void> {
+  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const raw = await fs.promises.readFile(filePath, "utf-8");
+  const entry: QueuedDelivery = JSON.parse(raw);
   entry.lastAttemptAt = Date.now();
   entry.lastError = error;
   const tmp = `${filePath}.${process.pid}.tmp`;
@@ -323,10 +348,21 @@ export async function recoverPendingDeliveries(opts: {
   stateDir?: string;
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
   maxRecoveryMs?: number;
+  /**
+   * Until this timestamp, startup/transient delivery errors do not consume a retry.
+   * After the deadline passes they fall back to normal retry accounting.
+   */
+  transientStartupOnlyUntilMs?: number;
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
-    return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
+    return {
+      recovered: 0,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+      deferredTransient: 0,
+    };
   }
 
   // Process oldest first.
@@ -340,6 +376,7 @@ export async function recoverPendingDeliveries(opts: {
   let failed = 0;
   let skippedMaxRetries = 0;
   let deferredBackoff = 0;
+  let deferredTransient = 0;
 
   for (const entry of pending) {
     const now = Date.now();
@@ -391,6 +428,21 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+
+      const withinTransientStartupWindow =
+        opts.transientStartupOnlyUntilMs === undefined ||
+        Date.now() <= opts.transientStartupOnlyUntilMs;
+      if (withinTransientStartupWindow && isTransientStartupDeliveryError(entry.channel, errMsg)) {
+        deferredTransient += 1;
+        try {
+          await noteDeliveryAttemptNoRetry(entry.id, errMsg, opts.stateDir);
+        } catch {
+          // Best-effort update.
+        }
+        opts.log.info(`Delivery ${entry.id} deferred (startup/transient): ${errMsg}`);
+        continue;
+      }
+
       if (isPermanentDeliveryError(errMsg)) {
         opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
         try {
@@ -412,9 +464,9 @@ export async function recoverPendingDeliveries(opts: {
   }
 
   opts.log.info(
-    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skippedMaxRetries} skipped (max retries), ${deferredBackoff} deferred (backoff)`,
+    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skippedMaxRetries} skipped (max retries), ${deferredBackoff} deferred (backoff), ${deferredTransient} deferred (startup/transient)`,
   );
-  return { recovered, failed, skippedMaxRetries, deferredBackoff };
+  return { recovered, failed, skippedMaxRetries, deferredBackoff, deferredTransient };
 }
 
 export { MAX_RETRIES };
@@ -430,6 +482,20 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
 ];
+
+const TRANSIENT_STARTUP_ERROR_PATTERNS_BY_CHANNEL: Partial<Record<string, readonly RegExp[]>> = {
+  // WhatsApp outbound sends require an active listener; during gateway startup
+  // we can briefly race the provider connect loop.
+  whatsapp: [/no active whatsapp web listener/i, /whatsapp.*not (connected|ready)/i],
+};
+
+function isTransientStartupDeliveryError(channel: string, error: string): boolean {
+  const patterns = TRANSIENT_STARTUP_ERROR_PATTERNS_BY_CHANNEL[channel];
+  if (!patterns) {
+    return false;
+  }
+  return patterns.some((re) => re.test(error));
+}
 
 export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));

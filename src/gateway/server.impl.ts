@@ -775,16 +775,59 @@ export async function startGatewayServer(
   }
 
   // Recover pending outbound deliveries from previous crash/restart.
+  let deliveryRecoveryDelayedTimer: NodeJS.Timeout | null = null;
+  let deliveryRecoveryCloseStarted = false;
   if (!minimalTestGateway) {
+    const deliveryRecoveryStartedAt = Date.now();
+    const transientStartupOnlyUntilMs = deliveryRecoveryStartedAt + 15_000;
     void (async () => {
       const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
       const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
+      if (deliveryRecoveryCloseStarted) {
+        return;
+      }
+
+      let deliveryRecoveryInitialPassDone = false;
+      let deliveryRecoveryDelayedDue = false;
+      let deliveryRecoveryDelayedRan = false;
+      const runDelayedRecoveryIfReady = () => {
+        if (
+          deliveryRecoveryCloseStarted ||
+          !deliveryRecoveryInitialPassDone ||
+          !deliveryRecoveryDelayedDue ||
+          deliveryRecoveryDelayedRan
+        ) {
+          return;
+        }
+        deliveryRecoveryDelayedRan = true;
+        void recoverPendingDeliveries({
+          deliver: deliverOutboundPayloads,
+          log: log.child("delivery-recovery-delayed"),
+          cfg: cfgAtStart,
+          transientStartupOnlyUntilMs,
+        }).catch((err) => {
+          log.error(`Delivery recovery (delayed) failed: ${String(err)}`);
+        });
+      };
+
+      // Anchor the delayed pass to gateway startup time, but avoid running it
+      // concurrently with the initial recovery pass.
+      const delayedRecoveryDelayMs = Math.max(0, deliveryRecoveryStartedAt + 10_000 - Date.now());
+      deliveryRecoveryDelayedTimer = setTimeout(() => {
+        deliveryRecoveryDelayedTimer = null;
+        deliveryRecoveryDelayedDue = true;
+        runDelayedRecoveryIfReady();
+      }, delayedRecoveryDelayMs);
+
       const logRecovery = log.child("delivery-recovery");
       await recoverPendingDeliveries({
         deliver: deliverOutboundPayloads,
         log: logRecovery,
         cfg: cfgAtStart,
+        transientStartupOnlyUntilMs,
       });
+      deliveryRecoveryInitialPassDone = true;
+      runDelayedRecoveryIfReady();
     })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
   }
 
@@ -1065,6 +1108,7 @@ export async function startGatewayServer(
 
   return {
     close: async (opts) => {
+      deliveryRecoveryCloseStarted = true;
       // Run gateway_stop plugin hook before shutdown
       await runGlobalGatewayStopSafely({
         event: { reason: opts?.reason ?? "gateway stopping" },
@@ -1077,6 +1121,10 @@ export async function startGatewayServer(
       if (skillsRefreshTimer) {
         clearTimeout(skillsRefreshTimer);
         skillsRefreshTimer = null;
+      }
+      if (deliveryRecoveryDelayedTimer) {
+        clearTimeout(deliveryRecoveryDelayedTimer);
+        deliveryRecoveryDelayedTimer = null;
       }
       skillsChangeUnsub();
       authRateLimiter?.dispose();
