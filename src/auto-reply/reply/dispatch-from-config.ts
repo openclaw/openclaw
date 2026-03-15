@@ -33,6 +33,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
+import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
@@ -213,6 +214,46 @@ export async function dispatchReplyFromConfig(params: {
       ),
       "dispatch-from-config: message_received internal hook failed",
     );
+  }
+
+  // Run before_dispatch hook (blocking) — lets plugins modify or cancel before dispatch
+  if (hookRunner?.hasHooks("before_dispatch")) {
+    const dispatchResult = await hookRunner.runBeforeDispatch(
+      {
+        from: hookContext.from,
+        content: hookContext.content,
+        timestamp: hookContext.timestamp,
+        metadata: {
+          provider: hookContext.provider,
+          surface: hookContext.surface,
+          threadId: hookContext.threadId,
+        },
+      },
+      toPluginMessageContext(hookContext),
+    );
+    if (dispatchResult?.cancel) {
+      logVerbose("dispatch-from-config: before_dispatch hook cancelled dispatch");
+      recordProcessed("skipped", { reason: "before_dispatch_cancel" });
+      return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+    }
+    if (dispatchResult?.content != null) {
+      if (typeof dispatchResult.content !== "string") {
+        logVerbose(
+          "dispatch-from-config: before_dispatch hook returned non-string content, ignoring",
+        );
+      } else {
+        ctx.Body = dispatchResult.content;
+        // Re-derive all text-derived fields so downstream command parsing, ACP
+        // bypass checks, and agent input see the rewritten text.
+        const rewritten = sanitizeInboundSystemTags(
+          normalizeInboundTextNewlines(dispatchResult.content),
+        );
+        ctx.BodyForCommands = rewritten;
+        ctx.BodyForAgent = rewritten;
+        ctx.CommandBody = rewritten;
+        ctx.RawBody = dispatchResult.content;
+      }
+    }
   }
 
   // Check if we should route replies to originating channel instead of dispatcher.

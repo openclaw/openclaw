@@ -19,6 +19,8 @@ import type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchResult,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
@@ -396,6 +398,26 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run before_dispatch hook.
+   * Allows plugins to modify or cancel messages before dispatch.
+   * Runs sequentially.
+   */
+  async function runBeforeDispatch(
+    event: PluginHookBeforeDispatchEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<PluginHookBeforeDispatchResult | undefined> {
+    return runModifyingHook<"before_dispatch", PluginHookBeforeDispatchResult>(
+      "before_dispatch",
+      event,
+      ctx,
+      (acc, next) => ({
+        content: next.content ?? acc?.content,
+        cancel: next.cancel ?? acc?.cancel,
+      }),
+    );
+  }
+
+  /**
    * Run message_sending hook.
    * Allows plugins to modify or cancel outgoing messages.
    * Runs sequentially.
@@ -735,6 +757,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeReset,
     // Message hooks
     runMessageReceived,
+    runBeforeDispatch,
     runMessageSending,
     runMessageSent,
     // Tool hooks
