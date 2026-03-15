@@ -275,7 +275,11 @@ function resolveGoogle31ForwardCompatModel(
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  if (normalizedProvider !== "google" && normalizedProvider !== "google-gemini-cli") {
+  if (
+    normalizedProvider !== "google" &&
+    normalizedProvider !== "google-gemini-cli" &&
+    normalizedProvider !== "google-antigravity"
+  ) {
     return undefined;
   }
   const trimmed = modelId.trim();
