@@ -167,6 +167,10 @@ export function buildMistralModelDefinition(): ModelDefinitionConfig {
     cost: MISTRAL_DEFAULT_COST,
     contextWindow: MISTRAL_DEFAULT_CONTEXT_WINDOW,
     maxTokens: MISTRAL_DEFAULT_MAX_TOKENS,
+    // Mistral API rejects max_completion_tokens, only accepts max_tokens
+    compat: {
+      maxTokensField: "max_tokens",
+    },
   };
 }
 

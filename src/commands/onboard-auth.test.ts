@@ -606,6 +606,14 @@ describe("applyMistralConfig", () => {
       MISTRAL_DEFAULT_MODEL_REF,
     );
   });
+
+  it("sets maxTokensField to max_tokens for Mistral API compatibility", () => {
+    const cfg = applyMistralConfig({});
+    const mistralDefault = cfg.models?.providers?.mistral?.models?.find(
+      (model) => model.id === "mistral-large-latest",
+    );
+    expect(mistralDefault?.compat?.maxTokensField).toBe("max_tokens");
+  });
 });
 
 describe("applyMistralProviderConfig", () => {
