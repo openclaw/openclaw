@@ -9,6 +9,7 @@ export type GatewayAgentIdentity = {
 export type GatewayAgentRow = {
   id: string;
   name?: string;
+  model?: string;
   identity?: GatewayAgentIdentity;
 };
 
