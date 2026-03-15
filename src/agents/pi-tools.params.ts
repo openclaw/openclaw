@@ -1,3 +1,4 @@
+import os from "node:os";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 export type RequiredParamGroup = {
@@ -111,6 +112,11 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   normalizeTextLikeParam(normalized, "content");
   normalizeTextLikeParam(normalized, "oldText");
   normalizeTextLikeParam(normalized, "newText");
+  // Expand leading ~ to the user's home directory so file tools resolve paths
+  // consistently (exec/read already handle this via shell expansion).
+  if (typeof normalized.path === "string" && normalized.path.startsWith("~/")) {
+    normalized.path = os.homedir() + normalized.path.slice(1);
+  }
   return normalized;
 }
 
