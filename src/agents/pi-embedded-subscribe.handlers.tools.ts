@@ -1,4 +1,5 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   buildExecApprovalPendingReplyPayload,
@@ -573,4 +574,15 @@ export async function handleToolExecutionEnd(
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }
+
+  // Bridge to internal hook system so ~/.openclaw/hooks/ handlers can observe tool calls
+  void triggerInternalHook(
+    createInternalHookEvent("tool", "after_call", ctx.params.sessionKey ?? "", {
+      toolName,
+      params: afterToolCallArgs && typeof afterToolCallArgs === "object" ? afterToolCallArgs : {},
+      result: sanitizedResult,
+      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+      durationMs: startData?.startTime != null ? Date.now() - startData.startTime : undefined,
+    }),
+  );
 }
