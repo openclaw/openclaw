@@ -50,6 +50,11 @@ API key
 - `GEMINI_API_KEY` env var
 - Or set `skills."nano-banana-pro".apiKey` / `skills."nano-banana-pro".env.GEMINI_API_KEY` in `~/.openclaw/openclaw.json`
 
+Custom base URL (optional, for proxies)
+
+- `GEMINI_BASE_URL` env var, or `--base-url` / `-u` argument
+- Overrides the default `https://generativelanguage.googleapis.com`; the proxy must speak the Google GenAI API format
+
 Specific aspect ratio (optional)
 
 ```bash

@@ -42,6 +42,13 @@ def get_api_key(provided_key: str | None) -> str | None:
     return os.environ.get("GEMINI_API_KEY")
 
 
+def get_base_url(provided_url: str | None) -> str | None:
+    """Get base URL from argument first, then environment."""
+    if provided_url:
+        return provided_url
+    return os.environ.get("GEMINI_BASE_URL")
+
+
 def auto_detect_resolution(max_input_dim: int) -> str:
     """Infer output resolution from the largest input image dimension."""
     if max_input_dim >= 3000:
@@ -106,6 +113,10 @@ def main():
         "--api-key", "-k",
         help="Gemini API key (overrides GEMINI_API_KEY env var)"
     )
+    parser.add_argument(
+        "--base-url", "-u",
+        help="Custom base URL for the Gemini API (e.g., https://your-proxy.com)"
+    )
 
     args = parser.parse_args()
 
@@ -124,7 +135,12 @@ def main():
     from PIL import Image as PILImage
 
     # Initialise client
-    client = genai.Client(api_key=api_key)
+    base_url = get_base_url(args.base_url)
+    if base_url and not base_url.startswith(("http://", "https://")):
+        print(f"Error: --base-url must start with http:// or https://: {base_url!r}", file=sys.stderr)
+        sys.exit(1)
+    http_options = types.HttpOptions(base_url=base_url) if base_url else None
+    client = genai.Client(api_key=api_key, http_options=http_options)
 
     # Set up output path
     output_path = Path(args.filename)
