@@ -4,6 +4,23 @@ import type { SessionBindingRecord } from "../infra/outbound/session-binding-ser
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
+    agents: {
+      list: [
+        {
+          id: "main",
+          default: true,
+          subagents: {
+            allowAgents: ["codex"],
+          },
+        },
+        {
+          id: "research",
+          subagents: {
+            allowAgents: ["codex"],
+          },
+        },
+      ],
+    },
     acp: {
       enabled: true,
       backend: "acpx",
@@ -82,35 +99,25 @@ function buildSessionBindingServiceMock() {
   };
 }
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => hoisted.state.cfg,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => hoisted.state.cfg,
+}));
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));
 
-vi.mock("../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions.js")>();
-  return {
-    ...actual,
-    loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
-    resolveStorePath: (store: unknown, opts: unknown) => hoisted.resolveStorePathMock(store, opts),
-  };
-});
+vi.mock("../config/sessions.js", () => ({
+  loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
+  resolveStorePath: (store: unknown, opts: unknown) => hoisted.resolveStorePathMock(store, opts),
+  resolveAgentMainSessionKey: ({ agentId }: { agentId: string }) => `agent:${agentId}:main`,
+  canonicalizeMainSessionAlias: ({ sessionKey }: { sessionKey: string }) => sessionKey,
+}));
 
-vi.mock("../config/sessions/transcript.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/transcript.js")>();
-  return {
-    ...actual,
-    resolveSessionTranscriptFile: (params: unknown) =>
-      hoisted.resolveSessionTranscriptFileMock(params),
-  };
-});
+vi.mock("../config/sessions/transcript.js", () => ({
+  resolveSessionTranscriptFile: (params: unknown) =>
+    hoisted.resolveSessionTranscriptFileMock(params),
+}));
 
 vi.mock("../acp/control-plane/manager.js", () => {
   return {
@@ -650,6 +657,21 @@ describe("spawnAcpDirect", () => {
     hoisted.state.cfg = {
       ...hoisted.state.cfg,
       agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            subagents: {
+              allowAgents: ["codex"],
+            },
+          },
+          {
+            id: "research",
+            subagents: {
+              allowAgents: ["codex"],
+            },
+          },
+        ],
         defaults: {
           heartbeat: {
             every: "30m",
@@ -728,6 +750,21 @@ describe("spawnAcpDirect", () => {
     hoisted.state.cfg = {
       ...hoisted.state.cfg,
       agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            subagents: {
+              allowAgents: ["codex"],
+            },
+          },
+          {
+            id: "research",
+            subagents: {
+              allowAgents: ["codex"],
+            },
+          },
+        ],
         defaults: {
           heartbeat: {
             every: "30m",
@@ -762,6 +799,21 @@ describe("spawnAcpDirect", () => {
         scope: "global",
       },
       agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            subagents: {
+              allowAgents: ["codex"],
+            },
+          },
+          {
+            id: "research",
+            subagents: {
+              allowAgents: ["codex"],
+            },
+          },
+        ],
         defaults: {
           heartbeat: {
             every: "30m",
@@ -791,7 +843,21 @@ describe("spawnAcpDirect", () => {
     hoisted.state.cfg = {
       ...hoisted.state.cfg,
       agents: {
-        list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "research" }],
+        list: [
+          {
+            id: "main",
+            heartbeat: { every: "30m" },
+            subagents: {
+              allowAgents: ["codex"],
+            },
+          },
+          {
+            id: "research",
+            subagents: {
+              allowAgents: ["codex"],
+            },
+          },
+        ],
       },
     };
 
@@ -819,6 +885,9 @@ describe("spawnAcpDirect", () => {
           {
             id: "research",
             heartbeat: { every: "0m" },
+            subagents: {
+              allowAgents: ["codex"],
+            },
           },
         ],
       },
@@ -1040,5 +1109,45 @@ describe("spawnAcpDirect", () => {
     expect(result.error).toContain('streamTo="parent"');
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
+  it("forbids ACP cross-agent spawning when the requester allowlist does not include the target", async () => {
+    hoisted.state.cfg = {
+      ...createDefaultSpawnConfig(),
+      acp: {
+        enabled: true,
+        backend: "acpx",
+        allowedAgents: ["ops"],
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: ["research"],
+            },
+          },
+          {
+            id: "ops",
+          },
+        ],
+      },
+    };
+
+    const result = await spawnAcpDirect(
+      {
+        task: "do thing",
+        agentId: "ops",
+      },
+      {
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    expect(result).toEqual({
+      status: "forbidden",
+      error: "agentId is not allowed for sessions_spawn (allowed: research)",
+    });
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 });

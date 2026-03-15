@@ -256,6 +256,32 @@ function normalizeOptionalAgentId(value: string | undefined | null): string | un
   return normalizeAgentId(trimmed);
 }
 
+function resolveCrossAgentAllowlistError(params: {
+  cfg: OpenClawConfig;
+  requesterAgentId?: string;
+  targetAgentId: string;
+}): string | undefined {
+  const requesterAgentId = normalizeOptionalAgentId(params.requesterAgentId);
+  if (!requesterAgentId || requesterAgentId === params.targetAgentId) {
+    return undefined;
+  }
+
+  const allowAgents =
+    resolveAgentConfig(params.cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+  const allowAny = allowAgents.some((value) => value.trim() === "*");
+  const allowSet = new Set(
+    allowAgents
+      .filter((value) => value.trim() && value.trim() !== "*")
+      .map((value) => normalizeAgentId(value).toLowerCase()),
+  );
+  if (allowAny || allowSet.has(params.targetAgentId.toLowerCase())) {
+    return undefined;
+  }
+
+  const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
+  return `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`;
+}
+
 function summarizeError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
@@ -506,6 +532,17 @@ export async function spawnAcpDirect(
     };
   }
   const targetAgentId = targetAgentResult.agentId;
+  const crossAgentAllowlistError = resolveCrossAgentAllowlistError({
+    cfg,
+    requesterAgentId,
+    targetAgentId,
+  });
+  if (crossAgentAllowlistError) {
+    return {
+      status: "forbidden",
+      error: crossAgentAllowlistError,
+    };
+  }
   const agentPolicyError = resolveAcpAgentPolicyError(cfg, targetAgentId);
   if (agentPolicyError) {
     return {
