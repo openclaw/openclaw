@@ -544,12 +544,11 @@ export type PluginHookBeforePromptBuildResult = {
   appendSystemContext?: string;
   /**
    * Generic key-value bag for plugins to attach metadata to the persisted
-   * user message. Top-level keys are namespaced by plugin ID (e.g.
-   * `"memory-lancedb"`) so each plugin's data is isolated from others.
-   *
-   * Example: memory-lancedb stores `displayStripPatterns` under its own
-   * namespace: `{ "memory-lancedb": { displayStripPatterns: [...] } }`.
-   * The UI reads only `messageMeta["memory-lancedb"]` to apply strip patterns.
+   * user message. Plugins return flat meta (e.g. `{ displayStripPatterns: [...] }`)
+   * and the hook runner automatically wraps it under the plugin's ID
+   * (e.g. `{ "memory-lancedb": { displayStripPatterns: [...] } }`).
+   * This ensures each plugin's data is isolated — a plugin cannot write
+   * into another plugin's namespace.
    */
   messageMeta?: Record<string, unknown>;
 };

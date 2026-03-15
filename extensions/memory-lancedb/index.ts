@@ -565,14 +565,12 @@ const memoryPlugin = {
               results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
             ),
             messageMeta: {
-              "memory-lancedb": {
-                displayStripPatterns: [
-                  {
-                    regex:
-                      "<\\s*relevant[-_]memories\\b[^>]*>[\\s\\S]*?<\\s*/\\s*relevant[-_]memories\\s*>\\s*",
-                  },
-                ],
-              },
+              displayStripPatterns: [
+                {
+                  regex:
+                    "<\\s*relevant[-_]memories\\b[^>]*>[\\s\\S]*?<\\s*/\\s*relevant[-_]memories\\s*>\\s*",
+                },
+              ],
             },
           };
         } catch (err) {
