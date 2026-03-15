@@ -41,6 +41,7 @@ describe("commands registry", () => {
     expect(specs.find((spec) => spec.name === "skill")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "whoami")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "compact")).toBeTruthy();
+    expect(specs.find((spec) => spec.name === "ping")).toBeTruthy();
   });
 
   it("filters commands based on config flags", () => {

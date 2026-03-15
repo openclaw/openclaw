@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { Bot, Context } from "grammy";
 import { ensureConfiguredAcpRouteReady } from "../../../src/acp/persistent-bindings.route.js";
 import { resolveChunkMode } from "../../../src/auto-reply/chunk.js";
@@ -75,6 +77,7 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const execFileAsync = promisify(execFile);
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -599,6 +602,30 @@ export const registerTelegramNativeCommands = ({
           }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
+          if (command.name === "ping") {
+            const branch = await (async () => {
+              try {
+                const { stdout } = await execFileAsync(
+                  "git",
+                  ["rev-parse", "--abbrev-ref", "HEAD"],
+                  {
+                    cwd: process.cwd(),
+                    timeout: 1500,
+                  },
+                );
+                return stdout.trim() || "HEAD";
+              } catch {
+                return "HEAD";
+              }
+            })();
+            const pingText = `pong (${branch})`;
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () => bot.api.sendMessage(chatId, pingText, threadParams),
+            });
+            return;
+          }
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
           const rawText = ctx.match?.trim() ?? "";

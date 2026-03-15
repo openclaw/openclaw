@@ -173,6 +173,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "ping",
+      nativeName: "ping",
+      description: "Check bot responsiveness and current branch.",
+      scope: "native",
+      category: "status",
+    }),
+    defineChatCommand({
       key: "allowlist",
       description: "List/add/remove allowlist entries.",
       textAlias: "/allowlist",
