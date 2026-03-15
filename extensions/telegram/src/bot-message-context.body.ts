@@ -14,6 +14,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
+import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
 import {
   recordPendingHistoryEntryIfEnabled,
@@ -163,9 +164,7 @@ export async function resolveTelegramInboundBody(params: {
   }
 
   let bodyText = rawBody;
-  const hasAudio = allMedia.some((media) =>
-    media.contentType?.split(";")[0]?.trim().toLowerCase().startsWith("audio/"),
-  );
+  const hasAudio = allMedia.some((media) => kindFromMime(media.contentType) === "audio");
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
