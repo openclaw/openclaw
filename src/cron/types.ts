@@ -91,10 +91,14 @@ export type CronPayload =
   | CronAgentTurnPayload
   | CronScriptPayload;
 
+type CronScriptPayloadPatch = {
+  kind: "script";
+} & Partial<Omit<CronScriptPayload, "kind">>;
+
 export type CronPayloadPatch =
   | { kind: "systemEvent"; text?: string }
   | CronAgentTurnPayloadPatch
-  | CronScriptPayload;
+  | CronScriptPayloadPatch;
 
 type CronAgentTurnPayloadFields = {
   message: string;
