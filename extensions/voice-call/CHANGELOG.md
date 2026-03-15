@@ -1,78 +1,96 @@
 # Changelog
 
-## 2026.2.19
+## 2026.3.14
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
 
-## 2026.2.16
+## 2026.3.13
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
 
-## 2026.2.15
+## 2026.3.12
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
 
-## 2026.2.14
+## 2026.3.11
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
 
-## 2026.2.13
+## 2026.3.10
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
 
-## 2026.2.6-3
+## 2026.3.9
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
 
-## 2026.2.6-2
+## 2026.3.8-beta.1
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
 
-## 2026.2.6
+## 2026.3.8
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
 
-## 2026.2.4
+## 2026.3.7
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
 
-## 2026.2.2
+## 2026.3.3
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
 
-## 2026.1.31
+## 2026.3.2
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
 
-## 2026.1.30
+## 2026.3.1
 
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
 
-## 2026.1.29
+## 2026.2.26
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.2.25
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.2.24
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.2.22
 
 ### Changes
 
@@ -86,60 +104,6 @@
 - Telephony TTS supports OpenAI + ElevenLabs; Edge TTS is ignored for calls.
 - Removed legacy `tts.model`/`tts.voice`/`tts.instructions` plugin fields.
 - Ngrok free-tier bypass renamed to `tunnel.allowNgrokFreeTierLoopbackBypass` and gated to loopback + `tunnel.provider="ngrok"`.
-
-## 2026.1.23
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.22
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.21
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.20
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.17-1
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.17
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.16
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.15
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
-
-## 2026.1.14
-
-### Changes
-
-- Version alignment with core OpenClaw release numbers.
 
 ## 0.1.0
 

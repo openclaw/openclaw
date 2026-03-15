@@ -63,30 +63,20 @@ function mockSnapshot(params?: {
 
 describe("dashboardCommand bind selection", () => {
   beforeEach(() => {
-    mocks.readConfigFileSnapshot.mockReset();
-    mocks.resolveGatewayPort.mockReset();
-    mocks.resolveControlUiLinks.mockReset();
-    mocks.copyToClipboard.mockReset();
-    runtime.log.mockReset();
-    runtime.error.mockReset();
-    runtime.exit.mockReset();
+    mocks.readConfigFileSnapshot.mockClear();
+    mocks.resolveGatewayPort.mockClear();
+    mocks.resolveControlUiLinks.mockClear();
+    mocks.copyToClipboard.mockClear();
+    runtime.log.mockClear();
+    runtime.error.mockClear();
+    runtime.exit.mockClear();
   });
 
-  it("maps lan bind to loopback for dashboard URLs", async () => {
-    mockSnapshot({ bind: "lan" });
-
-    await dashboardCommand(runtime, { noOpen: true });
-
-    expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({
-      port: 18789,
-      bind: "loopback",
-      customBindHost: undefined,
-      basePath: undefined,
-    });
-  });
-
-  it("defaults to loopback when bind is unset", async () => {
-    mockSnapshot();
+  it.each([
+    { label: "maps lan bind to loopback", snapshot: { bind: "lan" as const } },
+    { label: "defaults unset bind to loopback", snapshot: undefined },
+  ])("$label for dashboard URLs", async ({ snapshot }) => {
+    mockSnapshot(snapshot);
 
     await dashboardCommand(runtime, { noOpen: true });
 

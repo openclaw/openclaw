@@ -216,6 +216,86 @@ describe("tool interrupt handlers", () => {
     manager.stop();
   });
 
+  it("reuses the same resume token for replayed pending emits", async () => {
+    const filePath = await createTempInterruptPath();
+    const manager = new ToolInterruptManager({ filePath });
+    await manager.load();
+    const handlers = createToolInterruptHandlers(manager);
+    const broadcasts: Array<{ event: string; payload: unknown }> = [];
+
+    const firstEmitPromise = handlers["tool.interrupt.emit"](
+      baseHandlerArgs({
+        req: { id: "req-emit-a", type: "req", method: "tool.interrupt.emit" } as never,
+        params: {
+          approvalRequestId: "approval-stable-token-1",
+          runId: "run-stable-token-1",
+          sessionKey: "agent:main:main",
+          toolCallId: "tool-stable-token-1",
+          interrupt: { type: "approval", text: "approve" },
+          timeoutMs: 60_000,
+          twoPhase: true,
+        },
+        respond: vi.fn(),
+        context: {
+          broadcast: (event: string, payload: unknown) => broadcasts.push({ event, payload }),
+        } as never,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(broadcasts.some((entry) => entry.event === "tool.interrupt.requested")).toBe(true);
+    });
+    const firstRequested = broadcasts.find((entry) => entry.event === "tool.interrupt.requested");
+    const firstToken = (firstRequested?.payload as { resumeToken?: string } | undefined)
+      ?.resumeToken;
+
+    const replayRespond = vi.fn();
+    const replayEmitPromise = handlers["tool.interrupt.emit"](
+      baseHandlerArgs({
+        req: { id: "req-emit-b", type: "req", method: "tool.interrupt.emit" } as never,
+        params: {
+          approvalRequestId: "approval-stable-token-1",
+          runId: "run-stable-token-1",
+          sessionKey: "agent:main:main",
+          toolCallId: "tool-stable-token-1",
+          interrupt: { type: "approval", text: "approve" },
+          timeoutMs: 60_000,
+          twoPhase: true,
+        },
+        respond: replayRespond,
+        context: {
+          broadcast: (event: string, payload: unknown) => broadcasts.push({ event, payload }),
+        } as never,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(replayRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "accepted", resumeToken: firstToken }),
+        undefined,
+      );
+    });
+
+    await handlers["tool.interrupt.resume"](
+      baseHandlerArgs({
+        req: { id: "req-resume-stable", type: "req", method: "tool.interrupt.resume" } as never,
+        params: {
+          approvalRequestId: "approval-stable-token-1",
+          runId: "run-stable-token-1",
+          sessionKey: "agent:main:main",
+          toolCallId: "tool-stable-token-1",
+          resumeToken: firstToken,
+          result: { ok: true },
+        },
+        respond: vi.fn(),
+      }),
+    );
+
+    await Promise.all([firstEmitPromise, replayEmitPromise]);
+    manager.stop();
+  });
+
   it("returns deterministic terminal state for duplicate resume RPC calls", async () => {
     const filePath = await createTempInterruptPath();
     const manager = new ToolInterruptManager({ filePath });

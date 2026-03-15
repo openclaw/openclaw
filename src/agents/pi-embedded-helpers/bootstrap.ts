@@ -84,6 +84,7 @@ export function stripThoughtSignatures<T>(
 
 export const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
 export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 150_000;
+export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "once";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 const BOOTSTRAP_HEAD_RATIO = 0.7;
 const BOOTSTRAP_TAIL_RATIO = 0.2;
@@ -109,6 +110,16 @@ export function resolveBootstrapTotalMaxChars(cfg?: OpenClawConfig): number {
     return Math.floor(raw);
   }
   return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
+}
+
+export function resolveBootstrapPromptTruncationWarningMode(
+  cfg?: OpenClawConfig,
+): "off" | "once" | "always" {
+  const raw = cfg?.agents?.defaults?.bootstrapPromptTruncationWarning;
+  if (raw === "off" || raw === "once" || raw === "always") {
+    return raw;
+  }
+  return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
 }
 
 function trimBootstrapContent(
@@ -199,15 +210,22 @@ export function buildBootstrapContextFiles(
     if (remainingTotalChars <= 0) {
       break;
     }
+    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
+    if (!pathValue) {
+      opts?.warn?.(
+        `skipping bootstrap file "${file.name}" — missing or invalid "path" field (hook may have used "filePath" instead)`,
+      );
+      continue;
+    }
     if (file.missing) {
-      const missingText = `[MISSING] Expected at: ${file.path}`;
+      const missingText = `[MISSING] Expected at: ${pathValue}`;
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
       if (!cappedMissingText) {
         break;
       }
       remainingTotalChars = Math.max(0, remainingTotalChars - cappedMissingText.length);
       result.push({
-        path: file.path,
+        path: pathValue,
         content: cappedMissingText,
       });
       continue;
@@ -231,7 +249,7 @@ export function buildBootstrapContextFiles(
     }
     remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);
     result.push({
-      path: file.path,
+      path: pathValue,
       content: contentWithinBudget,
     });
   }

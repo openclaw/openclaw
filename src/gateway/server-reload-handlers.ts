@@ -16,16 +16,22 @@ import {
 } from "../infra/restart.js";
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
-import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
+import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
+import type { ChannelKind } from "./config-reload-plan.js";
+import type { GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
+import type { HookClientIpConfig } from "./server-http.js";
+import { resolveHookClientIpConfig } from "./server/hooks.js";
 
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
+  hookClientIpConfig: HookClientIpConfig;
   heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
   browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
+  channelHealthMonitor: ChannelHealthMonitor | null;
 };
 
 export function createGatewayReloadHandlers(params: {
@@ -44,6 +50,7 @@ export function createGatewayReloadHandlers(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
   logReload: { info: (msg: string) => void; warn: (msg: string) => void };
+  createHealthMonitor: (checkIntervalMs: number) => ChannelHealthMonitor;
 }) {
   const applyHotReload = async (
     plan: GatewayReloadPlan,
@@ -60,6 +67,7 @@ export function createGatewayReloadHandlers(params: {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
       }
     }
+    nextState.hookClientIpConfig = resolveHookClientIpConfig(nextConfig);
 
     if (plan.restartHeartbeat) {
       nextState.heartbeatRunner.updateConfig(nextConfig);
@@ -88,6 +96,13 @@ export function createGatewayReloadHandlers(params: {
       } catch (err) {
         params.logBrowser.error(`server failed to start: ${String(err)}`);
       }
+    }
+
+    if (plan.restartHealthMonitor) {
+      state.channelHealthMonitor?.stop();
+      const minutes = nextConfig.gateway?.channelHealthCheckMinutes;
+      nextState.channelHealthMonitor =
+        minutes === 0 ? null : params.createHealthMonitor((minutes ?? 5) * 60_000);
     }
 
     if (plan.restartGmailWatcher) {

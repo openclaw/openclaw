@@ -6,6 +6,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveArchiveKind } from "../infra/archive.js";
+import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
+import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
@@ -17,9 +19,16 @@ import { resolveUninstallDirectoryTarget, uninstallPlugin } from "../plugins/uni
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { renderTable } from "../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { resolveUserPath, shortenHomeInString, shortenHomePath } from "../utils.js";
+import { looksLikeLocalInstallSpec } from "./install-spec.js";
+import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
+import {
+  resolveBundledInstallPlanBeforeNpm,
+  resolveBundledInstallPlanForNpmFailure,
+} from "./plugin-install-plan.js";
+import { setPluginEnabledInConfig } from "./plugins-config.js";
 import { promptYesNo } from "./prompt.js";
 
 export type PluginsListOptions = {
@@ -135,22 +144,6 @@ function createPluginInstallLogger(): { info: (msg: string) => void; warn: (msg:
   };
 }
 
-function enablePluginInConfig(config: OpenClawConfig, pluginId: string): OpenClawConfig {
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      entries: {
-        ...config.plugins?.entries,
-        [pluginId]: {
-          ...(config.plugins?.entries?.[pluginId] as object | undefined),
-          enabled: true,
-        },
-      },
-    },
-  };
-}
-
 function logSlotWarnings(warnings: string[]) {
   if (warnings.length === 0) {
     return;
@@ -160,6 +153,214 @@ function logSlotWarnings(warnings: string[]) {
   }
 }
 
+async function installBundledPluginSource(params: {
+  config: OpenClawConfig;
+  rawSpec: string;
+  bundledSource: BundledPluginSource;
+  warning: string;
+}) {
+  const existing = params.config.plugins?.load?.paths ?? [];
+  const mergedPaths = Array.from(new Set([...existing, params.bundledSource.localPath]));
+  let next: OpenClawConfig = {
+    ...params.config,
+    plugins: {
+      ...params.config.plugins,
+      load: {
+        ...params.config.plugins?.load,
+        paths: mergedPaths,
+      },
+      entries: {
+        ...params.config.plugins?.entries,
+        [params.bundledSource.pluginId]: {
+          ...(params.config.plugins?.entries?.[params.bundledSource.pluginId] as
+            | object
+            | undefined),
+          enabled: true,
+        },
+      },
+    },
+  };
+  next = recordPluginInstall(next, {
+    pluginId: params.bundledSource.pluginId,
+    source: "path",
+    spec: params.rawSpec,
+    sourcePath: params.bundledSource.localPath,
+    installPath: params.bundledSource.localPath,
+  });
+  const slotResult = applySlotSelectionForPlugin(next, params.bundledSource.pluginId);
+  next = slotResult.config;
+  await writeConfigFile(next);
+  logSlotWarnings(slotResult.warnings);
+  defaultRuntime.log(theme.warn(params.warning));
+  defaultRuntime.log(`Installed plugin: ${params.bundledSource.pluginId}`);
+  defaultRuntime.log(`Restart the gateway to load plugins.`);
+}
+
+async function runPluginInstallCommand(params: {
+  raw: string;
+  opts: { link?: boolean; pin?: boolean };
+}) {
+  const { raw, opts } = params;
+  const fileSpec = resolveFileNpmSpecToLocalPath(raw);
+  if (fileSpec && !fileSpec.ok) {
+    defaultRuntime.error(fileSpec.error);
+    process.exit(1);
+  }
+  const normalized = fileSpec && fileSpec.ok ? fileSpec.path : raw;
+  const resolved = resolveUserPath(normalized);
+  const cfg = loadConfig();
+
+  if (fs.existsSync(resolved)) {
+    if (opts.link) {
+      const existing = cfg.plugins?.load?.paths ?? [];
+      const merged = Array.from(new Set([...existing, resolved]));
+      const probe = await installPluginFromPath({ path: resolved, dryRun: true });
+      if (!probe.ok) {
+        defaultRuntime.error(probe.error);
+        process.exit(1);
+      }
+
+      let next: OpenClawConfig = enablePluginInConfig(
+        {
+          ...cfg,
+          plugins: {
+            ...cfg.plugins,
+            load: {
+              ...cfg.plugins?.load,
+              paths: merged,
+            },
+          },
+        },
+        probe.pluginId,
+      ).config;
+      next = recordPluginInstall(next, {
+        pluginId: probe.pluginId,
+        source: "path",
+        sourcePath: resolved,
+        installPath: resolved,
+        version: probe.version,
+      });
+      const slotResult = applySlotSelectionForPlugin(next, probe.pluginId);
+      next = slotResult.config;
+      await writeConfigFile(next);
+      logSlotWarnings(slotResult.warnings);
+      defaultRuntime.log(`Linked plugin path: ${shortenHomePath(resolved)}`);
+      defaultRuntime.log(`Restart the gateway to load plugins.`);
+      return;
+    }
+
+    const result = await installPluginFromPath({
+      path: resolved,
+      logger: createPluginInstallLogger(),
+    });
+    if (!result.ok) {
+      defaultRuntime.error(result.error);
+      process.exit(1);
+    }
+    // Plugin CLI registrars may have warmed the manifest registry cache before install;
+    // force a rescan so config validation sees the freshly installed plugin.
+    clearPluginManifestRegistryCache();
+
+    let next = enablePluginInConfig(cfg, result.pluginId).config;
+    const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
+    next = recordPluginInstall(next, {
+      pluginId: result.pluginId,
+      source,
+      sourcePath: resolved,
+      installPath: result.targetDir,
+      version: result.version,
+    });
+    const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
+    next = slotResult.config;
+    await writeConfigFile(next);
+    logSlotWarnings(slotResult.warnings);
+    defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
+    defaultRuntime.log(`Restart the gateway to load plugins.`);
+    return;
+  }
+
+  if (opts.link) {
+    defaultRuntime.error("`--link` requires a local path.");
+    process.exit(1);
+  }
+
+  if (
+    looksLikeLocalInstallSpec(raw, [
+      ".ts",
+      ".js",
+      ".mjs",
+      ".cjs",
+      ".tgz",
+      ".tar.gz",
+      ".tar",
+      ".zip",
+    ])
+  ) {
+    defaultRuntime.error(`Path not found: ${resolved}`);
+    process.exit(1);
+  }
+
+  const bundledPreNpmPlan = resolveBundledInstallPlanBeforeNpm({
+    rawSpec: raw,
+    findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
+  });
+  if (bundledPreNpmPlan) {
+    await installBundledPluginSource({
+      config: cfg,
+      rawSpec: raw,
+      bundledSource: bundledPreNpmPlan.bundledSource,
+      warning: bundledPreNpmPlan.warning,
+    });
+    return;
+  }
+
+  const result = await installPluginFromNpmSpec({
+    spec: raw,
+    logger: createPluginInstallLogger(),
+  });
+  if (!result.ok) {
+    const bundledFallbackPlan = resolveBundledInstallPlanForNpmFailure({
+      rawSpec: raw,
+      code: result.code,
+      findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
+    });
+    if (!bundledFallbackPlan) {
+      defaultRuntime.error(result.error);
+      process.exit(1);
+    }
+
+    await installBundledPluginSource({
+      config: cfg,
+      rawSpec: raw,
+      bundledSource: bundledFallbackPlan.bundledSource,
+      warning: bundledFallbackPlan.warning,
+    });
+    return;
+  }
+  // Ensure config validation sees newly installed plugin(s) even if the cache was warmed at startup.
+  clearPluginManifestRegistryCache();
+
+  let next = enablePluginInConfig(cfg, result.pluginId).config;
+  const installRecord = resolvePinnedNpmInstallRecordForCli(
+    raw,
+    Boolean(opts.pin),
+    result.targetDir,
+    result.version,
+    result.npmResolution,
+    defaultRuntime.log,
+    theme.warn,
+  );
+  next = recordPluginInstall(next, {
+    pluginId: result.pluginId,
+    ...installRecord,
+  });
+  const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
+  next = slotResult.config;
+  await writeConfigFile(next);
+  logSlotWarnings(slotResult.warnings);
+  defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
+  defaultRuntime.log(`Restart the gateway to load plugins.`);
+}
 export function registerPluginsCli(program: Command) {
   const plugins = program
     .command("plugins")
@@ -203,7 +404,7 @@ export function registerPluginsCli(program: Command) {
       );
 
       if (!opts.verbose) {
-        const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+        const tableWidth = getTerminalTableWidth();
         const sourceRoots = resolvePluginSourceRoots({
           workspaceDir: report.workspaceDir,
         });
@@ -352,24 +553,21 @@ export function registerPluginsCli(program: Command) {
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
       const cfg = loadConfig();
-      let next: OpenClawConfig = {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          entries: {
-            ...cfg.plugins?.entries,
-            [id]: {
-              ...(cfg.plugins?.entries as Record<string, { enabled?: boolean }> | undefined)?.[id],
-              enabled: true,
-            },
-          },
-        },
-      };
+      const enableResult = enablePluginInConfig(cfg, id);
+      let next: OpenClawConfig = enableResult.config;
       const slotResult = applySlotSelectionForPlugin(next, id);
       next = slotResult.config;
       await writeConfigFile(next);
       logSlotWarnings(slotResult.warnings);
-      defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
+      if (enableResult.enabled) {
+        defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
+        return;
+      }
+      defaultRuntime.log(
+        theme.warn(
+          `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
+        ),
+      );
     });
 
   plugins
@@ -378,19 +576,7 @@ export function registerPluginsCli(program: Command) {
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
       const cfg = loadConfig();
-      const next = {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          entries: {
-            ...cfg.plugins?.entries,
-            [id]: {
-              ...(cfg.plugins?.entries as Record<string, { enabled?: boolean }> | undefined)?.[id],
-              enabled: false,
-            },
-          },
-        },
-      };
+      const next = setPluginEnabledInConfig(cfg, id, false);
       await writeConfigFile(next);
       defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
     });
@@ -537,147 +723,7 @@ export function registerPluginsCli(program: Command) {
     .option("-l, --link", "Link a local path instead of copying", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
-      const fileSpec = resolveFileNpmSpecToLocalPath(raw);
-      if (fileSpec && !fileSpec.ok) {
-        defaultRuntime.error(fileSpec.error);
-        process.exit(1);
-      }
-      const normalized = fileSpec && fileSpec.ok ? fileSpec.path : raw;
-      const resolved = resolveUserPath(normalized);
-      const cfg = loadConfig();
-
-      if (fs.existsSync(resolved)) {
-        if (opts.link) {
-          const existing = cfg.plugins?.load?.paths ?? [];
-          const merged = Array.from(new Set([...existing, resolved]));
-          const probe = await installPluginFromPath({ path: resolved, dryRun: true });
-          if (!probe.ok) {
-            defaultRuntime.error(probe.error);
-            process.exit(1);
-          }
-
-          let next: OpenClawConfig = enablePluginInConfig(
-            {
-              ...cfg,
-              plugins: {
-                ...cfg.plugins,
-                load: {
-                  ...cfg.plugins?.load,
-                  paths: merged,
-                },
-              },
-            },
-            probe.pluginId,
-          );
-          next = recordPluginInstall(next, {
-            pluginId: probe.pluginId,
-            source: "path",
-            sourcePath: resolved,
-            installPath: resolved,
-            version: probe.version,
-          });
-          const slotResult = applySlotSelectionForPlugin(next, probe.pluginId);
-          next = slotResult.config;
-          await writeConfigFile(next);
-          logSlotWarnings(slotResult.warnings);
-          defaultRuntime.log(`Linked plugin path: ${shortenHomePath(resolved)}`);
-          defaultRuntime.log(`Restart the gateway to load plugins.`);
-          return;
-        }
-
-        const result = await installPluginFromPath({
-          path: resolved,
-          logger: createPluginInstallLogger(),
-        });
-        if (!result.ok) {
-          defaultRuntime.error(result.error);
-          process.exit(1);
-        }
-        // Plugin CLI registrars may have warmed the manifest registry cache before install;
-        // force a rescan so config validation sees the freshly installed plugin.
-        clearPluginManifestRegistryCache();
-
-        let next = enablePluginInConfig(cfg, result.pluginId);
-        const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
-        next = recordPluginInstall(next, {
-          pluginId: result.pluginId,
-          source,
-          sourcePath: resolved,
-          installPath: result.targetDir,
-          version: result.version,
-        });
-        const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
-        next = slotResult.config;
-        await writeConfigFile(next);
-        logSlotWarnings(slotResult.warnings);
-        defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
-        defaultRuntime.log(`Restart the gateway to load plugins.`);
-        return;
-      }
-
-      if (opts.link) {
-        defaultRuntime.error("`--link` requires a local path.");
-        process.exit(1);
-      }
-
-      const looksLikePath =
-        raw.startsWith(".") ||
-        raw.startsWith("~") ||
-        path.isAbsolute(raw) ||
-        raw.endsWith(".ts") ||
-        raw.endsWith(".js") ||
-        raw.endsWith(".mjs") ||
-        raw.endsWith(".cjs") ||
-        raw.endsWith(".tgz") ||
-        raw.endsWith(".tar.gz") ||
-        raw.endsWith(".tar") ||
-        raw.endsWith(".zip");
-      if (looksLikePath) {
-        defaultRuntime.error(`Path not found: ${resolved}`);
-        process.exit(1);
-      }
-
-      const result = await installPluginFromNpmSpec({
-        spec: raw,
-        logger: createPluginInstallLogger(),
-      });
-      if (!result.ok) {
-        defaultRuntime.error(result.error);
-        process.exit(1);
-      }
-      // Ensure config validation sees newly installed plugin(s) even if the cache was warmed at startup.
-      clearPluginManifestRegistryCache();
-
-      let next = enablePluginInConfig(cfg, result.pluginId);
-      const resolvedSpec = result.npmResolution?.resolvedSpec;
-      const recordSpec = opts.pin && resolvedSpec ? resolvedSpec : raw;
-      if (opts.pin && !resolvedSpec) {
-        defaultRuntime.log(
-          theme.warn("Could not resolve exact npm version for --pin; storing original npm spec."),
-        );
-      }
-      if (opts.pin && resolvedSpec) {
-        defaultRuntime.log(`Pinned npm install record to ${resolvedSpec}.`);
-      }
-      next = recordPluginInstall(next, {
-        pluginId: result.pluginId,
-        source: "npm",
-        spec: recordSpec,
-        installPath: result.targetDir,
-        version: result.version,
-        resolvedName: result.npmResolution?.name,
-        resolvedVersion: result.npmResolution?.version,
-        resolvedSpec: result.npmResolution?.resolvedSpec,
-        integrity: result.npmResolution?.integrity,
-        shasum: result.npmResolution?.shasum,
-        resolvedAt: result.npmResolution?.resolvedAt,
-      });
-      const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
-      next = slotResult.config;
-      await writeConfigFile(next);
-      logSlotWarnings(slotResult.warnings);
-      defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
-      defaultRuntime.log(`Restart the gateway to load plugins.`);
+      await runPluginInstallCommand({ raw, opts });
     });
 
   plugins

@@ -1,5 +1,7 @@
 import type { ChatType } from "../channels/chat-type.js";
+import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
+import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
   channel?: string;
@@ -91,6 +93,16 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
   models?: MediaUnderstandingModelConfig[];
+  /**
+   * Echo the audio transcript back to the originating chat before agent processing.
+   * Lets users verify what was heard. Default: false.
+   */
+  echoTranscript?: boolean;
+  /**
+   * Format string for the echoed transcript. Use `{transcript}` as placeholder.
+   * Default: '📝 "{transcript}"'
+   */
+  echoFormat?: string;
 };
 
 export type LinkModelConfig = {
@@ -175,6 +187,42 @@ export type GroupToolPolicyConfig = {
   deny?: string[];
 };
 
+export const TOOLS_BY_SENDER_KEY_TYPES = ["id", "e164", "username", "name"] as const;
+export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
+
+export function parseToolsBySenderTypedKey(
+  rawKey: string,
+): { type: ToolsBySenderKeyType; value: string } | undefined {
+  const trimmed = rawKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const lowered = trimmed.toLowerCase();
+  for (const type of TOOLS_BY_SENDER_KEY_TYPES) {
+    const prefix = `${type}:`;
+    if (!lowered.startsWith(prefix)) {
+      continue;
+    }
+    return {
+      type,
+      value: trimmed.slice(prefix.length),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Per-sender overrides.
+ *
+ * Prefer explicit key prefixes:
+ * - id:<senderId>
+ * - e164:<phone>
+ * - username:<handle>
+ * - name:<display-name>
+ * - * (wildcard)
+ *
+ * Legacy unprefixed keys are supported for backward compatibility and are matched as senderId only.
+ */
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {
@@ -190,6 +238,10 @@ export type ExecToolConfig = {
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
+  /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
+  safeBinTrustedDirs?: string[];
+  /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
+  safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   /** Default time (ms) before an exec command auto-backgrounds. */
   backgroundMs?: number;
   /** Default timeout (seconds) before auto-killing exec commands. */
@@ -267,16 +319,25 @@ export type MemorySearchConfig = {
   sources?: Array<"memory" | "sessions">;
   /** Extra paths to include in memory search (directories or .md files). */
   extraPaths?: string[];
+  /** Optional multimodal file indexing for selected extra paths. */
+  multimodal?: {
+    /** Enable image/audio embeddings from extraPaths. */
+    enabled?: boolean;
+    /** Which non-text file types to index. */
+    modalities?: Array<"image" | "audio" | "all">;
+    /** Max bytes allowed per multimodal file before it is skipped. */
+    maxFileBytes?: number;
+  };
   /** Experimental memory search settings. */
   experimental?: {
     /** Enable session transcript indexing (experimental, default: false). */
     sessionMemory?: boolean;
   };
   /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage";
+  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
   remote?: {
     baseUrl?: string;
-    apiKey?: string;
+    apiKey?: SecretInput;
     headers?: Record<string, string>;
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
@@ -292,9 +353,14 @@ export type MemorySearchConfig = {
     };
   };
   /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "none";
+  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
+  /**
+   * Gemini embedding-2 models only: output vector dimensions.
+   * Supported values today are 768, 1536, and 3072.
+   */
+  outputDimensionality?: number;
   /** Local embedding settings (node-llama-cpp). */
   local?: {
     /** GGUF model path or hf: URI. */
@@ -336,6 +402,8 @@ export type MemorySearchConfig = {
       deltaBytes?: number;
       /** Minimum appended JSONL lines before session transcripts are reindexed. */
       deltaMessages?: number;
+      /** Force session reindex after compaction-triggered transcript updates (default: true). */
+      postCompactionForce?: boolean;
     };
   };
   /** Query behavior. */
@@ -389,33 +457,54 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", or "grok"). */
-      provider?: "brave" | "perplexity" | "grok";
+      /** Search provider ("brave", "gemini", "grok", "kimi", or "perplexity"). */
+      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
-      apiKey?: string;
+      apiKey?: SecretInput;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
-      /** Perplexity-specific configuration (used when provider="perplexity"). */
-      perplexity?: {
-        /** API key for Perplexity or OpenRouter (defaults to PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). */
-        apiKey?: string;
-        /** Base URL for API requests (defaults to OpenRouter: https://openrouter.ai/api/v1). */
-        baseUrl?: string;
-        /** Model to use (defaults to "perplexity/sonar-pro"). */
+      /** Brave-specific configuration (used when provider="brave"). */
+      brave?: {
+        /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
+        mode?: "web" | "llm-context";
+      };
+      /** Gemini-specific configuration (used when provider="gemini"). */
+      gemini?: {
+        /** Gemini API key (defaults to GEMINI_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
         model?: string;
       };
       /** Grok-specific configuration (used when provider="grok"). */
       grok?: {
         /** API key for xAI (defaults to XAI_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Model to use (defaults to "grok-4-1-fast"). */
         model?: string;
         /** Include inline citations in response text as markdown links (default: false). */
         inlineCitations?: boolean;
+      };
+      /** Kimi-specific configuration (used when provider="kimi"). */
+      kimi?: {
+        /** Moonshot/Kimi API key (defaults to KIMI_API_KEY or MOONSHOT_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** Base URL for API requests (defaults to "https://api.moonshot.ai/v1"). */
+        baseUrl?: string;
+        /** Model to use (defaults to "moonshot-v1-128k"). */
+        model?: string;
+      };
+      /** Perplexity-specific configuration (used when provider="perplexity"). */
+      perplexity?: {
+        /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
+        baseUrl?: string;
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
+        model?: string;
       };
     };
     fetch?: {
@@ -439,7 +528,7 @@ export type ToolsConfig = {
         /** Enable Firecrawl fallback (default: true when apiKey is set). */
         enabled?: boolean;
         /** Firecrawl API key (optional; defaults to FIRECRAWL_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Firecrawl base URL (default: https://api.firecrawl.dev). */
         baseUrl?: string;
         /** Whether to keep only main content (default: true). */
@@ -520,6 +609,8 @@ export type ToolsConfig = {
     model?: string | { primary?: string; fallbacks?: string[] };
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into allow and/or default sub-agent denylist. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };

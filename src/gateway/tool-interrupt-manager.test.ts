@@ -31,7 +31,7 @@ describe("ToolInterruptManager", () => {
     };
     const record = persisted.interrupts?.["approval-1"];
     expect(record?.resumeTokenHash).toMatch(/^[a-f0-9]{64}$/);
-    expect(record?.resumeToken).toBe(token);
+    expect(record?.resumeToken).toBeUndefined();
 
     const resumed = await manager.resume({
       approvalRequestId: "approval-1",
@@ -190,6 +190,33 @@ describe("ToolInterruptManager", () => {
     manager.stop();
   });
 
+  it("reuses the same pending resume token across replayed emits", async () => {
+    const filePath = await createTempInterruptPath();
+    const manager = new ToolInterruptManager({ filePath });
+    await manager.load();
+
+    const first = await manager.emit({
+      approvalRequestId: "approval-replay-1",
+      runId: "run-replay-1",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-replay-1",
+      interrupt: { type: "approval" },
+      timeoutMs: 60_000,
+    });
+    const second = await manager.emit({
+      approvalRequestId: "approval-replay-1",
+      runId: "run-replay-1",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-replay-1",
+      interrupt: { type: "approval" },
+      timeoutMs: 60_000,
+    });
+
+    expect(second.created).toBe(false);
+    expect(second.requested.resumeToken).toBe(first.requested.resumeToken);
+    manager.stop();
+  });
+
   it("lists pending interrupts and preserves resume capability across reload", async () => {
     const filePath = await createTempInterruptPath();
     const manager = new ToolInterruptManager({ filePath });
@@ -206,7 +233,7 @@ describe("ToolInterruptManager", () => {
       timeoutMs: 60_000,
     });
 
-    const pending = manager.listPending();
+    const pending = await manager.listPending();
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({
       approvalRequestId: "approval-list-1",
@@ -219,8 +246,9 @@ describe("ToolInterruptManager", () => {
     manager.stop();
     const reloaded = new ToolInterruptManager({ filePath });
     await reloaded.load();
-    const pendingAfterReload = reloaded.listPending();
+    const pendingAfterReload = await reloaded.listPending();
     expect(pendingAfterReload).toHaveLength(1);
+    expect(pendingAfterReload[0]?.resumeToken).not.toBe(emitted.requested.resumeToken);
 
     const resumed = await reloaded.resume({
       approvalRequestId: "approval-list-1",
@@ -233,6 +261,10 @@ describe("ToolInterruptManager", () => {
       result: { ok: true },
     });
     expect(resumed).toMatchObject({ ok: true, alreadyResolved: false });
+    const persisted = JSON.parse(await fs.readFile(filePath, "utf-8")) as {
+      interrupts?: Record<string, { resumeToken?: string }>;
+    };
+    expect(persisted.interrupts?.["approval-list-1"]?.resumeToken).toBeUndefined();
     reloaded.stop();
   });
 

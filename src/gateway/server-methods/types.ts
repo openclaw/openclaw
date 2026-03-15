@@ -19,6 +19,9 @@ export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
   clientIp?: string;
+  canvasHostUrl?: string;
+  canvasCapability?: string;
+  canvasCapabilityExpiresAtMs?: number;
 };
 
 export type RespondFn = (
@@ -49,6 +52,7 @@ export type GatewayRequestContext = {
   nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedMobileNode: () => boolean;
+  hasExecApprovalClients?: () => boolean;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;

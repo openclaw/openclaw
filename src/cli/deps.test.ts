@@ -24,32 +24,42 @@ vi.mock("../channels/web/index.js", () => {
   return { sendMessageWhatsApp: sendFns.whatsapp };
 });
 
-vi.mock("../telegram/send.js", () => {
+vi.mock("../../extensions/telegram/src/send.js", () => {
   moduleLoads.telegram();
   return { sendMessageTelegram: sendFns.telegram };
 });
 
-vi.mock("../discord/send.js", () => {
+vi.mock("../../extensions/discord/src/send.js", () => {
   moduleLoads.discord();
   return { sendMessageDiscord: sendFns.discord };
 });
 
-vi.mock("../slack/send.js", () => {
+vi.mock("../../extensions/slack/src/send.js", () => {
   moduleLoads.slack();
   return { sendMessageSlack: sendFns.slack };
 });
 
-vi.mock("../signal/send.js", () => {
+vi.mock("../../extensions/signal/src/send.js", () => {
   moduleLoads.signal();
   return { sendMessageSignal: sendFns.signal };
 });
 
-vi.mock("../imessage/send.js", () => {
+vi.mock("../../extensions/imessage/src/send.js", () => {
   moduleLoads.imessage();
   return { sendMessageIMessage: sendFns.imessage };
 });
 
 describe("createDefaultDeps", () => {
+  function expectUnusedModulesNotLoaded(exclude: keyof typeof moduleLoads): void {
+    const keys = Object.keys(moduleLoads) as Array<keyof typeof moduleLoads>;
+    for (const key of keys) {
+      if (key === exclude) {
+        continue;
+      }
+      expect(moduleLoads[key]).not.toHaveBeenCalled();
+    }
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -64,25 +74,17 @@ describe("createDefaultDeps", () => {
     expect(moduleLoads.signal).not.toHaveBeenCalled();
     expect(moduleLoads.imessage).not.toHaveBeenCalled();
 
-    const sendTelegram = deps.sendMessageTelegram as unknown as (
-      ...args: unknown[]
-    ) => Promise<unknown>;
+    const sendTelegram = deps["telegram"] as (...args: unknown[]) => Promise<unknown>;
     await sendTelegram("chat", "hello", { verbose: false });
 
     expect(moduleLoads.telegram).toHaveBeenCalledTimes(1);
     expect(sendFns.telegram).toHaveBeenCalledTimes(1);
-    expect(moduleLoads.whatsapp).not.toHaveBeenCalled();
-    expect(moduleLoads.discord).not.toHaveBeenCalled();
-    expect(moduleLoads.slack).not.toHaveBeenCalled();
-    expect(moduleLoads.signal).not.toHaveBeenCalled();
-    expect(moduleLoads.imessage).not.toHaveBeenCalled();
+    expectUnusedModulesNotLoaded("telegram");
   });
 
   it("reuses module cache after first dynamic import", async () => {
     const deps = createDefaultDeps();
-    const sendDiscord = deps.sendMessageDiscord as unknown as (
-      ...args: unknown[]
-    ) => Promise<unknown>;
+    const sendDiscord = deps["discord"] as (...args: unknown[]) => Promise<unknown>;
 
     await sendDiscord("channel", "first", { verbose: false });
     await sendDiscord("channel", "second", { verbose: false });

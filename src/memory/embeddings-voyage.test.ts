@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
 import { type FetchMock, withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { createVoyageEmbeddingProvider, normalizeVoyageModel } from "./embeddings-voyage.js";
+import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
@@ -32,6 +33,7 @@ async function createDefaultVoyageProvider(
   fetchMock: ReturnType<typeof createFetchMock>,
 ) {
   vi.stubGlobal("fetch", fetchMock);
+  mockPublicPinnedHostname();
   mockVoyageApiKey();
   return createVoyageEmbeddingProvider({
     config: {} as never,
@@ -77,6 +79,7 @@ describe("voyage embedding provider", () => {
   it("respects remote overrides for baseUrl and apiKey", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
 
     const result = await createVoyageEmbeddingProvider({
       config: {} as never,
@@ -84,7 +87,7 @@ describe("voyage embedding provider", () => {
       model: "voyage-4-lite",
       fallback: "none",
       remote: {
-        baseUrl: "https://proxy.example.com",
+        baseUrl: "https://example.com",
         apiKey: "remote-override-key",
         headers: { "X-Custom": "123" },
       },
@@ -95,7 +98,7 @@ describe("voyage embedding provider", () => {
     const call = fetchMock.mock.calls[0];
     expect(call).toBeDefined();
     const [url, init] = call as [RequestInfo | URL, RequestInit | undefined];
-    expect(url).toBe("https://proxy.example.com/embeddings");
+    expect(url).toBe("https://example.com/embeddings");
 
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer remote-override-key");

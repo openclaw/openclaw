@@ -14,12 +14,14 @@ import {
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
+import { CDP_PORT_RANGE_START } from "./profiles.js";
 
 export type ResolvedBrowserConfig = {
   enabled: boolean;
   evaluateEnabled: boolean;
   controlPort: number;
+  cdpPortRangeStart: number;
+  cdpPortRangeEnd: number;
   cdpProtocol: "http" | "https";
   cdpHost: string;
   cdpIsLoopback: boolean;
@@ -34,6 +36,7 @@ export type ResolvedBrowserConfig = {
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
+  relayBindHost?: string;
 };
 
 export type ResolvedBrowserProfile = {
@@ -43,7 +46,8 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   color: string;
-  driver: "openclaw" | "extension";
+  driver: "openclaw" | "extension" | "existing-session";
+  attachOnly: boolean;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -63,6 +67,27 @@ function normalizeTimeoutMs(raw: number | undefined, fallback: number) {
   return value < 0 ? fallback : value;
 }
 
+function resolveCdpPortRangeStart(
+  rawStart: number | undefined,
+  fallbackStart: number,
+  rangeSpan: number,
+) {
+  const start =
+    typeof rawStart === "number" && Number.isFinite(rawStart)
+      ? Math.floor(rawStart)
+      : fallbackStart;
+  if (start < 1 || start > 65535) {
+    throw new Error(`browser.cdpPortRangeStart must be between 1 and 65535, got: ${start}`);
+  }
+  const maxStart = 65535 - rangeSpan;
+  if (start > maxStart) {
+    throw new Error(
+      `browser.cdpPortRangeStart (${start}) is too high for a ${rangeSpan + 1}-port range; max is ${maxStart}.`,
+    );
+  }
+  return start;
+}
+
 function normalizeStringList(raw: string[] | undefined): string[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) {
     return undefined;
@@ -75,19 +100,28 @@ function normalizeStringList(raw: string[] | undefined): string[] | undefined {
 
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
   const allowPrivateNetwork = cfg?.ssrfPolicy?.allowPrivateNetwork;
+  const dangerouslyAllowPrivateNetwork = cfg?.ssrfPolicy?.dangerouslyAllowPrivateNetwork;
   const allowedHostnames = normalizeStringList(cfg?.ssrfPolicy?.allowedHostnames);
   const hostnameAllowlist = normalizeStringList(cfg?.ssrfPolicy?.hostnameAllowlist);
+  const hasExplicitPrivateSetting =
+    allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
+  // Browser defaults to trusted-network mode unless explicitly disabled by policy.
+  const resolvedAllowPrivateNetwork =
+    dangerouslyAllowPrivateNetwork === true ||
+    allowPrivateNetwork === true ||
+    !hasExplicitPrivateSetting;
 
   if (
-    allowPrivateNetwork === undefined &&
-    allowedHostnames === undefined &&
-    hostnameAllowlist === undefined
+    !resolvedAllowPrivateNetwork &&
+    !hasExplicitPrivateSetting &&
+    !allowedHostnames &&
+    !hostnameAllowlist
   ) {
     return undefined;
   }
 
   return {
-    ...(allowPrivateNetwork === true ? { allowPrivateNetwork: true } : {}),
+    ...(resolvedAllowPrivateNetwork ? { dangerouslyAllowPrivateNetwork: true } : {}),
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
   };
@@ -96,14 +130,16 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
 export function parseHttpUrl(raw: string, label: string) {
   const trimmed = raw.trim();
   const parsed = new URL(trimmed);
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`${label} must be http(s), got: ${parsed.protocol.replace(":", "")}`);
+  const allowed = ["http:", "https:", "ws:", "wss:"];
+  if (!allowed.includes(parsed.protocol)) {
+    throw new Error(`${label} must be http(s) or ws(s), got: ${parsed.protocol.replace(":", "")}`);
   }
 
+  const isSecure = parsed.protocol === "https:" || parsed.protocol === "wss:";
   const port =
     parsed.port && Number.parseInt(parsed.port, 10) > 0
       ? Number.parseInt(parsed.port, 10)
-      : parsed.protocol === "https:"
+      : isSecure
         ? 443
         : 80;
 
@@ -127,47 +163,40 @@ function ensureDefaultProfile(
   defaultColor: string,
   legacyCdpPort?: number,
   derivedDefaultCdpPort?: number,
+  legacyCdpUrl?: string,
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
   if (!result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]) {
     result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME] = {
       cdpPort: legacyCdpPort ?? derivedDefaultCdpPort ?? CDP_PORT_RANGE_START,
       color: defaultColor,
+      // Preserve the full cdpUrl for ws/wss endpoints so resolveProfile()
+      // doesn't reconstruct from cdpProtocol/cdpHost/cdpPort (which drops
+      // the WebSocket protocol and query params like API keys).
+      ...(legacyCdpUrl ? { cdpUrl: legacyCdpUrl } : {}),
     };
   }
   return result;
 }
 
 /**
- * Ensure a built-in "chrome" profile exists for the Chrome extension relay.
- *
- * Note: this is an OpenClaw browser profile (routing config), not a Chrome user profile.
- * It points at the local relay CDP endpoint (controlPort + 1).
+ * Ensure a built-in "user" profile exists for Chrome's existing-session attach flow.
  */
-function ensureDefaultChromeExtensionProfile(
+function ensureDefaultUserBrowserProfile(
   profiles: Record<string, BrowserProfileConfig>,
-  controlPort: number,
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
-  if (result.chrome) {
+  if (result.user) {
     return result;
   }
-  const relayPort = controlPort + 1;
-  if (!Number.isFinite(relayPort) || relayPort <= 0 || relayPort > 65535) {
-    return result;
-  }
-  // Avoid adding the built-in profile if the derived relay port is already used by another profile
-  // (legacy single-profile configs may use controlPort+1 for openclaw/openclaw CDP).
-  if (getUsedPorts(result).has(relayPort)) {
-    return result;
-  }
-  result.chrome = {
-    driver: "extension",
-    cdpUrl: `http://127.0.0.1:${relayPort}`,
+  result.user = {
+    driver: "existing-session",
+    attachOnly: true,
     color: "#00AA00",
   };
   return result;
 }
+
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
   rootConfig?: OpenClawConfig,
@@ -184,6 +213,13 @@ export function resolveBrowserConfig(
   );
 
   const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
+  const cdpRangeSpan = derivedCdpRange.end - derivedCdpRange.start;
+  const cdpPortRangeStart = resolveCdpPortRangeStart(
+    cfg?.cdpPortRangeStart,
+    derivedCdpRange.start,
+    cdpRangeSpan,
+  );
+  const cdpPortRangeEnd = cdpPortRangeStart + cdpRangeSpan;
 
   const rawCdpUrl = (cfg?.cdpUrl ?? "").trim();
   let cdpInfo:
@@ -218,26 +254,39 @@ export function resolveBrowserConfig(
   const defaultProfileFromConfig = cfg?.defaultProfile?.trim() || undefined;
   // Use legacy cdpUrl port for backward compatibility when no profiles configured
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
-  const profiles = ensureDefaultChromeExtensionProfile(
-    ensureDefaultProfile(cfg?.profiles, defaultColor, legacyCdpPort, derivedCdpRange.start),
-    controlPort,
+  const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
+  const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
+  const profiles = ensureDefaultUserBrowserProfile(
+    ensureDefaultProfile(
+      cfg?.profiles,
+      defaultColor,
+      legacyCdpPort,
+      cdpPortRangeStart,
+      legacyCdpUrl,
+    ),
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
+
   const defaultProfile =
     defaultProfileFromConfig ??
     (profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
       ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
-      : DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+      : profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
+        ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
+        : "user");
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
     : [];
   const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
+  const relayBindHost = cfg?.relayBindHost?.trim() || undefined;
 
   return {
     enabled,
     evaluateEnabled,
     controlPort,
+    cdpPortRangeStart,
+    cdpPortRangeEnd,
     cdpProtocol,
     cdpHost: cdpInfo.parsed.hostname,
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
@@ -252,6 +301,7 @@ export function resolveBrowserConfig(
     profiles,
     ssrfPolicy,
     extraArgs,
+    relayBindHost,
   };
 }
 
@@ -272,7 +322,26 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
-  const driver = profile.driver === "extension" ? "extension" : "openclaw";
+  const driver =
+    profile.driver === "extension"
+      ? "extension"
+      : profile.driver === "existing-session"
+        ? "existing-session"
+        : "openclaw";
+
+  if (driver === "existing-session") {
+    // existing-session uses Chrome MCP auto-connect; no CDP port/URL needed
+    return {
+      name: profileName,
+      cdpPort: 0,
+      cdpUrl: "",
+      cdpHost: "",
+      cdpIsLoopback: true,
+      color: profile.color,
+      driver,
+      attachOnly: true,
+    };
+  }
 
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
@@ -293,6 +362,7 @@ export function resolveProfile(
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
     driver,
+    attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };
 }
 

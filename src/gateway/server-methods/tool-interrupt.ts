@@ -178,7 +178,7 @@ export function createToolInterruptHandlers(manager: ToolInterruptManager): Gate
         true,
         {
           state,
-          interrupts: manager.listPending(),
+          interrupts: await manager.listPending(),
         },
         undefined,
       );

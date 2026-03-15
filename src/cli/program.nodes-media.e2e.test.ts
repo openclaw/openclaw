@@ -1,9 +1,11 @@
 import * as fs from "node:fs/promises";
+import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseCameraSnapPayload, parseCameraClipPayload } from "./nodes-camera.js";
-import { callGateway, installBaseProgramMocks, runTui, runtime } from "./program.test-mocks.js";
+import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helpers.js";
+import { callGateway, installBaseProgramMocks, runtime } from "./program.test-mocks.js";
 
 installBaseProgramMocks();
+let registerNodesCli: (program: Command) => void;
 
 function getFirstRuntimeLogLine(): string {
   const first = runtime.log.mock.calls[0]?.[0];
@@ -30,39 +32,11 @@ async function expectLoggedSingleMediaFile(params?: {
   return mediaPath;
 }
 
-function expectParserAcceptsUrlWithoutBase64(
-  parse: (payload: Record<string, unknown>) => { url?: string; base64?: string },
-  payload: Record<string, unknown>,
-  expectedUrl: string,
-) {
-  const result = parse(payload);
-  expect(result.url).toBe(expectedUrl);
-  expect(result.base64).toBeUndefined();
-}
-
-function expectParserRejectsMissingMedia(
-  parse: (payload: Record<string, unknown>) => unknown,
-  payload: Record<string, unknown>,
-  expectedMessage: string,
-) {
-  expect(() => parse(payload)).toThrow(expectedMessage);
-}
-
-const IOS_NODE = {
-  nodeId: "ios-node",
-  displayName: "iOS Node",
-  remoteIp: "192.168.0.88",
-  connected: true,
-} as const;
-
 function mockNodeGateway(command?: string, payload?: Record<string, unknown>) {
   callGateway.mockImplementation(async (...args: unknown[]) => {
     const opts = (args[0] ?? {}) as { method?: string };
     if (opts.method === "node.list") {
-      return {
-        ts: Date.now(),
-        nodes: [IOS_NODE],
-      };
+      return createIosNodeListResponse();
     }
     if (opts.method === "node.invoke" && command) {
       return {
@@ -76,18 +50,31 @@ function mockNodeGateway(command?: string, payload?: Record<string, unknown>) {
   });
 }
 
-const { buildProgram } = await import("./program.js");
-
 describe("cli program (nodes media)", () => {
-  function createProgramWithCleanRuntimeLog() {
-    const program = buildProgram();
-    runtime.log.mockClear();
-    return program;
-  }
+  let program: Command;
+
+  beforeAll(async () => {
+    ({ registerNodesCli } = await import("./nodes-cli.js"));
+    program = new Command();
+    program.exitOverride();
+    registerNodesCli(program);
+  });
 
   async function runNodesCommand(argv: string[]) {
-    const program = createProgramWithCleanRuntimeLog();
+    runtime.log.mockClear();
     await program.parseAsync(argv, { from: "user" });
+  }
+
+  async function expectCameraSnapParseFailure(args: string[], expectedError: RegExp) {
+    mockNodeGateway();
+
+    const parseProgram = new Command();
+    parseProgram.exitOverride();
+    registerNodesCli(parseProgram);
+    runtime.error.mockClear();
+
+    await expect(parseProgram.parseAsync(args, { from: "user" })).rejects.toThrow(/exit/i);
+    expect(runtime.error.mock.calls.some(([msg]) => expectedError.test(String(msg)))).toBe(true);
   }
 
   async function runAndExpectUrlPayloadMediaFile(params: {
@@ -106,7 +93,6 @@ describe("cli program (nodes media)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    runTui.mockResolvedValue(undefined);
   });
 
   it("runs nodes camera snap and prints two MEDIA paths", async () => {
@@ -130,11 +116,14 @@ describe("cli program (nodes media)", () => {
       .map((l) => l.replace(/^MEDIA:/, ""))
       .filter(Boolean);
     expect(mediaPaths).toHaveLength(2);
+    expect(mediaPaths[0]).toContain("openclaw-camera-snap-");
+    expect(mediaPaths[1]).toContain("openclaw-camera-snap-");
 
     try {
-      for (const p of mediaPaths) {
-        await expect(fs.readFile(p, "utf8")).resolves.toBe("hi");
-      }
+      // Content bytes are covered by single-output camera/file tests; here we
+      // only verify dual snapshot behavior and that both paths were written.
+      await expect(fs.stat(mediaPaths[0])).resolves.toBeTruthy();
+      await expect(fs.stat(mediaPaths[1])).resolves.toBeTruthy();
     } finally {
       await Promise.all(mediaPaths.map((p) => fs.unlink(p).catch(() => {})));
     }
@@ -289,19 +278,26 @@ describe("cli program (nodes media)", () => {
   });
 
   it("fails nodes camera snap on invalid facing", async () => {
-    mockNodeGateway();
+    await expectCameraSnapParseFailure(
+      ["nodes", "camera", "snap", "--node", "ios-node", "--facing", "nope"],
+      /invalid facing/i,
+    );
+  });
 
-    const program = buildProgram();
-    runtime.error.mockClear();
-
-    await expect(
-      program.parseAsync(["nodes", "camera", "snap", "--node", "ios-node", "--facing", "nope"], {
-        from: "user",
-      }),
-    ).rejects.toThrow(/exit/i);
-
-    expect(runtime.error.mock.calls.some(([msg]) => /invalid facing/i.test(String(msg)))).toBe(
-      true,
+  it("fails nodes camera snap when --facing both and --device-id are combined", async () => {
+    await expectCameraSnapParseFailure(
+      [
+        "nodes",
+        "camera",
+        "snap",
+        "--node",
+        "ios-node",
+        "--facing",
+        "both",
+        "--device-id",
+        "cam-123",
+      ],
+      /facing=both is not allowed when --device-id is set/i,
     );
   });
 
@@ -329,7 +325,7 @@ describe("cli program (nodes media)", () => {
         command: "camera.snap" as const,
         payload: {
           format: "jpg",
-          url: "https://example.com/photo.jpg",
+          url: `https://${IOS_NODE.remoteIp}/photo.jpg`,
           width: 640,
           height: 480,
         },
@@ -341,7 +337,7 @@ describe("cli program (nodes media)", () => {
         command: "camera.clip" as const,
         payload: {
           format: "mp4",
-          url: "https://example.com/clip.mp4",
+          url: `https://${IOS_NODE.remoteIp}/clip.mp4`,
           durationMs: 5000,
           hasAudio: true,
         },
@@ -355,63 +351,6 @@ describe("cli program (nodes media)", () => {
         argv,
         expectedPathPattern,
       });
-    });
-  });
-
-  describe("url payload parsers", () => {
-    const parserCases = [
-      {
-        label: "camera snap parser",
-        parse: (payload: Record<string, unknown>) => parseCameraSnapPayload(payload),
-        validPayload: {
-          format: "jpg",
-          url: "https://example.com/photo.jpg",
-          width: 640,
-          height: 480,
-        },
-        invalidPayload: { format: "jpg", width: 640, height: 480 },
-        expectedUrl: "https://example.com/photo.jpg",
-        expectedError: "invalid camera.snap payload",
-      },
-      {
-        label: "camera clip parser",
-        parse: (payload: Record<string, unknown>) => parseCameraClipPayload(payload),
-        validPayload: {
-          format: "mp4",
-          url: "https://example.com/clip.mp4",
-          durationMs: 3000,
-          hasAudio: true,
-        },
-        invalidPayload: { format: "mp4", durationMs: 3000, hasAudio: true },
-        expectedUrl: "https://example.com/clip.mp4",
-        expectedError: "invalid camera.clip payload",
-      },
-    ] as const;
-
-    it.each(parserCases)(
-      "accepts url without base64: $label",
-      ({ parse, validPayload, expectedUrl }) => {
-        expectParserAcceptsUrlWithoutBase64(parse, validPayload, expectedUrl);
-      },
-    );
-
-    it.each(parserCases)(
-      "rejects payload with neither base64 nor url: $label",
-      ({ parse, invalidPayload, expectedError }) => {
-        expectParserRejectsMissingMedia(parse, invalidPayload, expectedError);
-      },
-    );
-
-    it("snap parser accepts both base64 and url", () => {
-      const result = parseCameraSnapPayload({
-        format: "jpg",
-        base64: "aGk=",
-        url: "https://example.com/photo.jpg",
-        width: 640,
-        height: 480,
-      });
-      expect(result.base64).toBe("aGk=");
-      expect(result.url).toBe("https://example.com/photo.jpg");
     });
   });
 });

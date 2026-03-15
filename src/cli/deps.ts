@@ -1,59 +1,73 @@
-import type { sendMessageWhatsApp } from "../channels/web/index.js";
-import type { sendMessageDiscord } from "../discord/send.js";
-import type { sendMessageIMessage } from "../imessage/send.js";
-import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
-import type { sendMessageSignal } from "../signal/send.js";
-import type { sendMessageSlack } from "../slack/send.js";
-import type { sendMessageTelegram } from "../telegram/send.js";
+import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
+import { createOutboundSendDepsFromCliSource } from "./outbound-send-mapping.js";
 
-export type CliDeps = {
-  sendMessageWhatsApp: typeof sendMessageWhatsApp;
-  sendMessageTelegram: typeof sendMessageTelegram;
-  sendMessageDiscord: typeof sendMessageDiscord;
-  sendMessageSlack: typeof sendMessageSlack;
-  sendMessageSignal: typeof sendMessageSignal;
-  sendMessageIMessage: typeof sendMessageIMessage;
-};
+/**
+ * Lazy-loaded per-channel send functions, keyed by channel ID.
+ * Values are proxy functions that dynamically import the real module on first use.
+ */
+export type CliDeps = { [channelId: string]: unknown };
+
+// Per-channel module caches for lazy loading.
+const senderCache = new Map<string, Promise<Record<string, unknown>>>();
+
+/**
+ * Create a lazy-loading send function proxy for a channel.
+ * The channel's module is loaded on first call and cached for reuse.
+ */
+function createLazySender(
+  channelId: string,
+  loader: () => Promise<Record<string, unknown>>,
+  exportName: string,
+): (...args: unknown[]) => Promise<unknown> {
+  return async (...args: unknown[]) => {
+    let cached = senderCache.get(channelId);
+    if (!cached) {
+      cached = loader();
+      senderCache.set(channelId, cached);
+    }
+    const mod = await cached;
+    const fn = mod[exportName] as (...a: unknown[]) => Promise<unknown>;
+    return await fn(...args);
+  };
+}
 
 export function createDefaultDeps(): CliDeps {
   return {
-    sendMessageWhatsApp: async (...args) => {
-      const { sendMessageWhatsApp } = await import("../channels/web/index.js");
-      return await sendMessageWhatsApp(...args);
-    },
-    sendMessageTelegram: async (...args) => {
-      const { sendMessageTelegram } = await import("../telegram/send.js");
-      return await sendMessageTelegram(...args);
-    },
-    sendMessageDiscord: async (...args) => {
-      const { sendMessageDiscord } = await import("../discord/send.js");
-      return await sendMessageDiscord(...args);
-    },
-    sendMessageSlack: async (...args) => {
-      const { sendMessageSlack } = await import("../slack/send.js");
-      return await sendMessageSlack(...args);
-    },
-    sendMessageSignal: async (...args) => {
-      const { sendMessageSignal } = await import("../signal/send.js");
-      return await sendMessageSignal(...args);
-    },
-    sendMessageIMessage: async (...args) => {
-      const { sendMessageIMessage } = await import("../imessage/send.js");
-      return await sendMessageIMessage(...args);
-    },
+    whatsapp: createLazySender(
+      "whatsapp",
+      () => import("../channels/web/index.js") as Promise<Record<string, unknown>>,
+      "sendMessageWhatsApp",
+    ),
+    telegram: createLazySender(
+      "telegram",
+      () => import("../../extensions/telegram/src/send.js") as Promise<Record<string, unknown>>,
+      "sendMessageTelegram",
+    ),
+    discord: createLazySender(
+      "discord",
+      () => import("../../extensions/discord/src/send.js") as Promise<Record<string, unknown>>,
+      "sendMessageDiscord",
+    ),
+    slack: createLazySender(
+      "slack",
+      () => import("../../extensions/slack/src/send.js") as Promise<Record<string, unknown>>,
+      "sendMessageSlack",
+    ),
+    signal: createLazySender(
+      "signal",
+      () => import("../../extensions/signal/src/send.js") as Promise<Record<string, unknown>>,
+      "sendMessageSignal",
+    ),
+    imessage: createLazySender(
+      "imessage",
+      () => import("../../extensions/imessage/src/send.js") as Promise<Record<string, unknown>>,
+      "sendMessageIMessage",
+    ),
   };
 }
 
-// Provider docking: extend this mapping when adding new outbound send deps.
 export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
-  return {
-    sendWhatsApp: deps.sendMessageWhatsApp,
-    sendTelegram: deps.sendMessageTelegram,
-    sendDiscord: deps.sendMessageDiscord,
-    sendSlack: deps.sendMessageSlack,
-    sendSignal: deps.sendMessageSignal,
-    sendIMessage: deps.sendMessageIMessage,
-  };
+  return createOutboundSendDepsFromCliSource(deps);
 }
 
-export { logWebSelfId } from "../web/auth-store.js";
+export { logWebSelfId } from "../../extensions/whatsapp/src/auth-store.js";

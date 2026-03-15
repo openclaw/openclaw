@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
@@ -13,6 +10,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
+import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -30,34 +28,20 @@ async function withHeartbeatFixture(
     seedSession: (sessionKey: string, input: SeedSessionInput) => Promise<void>;
   }) => Promise<unknown>,
 ): Promise<unknown> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-model-"));
-  const storePath = path.join(tmpDir, "sessions.json");
-
-  const seedSession = async (sessionKey: string, input: SeedSessionInput) => {
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: input.updatedAt ?? Date.now(),
-            lastChannel: input.lastChannel,
-            lastTo: input.lastTo,
-          },
-        },
-        null,
-        2,
-      ),
-    );
-  };
-
-  await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
-
-  try {
-    return await run({ tmpDir, storePath, seedSession });
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  }
+  return withTempHeartbeatSandbox(
+    async ({ tmpDir, storePath }) => {
+      const seedSession = async (sessionKey: string, input: SeedSessionInput) => {
+        await seedSessionStore(storePath, sessionKey, {
+          updatedAt: input.updatedAt,
+          lastChannel: input.lastChannel,
+          lastProvider: input.lastChannel,
+          lastTo: input.lastTo,
+        });
+      };
+      return run({ tmpDir, storePath, seedSession });
+    },
+    { prefix: "openclaw-hb-model-" },
+  );
 }
 
 beforeEach(() => {
@@ -80,6 +64,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   async function runDefaultsHeartbeat(params: {
     model?: string;
     suppressToolErrorWarnings?: boolean;
+    lightContext?: boolean;
+    isolatedSession?: boolean;
   }) {
     return withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
       const cfg: OpenClawConfig = {
@@ -91,6 +77,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
               target: "whatsapp",
               model: params.model,
               suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+              lightContext: params.lightContext,
+              isolatedSession: params.isolatedSession,
             },
           },
         },
@@ -135,6 +123,82 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         suppressToolErrorWarnings: true,
       }),
     );
+  });
+
+  it("passes bootstrapContextMode when heartbeat lightContext is enabled", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ lightContext: true });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        bootstrapContextMode: "lightweight",
+      }),
+    );
+  });
+
+  it("uses isolated session key when isolatedSession is enabled", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+              isolatedSession: true,
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: { getQueueSize: () => 0, nowMs: () => 0 },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const ctx = replySpy.mock.calls[0]?.[0];
+      // Isolated heartbeat runs use a dedicated session key with :heartbeat suffix
+      expect(ctx.SessionKey).toBe(`${sessionKey}:heartbeat`);
+    });
+  });
+
+  it("uses main session key when isolatedSession is not set", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: { getQueueSize: () => 0, nowMs: () => 0 },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const ctx = replySpy.mock.calls[0]?.[0];
+      expect(ctx.SessionKey).toBe(sessionKey);
+    });
   });
 
   it("passes per-agent heartbeat model override (merged with defaults)", async () => {

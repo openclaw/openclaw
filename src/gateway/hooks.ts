@@ -5,12 +5,13 @@ import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
 
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
+const MAX_HOOK_IDEMPOTENCY_KEY_LENGTH = 256;
 
 export type HooksConfigResolved = {
   basePath: string;
@@ -99,7 +100,7 @@ function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId: string): Set<
   return known;
 }
 
-function resolveAllowedAgentIds(raw: string[] | undefined): Set<string> | undefined {
+export function resolveAllowedAgentIds(raw: string[] | undefined): Set<string> | undefined {
   if (!Array.isArray(raw)) {
     return undefined;
   }
@@ -223,6 +224,7 @@ export type HookAgentPayload = {
   message: string;
   name: string;
   agentId?: string;
+  idempotencyKey?: string;
   wakeMode: "now" | "next-heartbeat";
   sessionKey?: string;
   deliver: boolean;
@@ -231,6 +233,11 @@ export type HookAgentPayload = {
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
+};
+
+export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
+  sessionKey: string;
+  allowUnsafeExternalContent?: boolean;
 };
 
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
@@ -256,6 +263,28 @@ export function resolveHookChannel(raw: unknown): HookMessageChannel | null {
 
 export function resolveHookDeliver(raw: unknown): boolean {
   return raw !== false;
+}
+
+function resolveOptionalHookIdempotencyKey(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > MAX_HOOK_IDEMPOTENCY_KEY_LENGTH) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+export function resolveHookIdempotencyKey(params: {
+  payload: Record<string, unknown>;
+  headers?: Record<string, string>;
+}): string | undefined {
+  return (
+    resolveOptionalHookIdempotencyKey(params.headers?.["idempotency-key"]) ||
+    resolveOptionalHookIdempotencyKey(params.headers?.["x-openclaw-idempotency-key"]) ||
+    resolveOptionalHookIdempotencyKey(params.payload.idempotencyKey)
+  );
 }
 
 export function resolveHookTargetAgentId(
@@ -327,6 +356,25 @@ export function resolveHookSessionKey(params: {
   return { ok: true, value: generated };
 }
 
+export function normalizeHookDispatchSessionKey(params: {
+  sessionKey: string;
+  targetAgentId: string | undefined;
+}): string {
+  const trimmed = params.sessionKey.trim();
+  if (!trimmed || !params.targetAgentId) {
+    return trimmed;
+  }
+  const parsed = parseAgentSessionKey(trimmed);
+  if (!parsed) {
+    return trimmed;
+  }
+  const targetAgentId = normalizeAgentId(params.targetAgentId);
+  if (parsed.agentId !== targetAgentId) {
+    return `agent:${parsed.agentId}:${parsed.rest}`;
+  }
+  return parsed.rest;
+}
+
 export function normalizeAgentPayload(payload: Record<string, unknown>):
   | {
       ok: true;
@@ -342,6 +390,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
   const agentIdRaw = payload.agentId;
   const agentId =
     typeof agentIdRaw === "string" && agentIdRaw.trim() ? agentIdRaw.trim() : undefined;
+  const idempotencyKey = resolveOptionalHookIdempotencyKey(payload.idempotencyKey);
   const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKeyRaw = payload.sessionKey;
   const sessionKey =
@@ -372,6 +421,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       message,
       name,
       agentId,
+      idempotencyKey,
       wakeMode,
       sessionKey,
       deliver,

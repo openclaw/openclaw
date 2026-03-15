@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import { stripAnsi } from "../terminal/ansi.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   clearInternalHooks,
   getRegisteredEventKeys,
@@ -15,7 +19,7 @@ describe("loader", () => {
   let fixtureRoot = "";
   let caseId = 0;
   let tmpDir: string;
-  let originalBundledDir: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-loader-"));
@@ -28,18 +32,41 @@ describe("loader", () => {
     await fs.mkdir(tmpDir, { recursive: true });
 
     // Disable bundled hooks during tests by setting env var to non-existent directory
-    originalBundledDir = process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
+    envSnapshot = captureEnv(["OPENCLAW_BUNDLED_HOOKS_DIR"]);
     process.env.OPENCLAW_BUNDLED_HOOKS_DIR = "/nonexistent/bundled/hooks";
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
   });
+
+  async function writeHandlerModule(
+    fileName: string,
+    code = "export default async function() {}",
+  ): Promise<string> {
+    const handlerPath = path.join(tmpDir, fileName);
+    await fs.writeFile(handlerPath, code, "utf-8");
+    return handlerPath;
+  }
+
+  function createEnabledHooksConfig(
+    handlers?: Array<{ event: string; module: string; export?: string }>,
+  ): OpenClawConfig {
+    return {
+      hooks: {
+        internal: handlers ? { enabled: true, handlers } : { enabled: true },
+      },
+    };
+  }
 
   afterEach(async () => {
     clearInternalHooks();
-    // Restore original env var
-    if (originalBundledDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_HOOKS_DIR = originalBundledDir;
-    }
+    loggingState.rawConsole = null;
+    setLoggerOverride(null);
+    envSnapshot.restore();
   });
 
   afterAll(async () => {
@@ -50,6 +77,20 @@ describe("loader", () => {
   });
 
   describe("loadInternalHooks", () => {
+    const createLegacyHandlerConfig = () =>
+      createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: "legacy-handler.js",
+        },
+      ]);
+
+    const expectNoCommandHookRegistration = async (cfg: OpenClawConfig) => {
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(0);
+      expect(getRegisteredEventKeys()).not.toContain("command:new");
+    };
+
     it("should return 0 when hooks are not enabled", async () => {
       const cfg: OpenClawConfig = {
         hooks: {
@@ -71,27 +112,18 @@ describe("loader", () => {
 
     it("should load a handler from a module", async () => {
       // Create a test handler module
-      const handlerPath = path.join(tmpDir, "test-handler.js");
       const handlerCode = `
         export default async function(event) {
           // Test handler
         }
       `;
-      await fs.writeFile(handlerPath, handlerCode, "utf-8");
-
-      const cfg: OpenClawConfig = {
-        hooks: {
-          internal: {
-            enabled: true,
-            handlers: [
-              {
-                event: "command:new",
-                module: path.basename(handlerPath),
-              },
-            ],
-          },
+      const handlerPath = await writeHandlerModule("test-handler.js", handlerCode);
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: path.basename(handlerPath),
         },
-      };
+      ]);
 
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(1);
@@ -102,23 +134,13 @@ describe("loader", () => {
 
     it("should load multiple handlers", async () => {
       // Create test handler modules
-      const handler1Path = path.join(tmpDir, "handler1.js");
-      const handler2Path = path.join(tmpDir, "handler2.js");
+      const handler1Path = await writeHandlerModule("handler1.js");
+      const handler2Path = await writeHandlerModule("handler2.js");
 
-      await fs.writeFile(handler1Path, "export default async function() {}", "utf-8");
-      await fs.writeFile(handler2Path, "export default async function() {}", "utf-8");
-
-      const cfg: OpenClawConfig = {
-        hooks: {
-          internal: {
-            enabled: true,
-            handlers: [
-              { event: "command:new", module: path.basename(handler1Path) },
-              { event: "command:stop", module: path.basename(handler2Path) },
-            ],
-          },
-        },
-      };
+      const cfg = createEnabledHooksConfig([
+        { event: "command:new", module: path.basename(handler1Path) },
+        { event: "command:stop", module: path.basename(handler2Path) },
+      ]);
 
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(2);
@@ -130,47 +152,32 @@ describe("loader", () => {
 
     it("should support named exports", async () => {
       // Create a handler module with named export
-      const handlerPath = path.join(tmpDir, "named-export.js");
       const handlerCode = `
         export const myHandler = async function(event) {
           // Named export handler
         }
       `;
-      await fs.writeFile(handlerPath, handlerCode, "utf-8");
+      const handlerPath = await writeHandlerModule("named-export.js", handlerCode);
 
-      const cfg: OpenClawConfig = {
-        hooks: {
-          internal: {
-            enabled: true,
-            handlers: [
-              {
-                event: "command:new",
-                module: path.basename(handlerPath),
-                export: "myHandler",
-              },
-            ],
-          },
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: path.basename(handlerPath),
+          export: "myHandler",
         },
-      };
+      ]);
 
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(1);
     });
 
     it("should handle module loading errors gracefully", async () => {
-      const cfg: OpenClawConfig = {
-        hooks: {
-          internal: {
-            enabled: true,
-            handlers: [
-              {
-                event: "command:new",
-                module: "missing-handler.js",
-              },
-            ],
-          },
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: "missing-handler.js",
         },
-      };
+      ]);
 
       // Should not throw and should return 0 (handler failed to load)
       const count = await loadInternalHooks(cfg, tmpDir);
@@ -179,22 +186,17 @@ describe("loader", () => {
 
     it("should handle non-function exports", async () => {
       // Create a module with a non-function export
-      const handlerPath = path.join(tmpDir, "bad-export.js");
-      await fs.writeFile(handlerPath, 'export default "not a function";', "utf-8");
+      const handlerPath = await writeHandlerModule(
+        "bad-export.js",
+        'export default "not a function";',
+      );
 
-      const cfg: OpenClawConfig = {
-        hooks: {
-          internal: {
-            enabled: true,
-            handlers: [
-              {
-                event: "command:new",
-                module: path.basename(handlerPath),
-              },
-            ],
-          },
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: path.basename(handlerPath),
         },
-      };
+      ]);
 
       // Should not throw and should return 0 (handler is not a function)
       const count = await loadInternalHooks(cfg, tmpDir);
@@ -203,25 +205,17 @@ describe("loader", () => {
 
     it("should handle relative paths", async () => {
       // Create a handler module
-      const handlerPath = path.join(tmpDir, "relative-handler.js");
-      await fs.writeFile(handlerPath, "export default async function() {}", "utf-8");
+      const handlerPath = await writeHandlerModule("relative-handler.js");
 
       // Relative to workspaceDir (tmpDir)
       const relativePath = path.relative(tmpDir, handlerPath);
 
-      const cfg: OpenClawConfig = {
-        hooks: {
-          internal: {
-            enabled: true,
-            handlers: [
-              {
-                event: "command:new",
-                module: relativePath,
-              },
-            ],
-          },
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: relativePath,
         },
-      };
+      ]);
 
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(1);
@@ -229,7 +223,6 @@ describe("loader", () => {
 
     it("should actually call the loaded handler", async () => {
       // Create a handler that we can verify was called
-      const handlerPath = path.join(tmpDir, "callable-handler.js");
       const handlerCode = `
         let callCount = 0;
         export default async function(event) {
@@ -239,21 +232,14 @@ describe("loader", () => {
           return callCount;
         }
       `;
-      await fs.writeFile(handlerPath, handlerCode, "utf-8");
+      const handlerPath = await writeHandlerModule("callable-handler.js", handlerCode);
 
-      const cfg: OpenClawConfig = {
-        hooks: {
-          internal: {
-            enabled: true,
-            handlers: [
-              {
-                event: "command:new",
-                module: path.basename(handlerPath),
-              },
-            ],
-          },
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: path.basename(handlerPath),
         },
-      };
+      ]);
 
       await loadInternalHooks(cfg, tmpDir);
 
@@ -292,17 +278,7 @@ describe("loader", () => {
         return;
       }
 
-      const cfg: OpenClawConfig = {
-        hooks: {
-          internal: {
-            enabled: true,
-          },
-        },
-      };
-
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(0);
-      expect(getRegisteredEventKeys()).not.toContain("command:new");
+      await expectNoCommandHookRegistration(createEnabledHooksConfig());
     });
 
     it("rejects legacy handler modules that escape workspace via symlink", async () => {
@@ -316,23 +292,84 @@ describe("loader", () => {
         return;
       }
 
-      const cfg: OpenClawConfig = {
-        hooks: {
-          internal: {
-            enabled: true,
-            handlers: [
-              {
-                event: "command:new",
-                module: "legacy-handler.js",
-              },
-            ],
-          },
-        },
-      };
+      await expectNoCommandHookRegistration(createLegacyHandlerConfig());
+    });
 
-      const count = await loadInternalHooks(cfg, tmpDir);
-      expect(count).toBe(0);
-      expect(getRegisteredEventKeys()).not.toContain("command:new");
+    it("rejects directory hook handlers that escape hook dir via hardlink", async () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const outsideHandlerPath = path.join(fixtureRoot, `outside-handler-hardlink-${caseId}.js`);
+      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
+
+      const hookDir = path.join(tmpDir, "hooks", "hardlink-hook");
+      await fs.mkdir(hookDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hookDir, "HOOK.md"),
+        [
+          "---",
+          "name: hardlink-hook",
+          "description: hardlink test",
+          'metadata: {"openclaw":{"events":["command:new"]}}',
+          "---",
+          "",
+          "# Hardlink Hook",
+        ].join("\n"),
+        "utf-8",
+      );
+      try {
+        await fs.link(outsideHandlerPath, path.join(hookDir, "handler.js"));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+
+      await expectNoCommandHookRegistration(createEnabledHooksConfig());
+    });
+
+    it("rejects legacy handler modules that escape workspace via hardlink", async () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const outsideHandlerPath = path.join(fixtureRoot, `outside-legacy-hardlink-${caseId}.js`);
+      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
+
+      const linkedHandlerPath = path.join(tmpDir, "legacy-handler.js");
+      try {
+        await fs.link(outsideHandlerPath, linkedHandlerPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+
+      await expectNoCommandHookRegistration(createLegacyHandlerConfig());
+    });
+
+    it("sanitizes control characters in loader error logs", async () => {
+      const error = loggingState.rawConsole?.error;
+      expect(error).toBeTypeOf("function");
+
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: `${tmpDir}\u001b[31m\nforged-log`,
+        },
+      ]);
+
+      await expectNoCommandHookRegistration(cfg);
+
+      const messages = stripAnsi(
+        (error as ReturnType<typeof vi.fn>).mock.calls
+          .map((call) => String(call[0] ?? ""))
+          .join("\n"),
+      );
+      expect(messages).toContain("forged-log");
+      expect(messages).not.toContain("\u001b[31m");
+      expect(messages).not.toContain("\nforged-log");
     });
   });
 });

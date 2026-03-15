@@ -4,10 +4,12 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  ReplyRuntimeConfigSchemaShape,
   ToolPolicySchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/irc";
 import { z } from "zod";
+import { requireChannelOpenAllowFrom } from "../../shared/config-schema-helpers.js";
 
 const IrcGroupSchema = z
   .object({
@@ -45,6 +47,7 @@ export const IrcAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    dangerouslyAllowNameMatching: z.boolean().optional(),
     host: z.string().optional(),
     port: z.number().int().min(1).max(65535).optional(),
     tls: z.boolean().optional(),
@@ -62,36 +65,29 @@ export const IrcAccountSchemaBase = z
     channels: z.array(z.string()).optional(),
     mentionPatterns: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    responsePrefix: z.string().optional(),
-    mediaMaxMb: z.number().positive().optional(),
+    ...ReplyRuntimeConfigSchemaShape,
   })
   .strict();
 
 export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
-  requireOpenAllowFrom({
+  requireChannelOpenAllowFrom({
+    channel: "irc",
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    path: ["allowFrom"],
-    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
+    requireOpenAllowFrom,
   });
 });
 
 export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   accounts: z.record(z.string(), IrcAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  requireOpenAllowFrom({
+  requireChannelOpenAllowFrom({
+    channel: "irc",
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    path: ["allowFrom"],
-    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
+    requireOpenAllowFrom,
   });
 });

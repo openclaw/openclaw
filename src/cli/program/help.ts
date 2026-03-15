@@ -1,10 +1,12 @@
 import type { Command } from "commander";
+import { resolveCommitHash } from "../../infra/git-commit.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { isRich, theme } from "../../terminal/theme.js";
 import { escapeRegExp } from "../../utils.js";
 import { hasFlag, hasRootVersionAlias } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
+import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
 import { getCoreCliCommandsWithSubcommands } from "./command-registry.js";
 import type { ProgramContext } from "./context.js";
 import { getSubCliCommandsWithSubcommands } from "./register.subclis.js";
@@ -54,6 +56,11 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     .option(
       "--profile <name>",
       "Use a named profile (isolates OPENCLAW_STATE_DIR/OPENCLAW_CONFIG_PATH under ~/.openclaw-<name>)",
+    )
+    .option(
+      "--log-level <level>",
+      `Global log level override for file + console (${CLI_LOG_LEVEL_VALUES})`,
+      parseCliLogLevelOption,
     );
 
   program.option("--no-color", "Disable ANSI colors", false);
@@ -103,7 +110,10 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     hasFlag(process.argv, "--version") ||
     hasRootVersionAlias(process.argv)
   ) {
-    console.log(ctx.programVersion);
+    const commit = resolveCommitHash({ moduleUrl: import.meta.url });
+    console.log(
+      commit ? `OpenClaw ${ctx.programVersion} (${commit})` : `OpenClaw ${ctx.programVersion}`,
+    );
     process.exit(0);
   }
 

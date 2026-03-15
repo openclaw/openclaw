@@ -62,7 +62,7 @@ The agent reads this on each heartbeat and handles all items in one turn.
     defaults: {
       heartbeat: {
         every: "30m", // interval
-        target: "last", // where to deliver alerts
+        target: "last", // explicit alert delivery target (default is "none")
         activeHours: { start: "08:00", end: "22:00" }, // optional
       },
     },
@@ -219,13 +219,13 @@ See [Lobster](/tools/lobster) for full usage and examples.
 
 Both heartbeat and cron can interact with the main session, but differently:
 
-|         | Heartbeat                       | Cron (main)              | Cron (isolated)            |
-| ------- | ------------------------------- | ------------------------ | -------------------------- |
-| Session | Main                            | Main (via system event)  | `cron:<jobId>`             |
-| History | Shared                          | Shared                   | Fresh each run             |
-| Context | Full                            | Full                     | None (starts clean)        |
-| Model   | Main session model              | Main session model       | Can override               |
-| Output  | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Announce summary (default) |
+|         | Heartbeat                       | Cron (main)              | Cron (isolated)                                 |
+| ------- | ------------------------------- | ------------------------ | ----------------------------------------------- |
+| Session | Main                            | Main (via system event)  | `cron:<jobId>` or custom session                |
+| History | Shared                          | Shared                   | Fresh each run (isolated) / Persistent (custom) |
+| Context | Full                            | Full                     | None (isolated) / Cumulative (custom)           |
+| Model   | Main session model              | Main session model       | Can override                                    |
+| Output  | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Announce summary (default)                      |
 
 ### When to use main session cron
 

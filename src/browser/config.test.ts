@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 
 describe("browser config", () => {
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {
@@ -11,63 +13,63 @@ describe("browser config", () => {
     expect(resolved.cdpHost).toBe("127.0.0.1");
     expect(resolved.cdpProtocol).toBe("http");
     const profile = resolveProfile(resolved, resolved.defaultProfile);
-    expect(profile?.name).toBe("chrome");
-    expect(profile?.driver).toBe("extension");
-    expect(profile?.cdpPort).toBe(18792);
-    expect(profile?.cdpUrl).toBe("http://127.0.0.1:18792");
+    expect(profile?.name).toBe("openclaw");
+    expect(profile?.driver).toBe("openclaw");
+    expect(profile?.cdpPort).toBe(18800);
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:18800");
 
     const openclaw = resolveProfile(resolved, "openclaw");
     expect(openclaw?.driver).toBe("openclaw");
     expect(openclaw?.cdpPort).toBe(18800);
     expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:18800");
+    const user = resolveProfile(resolved, "user");
+    expect(user?.driver).toBe("existing-session");
+    expect(user?.cdpPort).toBe(0);
+    expect(user?.cdpUrl).toBe("");
+    // chrome-relay is no longer auto-created
+    expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
   });
 
   it("derives default ports from OPENCLAW_GATEWAY_PORT when unset", () => {
-    const prev = process.env.OPENCLAW_GATEWAY_PORT;
-    process.env.OPENCLAW_GATEWAY_PORT = "19001";
-    try {
+    withEnv({ OPENCLAW_GATEWAY_PORT: "19001" }, () => {
       const resolved = resolveBrowserConfig(undefined);
       expect(resolved.controlPort).toBe(19003);
-      const chrome = resolveProfile(resolved, "chrome");
-      expect(chrome?.driver).toBe("extension");
-      expect(chrome?.cdpPort).toBe(19004);
-      expect(chrome?.cdpUrl).toBe("http://127.0.0.1:19004");
+      expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
 
       const openclaw = resolveProfile(resolved, "openclaw");
       expect(openclaw?.cdpPort).toBe(19012);
       expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19012");
-    } finally {
-      if (prev === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_PORT;
-      } else {
-        process.env.OPENCLAW_GATEWAY_PORT = prev;
-      }
-    }
+    });
   });
 
   it("derives default ports from gateway.port when env is unset", () => {
-    const prev = process.env.OPENCLAW_GATEWAY_PORT;
-    delete process.env.OPENCLAW_GATEWAY_PORT;
-    try {
+    withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () => {
       const resolved = resolveBrowserConfig(undefined, { gateway: { port: 19011 } });
       expect(resolved.controlPort).toBe(19013);
-      const chrome = resolveProfile(resolved, "chrome");
-      expect(chrome?.driver).toBe("extension");
-      expect(chrome?.cdpPort).toBe(19014);
-      expect(chrome?.cdpUrl).toBe("http://127.0.0.1:19014");
+      expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
 
       const openclaw = resolveProfile(resolved, "openclaw");
       expect(openclaw?.cdpPort).toBe(19022);
       expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19022");
-    } finally {
-      if (prev === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_PORT;
-      } else {
-        process.env.OPENCLAW_GATEWAY_PORT = prev;
-      }
-    }
+    });
+  });
+
+  it("supports overriding the local CDP auto-allocation range start", () => {
+    const resolved = resolveBrowserConfig({
+      cdpPortRangeStart: 19000,
+    });
+    const openclaw = resolveProfile(resolved, "openclaw");
+    expect(resolved.cdpPortRangeStart).toBe(19000);
+    expect(openclaw?.cdpPort).toBe(19000);
+    expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19000");
+  });
+
+  it("rejects cdpPortRangeStart values that overflow the CDP range window", () => {
+    expect(() => resolveBrowserConfig({ cdpPortRangeStart: 65535 })).toThrow(
+      /cdpPortRangeStart .* too high/i,
+    );
   });
 
   it("normalizes hex colors", () => {
@@ -124,6 +126,30 @@ describe("browser config", () => {
     expect(remote?.cdpIsLoopback).toBe(false);
   });
 
+  it("inherits attachOnly from global browser config when profile override is not set", () => {
+    const resolved = resolveBrowserConfig({
+      attachOnly: true,
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.attachOnly).toBe(true);
+  });
+
+  it("allows profile attachOnly to override global browser attachOnly", () => {
+    const resolved = resolveBrowserConfig({
+      attachOnly: false,
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", attachOnly: true, color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.attachOnly).toBe(true);
+  });
+
   it("uses base protocol for profiles with only cdpPort", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "https://example.com:9443",
@@ -136,18 +162,43 @@ describe("browser config", () => {
     expect(work?.cdpUrl).toBe("https://example.com:18801");
   });
 
-  it("rejects unsupported protocols", () => {
-    expect(() => resolveBrowserConfig({ cdpUrl: "ws://127.0.0.1:18791" })).toThrow(/must be http/i);
+  it("preserves wss:// cdpUrl with query params for the default profile", () => {
+    const resolved = resolveBrowserConfig({
+      cdpUrl: "wss://connect.browserbase.com?apiKey=test-key",
+    });
+    const profile = resolveProfile(resolved, "openclaw");
+    expect(profile?.cdpUrl).toBe("wss://connect.browserbase.com/?apiKey=test-key");
+    expect(profile?.cdpHost).toBe("connect.browserbase.com");
+    expect(profile?.cdpPort).toBe(443);
+    expect(profile?.cdpIsLoopback).toBe(false);
   });
 
-  it("does not add the built-in chrome extension profile if the derived relay port is already used", () => {
+  it("preserves loopback direct WebSocket cdpUrl for explicit profiles", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
-        openclaw: { cdpPort: 18792, color: "#FF4500" },
+        localws: {
+          cdpUrl: "ws://127.0.0.1:9222/devtools/browser/ABC?token=test-key",
+          color: "#0066CC",
+        },
       },
     });
-    expect(resolveProfile(resolved, "chrome")).toBe(null);
-    expect(resolved.defaultProfile).toBe("openclaw");
+    const profile = resolveProfile(resolved, "localws");
+    expect(profile?.cdpUrl).toBe("ws://127.0.0.1:9222/devtools/browser/ABC?token=test-key");
+    expect(profile?.cdpPort).toBe(9222);
+    expect(profile?.cdpIsLoopback).toBe(true);
+  });
+
+  it("trims relayBindHost when configured", () => {
+    const resolved = resolveBrowserConfig({
+      relayBindHost: " 0.0.0.0 ",
+    });
+    expect(resolved.relayBindHost).toBe("0.0.0.0");
+  });
+
+  it("rejects unsupported protocols", () => {
+    expect(() => resolveBrowserConfig({ cdpUrl: "ftp://127.0.0.1:18791" })).toThrow(
+      "must be http(s) or ws(s)",
+    );
   });
 
   it("defaults extraArgs to empty array when not provided", () => {
@@ -192,14 +243,126 @@ describe("browser config", () => {
       },
     });
     expect(resolved.ssrfPolicy).toEqual({
-      allowPrivateNetwork: true,
+      dangerouslyAllowPrivateNetwork: true,
       allowedHostnames: ["localhost"],
       hostnameAllowlist: ["*.trusted.example"],
     });
   });
 
-  it("keeps browser SSRF policy undefined when not configured", () => {
+  it("defaults browser SSRF policy to trusted-network mode", () => {
     const resolved = resolveBrowserConfig({});
-    expect(resolved.ssrfPolicy).toBeUndefined();
+    expect(resolved.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+    });
+  });
+
+  it("supports explicit strict mode by disabling private network access", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: false,
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({});
+  });
+
+  it("resolves existing-session profiles without cdpPort or cdpUrl", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "chrome-live": {
+          driver: "existing-session",
+          attachOnly: true,
+          color: "#00AA00",
+        },
+      },
+    });
+    const profile = resolveProfile(resolved, "chrome-live");
+    expect(profile).not.toBeNull();
+    expect(profile?.driver).toBe("existing-session");
+    expect(profile?.attachOnly).toBe(true);
+    expect(profile?.cdpPort).toBe(0);
+    expect(profile?.cdpUrl).toBe("");
+    expect(profile?.cdpIsLoopback).toBe(true);
+    expect(profile?.color).toBe("#00AA00");
+  });
+
+  it("sets usesChromeMcp only for existing-session profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "chrome-live": { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+        relay: { driver: "extension", cdpUrl: "http://127.0.0.1:18792", color: "#0066CC" },
+        work: { cdpPort: 18801, color: "#0066CC" },
+      },
+    });
+
+    const existingSession = resolveProfile(resolved, "chrome-live")!;
+    expect(getBrowserProfileCapabilities(existingSession).usesChromeMcp).toBe(true);
+
+    const managed = resolveProfile(resolved, "openclaw")!;
+    expect(getBrowserProfileCapabilities(managed).usesChromeMcp).toBe(false);
+
+    const extension = resolveProfile(resolved, "relay")!;
+    expect(getBrowserProfileCapabilities(extension).usesChromeMcp).toBe(false);
+
+    const work = resolveProfile(resolved, "work")!;
+    expect(getBrowserProfileCapabilities(work).usesChromeMcp).toBe(false);
+  });
+
+  describe("default profile preference", () => {
+    it("defaults to openclaw profile when defaultProfile is not configured", () => {
+      const resolved = resolveBrowserConfig({
+        headless: false,
+        noSandbox: false,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("keeps openclaw default when headless=true", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("keeps openclaw default when noSandbox=true", () => {
+      const resolved = resolveBrowserConfig({
+        noSandbox: true,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("keeps openclaw default when both headless and noSandbox are true", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        noSandbox: true,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("explicit defaultProfile config overrides defaults in headless mode", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        defaultProfile: "user",
+      });
+      expect(resolved.defaultProfile).toBe("user");
+    });
+
+    it("explicit defaultProfile config overrides defaults in noSandbox mode", () => {
+      const resolved = resolveBrowserConfig({
+        noSandbox: true,
+        defaultProfile: "user",
+      });
+      expect(resolved.defaultProfile).toBe("user");
+    });
+
+    it("allows custom profile as default even in headless mode", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        defaultProfile: "custom",
+        profiles: {
+          custom: { cdpPort: 19999, color: "#00FF00" },
+        },
+      });
+      expect(resolved.defaultProfile).toBe("custom");
+    });
   });
 });

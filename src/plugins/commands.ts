@@ -37,6 +37,7 @@ const RESERVED_COMMANDS = new Set([
   "status",
   "whoami",
   "context",
+  "btw",
   // Session management
   "stop",
   "restart",
@@ -119,23 +120,36 @@ export function registerPluginCommand(
     return { ok: false, error: "Command handler must be a function" };
   }
 
-  const validationError = validateCommandName(command.name);
+  if (typeof command.name !== "string") {
+    return { ok: false, error: "Command name must be a string" };
+  }
+  if (typeof command.description !== "string") {
+    return { ok: false, error: "Command description must be a string" };
+  }
+
+  const name = command.name.trim();
+  const description = command.description.trim();
+  if (!description) {
+    return { ok: false, error: "Command description cannot be empty" };
+  }
+
+  const validationError = validateCommandName(name);
   if (validationError) {
     return { ok: false, error: validationError };
   }
 
-  const key = `/${command.name.toLowerCase()}`;
+  const key = `/${name.toLowerCase()}`;
 
   // Check for duplicate registration
   if (pluginCommands.has(key)) {
     const existing = pluginCommands.get(key)!;
     return {
       ok: false,
-      error: `Command "${command.name}" already registered by plugin "${existing.pluginId}"`,
+      error: `Command "${name}" already registered by plugin "${existing.pluginId}"`,
     };
   }
 
-  pluginCommands.set(key, { ...command, pluginId });
+  pluginCommands.set(key, { ...command, name, description, pluginId });
   logVerbose(`Registered plugin command: ${key} (plugin: ${pluginId})`);
   return { ok: true };
 }
@@ -303,15 +317,33 @@ export function listPluginCommands(): Array<{
   }));
 }
 
+function resolvePluginNativeName(
+  command: OpenClawPluginCommandDefinition,
+  provider?: string,
+): string {
+  const providerName = provider?.trim().toLowerCase();
+  const providerOverride = providerName ? command.nativeNames?.[providerName] : undefined;
+  if (typeof providerOverride === "string" && providerOverride.trim()) {
+    return providerOverride.trim();
+  }
+  const defaultOverride = command.nativeNames?.default;
+  if (typeof defaultOverride === "string" && defaultOverride.trim()) {
+    return defaultOverride.trim();
+  }
+  return command.name;
+}
+
 /**
  * Get plugin command specs for native command registration (e.g., Telegram).
  */
-export function getPluginCommandSpecs(): Array<{
+export function getPluginCommandSpecs(provider?: string): Array<{
   name: string;
   description: string;
+  acceptsArgs: boolean;
 }> {
   return Array.from(pluginCommands.values()).map((cmd) => ({
-    name: cmd.name,
+    name: resolvePluginNativeName(cmd, provider),
     description: cmd.description,
+    acceptsArgs: cmd.acceptsArgs ?? false,
   }));
 }

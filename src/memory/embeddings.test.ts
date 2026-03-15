@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
+import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
@@ -19,6 +20,18 @@ const createFetchMock = () =>
     status: 200,
     json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
   }));
+
+const createGeminiFetchMock = () =>
+  vi.fn(async (_input?: unknown, _init?: unknown) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ embedding: { values: [1, 2, 3] } }),
+  }));
+
+function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {
+  const [url, init] = fetchMock.mock.calls[0] ?? [];
+  return { url, init: init as RequestInit | undefined };
+}
 
 afterEach(() => {
   vi.resetAllMocks();
@@ -57,17 +70,37 @@ function createLocalProvider(options?: { fallback?: "none" | "openai" }) {
   });
 }
 
+function expectAutoSelectedProvider(
+  result: Awaited<ReturnType<typeof createEmbeddingProvider>>,
+  expectedId: "openai" | "gemini" | "mistral",
+) {
+  expect(result.requestedProvider).toBe("auto");
+  const provider = requireProvider(result);
+  expect(provider.id).toBe(expectedId);
+  return provider;
+}
+
+function createAutoProvider(model = "") {
+  return createEmbeddingProvider({
+    config: {} as never,
+    provider: "auto",
+    model,
+    fallback: "none",
+  });
+}
+
 describe("embedding provider remote overrides", () => {
   it("uses remote baseUrl/apiKey and merges headers", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
     const cfg = {
       models: {
         providers: {
           openai: {
-            baseUrl: "https://provider.example/v1",
+            baseUrl: "https://api.openai.com/v1",
             headers: {
               "X-Provider": "p",
               "X-Shared": "provider",
@@ -81,7 +114,7 @@ describe("embedding provider remote overrides", () => {
       config: cfg as never,
       provider: "openai",
       remote: {
-        baseUrl: "https://remote.example/v1",
+        baseUrl: "https://example.com/v1",
         apiKey: "  remote-key  ",
         headers: {
           "X-Shared": "remote",
@@ -98,7 +131,7 @@ describe("embedding provider remote overrides", () => {
     expect(authModule.resolveApiKeyForProvider).not.toHaveBeenCalled();
     const url = fetchMock.mock.calls[0]?.[0];
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect(url).toBe("https://remote.example/v1/embeddings");
+    expect(url).toBe("https://example.com/v1/embeddings");
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer remote-key");
     expect(headers["Content-Type"]).toBe("application/json");
@@ -110,13 +143,14 @@ describe("embedding provider remote overrides", () => {
   it("falls back to resolved api key when remote apiKey is blank", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
     const cfg = {
       models: {
         providers: {
           openai: {
-            baseUrl: "https://provider.example/v1",
+            baseUrl: "https://api.openai.com/v1",
           },
         },
       },
@@ -126,7 +160,7 @@ describe("embedding provider remote overrides", () => {
       config: cfg as never,
       provider: "openai",
       remote: {
-        baseUrl: "https://remote.example/v1",
+        baseUrl: "https://example.com/v1",
         apiKey: "   ",
       },
       model: "text-embedding-3-small",
@@ -143,12 +177,9 @@ describe("embedding provider remote overrides", () => {
   });
 
   it("builds Gemini embeddings requests with api key header", async () => {
-    const fetchMock = vi.fn(async (_input?: unknown, _init?: unknown) => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ embedding: { values: [1, 2, 3] } }),
-    }));
+    const fetchMock = createGeminiFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
     const cfg = {
@@ -174,14 +205,88 @@ describe("embedding provider remote overrides", () => {
     const provider = requireProvider(result);
     await provider.embedQuery("hello");
 
-    const url = fetchMock.mock.calls[0]?.[0];
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const { url, init } = readFirstFetchRequest(fetchMock);
     expect(url).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent",
     );
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers["x-goog-api-key"]).toBe("gemini-key");
     expect(headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("fails fast when Gemini remote apiKey is an unresolved SecretRef", async () => {
+    await expect(
+      createEmbeddingProvider({
+        config: {} as never,
+        provider: "gemini",
+        remote: {
+          apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+        },
+        model: "text-embedding-004",
+        fallback: "openai",
+      }),
+    ).rejects.toThrow(/agents\.\*\.memorySearch\.remote\.apiKey:/i);
+  });
+
+  it("uses GEMINI_API_KEY env indirection for Gemini remote apiKey", async () => {
+    const fetchMock = createGeminiFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
+    vi.stubEnv("GEMINI_API_KEY", "env-gemini-key");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: {
+        apiKey: "GEMINI_API_KEY", // pragma: allowlist secret
+      },
+      model: "text-embedding-004",
+      fallback: "openai",
+    });
+
+    const provider = requireProvider(result);
+    await provider.embedQuery("hello");
+
+    const { init } = readFirstFetchRequest(fetchMock);
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers["x-goog-api-key"]).toBe("env-gemini-key");
+  });
+
+  it("builds Mistral embeddings requests with bearer auth", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
+    mockResolvedProviderKey("provider-key");
+
+    const cfg = {
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://api.mistral.ai/v1",
+          },
+        },
+      },
+    };
+
+    const result = await createEmbeddingProvider({
+      config: cfg as never,
+      provider: "mistral",
+      remote: {
+        apiKey: "mistral-key", // pragma: allowlist secret
+      },
+      model: "mistral/mistral-embed",
+      fallback: "none",
+    });
+
+    const provider = requireProvider(result);
+    await provider.embedQuery("hello");
+
+    const { url, init } = readFirstFetchRequest(fetchMock);
+    expect(url).toBe("https://api.mistral.ai/v1/embeddings");
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer mistral-key");
+    const payload = JSON.parse((init?.body as string | undefined) ?? "{}") as { model?: string };
+    expect(payload.model).toBe("mistral-embed");
   });
 });
 
@@ -194,25 +299,14 @@ describe("embedding provider auto selection", () => {
       throw new Error(`No API key found for provider "${provider}".`);
     });
 
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "auto",
-      model: "",
-      fallback: "none",
-    });
-
-    expect(result.requestedProvider).toBe("auto");
-    const provider = requireProvider(result);
-    expect(provider.id).toBe("openai");
+    const result = await createAutoProvider();
+    expectAutoSelectedProvider(result, "openai");
   });
 
   it("uses gemini when openai is missing", async () => {
-    const fetchMock = vi.fn(async (_input?: unknown, _init?: unknown) => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ embedding: { values: [1, 2, 3] } }),
-    }));
+    const fetchMock = createGeminiFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
         throw new Error('No API key found for provider "openai".');
@@ -223,16 +317,8 @@ describe("embedding provider auto selection", () => {
       throw new Error(`Unexpected provider ${provider}`);
     });
 
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "auto",
-      model: "",
-      fallback: "none",
-    });
-
-    expect(result.requestedProvider).toBe("auto");
-    const provider = requireProvider(result);
-    expect(provider.id).toBe("gemini");
+    const result = await createAutoProvider();
+    const provider = expectAutoSelectedProvider(result, "gemini");
     await provider.embedQuery("hello");
     const [url] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe(
@@ -247,6 +333,7 @@ describe("embedding provider auto selection", () => {
       json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
     }));
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
         return { apiKey: "openai-key", source: "env: OPENAI_API_KEY", mode: "api-key" };
@@ -270,6 +357,24 @@ describe("embedding provider auto selection", () => {
     expect(url).toBe("https://api.openai.com/v1/embeddings");
     const payload = JSON.parse(init?.body as string) as { model?: string };
     expect(payload.model).toBe("text-embedding-3-small");
+  });
+
+  it("uses mistral when openai/gemini/voyage are missing", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
+      if (provider === "mistral") {
+        return { apiKey: "mistral-key", source: "env: MISTRAL_API_KEY", mode: "api-key" }; // pragma: allowlist secret
+      }
+      throw new Error(`No API key found for provider "${provider}".`);
+    });
+
+    const result = await createAutoProvider();
+    const provider = expectAutoSelectedProvider(result, "mistral");
+    await provider.embedQuery("hello");
+    const [url] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.mistral.ai/v1/embeddings");
   });
 });
 
@@ -298,6 +403,7 @@ describe("embedding provider local fallback", () => {
   it("mentions every remote provider in local setup guidance", async () => {
     mockMissingLocalEmbeddingDependency();
     await expect(createLocalProvider()).rejects.toThrow(/provider = "gemini"/i);
+    await expect(createLocalProvider()).rejects.toThrow(/provider = "mistral"/i);
   });
 });
 
@@ -408,6 +514,138 @@ describe("local embedding normalization", () => {
       const magnitude = Math.sqrt(embedding.reduce((sum, x) => sum + x * x, 0));
       expect(magnitude).toBeCloseTo(1.0, 5);
     }
+  });
+});
+
+describe("local embedding ensureContext concurrency", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    vi.doUnmock("./node-llama.js");
+  });
+
+  async function setupLocalProviderWithMockedInit(params?: {
+    initializationDelayMs?: number;
+    failFirstGetLlama?: boolean;
+  }) {
+    const getLlamaSpy = vi.fn();
+    const loadModelSpy = vi.fn();
+    const createContextSpy = vi.fn();
+    let shouldFail = params?.failFirstGetLlama ?? false;
+
+    const nodeLlamaModule = await import("./node-llama.js");
+    vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp").mockResolvedValue({
+      getLlama: async (...args: unknown[]) => {
+        getLlamaSpy(...args);
+        if (shouldFail) {
+          shouldFail = false;
+          throw new Error("transient init failure");
+        }
+        if (params?.initializationDelayMs) {
+          await new Promise((r) => setTimeout(r, params.initializationDelayMs));
+        }
+        return {
+          loadModel: async (...modelArgs: unknown[]) => {
+            loadModelSpy(...modelArgs);
+            if (params?.initializationDelayMs) {
+              await new Promise((r) => setTimeout(r, params.initializationDelayMs));
+            }
+            return {
+              createEmbeddingContext: async () => {
+                createContextSpy();
+                return {
+                  getEmbeddingFor: vi.fn().mockResolvedValue({
+                    vector: new Float32Array([1, 0, 0, 0]),
+                  }),
+                };
+              },
+            };
+          },
+        };
+      },
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    } as never);
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    return {
+      provider: requireProvider(result),
+      getLlamaSpy,
+      loadModelSpy,
+      createContextSpy,
+    };
+  }
+
+  it("loads the model only once when embedBatch is called concurrently", async () => {
+    const { provider, getLlamaSpy, loadModelSpy, createContextSpy } =
+      await setupLocalProviderWithMockedInit({
+        initializationDelayMs: 50,
+      });
+
+    const results = await Promise.all([
+      provider.embedBatch(["text1"]),
+      provider.embedBatch(["text2"]),
+      provider.embedBatch(["text3"]),
+      provider.embedBatch(["text4"]),
+    ]);
+
+    expect(results).toHaveLength(4);
+    for (const embeddings of results) {
+      expect(embeddings).toHaveLength(1);
+      expect(embeddings[0]).toHaveLength(4);
+    }
+
+    expect(getLlamaSpy).toHaveBeenCalledTimes(1);
+    expect(loadModelSpy).toHaveBeenCalledTimes(1);
+    expect(createContextSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries initialization after a transient ensureContext failure", async () => {
+    const { provider, getLlamaSpy, loadModelSpy, createContextSpy } =
+      await setupLocalProviderWithMockedInit({
+        failFirstGetLlama: true,
+      });
+
+    await expect(provider.embedBatch(["first"])).rejects.toThrow("transient init failure");
+
+    const recovered = await provider.embedBatch(["second"]);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toHaveLength(4);
+
+    expect(getLlamaSpy).toHaveBeenCalledTimes(2);
+    expect(loadModelSpy).toHaveBeenCalledTimes(1);
+    expect(createContextSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares initialization when embedQuery and embedBatch start concurrently", async () => {
+    const { provider, getLlamaSpy, loadModelSpy, createContextSpy } =
+      await setupLocalProviderWithMockedInit({
+        initializationDelayMs: 50,
+      });
+
+    const [queryA, batch, queryB] = await Promise.all([
+      provider.embedQuery("query-a"),
+      provider.embedBatch(["batch-a", "batch-b"]),
+      provider.embedQuery("query-b"),
+    ]);
+
+    expect(queryA).toHaveLength(4);
+    expect(batch).toHaveLength(2);
+    expect(queryB).toHaveLength(4);
+    expect(batch[0]).toHaveLength(4);
+    expect(batch[1]).toHaveLength(4);
+
+    expect(getLlamaSpy).toHaveBeenCalledTimes(1);
+    expect(loadModelSpy).toHaveBeenCalledTimes(1);
+    expect(createContextSpy).toHaveBeenCalledTimes(1);
   });
 });
 
