@@ -56,10 +56,7 @@ describe("normalizeProviders flip-flop bug", () => {
 
     // First normalization: should preserve resolved value
     const _normalized1 = normalizeProviders({ providers, agentDir });
-    expect(normalized1?.["ollama-local"]?.apiKey).toBe(
-      TEST_ENV_VALUE,
-      "First normalization preserves resolved value (no flip-flop)",
-    );
+    expect(_normalized1?.["ollama-local"]?.apiKey).toBe(TEST_ENV_VALUE);
 
     // Simulate user manually editing models.json
     const manuallyFixed = {
@@ -72,10 +69,7 @@ describe("normalizeProviders flip-flop bug", () => {
 
     // Second normalization: should still preserve resolved value (no flip-flop)
     const normalized2 = normalizeProviders({ providers: manuallyFixed, agentDir });
-    expect(normalized2?.["ollama-local"]?.apiKey).toBe(
-      TEST_ENV_VALUE,
-      "Second normalization preserves resolved value (no flip-flop)",
-    );
+    expect(normalized2?.["ollama-local"]?.apiKey).toBe(TEST_ENV_VALUE);
   });
 
   it("FIX VERIFICATION: preserves resolved value after normalization (no flip-flop)", async () => {
@@ -103,10 +97,7 @@ describe("normalizeProviders flip-flop bug", () => {
 
     // EXPECTED BEHAVIOR AFTER FIX:
     // models.json should contain the resolved value, not the env var name
-    expect(normalized?.["ollama-local"]?.apiKey).toBe(
-      TEST_ENV_VALUE,
-      "After fix: resolved value is preserved (no flip-flop)",
-    );
+    expect(normalized?.["ollama-local"]?.apiKey).toBe(TEST_ENV_VALUE);
   });
 
   it("FIX VERIFICATION: manual edits to models.json are preserved", async () => {
@@ -135,10 +126,7 @@ describe("normalizeProviders flip-flop bug", () => {
 
     // EXPECTED BEHAVIOR AFTER FIX:
     // Manual edits should be preserved, not reverted
-    expect(normalized2?.["ollama-local"]?.apiKey).toBe(
-      "edited-value",
-      "After fix: manual edits are preserved (no flip-flop)",
-    );
+    expect(normalized2?.["ollama-local"]?.apiKey).toBe("edited-value");
   });
 
   it("ENV VAR REFERENCE: { source: 'env' } config normalizes to env var name", async () => {
@@ -158,10 +146,7 @@ describe("normalizeProviders flip-flop bug", () => {
     const normalized = normalizeProviders({ providers, agentDir });
 
     // SecretRef { source: "env", id: "VAR" } normalizes to "VAR"
-    expect(normalized?.["ollama-local"]?.apiKey).toBe(
-      TEST_ENV_VAR,
-      "SecretRef config normalizes to env var name",
-    );
+    expect(normalized?.["ollama-local"]?.apiKey).toBe(TEST_ENV_VAR);
   });
 });
 
