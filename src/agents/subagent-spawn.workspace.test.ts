@@ -122,6 +122,12 @@ function getRegisteredRun() {
     | undefined;
 }
 
+function getAgentCall() {
+  return hoisted.callGatewayMock.mock.calls.find(
+    ([opts]) => (opts as { method?: string } | undefined)?.method === "agent",
+  )?.[0] as { method?: string; params?: Record<string, unknown> } | undefined;
+}
+
 describe("spawnSubagentDirect workspace inheritance", () => {
   beforeEach(() => {
     hoisted.callGatewayMock.mockClear();
@@ -166,6 +172,30 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     expect(result.status).toBe("accepted");
     expect(getRegisteredRun()).toMatchObject({
       workspaceDir: "/tmp/workspace-ops",
+    });
+  });
+
+  it("attaches inter-session provenance to spawned child tasks", async () => {
+    const result = await spawnSubagentDirect(
+      {
+        task: "inspect workspace",
+        agentId: "main",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "123",
+        agentTo: "456",
+        workspaceDir: "/tmp/requester-workspace",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(getAgentCall()?.params?.inputProvenance).toMatchObject({
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:main",
+      sourceChannel: "telegram",
+      sourceTool: "sessions_spawn",
     });
   });
 
