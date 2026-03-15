@@ -9,9 +9,9 @@ type AnthropicContentBlock = {
 };
 
 /**
- * Strips dangling tool_use blocks from assistant messages when the immediately
+ * Strips dangling toolCall blocks from assistant messages when the immediately
  * following user message does not contain a matching tool_result block.
- * This fixes the "tool_use ids found without tool_result blocks" error from Anthropic.
+ * This fixes the "tool_use ids found without tool_result blocks" error from the provider API.
  */
 function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[] {
   const result: AgentMessage[] = [];
@@ -68,7 +68,7 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       if (block.type !== "toolCall") {
         return true;
       }
-      // Keep tool_use if its id is in the valid set
+      // Keep toolCall block if its id is in the valid set
       return validToolUseIds.has(block.id || "");
     });
 
@@ -187,7 +187,7 @@ export function mergeConsecutiveUserTurns(
  * Validates and fixes conversation turn sequences for Anthropic API.
  * Anthropic requires strict alternating user→assistant pattern.
  * Merges consecutive user messages together.
- * Also strips dangling tool_use blocks that lack corresponding tool_result blocks.
+ * Also strips dangling toolCall blocks that lack corresponding tool_result blocks.
  */
 export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[] {
   // First, strip dangling tool_use blocks from assistant messages
