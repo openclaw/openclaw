@@ -61,6 +61,20 @@ describe("getTelegramSequentialKey", () => {
     ],
     [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/status" }) }, "telegram:123"],
     [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/btw what is the time?" }) },
+      "telegram:123:btw:1",
+    ],
+    [
+      {
+        me: { username: "openclaw_bot" } as never,
+        message: mockMessage({
+          chat: mockChat({ id: 123 }),
+          text: "/btw@openclaw_bot what is the time?",
+        }),
+      },
+      "telegram:123:btw:1",
+    ],
+    [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "stop" }) },
       "telegram:123:control",
     ],
