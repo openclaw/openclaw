@@ -1,5 +1,5 @@
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
-const NEAR_BOTTOM_THRESHOLD = 450;
+const NEAR_BOTTOM_THRESHOLD = 150;
 
 type ScrollHost = {
   updateComplete: Promise<unknown>;
@@ -46,7 +46,6 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         return;
       }
       const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-
       // force=true only overrides when we haven't auto-scrolled yet (initial load).
       // After initial load, respect the user's scroll position.
       const effectiveForce = force && !host.chatHasAutoScrolled;
