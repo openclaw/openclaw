@@ -82,11 +82,11 @@
         "provider": "elevenlabs",
         "normalizedPayload": false,
         "voiceId": "voice-legacy",
-        "apiKey": "xxxxx"
+        "apiKey": "legacy-key"
       },
       "talk": {
         "voiceId": "voice-legacy",
-        "apiKey": "xxxxx"
+        "apiKey": "legacy-key"
       }
     }
   ],

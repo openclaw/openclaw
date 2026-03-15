@@ -314,6 +314,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               Object.keys(params.job as Record<string, unknown>).length === 0)
           ) {
             const JOB_KEYS: ReadonlySet<string> = new Set([
+              "id",
               "name",
               "schedule",
               "sessionTarget",

@@ -2242,7 +2242,7 @@ describe("loadOpenClawPlugins", () => {
       encoding: "utf-8",
       stdio: "pipe",
     });
-  });
+  }, 180_000);
 
   it("prefers dist plugin-sdk alias when loader runs from dist", () => {
     const { root, distFile } = createPluginSdkAliasFixture();

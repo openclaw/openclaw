@@ -509,9 +509,16 @@ export function nextWakeAtMs(state: CronServiceState) {
   }, first);
 }
 
+/** No colon: session keys are ...:cron:<jobId>:run:<uuid>, so jobId must be one segment. */
+const CUSTOM_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
+
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
-  const id = crypto.randomUUID();
+  const rawId = input.id;
+  const id =
+    typeof rawId === "string" && CUSTOM_ID_RE.test(rawId.trim())
+      ? rawId.trim()
+      : crypto.randomUUID();
   const schedule =
     input.schedule.kind === "every"
       ? {

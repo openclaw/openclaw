@@ -239,6 +239,10 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
     await ensureLoaded(state);
     const normalizedInput = normalizeCronCreateDeliveryInput(input);
     const job = createJob(state, normalizedInput);
+    // Session keys use lowercase job id (toAgentStoreSessionKey); reject case-insensitive duplicates.
+    if (state.store?.jobs.some((j) => j.id.toLowerCase() === job.id.toLowerCase())) {
+      throw new Error(`cron job with id "${job.id}" already exists`);
+    }
     state.store?.jobs.push(job);
 
     // Defensive: recompute all next-run times to ensure consistency

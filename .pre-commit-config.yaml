@@ -73,6 +73,15 @@ repos:
           - '"ap[i]Key": "(resolved|normalized|legacy)-key"(,)?'
           - --exclude-lines
           - 'sparkle:edSignature="[A-Za-z0-9+/=]+"'
+          # Scoped exclusions: skip scanning these test/fixture files (KeywordDetector false positives only there)
+          - --exclude-files
+          - '(^|/)test-fixtures/talk-config-contract\.json$'
+          - --exclude-files
+          - '(^|/)apps/macos/Tests/OpenClawIPCTests/AppStateRemoteConfigTests\.swift$'
+          - --exclude-files
+          - '(^|/)src/agents/models-config\.applies-config-env-vars\.test\.ts$'
+          - --exclude-files
+          - '(^|/)src/agents/models-config\.providers\.matrix\.test\.ts$'
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
