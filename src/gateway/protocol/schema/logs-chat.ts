@@ -73,6 +73,7 @@ export const ChatEventSchema = Type.Object(
       Type.Literal("final"),
       Type.Literal("aborted"),
       Type.Literal("error"),
+      Type.Literal("user-message"),
     ]),
     message: Type.Optional(Type.Unknown()),
     errorMessage: Type.Optional(Type.String()),

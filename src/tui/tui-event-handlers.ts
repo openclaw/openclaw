@@ -10,6 +10,7 @@ type EventHandlerChatLog = {
     result: unknown,
     options?: { partial?: boolean; isError?: boolean },
   ) => void;
+  addUser: (text: string) => void;
   addSystem: (text: string) => void;
   updateAssistant: (text: string, runId: string) => void;
   finalizeAssistant: (text: string, runId: string) => void;
@@ -198,6 +199,30 @@ export function createEventHandlers(context: EventHandlerContext) {
     const evt = payload as ChatEvent;
     syncSessionKey();
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    // A remote user message arrived on this session (e.g. from Telegram/Discord).
+    // Append it to the chat log immediately so the TUI live-tails the conversation
+    // without requiring a manual reload.
+    // Skip messages that originated from this TUI instance — the local send path
+    // (tui-command-handlers.ts sendMessage) already calls chatLog.addUser() before
+    // the RPC, so the broadcast echo would produce a duplicate entry.
+    if (evt.state === "user-message") {
+      if (isLocalRunId?.(evt.runId)) {
+        return;
+      }
+      const text =
+        evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
+          ? typeof (evt.message as Record<string, unknown>).text === "string"
+            ? ((evt.message as Record<string, unknown>).text as string)
+            : ""
+          : typeof evt.message === "string"
+            ? evt.message
+            : "";
+      if (text) {
+        chatLog.addUser(text);
+        tui.requestRender();
+      }
       return;
     }
     if (finalizedRuns.has(evt.runId)) {

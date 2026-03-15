@@ -7,6 +7,7 @@ type HandlerChatLog = {
   startTool: (...args: unknown[]) => void;
   updateToolResult: (...args: unknown[]) => void;
   addSystem: (...args: unknown[]) => void;
+  addUser: (...args: unknown[]) => void;
   updateAssistant: (...args: unknown[]) => void;
   finalizeAssistant: (...args: unknown[]) => void;
   dropAssistant: (...args: unknown[]) => void;
@@ -20,6 +21,7 @@ type MockChatLog = {
   startTool: MockFn;
   updateToolResult: MockFn;
   addSystem: MockFn;
+  addUser: MockFn;
   updateAssistant: MockFn;
   finalizeAssistant: MockFn;
   dropAssistant: MockFn;
@@ -35,6 +37,7 @@ function createMockChatLog(): MockChatLog & HandlerChatLog {
     startTool: vi.fn(),
     updateToolResult: vi.fn(),
     addSystem: vi.fn(),
+    addUser: vi.fn(),
     updateAssistant: vi.fn(),
     finalizeAssistant: vi.fn(),
     dropAssistant: vi.fn(),
@@ -589,5 +592,95 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression: TUI --session mode must live-tail inbound user messages from
+  // external channels (Telegram, Discord, etc.) without requiring a reload.
+  // See: https://github.com/openclaw/openclaw/issues/45388
+  describe("user-message live-tail (issue #45388)", () => {
+    it("appends inbound user message text to chat log", () => {
+      const { state, chatLog, tui, handleChatEvent } = createHandlersHarness();
+
+      const evt: ChatEvent = {
+        runId: "ext-run-1",
+        sessionKey: state.currentSessionKey,
+        state: "user-message",
+        message: { text: "Hello from Telegram" },
+      };
+
+      handleChatEvent(evt);
+
+      expect(chatLog.addUser).toHaveBeenCalledWith("Hello from Telegram");
+      expect(tui.requestRender).toHaveBeenCalledTimes(1);
+    });
+
+    it("appends plain-string message payload to chat log", () => {
+      const { state, chatLog, tui, handleChatEvent } = createHandlersHarness();
+
+      const evt: ChatEvent = {
+        runId: "ext-run-2",
+        sessionKey: state.currentSessionKey,
+        state: "user-message",
+        message: "plain text message",
+      };
+
+      handleChatEvent(evt);
+
+      expect(chatLog.addUser).toHaveBeenCalledWith("plain text message");
+      expect(tui.requestRender).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores user-message events for a different session", () => {
+      const { chatLog, tui, handleChatEvent } = createHandlersHarness();
+
+      const evt: ChatEvent = {
+        runId: "ext-run-3",
+        sessionKey: "agent:other:other",
+        state: "user-message",
+        message: { text: "should be ignored" },
+      };
+
+      handleChatEvent(evt);
+
+      expect(chatLog.addUser).not.toHaveBeenCalled();
+      expect(tui.requestRender).not.toHaveBeenCalled();
+    });
+
+    it("ignores user-message events with empty text", () => {
+      const { state, chatLog, tui, handleChatEvent } = createHandlersHarness();
+
+      const evt: ChatEvent = {
+        runId: "ext-run-4",
+        sessionKey: state.currentSessionKey,
+        state: "user-message",
+        message: { text: "" },
+      };
+
+      handleChatEvent(evt);
+
+      expect(chatLog.addUser).not.toHaveBeenCalled();
+      expect(tui.requestRender).not.toHaveBeenCalled();
+    });
+
+    // Regression: gateway broadcasts user-message to all connected clients including
+    // the originating TUI. The local send path already calls chatLog.addUser() before
+    // the RPC, so the broadcast echo must be suppressed to avoid duplicate entries.
+    it("ignores user-message echo for locally-originated runs (P1 regression #45417)", () => {
+      const { state, chatLog, tui, noteLocalRunId, handleChatEvent } = createHandlersHarness();
+
+      noteLocalRunId("local-run-99");
+
+      const evt: ChatEvent = {
+        runId: "local-run-99",
+        sessionKey: state.currentSessionKey,
+        state: "user-message",
+        message: { text: "Hello from this TUI" },
+      };
+
+      handleChatEvent(evt);
+
+      expect(chatLog.addUser).not.toHaveBeenCalled();
+      expect(tui.requestRender).not.toHaveBeenCalled();
+    });
   });
 });

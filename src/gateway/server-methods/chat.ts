@@ -1261,6 +1261,20 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
+      // Broadcast the inbound user message so TUI clients watching this session
+      // can live-tail the conversation without polling (fixes #45388).
+      // Use `inboundMessage` (the sanitized raw user text) rather than `parsedMessage`
+      // which may contain attachment-processing artifacts intended for the AI model.
+      const userMessagePayload = {
+        runId: clientRunId,
+        sessionKey: rawSessionKey,
+        seq: 0,
+        state: "user-message" as const,
+        message: { text: inboundMessage },
+      };
+      context.broadcast("chat", userMessagePayload);
+      context.nodeSendToSession(rawSessionKey, "chat", userMessagePayload);
+
       const trimmedMessage = parsedMessage.trim();
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
