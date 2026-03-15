@@ -122,6 +122,25 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   return list.some((entry) => Boolean(entry?.heartbeat));
 }
 
+function hasDefaultHeartbeatConfig(cfg: OpenClawConfig) {
+  return cfg.agents?.defaults?.heartbeat !== undefined;
+}
+
+function resolveHeartbeatScopedAgentIds(cfg: OpenClawConfig): string[] {
+  const ids = new Set<string>();
+  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+  if (defaultAgentId) {
+    ids.add(defaultAgentId);
+  }
+  for (const entry of cfg.agents?.list ?? []) {
+    const agentId = normalizeAgentId(entry?.id);
+    if (agentId) {
+      ids.add(agentId);
+    }
+  }
+  return [...ids];
+}
+
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const list = cfg.agents?.list ?? [];
@@ -131,7 +150,10 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
       (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
     );
   }
-  return resolvedAgentId === resolveDefaultAgentId(cfg);
+  if (hasDefaultHeartbeatConfig(cfg)) {
+    return resolveHeartbeatScopedAgentIds(cfg).includes(resolvedAgentId);
+  }
+  return false;
 }
 
 function resolveHeartbeatConfig(
@@ -208,8 +230,13 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
       })
       .filter((entry) => entry.agentId);
   }
-  const fallbackId = resolveDefaultAgentId(cfg);
-  return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
+  if (!hasDefaultHeartbeatConfig(cfg)) {
+    return [];
+  }
+  return resolveHeartbeatScopedAgentIds(cfg).map((agentId) => ({
+    agentId,
+    heartbeat: resolveHeartbeatConfig(cfg, agentId),
+  }));
 }
 
 export function resolveHeartbeatIntervalMs(
