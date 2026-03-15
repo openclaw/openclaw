@@ -12,6 +12,12 @@ function coerceNumberString(value: string, integer: boolean): number | undefined
   if (integer && !Number.isInteger(parsed)) {
     return value;
   }
+  // Discord Snowflake IDs and similar 64-bit integers exceed Number.MAX_SAFE_INTEGER
+  // (2^53 - 1). Coercing them to JS numbers causes silent precision loss, producing
+  // corrupted IDs. Keep such values as strings so the gateway receives the original.
+  if (!Number.isSafeInteger(parsed)) {
+    return value;
+  }
   return parsed;
 }
 
