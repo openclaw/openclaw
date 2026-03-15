@@ -54,10 +54,15 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         // expose unattended deep-link credentials to page JavaScript.
         canvasWindowLogger.debug("CanvasWindowController init building A2UI bridge script")
         let injectedSessionKey = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "main"
+        let allowedSchemesJSON = (
+            try? String(
+                data: JSONSerialization.data(withJSONObject: CanvasScheme.allSchemes),
+                encoding: .utf8)
+        ) ?? "[]"
         let bridgeScript = """
         (() => {
           try {
-            const allowedSchemes = \(String(describing: CanvasScheme.allSchemes));
+            const allowedSchemes = \(allowedSchemesJSON);
             const protocol = location.protocol.replace(':', '');
             if (!allowedSchemes.includes(protocol)) return;
             if (globalThis.__openclawA2UIBridgeInstalled) return;
