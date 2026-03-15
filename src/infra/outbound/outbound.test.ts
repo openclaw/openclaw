@@ -1257,6 +1257,16 @@ describe("normalizeOutboundPayloads", () => {
     ]);
     expect(normalized).toEqual([{ text: "final answer", mediaUrls: [] }]);
   });
+
+  it("formats BTW replies prominently for external delivery", () => {
+    const normalized = normalizeOutboundPayloads([
+      {
+        text: "323",
+        btw: { question: "what is 17 * 19?" },
+      },
+    ]);
+    expect(normalized).toEqual([{ text: "BTW\nQuestion: what is 17 * 19?\n\n323", mediaUrls: [] }]);
+  });
 });
 
 describe("formatOutboundPayloadLog", () => {

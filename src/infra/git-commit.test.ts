@@ -42,7 +42,6 @@ describe("git commit resolution", () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
   beforeEach(async () => {
-    process.chdir(repoRoot);
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
@@ -52,7 +51,6 @@ describe("git commit resolution", () => {
   });
 
   afterEach(async () => {
-    process.chdir(repoRoot);
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
@@ -87,9 +85,9 @@ describe("git commit resolution", () => {
       .trim()
       .slice(0, 7);
 
-    process.chdir(otherRepo);
     const { resolveCommitHash } = await import("./git-commit.js");
     const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
+    vi.spyOn(process, "cwd").mockReturnValue(otherRepo);
 
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).toBe(repoHead);
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).not.toBe(otherHead);

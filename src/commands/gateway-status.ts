@@ -10,6 +10,8 @@ import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
   buildNetworkHints,
   extractConfigSummary,
+  isProbeReachable,
+  isScopeLimitedProbeFailure,
   type GatewayStatusTarget,
   parseTimeoutMs,
   pickGatewaySelfPresence,
@@ -193,8 +195,10 @@ export async function gatewayStatusCommand(
     },
   );
 
-  const reachable = probed.filter((p) => p.probe.ok);
+  const reachable = probed.filter((p) => isProbeReachable(p.probe));
   const ok = reachable.length > 0;
+  const degradedScopeLimited = probed.filter((p) => isScopeLimitedProbeFailure(p.probe));
+  const degraded = degradedScopeLimited.length > 0;
   const multipleGateways = reachable.length > 1;
   const primary =
     reachable.find((p) => p.target.kind === "explicit") ??
@@ -236,12 +240,21 @@ export async function gatewayStatusCommand(
       });
     }
   }
+  for (const result of degradedScopeLimited) {
+    warnings.push({
+      code: "probe_scope_limited",
+      message:
+        "Probe diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but status details may be incomplete. Hint: pair device identity or use credentials with operator.read.",
+      targetIds: [result.target.id],
+    });
+  }
 
   if (opts.json) {
     runtime.log(
       JSON.stringify(
         {
           ok,
+          degraded,
           ts: Date.now(),
           durationMs: Date.now() - startedAt,
           timeoutMs: overallTimeoutMs,
@@ -274,7 +287,9 @@ export async function gatewayStatusCommand(
             active: p.target.active,
             tunnel: p.target.tunnel ?? null,
             connect: {
-              ok: p.probe.ok,
+              ok: isProbeReachable(p.probe),
+              rpcOk: p.probe.ok,
+              scopeLimited: isScopeLimitedProbeFailure(p.probe),
               latencyMs: p.probe.connectLatencyMs,
               error: p.probe.error,
               close: p.probe.close,

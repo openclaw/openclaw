@@ -800,9 +800,15 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
 
-    if (state === "delta" && messageData) {
+    const shouldHandleMessageSnapshot = messageData && (state === "delta" || state === "final");
+    if (shouldHandleMessageSnapshot) {
+      // Gateway chat events can carry the latest full assistant snapshot on both
+      // incremental updates and the terminal final event. Process the snapshot
+      // first so ACP clients never drop the last visible assistant text.
       await this.handleDeltaEvent(pending.sessionId, messageData);
-      return;
+      if (state === "delta") {
+        return;
+      }
     }
 
     if (state === "final") {
