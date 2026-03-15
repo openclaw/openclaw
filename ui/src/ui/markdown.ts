@@ -131,7 +131,7 @@ export const md = new MarkdownIt({
 
 // Override html_block and html_inline to escape raw HTML (#13937)
 md.renderer.rules.html_block = (tokens, idx) => {
-  return `<p>${escapeHtml(tokens[idx].content)}</p>\n`;
+  return escapeHtml(tokens[idx].content) + "\n";
 };
 md.renderer.rules.html_inline = (tokens, idx) => {
   return escapeHtml(tokens[idx].content);
@@ -157,11 +157,7 @@ md.renderer.rules.fence = (tokens, idx) => {
   const safeText = escapeHtml(text);
   const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
   const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
-  const attrSafe = text
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  const attrSafe = escapeHtml(text);
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 
@@ -187,11 +183,7 @@ md.renderer.rules.code_block = (tokens, idx) => {
   const text = token.content;
   const safeText = escapeHtml(text);
   const codeBlock = `<pre><code>${safeText}</code></pre>`;
-  const attrSafe = text
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  const attrSafe = escapeHtml(text);
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
   const header = `<div class="code-block-header">${copyBtn}</div>`;
   return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
