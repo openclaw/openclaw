@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerFeishuChatTools } from "./chat.js";
+import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const chatGetMock = vi.hoisted(() => vi.fn());
+const chatMembersGetMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
 describe("registerFeishuChatTools", () => {
-  const chatGetMock = vi.hoisted(() => vi.fn());
-  const chatMembersGetMock = vi.hoisted(() => vi.fn());
-
   beforeEach(() => {
     vi.clearAllMocks();
     createFeishuClientMock.mockReturnValue({
@@ -22,25 +22,23 @@ describe("registerFeishuChatTools", () => {
   });
 
   it("registers feishu_chat and handles info/members actions", async () => {
-    const registerTool = vi.fn();
-    registerFeishuChatTools({
-      config: {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "app_id",
-            appSecret: "app_secret", // pragma: allowlist secret
-            tools: { chat: true },
+    const { api, resolveTool } = createToolFactoryHarness({
+      channels: {
+        feishu: {
+          enabled: true,
+          accounts: {
+            main: {
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { chat: true },
+            },
           },
         },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
+      },
     } as any);
 
-    expect(registerTool).toHaveBeenCalledTimes(1);
-    const tool = registerTool.mock.calls[0]?.[0];
-    expect(tool?.name).toBe("feishu_chat");
+    registerFeishuChatTools(api);
+    const tool = resolveTool("feishu_chat");
 
     chatGetMock.mockResolvedValueOnce({
       code: 0,
@@ -85,5 +83,32 @@ describe("registerFeishuChatTools", () => {
       registerTool,
     } as any);
     expect(registerTool).not.toHaveBeenCalled();
+  });
+
+  it("registers without resolving SecretRef-backed account config", () => {
+    const registerTool = vi.fn();
+
+    expect(() =>
+      registerFeishuChatTools({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              accounts: {
+                main: {
+                  appId: { source: "file", provider: "default", id: "path/to/app-id" },
+                  appSecret: { source: "file", provider: "default", id: "path/to/app-secret" },
+                  tools: { chat: true },
+                },
+              },
+            },
+          },
+        } as any,
+        logger: { debug: vi.fn(), info: vi.fn() } as any,
+        registerTool,
+      } as any),
+    ).not.toThrow();
+
+    expect(registerTool).toHaveBeenCalledTimes(1);
   });
 });
