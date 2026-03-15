@@ -1134,4 +1134,102 @@ describe("realredactConfigSnapshot_real", () => {
     expect(restored.agents.defaults.memorySearch.remote.apiKey).toBe("1234");
     expect(restored.agents.list[0].memorySearch.remote.apiKey).toBe("6789");
   });
+
+  it("restores SecretRef id field when redacted (#44357)", () => {
+    const hints = mainSchemaHints;
+    const originalConfig = {
+      channels: {
+        telegram: {
+          botToken: {
+            source: "exec" as const,
+            provider: "default",
+            id: "telegram/bot-token",
+          },
+        },
+        discord: {
+          token: {
+            source: "exec" as const,
+            provider: "vault",
+            id: "discord/bot-token",
+          },
+        },
+      },
+    };
+    const snapshot = makeSnapshot(originalConfig);
+
+    // Redact - this should redact only the id field, not the whole SecretRef object
+    const redacted = redactConfigSnapshot(snapshot, hints);
+    const config = redacted.config as typeof originalConfig;
+
+    // SecretRef structure should be preserved, only id should be redacted
+    expect(config.channels.telegram.botToken).toEqual({
+      source: "exec",
+      provider: "default",
+      id: REDACTED_SENTINEL,
+    });
+    expect(config.channels.discord.token).toEqual({
+      source: "exec",
+      provider: "vault",
+      id: REDACTED_SENTINEL,
+    });
+
+    // Restore - the id field should be restored from original
+    const restored = restoreRedactedValues(
+      redacted.config,
+      snapshot.config,
+      hints,
+    ) as typeof originalConfig;
+
+    expect(restored.channels.telegram.botToken).toEqual({
+      source: "exec",
+      provider: "default",
+      id: "telegram/bot-token",
+    });
+    expect(restored.channels.discord.token).toEqual({
+      source: "exec",
+      provider: "vault",
+      id: "discord/bot-token",
+    });
+
+    // Full round-trip should preserve everything
+    expect(restored).toEqual(originalConfig);
+  });
+
+  it("allows user to change SecretRef id field explicitly", () => {
+    const hints = mainSchemaHints;
+    const originalConfig = {
+      channels: {
+        telegram: {
+          botToken: {
+            source: "exec" as const,
+            provider: "default",
+            id: "telegram/old-path",
+          },
+        },
+      },
+    };
+    const snapshot = makeSnapshot(originalConfig);
+
+    // User modifies the id field explicitly (not using sentinel)
+    const userModified = {
+      channels: {
+        telegram: {
+          botToken: {
+            source: "exec" as const,
+            provider: "default",
+            id: "telegram/new-path",
+          },
+        },
+      },
+    };
+
+    // Restore should preserve user's explicit change
+    const restored = restoreRedactedValues(
+      userModified,
+      snapshot.config,
+      hints,
+    ) as typeof originalConfig;
+
+    expect(restored.channels.telegram.botToken.id).toBe("telegram/new-path");
+  });
 });
