@@ -500,6 +500,90 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toHaveLength(1);
   });
+
+  it("skips duplicate final message already present in chatMessages (by id)", () => {
+    const existing = { role: "assistant", id: "msg-1", content: [{ type: "text", text: "Hi" }] };
+    const state = createState({
+      chatMessages: [existing],
+      chatRunId: "run-1",
+      sessionKey: "main",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: { role: "assistant", id: "msg-1", content: [{ type: "text", text: "Hi" }] },
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+  });
+
+  it("skips duplicate final message already present in chatMessages (by timestamp+role)", () => {
+    const existing = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello" }],
+      timestamp: 1700000000,
+    };
+    const state = createState({
+      chatMessages: [existing],
+      chatRunId: "run-2",
+      sessionKey: "main",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-2",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+        timestamp: 1700000000,
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+  });
+
+  it("skips duplicate from other-run final event after reconnect", () => {
+    const existing = { role: "assistant", id: "msg-X", content: [{ type: "text", text: "Sub" }] };
+    const state = createState({
+      chatMessages: [existing],
+      chatRunId: "run-active",
+      sessionKey: "main",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-other",
+      sessionKey: "main",
+      state: "final",
+      message: { role: "assistant", id: "msg-X", content: [{ type: "text", text: "Sub" }] },
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+  });
+
+  it("skips duplicate aborted message already present in chatMessages", () => {
+    const existing = {
+      role: "assistant",
+      id: "msg-abort",
+      content: [{ type: "text", text: "Partial" }],
+    };
+    const state = createState({
+      chatMessages: [existing],
+      chatRunId: "run-3",
+      sessionKey: "main",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-3",
+      sessionKey: "main",
+      state: "aborted",
+      message: {
+        role: "assistant",
+        id: "msg-abort",
+        content: [{ type: "text", text: "Partial" }],
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(state.chatMessages).toHaveLength(1);
+  });
 });
 
 describe("loadChatHistory", () => {

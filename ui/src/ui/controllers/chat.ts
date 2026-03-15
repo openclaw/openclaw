@@ -7,6 +7,43 @@ import { generateUUID } from "../uuid.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
+/**
+ * Extract a deduplication key from a chat message.
+ * Uses the first available stable identifier: id, messageId, toolCallId,
+ * or falls back to role+timestamp when both are present.
+ * Returns null when no usable key can be derived.
+ */
+function messageDedupeKey(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const m = message as Record<string, unknown>;
+  if (typeof m.id === "string" && m.id) {
+    return `id:${m.id}`;
+  }
+  if (typeof m.messageId === "string" && m.messageId) {
+    return `mid:${m.messageId}`;
+  }
+  if (typeof m.toolCallId === "string" && m.toolCallId) {
+    return `tool:${m.toolCallId}`;
+  }
+  const role = typeof m.role === "string" ? m.role : null;
+  const ts = typeof m.timestamp === "number" ? m.timestamp : null;
+  if (role && ts != null) {
+    return `${role}:${ts}`;
+  }
+  return null;
+}
+
+/** Check whether an equivalent message already exists in the chat history. */
+function isDuplicateMessage(messages: unknown[], candidate: unknown): boolean {
+  const key = messageDedupeKey(candidate);
+  if (!key) {
+    return false;
+  }
+  return messages.some((msg) => messageDedupeKey(msg) === key);
+}
+
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
 }
@@ -273,7 +310,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
-      if (finalMessage && !isAssistantSilentReply(finalMessage)) {
+      if (
+        finalMessage &&
+        !isAssistantSilentReply(finalMessage) &&
+        !isDuplicateMessage(state.chatMessages, finalMessage)
+      ) {
         state.chatMessages = [...state.chatMessages, finalMessage];
         return null;
       }
@@ -292,7 +333,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
-    if (finalMessage && !isAssistantSilentReply(finalMessage)) {
+    if (
+      finalMessage &&
+      !isAssistantSilentReply(finalMessage) &&
+      !isDuplicateMessage(state.chatMessages, finalMessage)
+    ) {
       state.chatMessages = [...state.chatMessages, finalMessage];
     } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
       state.chatMessages = [
@@ -309,7 +354,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
-    if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
+    if (
+      normalizedMessage &&
+      !isAssistantSilentReply(normalizedMessage) &&
+      !isDuplicateMessage(state.chatMessages, normalizedMessage)
+    ) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
     } else {
       const streamedText = state.chatStream ?? "";
