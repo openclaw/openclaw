@@ -16,6 +16,7 @@ import { generateUUID } from "./uuid.ts";
 
 export type ChatHost = {
   client: GatewayBrowserClient | null;
+  chatUserScrolledUp?: boolean;
   chatMessages: unknown[];
   chatStream: string | null;
   connected: boolean;
@@ -142,7 +143,7 @@ async function sendChatMessageNow(
     host.chatAttachments = opts.previousAttachments;
   }
   if (ok) {
-    (host as any).chatUserScrolledUp = false;
+    host.chatUserScrolledUp = false;
   }
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   if (ok && !host.chatRunId) {
