@@ -361,7 +361,7 @@ See [Dashboard](/web/dashboard) and [Web surfaces](/web) for bind modes and auth
 
 ### What runtime do I need
 
-Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
+Node **>= 22.16** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
 
 ### Does it run on Raspberry Pi
 
@@ -378,7 +378,7 @@ local screen/camera/canvas or command execution. See [Nodes](/nodes).
 
 Short version: it works, but expect rough edges.
 
-- Use a **64-bit** OS and keep Node >= 22.
+- Use a **64-bit** OS and keep Node >= 22.16.
 - Prefer the **hackable (git) install** so you can see logs and update fast.
 - Start without channels/skills, then add them one by one.
 - If you hit weird binary issues, it is usually an **ARM compatibility** problem.
