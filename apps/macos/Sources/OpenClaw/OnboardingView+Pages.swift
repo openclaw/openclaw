@@ -467,7 +467,13 @@ extension OnboardingView {
         let originalMode = self.state.connectionMode
         let shouldRestoreMode = originalMode != .remote
         if shouldRestoreMode {
-            // Reuse the shared remote endpoint stack for probing without committing the user's mode choice.
+            // Raise the suppress flag before switching mode so the MenuBar .onChange handler
+            // (MenuBar.swift:76-78) does not invoke ConnectionModeCoordinator.apply for this
+            // transient probe flip, preventing the active local gateway from being torn down.
+            // The flag is kept true for the duration of the probe and cleared in the defer block
+            // after the mode is restored, so neither the forward nor the backward flip triggers
+            // ConnectionModeCoordinator.apply (which would otherwise tear down the local gateway).
+            self.state.suppressRemoteProbeReset = true
             self.state.connectionMode = .remote
         }
         self.remoteProbeState = .checking
