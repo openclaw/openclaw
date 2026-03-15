@@ -1,0 +1,28 @@
+{
+  "id": "byterover",
+  "kind": "context-engine",
+  "name": "ByteRover",
+  "description": "ByteRover context engine — curates and queries conversation context via brv CLI",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "brvPath": {
+        "type": "string",
+        "description": "Path to the brv CLI binary. Defaults to 'brv' (resolved from PATH)."
+      },
+      "queryTimeoutMs": {
+        "type": "number",
+        "description": "Timeout in milliseconds for brv query calls. Defaults to 12000. Note: effective assemble deadline is capped at 10000 ms to stay within the agent ready timeout."
+      },
+      "curateTimeoutMs": {
+        "type": "number",
+        "description": "Timeout in milliseconds for brv curate calls. Defaults to 60000."
+      },
+      "cwd": {
+        "type": "string",
+        "description": "Working directory for brv commands. Must be a project with .brv/ initialized."
+      }
+    }
+  }
+}

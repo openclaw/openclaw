@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/byterover",
+  "version": "2026.3.8",
+  "private": true,
+  "description": "ByteRover context engine plugin for OpenClaw",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
