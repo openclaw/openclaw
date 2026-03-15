@@ -348,3 +348,13 @@ describe("isPermanentDeliveryError", () => {
     expect(isPermanentDeliveryError("request timed out")).toBe(false);
   });
 });
+
+describe("isPermanentDeliveryError – HTTP 408 exclusion", () => {
+  it("does NOT treat HTTP 408 as permanent", () => {
+    expect(isPermanentDeliveryError("status 408")).toBe(false);
+  });
+
+  it("does NOT treat HTTP 408 Request Timeout as permanent", () => {
+    expect(isPermanentDeliveryError("HTTP 408 Request Timeout")).toBe(false);
+  });
+});

@@ -158,7 +158,7 @@ export function isPermanentDeliveryError(error: string): boolean {
   const statusMatch = HTTP_STATUS_PATTERN.exec(error);
   if (statusMatch) {
     const status = parseInt(statusMatch[1], 10);
-    if (status >= 400 && status < 500 && status !== 429) {
+    if (status >= 400 && status < 500 && status !== 429 && status !== 408) {
       return true;
     }
   }
