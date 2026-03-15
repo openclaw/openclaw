@@ -263,6 +263,27 @@ export function createRootScopedReadFile(params: {
   };
 }
 
+export async function statLocalFileSafely(params: {
+  filePath: string;
+  maxBytes?: number;
+}): Promise<Omit<SafeLocalReadResult, "buffer">> {
+  const opened = await openVerifiedLocalFile(params.filePath);
+  try {
+    if (params.maxBytes !== undefined && opened.stat.size > params.maxBytes) {
+      throw new SafeOpenError(
+        "too-large",
+        `file exceeds limit of ${params.maxBytes} bytes (got ${opened.stat.size})`,
+      );
+    }
+    return {
+      realPath: opened.realPath,
+      stat: opened.stat,
+    };
+  } finally {
+    await opened.handle.close().catch(() => {});
+  }
+}
+
 export async function readLocalFileSafely(params: {
   filePath: string;
   maxBytes?: number;
@@ -270,6 +291,41 @@ export async function readLocalFileSafely(params: {
   const opened = await openVerifiedLocalFile(params.filePath);
   try {
     return await readOpenedFileSafely({ opened, maxBytes: params.maxBytes });
+  } finally {
+    await opened.handle.close().catch(() => {});
+  }
+}
+
+export async function readLocalFileHeadSafely(params: {
+  filePath: string;
+  bytes: number;
+  maxBytes?: number;
+}): Promise<SafeLocalReadResult> {
+  const opened = await openVerifiedLocalFile(params.filePath);
+  try {
+    if (params.maxBytes !== undefined && opened.stat.size > params.maxBytes) {
+      throw new SafeOpenError(
+        "too-large",
+        `file exceeds limit of ${params.maxBytes} bytes (got ${opened.stat.size})`,
+      );
+    }
+
+    const bytesToRead = Math.max(0, Math.min(params.bytes, opened.stat.size));
+    const buffer = Buffer.alloc(bytesToRead);
+    if (bytesToRead > 0) {
+      const { bytesRead } = await opened.handle.read(buffer, 0, bytesToRead, 0);
+      return {
+        buffer: buffer.subarray(0, bytesRead),
+        realPath: opened.realPath,
+        stat: opened.stat,
+      };
+    }
+
+    return {
+      buffer,
+      realPath: opened.realPath,
+      stat: opened.stat,
+    };
   } finally {
     await opened.handle.close().catch(() => {});
   }

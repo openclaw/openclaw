@@ -19,9 +19,10 @@ import type { MediaKind } from "../../../src/media/constants.js";
 import { buildOutboundMediaLoadOptions } from "../../../src/media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../../src/media/mime.js";
 import { normalizePollInput, type PollInput } from "../../../src/polls.js";
-import { loadWebMedia } from "../../whatsapp/src/media.js";
+import { loadWebMedia, resolveLocalMediaSource } from "../../whatsapp/src/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { isTelegramApiRootLoopback, resolveTelegramApiRoot } from "./api-root.js";
 import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
@@ -187,6 +188,7 @@ function buildTelegramClientOptionsCacheKey(params: {
   account: ResolvedTelegramAccount;
   timeoutSeconds?: number;
 }): string {
+  const apiRootKey = params.account.config.apiRoot?.trim() ?? "";
   const proxyKey = params.account.config.proxy?.trim() ?? "";
   const autoSelectFamily = params.account.config.network?.autoSelectFamily;
   const autoSelectFamilyKey =
@@ -194,7 +196,7 @@ function buildTelegramClientOptionsCacheKey(params: {
   const dnsResultOrderKey = params.account.config.network?.dnsResultOrder ?? "default";
   const timeoutSecondsKey =
     typeof params.timeoutSeconds === "number" ? String(params.timeoutSeconds) : "default";
-  return `${params.account.accountId}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${timeoutSecondsKey}`;
+  return `${params.account.accountId}::${apiRootKey}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${timeoutSecondsKey}`;
 }
 
 function setCachedTelegramClientOptions(
@@ -234,13 +236,18 @@ function resolveTelegramClientOptions(
   const proxyUrl = account.config.proxy?.trim();
   const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
   const fetchImpl = resolveTelegramFetch(proxyFetch, {
+    apiRoot: account.config.apiRoot,
     network: account.config.network,
   });
+  const apiRoot = account.config.apiRoot?.trim()
+    ? resolveTelegramApiRoot(account.config.apiRoot)
+    : undefined;
   const clientOptions =
-    fetchImpl || timeoutSeconds
+    fetchImpl || timeoutSeconds || apiRoot
       ? {
           ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
+          ...(apiRoot ? { apiRoot } : {}),
         }
       : undefined;
   if (cacheKey) {
@@ -760,23 +767,27 @@ export async function sendMessageTelegram(
     await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
 
   if (mediaUrl) {
-    const media = await loadWebMedia(
-      mediaUrl,
-      buildOutboundMediaLoadOptions({
-        maxBytes: mediaMaxBytes,
-        mediaLocalRoots: opts.mediaLocalRoots,
-        optimizeImages: opts.forceDocument ? false : undefined,
-      }),
-    );
-    const kind = kindFromMime(media.contentType ?? undefined);
+    const outboundMediaLoadOptions = buildOutboundMediaLoadOptions({
+      maxBytes: mediaMaxBytes,
+      mediaLocalRoots: opts.mediaLocalRoots,
+      optimizeImages: opts.forceDocument ? false : undefined,
+    });
+    const localMedia = isTelegramApiRootLoopback(account.config.apiRoot)
+      ? await resolveLocalMediaSource(mediaUrl, outboundMediaLoadOptions)
+      : null;
+    const media = localMedia ? null : await loadWebMedia(mediaUrl, outboundMediaLoadOptions);
+    const kind = localMedia?.kind ?? kindFromMime(media?.contentType ?? undefined);
     const isGif = isGifMedia({
-      contentType: media.contentType,
-      fileName: media.fileName,
+      contentType: localMedia?.contentType ?? media?.contentType,
+      fileName: localMedia?.fileName ?? media?.fileName,
     });
     const isVideoNote = kind === "video" && opts.asVideoNote === true;
     const fileName =
-      media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
-    const file = new InputFile(media.buffer, fileName);
+      localMedia?.fileName ??
+      media?.fileName ??
+      (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ??
+      "file";
+    const mediaInput = localMedia?.filePath ?? new InputFile(media!.buffer, fileName);
     let caption: string | undefined;
     let followUpText: string | undefined;
 
@@ -824,7 +835,7 @@ export async function sendMessageTelegram(
           sender: (effectiveParams: Record<string, unknown> | undefined) =>
             api.sendAnimation(
               chatId,
-              file,
+              mediaInput,
               effectiveParams as Parameters<typeof api.sendAnimation>[2],
             ) as Promise<TelegramMessageLike>,
         };
@@ -835,7 +846,7 @@ export async function sendMessageTelegram(
           sender: (effectiveParams: Record<string, unknown> | undefined) =>
             api.sendPhoto(
               chatId,
-              file,
+              mediaInput,
               effectiveParams as Parameters<typeof api.sendPhoto>[2],
             ) as Promise<TelegramMessageLike>,
         };
@@ -847,7 +858,7 @@ export async function sendMessageTelegram(
             sender: (effectiveParams: Record<string, unknown> | undefined) =>
               api.sendVideoNote(
                 chatId,
-                file,
+                mediaInput,
                 effectiveParams as Parameters<typeof api.sendVideoNote>[2],
               ) as Promise<TelegramMessageLike>,
           };
@@ -857,7 +868,7 @@ export async function sendMessageTelegram(
           sender: (effectiveParams: Record<string, unknown> | undefined) =>
             api.sendVideo(
               chatId,
-              file,
+              mediaInput,
               effectiveParams as Parameters<typeof api.sendVideo>[2],
             ) as Promise<TelegramMessageLike>,
         };
@@ -865,7 +876,7 @@ export async function sendMessageTelegram(
       if (kind === "audio") {
         const { useVoice } = resolveTelegramVoiceSend({
           wantsVoice: opts.asVoice === true, // default false (backward compatible)
-          contentType: media.contentType,
+          contentType: localMedia?.contentType ?? media?.contentType,
           fileName,
           logFallback: logVerbose,
         });
@@ -875,7 +886,7 @@ export async function sendMessageTelegram(
             sender: (effectiveParams: Record<string, unknown> | undefined) =>
               api.sendVoice(
                 chatId,
-                file,
+                mediaInput,
                 effectiveParams as Parameters<typeof api.sendVoice>[2],
               ) as Promise<TelegramMessageLike>,
           };
@@ -885,7 +896,7 @@ export async function sendMessageTelegram(
           sender: (effectiveParams: Record<string, unknown> | undefined) =>
             api.sendAudio(
               chatId,
-              file,
+              mediaInput,
               effectiveParams as Parameters<typeof api.sendAudio>[2],
             ) as Promise<TelegramMessageLike>,
         };
@@ -895,7 +906,7 @@ export async function sendMessageTelegram(
         sender: (effectiveParams: Record<string, unknown> | undefined) =>
           api.sendDocument(
             chatId,
-            file,
+            mediaInput,
             // Only force Telegram to keep the uploaded media type when callers explicitly
             // opt into document delivery for image/GIF uploads.
             (opts.forceDocument

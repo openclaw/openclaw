@@ -1,10 +1,12 @@
 import type { Message } from "@grammyjs/types";
 import { GrammyError } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SafeOpenError } from "../../../../src/infra/fs-safe.js";
 import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
 const fetchRemoteMedia = vi.fn();
+const readLocalFileSafely = vi.fn();
 
 vi.mock("../../../../src/media/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../../src/media/store.js")>();
@@ -17,6 +19,14 @@ vi.mock("../../../../src/media/store.js", async (importOriginal) => {
 vi.mock("../../../../src/media/fetch.js", () => ({
   fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
 }));
+
+vi.mock("../../../../src/infra/fs-safe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/infra/fs-safe.js")>();
+  return {
+    ...actual,
+    readLocalFileSafely: (...args: unknown[]) => readLocalFileSafely(...args),
+  };
+});
 
 vi.mock("../../../../src/globals.js", () => ({
   danger: (s: string) => s,
@@ -168,6 +178,7 @@ describe("resolveMedia getFile retry", () => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockClear();
     saveMediaBuffer.mockClear();
+    readLocalFileSafely.mockClear();
   });
 
   afterEach(() => {
@@ -352,6 +363,141 @@ describe("resolveMedia getFile retry", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         fetchImpl: callerFetch,
+      }),
+    );
+  });
+
+  it("builds file download URLs from a custom Telegram Bot API root", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    const callerFetch = vi.fn() as unknown as typeof fetch;
+    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf-data"),
+      contentType: "application/pdf",
+      fileName: "file_42.pdf",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_42---uuid.pdf",
+      contentType: "application/pdf",
+    });
+
+    await resolveMedia(
+      makeCtx("document", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      callerTransport,
+      "http://127.0.0.1:8081/",
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `http://127.0.0.1:8081/file/bot${BOT_TOKEN}/documents/file_42.pdf`,
+        ssrfPolicy: {
+          allowRfc2544BenchmarkRange: true,
+          allowedHostnames: ["127.0.0.1"],
+        },
+      }),
+    );
+  });
+
+  it("reads absolute local getFile paths from disk without HTTP when apiRoot is set", async () => {
+    const localFilePath = "/tmp/openclaw-local-bot-api/file_42.pdf";
+    const getFile = vi.fn().mockResolvedValue({ file_path: localFilePath });
+    readLocalFileSafely.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf-data"),
+      realPath: localFilePath,
+      stat: { size: 8 },
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_42---uuid.pdf",
+      contentType: "application/pdf",
+    });
+
+    const result = await resolveMedia(
+      makeCtx("document", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      "http://127.0.0.1:8081",
+    );
+
+    expect(result).not.toBeNull();
+    expect(readLocalFileSafely).toHaveBeenCalledWith({
+      filePath: localFilePath,
+      maxBytes: MAX_MEDIA_BYTES,
+    });
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+
+  it("reads file:// getFile paths from disk without HTTP when apiRoot is set", async () => {
+    const localFilePath = "/tmp/openclaw local/file 42.pdf";
+    const getFile = vi
+      .fn()
+      .mockResolvedValue({ file_path: "file:///tmp/openclaw%20local/file%2042.pdf" });
+    readLocalFileSafely.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf-data"),
+      realPath: localFilePath,
+      stat: { size: 8 },
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_42---uuid.pdf",
+      contentType: "application/pdf",
+    });
+
+    const result = await resolveMedia(
+      makeCtx("document", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      "http://127.0.0.1:8081",
+    );
+
+    expect(result).not.toBeNull();
+    expect(readLocalFileSafely).toHaveBeenCalledWith({
+      filePath: localFilePath,
+      maxBytes: MAX_MEDIA_BYTES,
+    });
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+
+  it("does not read absolute local getFile paths from disk without explicit apiRoot opt-in", async () => {
+    const localFilePath = "/tmp/openclaw-local-bot-api/file_42.pdf";
+    const getFile = vi.fn().mockResolvedValue({ file_path: localFilePath });
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const result = await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(result).not.toBeNull();
+    expect(readLocalFileSafely).not.toHaveBeenCalled();
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `https://api.telegram.org/file/bot${BOT_TOKEN}/tmp/openclaw-local-bot-api/file_42.pdf`,
+      }),
+    );
+  });
+
+  it("falls back to HTTP download when local file_path cannot be read", async () => {
+    const localFilePath = "/tmp/openclaw-local-bot-api/file_42.pdf";
+    const getFile = vi.fn().mockResolvedValue({ file_path: localFilePath });
+    readLocalFileSafely.mockRejectedValueOnce(new SafeOpenError("not-found", "file not found"));
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const result = await resolveMedia(
+      makeCtx("document", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      "http://127.0.0.1:8081",
+    );
+
+    expect(result).not.toBeNull();
+    expect(readLocalFileSafely).toHaveBeenCalledWith({
+      filePath: localFilePath,
+      maxBytes: MAX_MEDIA_BYTES,
+    });
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `http://127.0.0.1:8081/file/bot${BOT_TOKEN}/tmp/openclaw-local-bot-api/file_42.pdf`,
       }),
     );
   });

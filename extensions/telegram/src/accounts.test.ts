@@ -312,6 +312,49 @@ describe("resolveTelegramAccount allowFrom precedence", () => {
   });
 });
 
+describe("resolveTelegramAccount apiRoot precedence", () => {
+  it("inherits top-level apiRoot when account override is unset", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            apiRoot: "http://127.0.0.1:8081/",
+            accounts: {
+              work: { botToken: "123:work" },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.apiRoot).toBe("http://127.0.0.1:8081/");
+    expect(resolved.baseUrl).toBe("http://127.0.0.1:8081/");
+  });
+
+  it("prefers per-account apiRoot over the top-level value", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            apiRoot: "http://127.0.0.1:8081/",
+            accounts: {
+              work: {
+                botToken: "123:work",
+                apiRoot: "http://127.0.0.1:8082/",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.apiRoot).toBe("http://127.0.0.1:8082/");
+    expect(resolved.baseUrl).toBe("http://127.0.0.1:8082/");
+  });
+});
+
 describe("resolveTelegramPollActionGateState", () => {
   it("requires both sendMessage and poll actions", () => {
     const state = resolveTelegramPollActionGateState((key) => key !== "poll");

@@ -1,21 +1,22 @@
+import path from "node:path";
 import { GrammyError } from "grammy";
 import { logVerbose, warn } from "../../../../src/globals.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { SafeOpenError, readLocalFileSafely } from "../../../../src/infra/fs-safe.js";
 import { retryAsync } from "../../../../src/infra/retry.js";
 import { fetchRemoteMedia } from "../../../../src/media/fetch.js";
 import { saveMediaBuffer } from "../../../../src/media/store.js";
+import {
+  buildTelegramFileDownloadUrl,
+  resolveTelegramLocalFilePath,
+  resolveTelegramMediaSsrFPolicy,
+} from "../api-root.js";
 import { shouldRetryTelegramIpv4Fallback, type TelegramTransport } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
-const TELEGRAM_MEDIA_SSRF_POLICY = {
-  // Telegram file downloads should trust api.telegram.org even when DNS/proxy
-  // resolution maps to private/internal ranges in restricted networks.
-  allowedHostnames: ["api.telegram.org"],
-  allowRfc2544BenchmarkRange: true,
-};
 
 /**
  * Returns true if the error is Telegram's "file is too big" error.
@@ -121,21 +122,58 @@ const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 async function downloadAndSaveTelegramFile(params: {
   filePath: string;
   token: string;
-  transport: TelegramTransport;
+  transport?: TelegramTransport;
   maxBytes: number;
   telegramFileName?: string;
+  apiRoot?: string;
 }) {
-  const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
+  const localFilePath = params.apiRoot ? resolveTelegramLocalFilePath(params.filePath) : null;
+  if (localFilePath) {
+    try {
+      const localFile = await readLocalFileSafely({
+        filePath: localFilePath,
+        maxBytes: params.maxBytes,
+      });
+      const originalName = params.telegramFileName ?? path.basename(localFilePath);
+      return await saveMediaBuffer(
+        localFile.buffer,
+        undefined,
+        "inbound",
+        params.maxBytes,
+        originalName,
+      );
+    } catch (err) {
+      if (err instanceof SafeOpenError) {
+        if (err.code === "too-large") {
+          throw new Error(`Media exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`, {
+            cause: err,
+          });
+        }
+        logVerbose(
+          `telegram: local file_path unreadable, falling back to HTTP download: ${localFilePath} (${err.code})`,
+        );
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  const resolvedTransport = resolveRequiredTelegramTransport(params.transport);
+  const url = buildTelegramFileDownloadUrl({
+    token: params.token,
+    filePath: params.filePath,
+    apiRoot: params.apiRoot,
+  });
   const fetched = await fetchRemoteMedia({
     url,
-    fetchImpl: params.transport.sourceFetch,
-    dispatcherPolicy: params.transport.pinnedDispatcherPolicy,
-    fallbackDispatcherPolicy: params.transport.fallbackPinnedDispatcherPolicy,
+    fetchImpl: resolvedTransport.sourceFetch,
+    dispatcherPolicy: resolvedTransport.pinnedDispatcherPolicy,
+    fallbackDispatcherPolicy: resolvedTransport.fallbackPinnedDispatcherPolicy,
     shouldRetryFetchError: shouldRetryTelegramIpv4Fallback,
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
-    ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+    ssrfPolicy: resolveTelegramMediaSsrFPolicy(params.apiRoot),
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
   return saveMediaBuffer(
@@ -153,6 +191,7 @@ async function resolveStickerMedia(params: {
   maxBytes: number;
   token: string;
   transport?: TelegramTransport;
+  apiRoot?: string;
 }): Promise<
   | {
       path: string;
@@ -163,7 +202,7 @@ async function resolveStickerMedia(params: {
   | null
   | undefined
 > {
-  const { msg, ctx, maxBytes, token, transport } = params;
+  const { msg, ctx, maxBytes, token, transport, apiRoot } = params;
   if (!msg.sticker) {
     return undefined;
   }
@@ -183,16 +222,20 @@ async function resolveStickerMedia(params: {
       logVerbose("telegram: getFile returned no file_path for sticker");
       return null;
     }
-    const resolvedTransport = resolveOptionalTelegramTransport(transport);
-    if (!resolvedTransport) {
+    const isLocalFilePath = Boolean(resolveTelegramLocalFilePath(file.file_path));
+    const resolvedTransport = isLocalFilePath
+      ? undefined
+      : resolveOptionalTelegramTransport(transport);
+    if (!isLocalFilePath && !resolvedTransport) {
       logVerbose("telegram: fetch not available for sticker download");
       return null;
     }
     const saved = await downloadAndSaveTelegramFile({
       filePath: file.file_path,
       token,
-      transport: resolvedTransport,
+      transport: resolvedTransport ?? undefined,
       maxBytes,
+      apiRoot,
     });
 
     // Check sticker cache for existing description
@@ -248,6 +291,7 @@ export async function resolveMedia(
   maxBytes: number,
   token: string,
   transport?: TelegramTransport,
+  apiRoot?: string,
 ): Promise<{
   path: string;
   contentType?: string;
@@ -261,6 +305,7 @@ export async function resolveMedia(
     maxBytes,
     token,
     transport,
+    apiRoot,
   });
   if (stickerResolved !== undefined) {
     return stickerResolved;
@@ -281,9 +326,10 @@ export async function resolveMedia(
   const saved = await downloadAndSaveTelegramFile({
     filePath: file.file_path,
     token,
-    transport: resolveRequiredTelegramTransport(transport),
+    transport,
     maxBytes,
     telegramFileName: resolveTelegramFileName(msg),
+    apiRoot,
   });
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };

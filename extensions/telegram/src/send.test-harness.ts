@@ -20,8 +20,9 @@ const { botApi, botCtorSpy } = vi.hoisted(() => ({
   botCtorSpy: vi.fn(),
 }));
 
-const { loadWebMedia } = vi.hoisted(() => ({
+const { loadWebMedia, resolveLocalMediaSource } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
+  resolveLocalMediaSource: vi.fn(),
 }));
 
 const { loadConfig } = vi.hoisted(() => ({
@@ -37,11 +38,13 @@ type TelegramSendTestMocks = {
   botCtorSpy: MockFn;
   loadConfig: MockFn;
   loadWebMedia: MockFn;
+  resolveLocalMediaSource: MockFn;
   maybePersistResolvedTelegramTarget: MockFn;
 };
 
 vi.mock("../../whatsapp/src/media.js", () => ({
   loadWebMedia,
+  resolveLocalMediaSource,
 }));
 
 vi.mock("grammy", () => ({
@@ -51,7 +54,7 @@ vi.mock("grammy", () => ({
     constructor(
       public token: string,
       public options?: {
-        client?: { fetch?: typeof fetch; timeoutSeconds?: number };
+        client?: { apiRoot?: string; fetch?: typeof fetch; timeoutSeconds?: number };
       },
     ) {
       botCtorSpy(token, options);
@@ -73,13 +76,22 @@ vi.mock("./target-writeback.js", () => ({
 }));
 
 export function getTelegramSendTestMocks(): TelegramSendTestMocks {
-  return { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegramTarget };
+  return {
+    botApi,
+    botCtorSpy,
+    loadConfig,
+    loadWebMedia,
+    resolveLocalMediaSource,
+    maybePersistResolvedTelegramTarget,
+  };
 }
 
 export function installTelegramSendTestHooks() {
   beforeEach(() => {
     loadConfig.mockReturnValue({});
     loadWebMedia.mockReset();
+    resolveLocalMediaSource.mockReset();
+    resolveLocalMediaSource.mockResolvedValue(null);
     maybePersistResolvedTelegramTarget.mockReset();
     maybePersistResolvedTelegramTarget.mockResolvedValue(undefined);
     botCtorSpy.mockReset();

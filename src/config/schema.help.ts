@@ -1518,6 +1518,8 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.telegram.retry.jitter": "Jitter factor (0-1) applied to Telegram retry delays.",
   "channels.telegram.network.autoSelectFamily":
     "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
+  "channels.telegram.apiRoot":
+    "Custom Telegram Bot API root URL. Defaults to https://api.telegram.org. Set this to a local Bot API Server root such as http://127.0.0.1:8081 when you want probes, sends, lookups, and file downloads to use that server.",
   "channels.telegram.timeoutSeconds":
     "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
   "channels.telegram.threadBindings.enabled":

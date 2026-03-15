@@ -129,7 +129,7 @@ function mockRunOnceAndAbort(abort: AbortController) {
   runSpy.mockImplementationOnce(() => makeAbortRunner(abort));
 }
 
-async function expectOffsetConfirmationSkipped(offset: number | null) {
+async function expectStartupGetUpdatesSkipped(offset: number | null) {
   readTelegramUpdateOffsetSpy.mockResolvedValueOnce(offset);
   const abort = new AbortController();
   api.getUpdates.mockReset();
@@ -154,12 +154,6 @@ async function runMonitorAndCaptureStartupOrder(params?: { persistedOffset?: num
     order.push("deleteWebhook");
     return true;
   });
-  if (typeof params?.persistedOffset === "number") {
-    api.getUpdates.mockImplementationOnce(async () => {
-      order.push("getUpdates");
-      return [];
-    });
-  }
   runSpy.mockImplementationOnce(() => {
     order.push("run");
     return makeAbortRunner(abort);
@@ -604,25 +598,25 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
-  it("confirms persisted offset with Telegram before starting runner", async () => {
+  it("does not preflight getUpdates before starting runner when a persisted offset exists", async () => {
     const { order } = await runMonitorAndCaptureStartupOrder({
       persistedOffset: 549076203,
     });
 
-    expect(api.getUpdates).toHaveBeenCalledWith({ offset: 549076204, limit: 1, timeout: 0 });
-    expect(order).toEqual(["deleteWebhook", "getUpdates", "run"]);
+    expect(api.getUpdates).not.toHaveBeenCalled();
+    expect(order).toEqual(["deleteWebhook", "run"]);
   });
 
-  it("skips offset confirmation when no persisted offset exists", async () => {
-    await expectOffsetConfirmationSkipped(null);
+  it("skips startup getUpdates preflight when no persisted offset exists", async () => {
+    await expectStartupGetUpdatesSkipped(null);
   });
 
-  it("skips offset confirmation when persisted offset is invalid", async () => {
-    await expectOffsetConfirmationSkipped(-1);
+  it("skips startup getUpdates preflight when persisted offset is invalid", async () => {
+    await expectStartupGetUpdatesSkipped(-1);
   });
 
-  it("skips offset confirmation when persisted offset cannot be safely incremented", async () => {
-    await expectOffsetConfirmationSkipped(Number.MAX_SAFE_INTEGER);
+  it("skips startup getUpdates preflight when persisted offset cannot be safely incremented", async () => {
+    await expectStartupGetUpdatesSkipped(Number.MAX_SAFE_INTEGER);
   });
 
   it("resets webhookCleared latch on 409 conflict so deleteWebhook re-runs", async () => {

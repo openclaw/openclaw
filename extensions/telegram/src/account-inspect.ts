@@ -21,6 +21,7 @@ export type InspectedTelegramAccount = {
   accountId: string;
   enabled: boolean;
   name?: string;
+  baseUrl?: string;
   token: string;
   tokenSource: "env" | "tokenFile" | "config" | "none";
   tokenStatus: TelegramCredentialStatus;
@@ -132,6 +133,7 @@ function inspectTelegramAccountPrimary(params: {
       accountId,
       enabled,
       name: merged.name?.trim() || undefined,
+      baseUrl: merged.apiRoot?.trim() || undefined,
       token: accountTokenFile.token,
       tokenSource: accountTokenFile.tokenSource,
       tokenStatus: accountTokenFile.tokenStatus,
@@ -146,6 +148,7 @@ function inspectTelegramAccountPrimary(params: {
       accountId,
       enabled,
       name: merged.name?.trim() || undefined,
+      baseUrl: merged.apiRoot?.trim() || undefined,
       token: accountToken.token,
       tokenSource: accountToken.tokenSource,
       tokenStatus: accountToken.tokenStatus,
@@ -160,6 +163,7 @@ function inspectTelegramAccountPrimary(params: {
       accountId,
       enabled,
       name: merged.name?.trim() || undefined,
+      baseUrl: merged.apiRoot?.trim() || undefined,
       token: channelTokenFile.token,
       tokenSource: channelTokenFile.tokenSource,
       tokenStatus: channelTokenFile.tokenStatus,
@@ -177,6 +181,7 @@ function inspectTelegramAccountPrimary(params: {
       accountId,
       enabled,
       name: merged.name?.trim() || undefined,
+      baseUrl: merged.apiRoot?.trim() || undefined,
       token: channelToken.token,
       tokenSource: channelToken.tokenSource,
       tokenStatus: channelToken.tokenStatus,
@@ -192,6 +197,7 @@ function inspectTelegramAccountPrimary(params: {
       accountId,
       enabled,
       name: merged.name?.trim() || undefined,
+      baseUrl: merged.apiRoot?.trim() || undefined,
       token: envToken,
       tokenSource: "env",
       tokenStatus: "available",
@@ -204,6 +210,7 @@ function inspectTelegramAccountPrimary(params: {
     accountId,
     enabled,
     name: merged.name?.trim() || undefined,
+    baseUrl: merged.apiRoot?.trim() || undefined,
     token: "",
     tokenSource: "none",
     tokenStatus: "missing",

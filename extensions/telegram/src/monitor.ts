@@ -128,11 +128,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const persistedOffsetRaw = await readTelegramUpdateOffset({
       accountId: account.accountId,
       botToken: token,
+      apiRoot: account.config.apiRoot,
     });
     let lastUpdateId = normalizePersistedUpdateId(persistedOffsetRaw);
     if (persistedOffsetRaw !== null && lastUpdateId === null) {
       log(
-        `[telegram] Ignoring invalid persisted update offset (${String(persistedOffsetRaw)}); starting without offset confirmation.`,
+        `[telegram] Ignoring invalid persisted update offset (${String(persistedOffsetRaw)}); starting without a persisted offset seed.`,
       );
     }
 
@@ -151,6 +152,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           accountId: account.accountId,
           updateId: normalizedUpdateId,
           botToken: token,
+          apiRoot: account.config.apiRoot,
         });
       } catch (err) {
         (opts.runtime?.error ?? console.error)(

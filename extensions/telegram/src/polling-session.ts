@@ -166,20 +166,34 @@ export class TelegramPollingSession {
     }
   }
 
-  async #confirmPersistedOffset(bot: TelegramBot): Promise<void> {
+  #seedInitialPollingOffset(bot: TelegramBot): void {
     const lastUpdateId = this.opts.getLastUpdateId();
     if (lastUpdateId === null || lastUpdateId >= Number.MAX_SAFE_INTEGER) {
       return;
     }
-    try {
-      await bot.api.getUpdates({ offset: lastUpdateId + 1, limit: 1, timeout: 0 });
-    } catch {
-      // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
-    }
+    let seeded = false;
+    bot.api.config.use(async (prev, method, payload, signal) => {
+      if (method !== "getUpdates" || seeded) {
+        return await prev(method, payload, signal);
+      }
+      const requestPayload =
+        payload && typeof payload === "object"
+          ? { ...(payload as Record<string, unknown>) }
+          : ({} as Record<string, unknown>);
+      const currentOffset =
+        typeof requestPayload.offset === "number" ? requestPayload.offset : undefined;
+
+      // Let the runner receive the first batch itself, instead of consuming it in a
+      // separate confirmation call that can drop updates on some Local Bot API setups.
+      requestPayload.offset = Math.max(currentOffset ?? 0, lastUpdateId + 1);
+      const result = await prev(method, requestPayload as typeof payload, signal);
+      seeded = true;
+      return result;
+    });
   }
 
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
-    await this.#confirmPersistedOffset(bot);
+    this.#seedInitialPollingOffset(bot);
 
     let lastGetUpdatesAt = Date.now();
     bot.api.config.use((prev, method, payload, signal) => {

@@ -10,8 +10,14 @@ import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-m
 
 installTelegramSendTestHooks();
 
-const { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegramTarget } =
-  getTelegramSendTestMocks();
+const {
+  botApi,
+  botCtorSpy,
+  loadConfig,
+  loadWebMedia,
+  resolveLocalMediaSource,
+  maybePersistResolvedTelegramTarget,
+} = getTelegramSendTestMocks();
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
@@ -252,6 +258,130 @@ describe("sendMessageTelegram", () => {
         }),
       );
     }
+  });
+
+  it("applies apiRoot config precedence", async () => {
+    const cases = [
+      {
+        name: "global telegram apiRoot",
+        cfg: { channels: { telegram: { apiRoot: "http://127.0.0.1:8081/" } } },
+        opts: { token: "tok" },
+        expectedApiRoot: "http://127.0.0.1:8081",
+      },
+      {
+        name: "per-account apiRoot override",
+        cfg: {
+          channels: {
+            telegram: {
+              apiRoot: "http://127.0.0.1:8081/",
+              accounts: { foo: { apiRoot: "http://127.0.0.1:8082/" } },
+            },
+          },
+        },
+        opts: { token: "tok", accountId: "foo" },
+        expectedApiRoot: "http://127.0.0.1:8082",
+      },
+    ] as const;
+    for (const testCase of cases) {
+      botCtorSpy.mockClear();
+      loadConfig.mockReturnValue(testCase.cfg);
+      botApi.sendMessage.mockResolvedValue({
+        message_id: 1,
+        chat: { id: "123" },
+      });
+      await sendMessageTelegram("123", "hi", testCase.opts);
+      expect(botCtorSpy, testCase.name).toHaveBeenCalledWith(
+        "tok",
+        expect.objectContaining({
+          client: expect.objectContaining({ apiRoot: testCase.expectedApiRoot }),
+        }),
+      );
+    }
+  });
+
+  it.each(["http://127.0.0.1:8081/", "http://[::1]:8081/"])(
+    "uses direct local-path sends for loopback Local Bot API roots (%s)",
+    async (apiRoot) => {
+      const chatId = "123";
+      const sendPhoto = vi.fn().mockResolvedValue({
+        message_id: 12,
+        chat: { id: chatId },
+      });
+      const api = { sendPhoto } as unknown as {
+        sendPhoto: typeof sendPhoto;
+      };
+
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            apiRoot,
+          },
+        },
+      });
+      resolveLocalMediaSource.mockResolvedValueOnce({
+        filePath: "/tmp/photo.jpg",
+        fileName: "photo.jpg",
+        contentType: "image/jpeg",
+        kind: "image",
+      });
+
+      const res = await sendMessageTelegram(chatId, "caption", {
+        token: "tok",
+        api,
+        mediaUrl: "file:///tmp/photo.jpg",
+      });
+
+      expect(resolveLocalMediaSource).toHaveBeenCalledWith(
+        "file:///tmp/photo.jpg",
+        expect.objectContaining({ maxBytes: 100 * 1024 * 1024 }),
+      );
+      expect(loadWebMedia).not.toHaveBeenCalled();
+      expect(sendPhoto).toHaveBeenCalledWith(chatId, "/tmp/photo.jpg", {
+        caption: "caption",
+        parse_mode: "HTML",
+      });
+      expect(res.messageId).toBe("12");
+    },
+  );
+
+  it("keeps buffer uploads for non-loopback custom apiRoot values", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 13,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          apiRoot: "https://botapi.example.com",
+        },
+      },
+    });
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "/tmp/photo.jpg",
+    });
+
+    expect(resolveLocalMediaSource).not.toHaveBeenCalled();
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "/tmp/photo.jpg",
+      expect.objectContaining({ maxBytes: 100 * 1024 * 1024 }),
+    );
+    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+    });
   });
 
   it("falls back to plain text when Telegram rejects HTML and preserves send params", async () => {

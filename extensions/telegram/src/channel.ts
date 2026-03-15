@@ -6,6 +6,7 @@ import {
   createScopedDmSecurityResolver,
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
+import { type OutboundSendDeps, resolveOutboundSendDep } from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
@@ -40,10 +41,6 @@ import {
   type ResolvedTelegramAccount,
   type TelegramProbe,
 } from "openclaw/plugin-sdk/telegram";
-import {
-  type OutboundSendDeps,
-  resolveOutboundSendDep,
-} from "../../../src/infra/outbound/send-deps.js";
 import { getTelegramRuntime } from "./runtime.js";
 
 type TelegramSendFn = ReturnType<

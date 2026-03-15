@@ -54,4 +54,23 @@ describe("fetchTelegramChatId", () => {
       undefined,
     );
   });
+
+  it("uses a custom Telegram Bot API root when provided", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: true, result: { id: 12345 } }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchTelegramChatId({
+      token: "abc",
+      chatId: "@user",
+      apiRoot: "http://127.0.0.1:8081/",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8081/botabc/getChat?chat_id=%40user",
+      undefined,
+    );
+  });
 });

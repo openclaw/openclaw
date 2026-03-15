@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { logVerbose, shouldLogVerbose } from "../../../src/globals.js";
-import { SafeOpenError, readLocalFileSafely } from "../../../src/infra/fs-safe.js";
+import {
+  SafeOpenError,
+  readLocalFileHeadSafely,
+  readLocalFileSafely,
+  statLocalFileSafely,
+} from "../../../src/infra/fs-safe.js";
 import type { SsrFPolicy } from "../../../src/infra/net/ssrf.js";
 import { type MediaKind, maxBytesForKind } from "../../../src/media/constants.js";
 import { fetchRemoteMedia } from "../../../src/media/fetch.js";
@@ -74,6 +79,15 @@ export class LocalMediaAccessError extends Error {
   }
 }
 
+export type LocalMediaSource = {
+  filePath: string;
+  contentType?: string;
+  fileName?: string;
+  kind: MediaKind | undefined;
+};
+
+const LOCAL_MEDIA_SNIFF_BYTES = 8 * 1024;
+
 export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
 }
@@ -135,6 +149,88 @@ async function assertLocalMediaAllowed(
     "path-not-allowed",
     `Local media path is not under an allowed directory: ${mediaPath}`,
   );
+}
+
+export async function resolveLocalMediaSource(
+  mediaUrl: string,
+  options: Pick<WebMediaOptions, "maxBytes" | "localRoots"> = {},
+): Promise<LocalMediaSource | null> {
+  mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "").trim();
+  if (!mediaUrl || /^https?:\/\//i.test(mediaUrl)) {
+    return null;
+  }
+
+  if (mediaUrl.startsWith("file://")) {
+    try {
+      mediaUrl = fileURLToPath(mediaUrl);
+    } catch {
+      throw new LocalMediaAccessError("invalid-file-url", `Invalid file:// URL: ${mediaUrl}`);
+    }
+  }
+
+  if (mediaUrl.startsWith("~")) {
+    mediaUrl = resolveUserPath(mediaUrl);
+  }
+
+  await assertLocalMediaAllowed(mediaUrl, options.localRoots);
+
+  try {
+    await statLocalFileSafely({
+      filePath: mediaUrl,
+      maxBytes: options.maxBytes,
+    });
+  } catch (err) {
+    if (err instanceof SafeOpenError) {
+      if (err.code === "too-large") {
+        throw new Error(
+          `Media exceeds ${((options.maxBytes ?? 0) / (1024 * 1024)).toFixed(0)}MB limit`,
+          { cause: err },
+        );
+      }
+      if (err.code === "not-found") {
+        throw new LocalMediaAccessError("not-found", `Local media file not found: ${mediaUrl}`, {
+          cause: err,
+        });
+      }
+      if (err.code === "not-file") {
+        throw new LocalMediaAccessError("not-file", `Local media path is not a file: ${mediaUrl}`, {
+          cause: err,
+        });
+      }
+      throw new LocalMediaAccessError(
+        "invalid-path",
+        `Local media path is not safe to read: ${mediaUrl}`,
+        { cause: err },
+      );
+    }
+    throw err;
+  }
+
+  const fileName = path.basename(mediaUrl) || undefined;
+  let contentType = await detectMime({ filePath: mediaUrl });
+  let kind = kindFromMime(contentType);
+
+  if (!path.extname(mediaUrl) || kind === undefined || kind === "document") {
+    const sniffedHead = await readLocalFileHeadSafely({
+      filePath: mediaUrl,
+      bytes: LOCAL_MEDIA_SNIFF_BYTES,
+    });
+    const sniffedContentType = await detectMime({
+      buffer: sniffedHead.buffer,
+      filePath: mediaUrl,
+    });
+    if (sniffedContentType) {
+      contentType = sniffedContentType;
+      kind = kindFromMime(sniffedContentType);
+    }
+  }
+
+  return {
+    filePath: mediaUrl,
+    contentType,
+    fileName,
+    kind,
+  };
 }
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;

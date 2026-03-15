@@ -31,6 +31,7 @@ import { getChildLogger } from "../../../src/logging.js";
 import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../../src/runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramApiRoot } from "./api-root.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -136,6 +137,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const telegramCfg = account.config;
 
   const telegramTransport = resolveTelegramTransport(opts.proxyFetch, {
+    apiRoot: telegramCfg.apiRoot,
     network: telegramCfg.network,
   });
   const shouldProvideFetch = Boolean(telegramTransport.fetch);
@@ -211,11 +213,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
       : undefined;
+  const apiRoot = telegramCfg.apiRoot?.trim()
+    ? resolveTelegramApiRoot(telegramCfg.apiRoot)
+    : undefined;
   const client: ApiClientOptions | undefined =
-    finalFetch || timeoutSeconds
+    finalFetch || timeoutSeconds || apiRoot
       ? {
           ...(finalFetch ? { fetch: finalFetch } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
+          ...(apiRoot ? { apiRoot } : {}),
         }
       : undefined;
 

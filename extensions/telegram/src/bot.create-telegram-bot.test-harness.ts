@@ -174,7 +174,9 @@ vi.mock("grammy", () => ({
     catch = vi.fn();
     constructor(
       public token: string,
-      public options?: { client?: { fetch?: typeof fetch } },
+      public options?: {
+        client?: { apiRoot?: string; fetch?: typeof fetch; timeoutSeconds?: number };
+      },
     ) {
       grammySpies.botCtorSpy(token, options);
     }
