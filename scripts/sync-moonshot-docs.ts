@@ -91,7 +91,7 @@ async function syncMoonshotDocs() {
   moonshotText = replaceBlockLines(
     moonshotText,
     '[//]: # "moonshot-kimi-k2-ids:start"',
-    "[//]: # (moonshot-kimi-k2-ids:end)",
+    '[//]: # "moonshot-kimi-k2-ids:end"',
     renderKimiK2Ids(""),
   );
   moonshotText = replaceBlockLines(
@@ -111,7 +111,7 @@ async function syncMoonshotDocs() {
   conceptsText = replaceBlockLines(
     conceptsText,
     '[//]: # "moonshot-kimi-k2-model-refs:start"',
-    "[//]: # (moonshot-kimi-k2-model-refs:end)",
+    '[//]: # "moonshot-kimi-k2-model-refs:end"',
     renderKimiK2Ids("moonshot/"),
   );
 
