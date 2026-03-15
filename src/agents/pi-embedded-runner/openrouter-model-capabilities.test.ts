@@ -69,4 +69,43 @@ describe("openrouter-model-capabilities", () => {
       rmSync(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("does not refetch immediately after an awaited miss for the same model id", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "openclaw-openrouter-capabilities-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "acme/known-model",
+                name: "Known Model",
+                architecture: { modality: "text->text" },
+                context_length: 1234,
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const module = await import("./openrouter-model-capabilities.js");
+
+    try {
+      await module.loadOpenRouterModelCapabilities("acme/missing-model");
+      expect(module.getOpenRouterModelCapabilities("acme/missing-model")).toBeUndefined();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      expect(module.getOpenRouterModelCapabilities("acme/missing-model")).toBeUndefined();
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -149,6 +149,7 @@ function readDiskCache(): Map<string, OpenRouterModelCapabilities> | undefined {
 
 let cache: Map<string, OpenRouterModelCapabilities> | undefined;
 let fetchInFlight: Promise<void> | undefined;
+const skipNextMissRefresh = new Set<string>();
 
 function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
   const input: Array<"text" | "image"> = ["text"];
@@ -270,6 +271,9 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
     fetchPromise = fetchInFlight;
   }
   await fetchPromise;
+  if (!cache?.has(modelId)) {
+    skipNextMissRefresh.add(modelId);
+  }
 }
 
 /**
@@ -286,6 +290,9 @@ export function getOpenRouterModelCapabilities(
 
   // Model not found but cache exists — may be a newly added model.
   // Trigger a refresh so the next call picks it up.
+  if (!result && skipNextMissRefresh.delete(modelId)) {
+    return undefined;
+  }
   if (!result && cache && !fetchInFlight) {
     triggerFetch();
   }

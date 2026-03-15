@@ -165,23 +165,26 @@ function resolveExplicitModelWithRegistry(params: {
   modelId: string;
   modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
-}): Model<Api> | undefined {
+}): { kind: "resolved"; model: Model<Api> } | { kind: "suppressed" } | undefined {
   const { provider, modelId, modelRegistry, cfg } = params;
   if (shouldSuppressBuiltInModel({ provider, id: modelId })) {
-    return undefined;
+    return { kind: "suppressed" };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (model) {
-    return normalizeResolvedModel({
-      provider,
-      model: applyConfiguredProviderOverrides({
-        discoveredModel: model,
-        providerConfig,
-        modelId,
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({
+        provider,
+        model: applyConfiguredProviderOverrides({
+          discoveredModel: model,
+          providerConfig,
+          modelId,
+        }),
       }),
-    });
+    };
   }
 
   const providers = cfg?.models?.providers ?? {};
@@ -191,21 +194,27 @@ function resolveExplicitModelWithRegistry(params: {
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
   if (inlineMatch?.api) {
-    return normalizeResolvedModel({ provider, model: inlineMatch as Model<Api> });
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({ provider, model: inlineMatch as Model<Api> }),
+    };
   }
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
   // Otherwise, configured providers can default to a generic API and break specific transports.
   const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
   if (forwardCompat) {
-    return normalizeResolvedModel({
-      provider,
-      model: applyConfiguredProviderOverrides({
-        discoveredModel: forwardCompat,
-        providerConfig,
-        modelId,
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({
+        provider,
+        model: applyConfiguredProviderOverrides({
+          discoveredModel: forwardCompat,
+          providerConfig,
+          modelId,
+        }),
       }),
-    });
+    };
   }
 
   return undefined;
@@ -218,8 +227,11 @@ export function resolveModelWithRegistry(params: {
   cfg?: OpenClawConfig;
 }): Model<Api> | undefined {
   const explicitModel = resolveExplicitModelWithRegistry(params);
-  if (explicitModel) {
-    return explicitModel;
+  if (explicitModel?.kind === "suppressed") {
+    return undefined;
+  }
+  if (explicitModel?.kind === "resolved") {
+    return explicitModel.model;
   }
 
   const { provider, modelId, cfg } = params;
@@ -327,11 +339,20 @@ export async function resolveModelAsync(
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const explicitModel = resolveExplicitModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+  if (explicitModel?.kind === "suppressed") {
+    return {
+      error: buildUnknownModelError(provider, modelId),
+      authStorage,
+      modelRegistry,
+    };
+  }
   if (!explicitModel && normalizeProviderId(provider) === "openrouter") {
     await loadOpenRouterModelCapabilities(modelId);
   }
   const model =
-    explicitModel ?? resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+    explicitModel?.kind === "resolved"
+      ? explicitModel.model
+      : resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
   if (model) {
     return { model, authStorage, modelRegistry };
   }

@@ -907,6 +907,27 @@ describe("resolveModel", () => {
     );
   });
 
+  it("keeps suppressed openai gpt-5.3-codex-spark from falling through provider fallback", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-responses",
+            models: [{ ...makeModel("gpt-4.1"), api: "openai-responses" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openai", "gpt-5.3-codex-spark", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+    );
+  });
+
   it("rejects azure openai gpt-5.3-codex-spark with a codex-only hint", () => {
     const result = resolveModel("azure-openai-responses", "gpt-5.3-codex-spark", "/tmp/agent");
 
