@@ -57,6 +57,194 @@ function exists(filePath: string) {
   }
 }
 
+const CHROME_SINGLETON_ARTIFACTS = ["SingletonLock", "SingletonCookie", "SingletonSocket"] as const;
+
+type SingletonLockOwner = {
+  host: string;
+  pid: number;
+};
+
+type SingletonLockState = {
+  ownerRaw: string;
+  owner: SingletonLockOwner | null;
+};
+
+function parseSingletonLockOwner(raw: string): SingletonLockOwner | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const sep = trimmed.lastIndexOf("-");
+  if (sep <= 0 || sep === trimmed.length - 1) {
+    return null;
+  }
+  const host = trimmed.slice(0, sep).trim();
+  const pidRaw = trimmed.slice(sep + 1).trim();
+  if (!host || !/^\d+$/.test(pidRaw)) {
+    return null;
+  }
+  const pid = Number.parseInt(pidRaw, 10);
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return null;
+  }
+  return { host, pid };
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    // EPERM means the process exists but we are not allowed to signal it.
+    return code === "EPERM";
+  }
+}
+
+function readChromeSingletonLockState(userDataDir: string): SingletonLockState | null {
+  const lockPath = path.join(userDataDir, "SingletonLock");
+
+  let ownerRaw = "";
+  try {
+    const stat = fs.lstatSync(lockPath);
+    ownerRaw = stat.isSymbolicLink()
+      ? fs.readlinkSync(lockPath).trim()
+      : fs.readFileSync(lockPath, "utf-8").trim();
+  } catch {
+    return null;
+  }
+
+  return {
+    ownerRaw,
+    owner: parseSingletonLockOwner(ownerRaw),
+  };
+}
+
+function removeChromeSingletonArtifacts(userDataDir: string) {
+  for (const artifact of CHROME_SINGLETON_ARTIFACTS) {
+    try {
+      fs.rmSync(path.join(userDataDir, artifact), { force: true });
+    } catch {
+      // ignore best-effort cleanup failures
+    }
+  }
+}
+
+export function cleanupStaleChromeSingletonArtifacts(
+  userDataDir: string,
+  deps?: {
+    hostname?: string;
+    isProcessAlive?: (pid: number) => boolean;
+  },
+): { removed: boolean; reason?: string; owner?: string } {
+  const lockState = readChromeSingletonLockState(userDataDir);
+  if (!lockState) {
+    return { removed: false };
+  }
+
+  const owner = lockState.owner;
+  if (!owner) {
+    return { removed: false, owner: lockState.ownerRaw || undefined };
+  }
+
+  const hostname = deps?.hostname ?? os.hostname();
+  const processAlive = deps?.isProcessAlive ?? isProcessAlive;
+  if (owner.host !== hostname) {
+    // Host mismatch alone is not enough to prove staleness. The profile dir may
+    // live on shared storage and still be actively used by Chromium elsewhere.
+    return { removed: false, owner: lockState.ownerRaw };
+  }
+  const reason = !processAlive(owner.pid) ? `owner pid is not running (${owner.pid})` : undefined;
+
+  if (!reason) {
+    return { removed: false, owner: lockState.ownerRaw };
+  }
+
+  removeChromeSingletonArtifacts(userDataDir);
+  return { removed: true, reason, owner: lockState.ownerRaw };
+}
+
+type ChromeSingletonCleanupResult = ReturnType<typeof cleanupStaleChromeSingletonArtifacts>;
+
+type BootstrapChromeProcess = Pick<
+  ChildProcessWithoutNullStreams,
+  "exitCode" | "kill" | "signalCode"
+>;
+
+function logStaleChromeSingletonCleanup(
+  profileName: string,
+  lockCleanup: ChromeSingletonCleanupResult,
+) {
+  if (!lockCleanup.removed) {
+    return;
+  }
+  const reason = lockCleanup.reason ?? "stale singleton owner";
+  const ownerDetail = lockCleanup.owner ? ` owner=${lockCleanup.owner}` : "";
+  log.info(
+    `removed stale Chromium singleton artifacts for profile "${profileName}" (${reason}${ownerDetail})`,
+  );
+}
+
+function hasChromeProcessExited(proc: BootstrapChromeProcess) {
+  return proc.exitCode != null || proc.signalCode != null;
+}
+
+async function waitForChromeProcessExit(
+  proc: BootstrapChromeProcess,
+  timeoutMs: number,
+  pollMs = 50,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (hasChromeProcessExited(proc)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  return hasChromeProcessExited(proc);
+}
+
+async function shutdownBootstrapChromeForLaunch(
+  bootstrap: BootstrapChromeProcess,
+  params: {
+    userDataDir: string;
+    profileName: string;
+    cleanupSingletonArtifacts?: typeof cleanupStaleChromeSingletonArtifacts;
+    exitTimeoutMs?: number;
+    pollMs?: number;
+  },
+) {
+  try {
+    bootstrap.kill("SIGTERM");
+  } catch {
+    // ignore
+  }
+
+  const exitTimeoutMs = params.exitTimeoutMs ?? CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS;
+  const pollMs = params.pollMs ?? 50;
+  let exited = await waitForChromeProcessExit(bootstrap, exitTimeoutMs, pollMs);
+  if (!exited) {
+    try {
+      bootstrap.kill("SIGKILL");
+    } catch {
+      // ignore
+    }
+    exited = await waitForChromeProcessExit(bootstrap, exitTimeoutMs, pollMs);
+    if (!exited) {
+      log.warn(`bootstrap Chromium for profile "${params.profileName}" did not exit after SIGKILL`);
+    }
+  }
+
+  // Bootstrap can leave fresh singleton artifacts behind when it exits via signal.
+  const cleanupSingletonArtifacts =
+    params.cleanupSingletonArtifacts ?? cleanupStaleChromeSingletonArtifacts;
+  logStaleChromeSingletonCleanup(params.profileName, cleanupSingletonArtifacts(params.userDataDir));
+}
+
+export const __testing = {
+  shutdownBootstrapChromeForLaunch,
+};
+
 export type RunningChrome = {
   pid: number;
   exe: BrowserExecutable;
@@ -253,6 +441,7 @@ export async function launchOpenClawChrome(
 
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
+  logStaleChromeSingletonCleanup(profile.name, cleanupStaleChromeSingletonArtifacts(userDataDir));
 
   const needsDecorate = !isProfileDecorated(
     userDataDir,
@@ -289,6 +478,9 @@ export async function launchOpenClawChrome(
       args.push("--disable-dev-shm-usage");
     }
 
+    // Stealth: hide navigator.webdriver from automation detection (#80)
+    args.push("--disable-blink-features=AutomationControlled");
+
     // Append user-configured extra arguments (e.g., stealth flags, window size)
     if (resolved.extraArgs.length > 0) {
       args.push(...resolved.extraArgs);
@@ -324,18 +516,10 @@ export async function launchOpenClawChrome(
       }
       await new Promise((r) => setTimeout(r, 100));
     }
-    try {
-      bootstrap.kill("SIGTERM");
-    } catch {
-      // ignore
-    }
-    const exitDeadline = Date.now() + CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS;
-    while (Date.now() < exitDeadline) {
-      if (bootstrap.exitCode != null) {
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
+    await shutdownBootstrapChromeForLaunch(bootstrap, {
+      userDataDir,
+      profileName: profile.name,
+    });
   }
 
   if (needsDecorate) {

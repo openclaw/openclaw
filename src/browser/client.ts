@@ -94,6 +94,10 @@ export type SnapshotResult =
       imageType?: "png" | "jpeg";
     };
 
+// Browser startup can legitimately take ~15s on cold container boots. Keep client
+// timeouts above that window so we surface real server errors instead of local aborts.
+const BROWSER_STARTUP_ROUTE_TIMEOUT_MS = 25_000;
+
 function buildProfileQuery(profile?: string): string {
   return profile ? `?profile=${encodeURIComponent(profile)}` : "";
 }
@@ -130,7 +134,7 @@ export async function browserStart(baseUrl?: string, opts?: { profile?: string }
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
-    timeoutMs: 15000,
+    timeoutMs: BROWSER_STARTUP_ROUTE_TIMEOUT_MS,
   });
 }
 
@@ -232,7 +236,7 @@ export async function browserOpenTab(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
-    timeoutMs: 15000,
+    timeoutMs: BROWSER_STARTUP_ROUTE_TIMEOUT_MS,
   });
 }
 

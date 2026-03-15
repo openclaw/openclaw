@@ -7,6 +7,8 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
+  __testing,
+  cleanupStaleChromeSingletonArtifacts,
   decorateOpenClawProfile,
   ensureProfileCleanExit,
   findChromeExecutableMac,
@@ -22,6 +24,7 @@ import {
 } from "./constants.js";
 
 type StopChromeTarget = Parameters<typeof stopOpenClawChrome>[0];
+type BootstrapChromeTarget = Parameters<typeof __testing.shutdownBootstrapChromeForLaunch>[0];
 
 async function readJson(filePath: string): Promise<Record<string, unknown>> {
   const raw = await fsp.readFile(filePath, "utf-8");
@@ -202,6 +205,27 @@ describe("browser chrome profile decoration", () => {
 });
 
 describe("browser chrome helpers", () => {
+  function makeBootstrapChromeProc(
+    onKill?: (signal: NodeJS.Signals, markExited: (signal: NodeJS.Signals) => void) => void,
+  ): BootstrapChromeTarget {
+    let signalCode: NodeJS.Signals | null = null;
+    const proc: BootstrapChromeTarget = {
+      exitCode: null,
+      get signalCode() {
+        return signalCode;
+      },
+      kill: vi.fn((signal?: number | NodeJS.Signals) => {
+        if (typeof signal === "string") {
+          onKill?.(signal, (nextSignal) => {
+            signalCode = nextSignal;
+          });
+        }
+        return true;
+      }),
+    };
+    return proc;
+  }
+
   function mockExistsSync(match: (pathValue: string) => boolean) {
     return vi.spyOn(fs, "existsSync").mockImplementation((p) => match(String(p)));
   }
@@ -210,6 +234,146 @@ describe("browser chrome helpers", () => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("removes stale singleton lock artifacts when owner pid is gone", async () => {
+    const userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-singleton-stale-"));
+    try {
+      await fsp.writeFile(path.join(userDataDir, "SingletonLock"), "gateway-host-4242", "utf-8");
+      await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie", "utf-8");
+      await fsp.writeFile(path.join(userDataDir, "SingletonSocket"), "socket", "utf-8");
+
+      const result = cleanupStaleChromeSingletonArtifacts(userDataDir, {
+        hostname: "gateway-host",
+        isProcessAlive: () => false,
+      });
+
+      expect(result.removed).toBe(true);
+      expect(result.reason).toMatch(/not running/i);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonCookie"))).toBe(false);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(false);
+    } finally {
+      await fsp.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps singleton lock artifacts when owner pid is alive", async () => {
+    const userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-singleton-live-"));
+    try {
+      await fsp.writeFile(path.join(userDataDir, "SingletonLock"), "gateway-host-4242", "utf-8");
+      await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie", "utf-8");
+      await fsp.writeFile(path.join(userDataDir, "SingletonSocket"), "socket", "utf-8");
+
+      const result = cleanupStaleChromeSingletonArtifacts(userDataDir, {
+        hostname: "gateway-host",
+        isProcessAlive: () => true,
+      });
+
+      expect(result.removed).toBe(false);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(true);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonCookie"))).toBe(true);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(true);
+    } finally {
+      await fsp.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps singleton lock artifacts when hostname differs", async () => {
+    const userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-singleton-host-"));
+    try {
+      await fsp.writeFile(path.join(userDataDir, "SingletonLock"), "other-host-4242", "utf-8");
+      await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie", "utf-8");
+      await fsp.writeFile(path.join(userDataDir, "SingletonSocket"), "socket", "utf-8");
+
+      const result = cleanupStaleChromeSingletonArtifacts(userDataDir, {
+        hostname: "gateway-host",
+        isProcessAlive: () => true,
+      });
+
+      expect(result.removed).toBe(false);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(true);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonCookie"))).toBe(true);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(true);
+    } finally {
+      await fsp.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes stale singleton lock symlinks even when targets are broken", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-singleton-symlink-"));
+    try {
+      await fsp.symlink("gateway-host-4242", path.join(userDataDir, "SingletonLock"));
+      await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie", "utf-8");
+      await fsp.writeFile(path.join(userDataDir, "SingletonSocket"), "socket", "utf-8");
+
+      const result = cleanupStaleChromeSingletonArtifacts(userDataDir, {
+        hostname: "gateway-host",
+        isProcessAlive: () => false,
+      });
+
+      expect(result.removed).toBe(true);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonCookie"))).toBe(false);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(false);
+    } finally {
+      await fsp.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans singleton artifacts again after bootstrap exits via SIGTERM", async () => {
+    const steps: string[] = [];
+    const proc = makeBootstrapChromeProc((signal, markExited) => {
+      steps.push(signal);
+      if (signal === "SIGTERM") {
+        markExited("SIGTERM");
+      }
+    });
+    const cleanup = vi.fn((userDataDir: string) => {
+      steps.push("cleanup");
+      return {
+        removed: true,
+        reason: "owner pid is not running (4242)",
+        owner: userDataDir,
+      };
+    });
+
+    await __testing.shutdownBootstrapChromeForLaunch(proc, {
+      userDataDir: "/tmp/bootstrap-profile",
+      profileName: "default",
+      cleanupSingletonArtifacts: cleanup,
+      exitTimeoutMs: 0,
+    });
+
+    expect(steps).toEqual(["SIGTERM", "cleanup"]);
+    expect(cleanup).toHaveBeenCalledWith("/tmp/bootstrap-profile");
+  });
+
+  it("force-kills bootstrap before second singleton cleanup when SIGTERM times out", async () => {
+    const steps: string[] = [];
+    const proc = makeBootstrapChromeProc((signal, markExited) => {
+      steps.push(signal);
+      if (signal === "SIGKILL") {
+        markExited("SIGKILL");
+      }
+    });
+    const cleanup = vi.fn((_userDataDir: string) => {
+      steps.push("cleanup");
+      return { removed: false };
+    });
+
+    await __testing.shutdownBootstrapChromeForLaunch(proc, {
+      userDataDir: "/tmp/bootstrap-profile",
+      profileName: "default",
+      cleanupSingletonArtifacts: cleanup,
+      exitTimeoutMs: 0,
+    });
+
+    expect(steps).toEqual(["SIGTERM", "SIGKILL", "cleanup"]);
+    expect(cleanup).toHaveBeenCalledWith("/tmp/bootstrap-profile");
   });
 
   it("picks the first existing Chrome candidate on macOS", () => {
