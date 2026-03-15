@@ -8,7 +8,7 @@ import {
   TokenBudget,
   MetabolicState,
   PruningDecision,
-} from "./token-metabolism";
+} from "./token-metabolism.js";
 
 describe("TokenMetabolismSystem", () => {
   let system: TokenMetabolismSystem;
