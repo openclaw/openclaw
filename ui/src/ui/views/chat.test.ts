@@ -768,6 +768,46 @@ describe("chat view", () => {
     expect(optionValues).toContain("anthropic/claude-sonnet-4-5");
   });
 
+  it("normalizes cached slash model ids when the active session stores the provider separately", () => {
+    const catalog = [
+      {
+        id: "anthropic/claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5 via OpenRouter",
+        provider: "openrouter",
+      },
+    ] satisfies ModelCatalogEntry[];
+    const { state } = createChatHeaderState({
+      models: catalog,
+      defaultModel: null,
+      defaultModelProvider: "openrouter",
+    });
+    state.sessionsResult = {
+      ...state.sessionsResult,
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          modelProvider: "openrouter",
+          model: "anthropic/claude-sonnet-4-5",
+        },
+      ],
+    };
+    state.chatModelOverrides = { main: "anthropic/claude-sonnet-4-5" };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+
+    expect(modelSelect?.value).toBe("openrouter/anthropic/claude-sonnet-4-5");
+    expect(optionValues).not.toContain("anthropic/claude-sonnet-4-5");
+  });
+
   it("prefers the session label over displayName in the grouped chat session selector", () => {
     const { state } = createChatHeaderState({ omitSessionFromList: true });
     state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";

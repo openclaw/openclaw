@@ -572,11 +572,14 @@ function resolveModelOverrideValue(state: AppViewState): string {
     if (!cachedValue) {
       return "";
     }
-    if (cachedValue.includes("/")) {
-      return cachedValue;
-    }
     const activeRow = resolveActiveSessionRow(state);
     const activeModel = typeof activeRow?.model === "string" ? activeRow.model.trim() : "";
+    if (cachedValue.includes("/")) {
+      if (activeModel && activeModel.toLowerCase() === cachedValue.toLowerCase()) {
+        return buildModelRef(activeRow?.modelProvider, cachedValue);
+      }
+      return cachedValue;
+    }
     const inferredProvider = resolveUniqueCatalogProvider(
       state.chatModelCatalog ?? [],
       cachedValue,
