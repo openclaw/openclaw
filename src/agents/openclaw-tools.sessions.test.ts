@@ -817,6 +817,197 @@ describe("sessions tools", () => {
     });
   });
 
+  it("sessions_send fire-and-forget notifies requester when target run fails", async () => {
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    let agentCallCount = 0;
+    const requesterKey = "agent:main:discord:group:req";
+    const targetKey = "agent:main:discord:group:target";
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        if (agentCallCount === 1) {
+          return {
+            runId: "run-target",
+            status: "accepted",
+            acceptedAt: 3001,
+          };
+        }
+        return {
+          runId: `run-notice-${agentCallCount}`,
+          status: "accepted",
+          acceptedAt: 3000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        if (params?.runId === "run-target") {
+          return {
+            runId: "run-target",
+            status: "error",
+            error: "unknown model: google/gemini-3-1-pro-preview",
+          };
+        }
+        return { runId: params?.runId ?? "run-unknown", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "send") {
+        return { messageId: "m-unexpected" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const fire = await tool.execute("call-fire-failure", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+    expect(fire.details).toMatchObject({
+      status: "accepted",
+      runId: "run-target",
+    });
+
+    await vi.waitFor(
+      () => {
+        const failureNoticeCall = calls.find((call) => {
+          if (call.method !== "agent") {
+            return false;
+          }
+          const params = call.params as { message?: unknown } | undefined;
+          return (
+            typeof params?.message === "string" &&
+            params.message.includes("sessions_send delivery failed for")
+          );
+        });
+        expect(failureNoticeCall).toBeDefined();
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    const failureNoticeCall = calls.find((call) => {
+      if (call.method !== "agent") {
+        return false;
+      }
+      const params = call.params as { message?: unknown } | undefined;
+      return (
+        typeof params?.message === "string" &&
+        params.message.includes("sessions_send delivery failed for")
+      );
+    });
+
+    expect(failureNoticeCall?.params).toMatchObject({
+      sessionKey: requesterKey,
+      deliver: false,
+      channel: "webchat",
+      lane: "nested",
+    });
+    const failureMessage =
+      typeof (failureNoticeCall?.params as { message?: unknown } | undefined)?.message === "string"
+        ? ((failureNoticeCall?.params as { message?: string } | undefined)?.message ?? "")
+        : "";
+    expect(failureMessage).toContain("status: error");
+    expect(failureMessage).toContain("unknown model");
+  });
+
+  it("sessions_send falls back to latest reply when announce generation fails", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    let sentMessage: string | undefined;
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as {
+        method?: string;
+        params?: {
+          message?: string;
+          runId?: string;
+          extraSystemPrompt?: string;
+        };
+      };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params;
+        if (params?.message === "Agent-to-agent announce step.") {
+          throw new Error("unknown model: google/gemini-3-1-pro-preview");
+        }
+        replyByRunId.set(runId, "primary answer");
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 4000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        lastWaitedRunId = request.params?.runId;
+        return { runId: lastWaitedRunId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        const params = request.params as { message?: string } | undefined;
+        sentMessage = params?.message;
+        return { messageId: "m-fallback" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call-fallback-announce", {
+      sessionKey: "discord:group:target",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(waited.details).toMatchObject({
+      status: "ok",
+      reply: "primary answer",
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(sentMessage).toBe("primary answer");
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    const sendCall = calls.find((call) => call.method === "send");
+    expect(sendCall?.params).toMatchObject({
+      to: "channel:target",
+      channel: "discord",
+      message: "primary answer",
+    });
+  });
+
   it("subagents lists active and recent runs", async () => {
     resetSubagentRegistryForTests();
     const now = Date.now();
