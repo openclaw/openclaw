@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveOAuthDir } from "./config/paths.js";
+import { ALL_STATE_DIRNAMES, resolveOAuthDir } from "./config/paths.js";
 import { logVerbose, shouldLogVerbose } from "./globals.js";
 import {
   resolveEffectiveHomeDir,
@@ -290,7 +290,24 @@ export function resolveConfigDir(
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
-  const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
+  // Nesting guard: when OPENCLAW_HOME is explicitly set and its basename is
+  // already a known state directory name, use it directly without appending.
+  const explicitHome = env.OPENCLAW_HOME?.trim();
+  const resolvedHome = resolveRequiredHomeDir(env, homedir);
+  if (explicitHome && ALL_STATE_DIRNAMES.has(path.basename(resolvedHome))) {
+    // Backward compat: if a nested config dir already exists from the old
+    // buggy behavior, prefer it so we don't orphan existing config data.
+    const nestedConfig = path.join(resolvedHome, ".openclaw");
+    try {
+      if (fs.existsSync(nestedConfig)) {
+        return nestedConfig;
+      }
+    } catch {
+      // best-effort
+    }
+    return resolvedHome;
+  }
+  const newDir = path.join(resolvedHome, ".openclaw");
   try {
     const hasNew = fs.existsSync(newDir);
     if (hasNew) {

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   resolveDefaultConfigCandidates,
@@ -139,5 +140,45 @@ describe("state + config path candidates", () => {
       const resolved = resolveConfigPath(env, overrideDir, () => root);
       expect(resolved).toBe(path.join(overrideDir, "openclaw.json"));
     });
+  });
+});
+
+describe("resolveStateDir nesting guard (#45765)", () => {
+  it("does not append .openclaw when OPENCLAW_HOME ends with .openclaw", () => {
+    const env = { OPENCLAW_HOME: "/home/user/.openclaw" } as NodeJS.ProcessEnv;
+    expect(resolveStateDir(env)).toBe(path.resolve("/home/user/.openclaw"));
+  });
+
+  it("does not append .openclaw when OPENCLAW_HOME ends with .clawdbot", () => {
+    const env = { OPENCLAW_HOME: "/home/user/.clawdbot" } as NodeJS.ProcessEnv;
+    expect(resolveStateDir(env)).toBe(path.resolve("/home/user/.clawdbot"));
+  });
+
+  it("does not append .openclaw when OPENCLAW_HOME ends with .moldbot", () => {
+    const env = { OPENCLAW_HOME: "/home/user/.moldbot" } as NodeJS.ProcessEnv;
+    expect(resolveStateDir(env)).toBe(path.resolve("/home/user/.moldbot"));
+  });
+
+  it("handles tilde expansion when OPENCLAW_HOME=~/.openclaw", () => {
+    const env = { OPENCLAW_HOME: "~/.openclaw", HOME: "/home/user" } as NodeJS.ProcessEnv;
+    expect(resolveStateDir(env)).toBe(path.resolve("/home/user/.openclaw"));
+  });
+
+  it("still appends .openclaw when OPENCLAW_HOME is not a state dir basename", () => {
+    const env = { OPENCLAW_HOME: "/srv/app" } as NodeJS.ProcessEnv;
+    expect(resolveStateDir(env)).toBe(path.resolve("/srv/app/.openclaw"));
+  });
+
+  it("still appends .openclaw when OPENCLAW_HOME is not set", () => {
+    const env = { HOME: "/home/user" } as NodeJS.ProcessEnv;
+    expect(resolveStateDir(env)).toBe(path.resolve("/home/user/.openclaw"));
+  });
+
+  it("preserves existing nested state dir for backward compat", () => {
+    const env = { OPENCLAW_HOME: "/home/user/.openclaw" } as NodeJS.ProcessEnv;
+    const nestedDir = path.resolve("/home/user/.openclaw/.openclaw");
+    vi.spyOn(fsSync, "existsSync").mockImplementation((p) => String(p) === nestedDir);
+    expect(resolveStateDir(env)).toBe(nestedDir);
+    vi.restoreAllMocks();
   });
 });
