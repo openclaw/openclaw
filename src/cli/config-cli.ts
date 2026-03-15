@@ -293,6 +293,7 @@ async function warnIfModelNotInCatalog(
     const { parseModelRef } = await import("../agents/model-selection.js");
     const { loadModelCatalog } = await import("../agents/model-catalog.js");
     const { DEFAULT_PROVIDER } = await import("../agents/defaults.js");
+    const { splitTrailingAuthProfile } = await import("../agents/model-ref-profile.js");
     const ref = parseModelRef(value, DEFAULT_PROVIDER);
     if (!ref) {
       runtime.error(
@@ -305,8 +306,14 @@ async function warnIfModelNotInCatalog(
     }
     const { findModelInCatalog } = await import("../agents/model-catalog.js");
     const catalog = await loadModelCatalog();
-    const found = !!findModelInCatalog(catalog, ref.provider, ref.model);
-    const modelKey = `${ref.provider}/${ref.model}`;
+    // If catalog load degraded (transient failure), skip the warning to avoid false positives.
+    if (catalog.length === 0) {
+      return;
+    }
+    // Strip trailing @profile auth suffix (e.g. "gpt-5@work" -> "gpt-5") before lookup.
+    const { model: modelWithoutProfile } = splitTrailingAuthProfile(ref.model);
+    const found = !!findModelInCatalog(catalog, ref.provider, modelWithoutProfile);
+    const modelKey = `${ref.provider}/${modelWithoutProfile}`;
     if (!found) {
       runtime.error(
         warn(
