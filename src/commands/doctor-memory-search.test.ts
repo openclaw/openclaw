@@ -290,6 +290,57 @@ describe("noteMemorySearchHealth", () => {
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
     expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
   });
+
+  it("does not warn when ollama provider is set and gateway probe is ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "ollama",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("shows informational note when ollama provider is set and gateway probe is not ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "ollama",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: false, error: "connection refused" },
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("ollama");
+    expect(message).toContain("does not require an API key");
+    expect(message).toContain("connection refused");
+    expect(message).not.toContain("API key was not found");
+    expect(note.mock.calls[0]?.[1]).toBe("Memory search");
+  });
+
+  it("shows informational note when ollama provider is set and no gateway probe", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "ollama",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("ollama");
+    expect(message).toContain("does not require an API key");
+    expect(message).not.toContain("API key was not found");
+    expect(note.mock.calls[0]?.[1]).toBe("Memory search");
+  });
 });
 
 describe("detectLegacyWorkspaceDirs", () => {
