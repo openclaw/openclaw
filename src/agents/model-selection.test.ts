@@ -485,6 +485,61 @@ describe("model-selection", () => {
       });
     });
 
+    it("returns error when bare model id matches multiple allowed providers", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "provider-a/shared-model": {},
+              "provider-b/shared-model": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const catalog = [
+        { provider: "provider-a", id: "shared-model", name: "shared-model" },
+        { provider: "provider-b", id: "shared-model", name: "shared-model" },
+      ];
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog,
+        raw: "shared-model",
+        defaultProvider: "provider-c",
+      });
+
+      expect(result).toEqual({
+        error: expect.stringContaining("ambiguous model"),
+      });
+    });
+
+    it("resolves bare model id with trailing auth profile via catalog fallback", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+              "zhipu/glm-4.7": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const catalog = [
+        { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+        { provider: "zhipu", id: "glm-4.7", name: "glm-4.7" },
+      ];
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog,
+        raw: "glm-4.7@zhipu:default",
+        defaultProvider: "openai-codex",
+      });
+
+      expect(result).toEqual({
+        key: "zhipu/glm-4.7",
+        ref: { provider: "zhipu", model: "glm-4.7" },
+      });
+    });
+
     it("strips trailing auth profile suffix before allowlist matching", () => {
       const cfg: OpenClawConfig = {
         agents: {
