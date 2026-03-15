@@ -6,6 +6,8 @@ const flushKeyMock = vi.fn(async (_key: string) => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
+const logVerboseMock = vi.fn((_msg: string) => {});
+const shouldLogVerboseMock = vi.fn(() => false);
 
 vi.mock("../../../../src/auto-reply/inbound-debounce.js", () => ({
   resolveInboundDebounceMs: () => 10,
@@ -19,6 +21,12 @@ vi.mock("./thread-resolution.js", () => ({
   createSlackThreadTsResolver: () => ({
     resolve: (entry: { message: Record<string, unknown> }) => resolveThreadTsMock(entry),
   }),
+}));
+
+vi.mock("../../../../src/globals.js", () => ({
+  logVerbose: (msg: string) => logVerboseMock(msg),
+  shouldLogVerbose: () => shouldLogVerboseMock(),
+  danger: (msg: string) => msg,
 }));
 
 function createContext(overrides?: {
@@ -67,6 +75,8 @@ describe("createSlackMessageHandler", () => {
     enqueueMock.mockClear();
     flushKeyMock.mockClear();
     resolveThreadTsMock.mockClear();
+    logVerboseMock.mockClear();
+    shouldLogVerboseMock.mockReset().mockReturnValue(false);
   });
 
   it("does not track invalid non-message events from the message stream", async () => {
@@ -145,5 +155,44 @@ describe("createSlackMessageHandler", () => {
     );
 
     expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
+  });
+
+  it("logs DM trace when verbose mode is enabled", async () => {
+    shouldLogVerboseMock.mockReturnValue(true);
+    const { handler } = createHandlerWithTracker();
+
+    await handleDirectMessage(handler);
+
+    const dmTraceCall = logVerboseMock.mock.calls.find((c) =>
+      c[0].includes("slack inbound DM: channel=D1"),
+    );
+    expect(dmTraceCall).toBeDefined();
+    expect(dmTraceCall?.[0]).toContain("ts=123.456");
+    expect(dmTraceCall?.[0]).toContain("source=message");
+  });
+
+  it("logs dedup drop when verbose mode is enabled and message is already seen", async () => {
+    shouldLogVerboseMock.mockReturnValue(true);
+    const { handler } = createHandlerWithTracker({ markMessageSeen: () => true });
+
+    await handleDirectMessage(handler);
+
+    const dedupCall = logVerboseMock.mock.calls.find((c) =>
+      c[0].includes("slack inbound: dedup drop"),
+    );
+    expect(dedupCall).toBeDefined();
+    expect(dedupCall?.[0]).toContain("channel=D1");
+    expect(dedupCall?.[0]).toContain("ts=123.456");
+    expect(dedupCall?.[0]).toContain("source=message");
+  });
+
+  it("does not log DM trace when verbose mode is disabled", async () => {
+    shouldLogVerboseMock.mockReturnValue(false);
+    const { handler } = createHandlerWithTracker();
+
+    await handleDirectMessage(handler);
+
+    const dmTraceCall = logVerboseMock.mock.calls.find((c) => c[0].includes("slack inbound DM:"));
+    expect(dmTraceCall).toBeUndefined();
   });
 });

@@ -2,6 +2,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "../../../../src/channels/inbound-debounce-policy.js";
+import { logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackMessageEvent } from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
@@ -144,6 +145,14 @@ export function createSlackMessageHandler(params: {
       });
       const seenMessageKey = buildSeenMessageKey(last.message.channel, last.message.ts);
       if (!prepared) {
+        if (shouldLogVerbose()) {
+          logVerbose(
+            `slack inbound: drop unprepared channel=${last.message.channel} ts=${last.message.ts ?? "unknown"} entries=${entries.length} source=${last.opts.source}`,
+          );
+        }
+        // Do NOT delete appMentionRetryKeys here: when a message is dropped by
+        // prepareSlackMessage (prepared=null), the retry key must stay alive so
+        // an in-flight app_mention for the same ts can still dispatch once.
         return;
       }
       if (seenMessageKey) {
@@ -152,9 +161,21 @@ export function createSlackMessageHandler(params: {
           // If app_mention wins the race and dispatches first, drop the later message dispatch.
           appMentionDispatchedKeys.set(seenMessageKey, Date.now() + APP_MENTION_RETRY_TTL_MS);
         } else if (last.opts.source === "message" && appMentionDispatchedKeys.has(seenMessageKey)) {
+          if (shouldLogVerbose()) {
+            logVerbose(
+              `slack inbound: app_mention race drop channel=${last.message.channel} ts=${last.message.ts ?? "unknown"}`,
+            );
+          }
           appMentionDispatchedKeys.delete(seenMessageKey);
           appMentionRetryKeys.delete(seenMessageKey);
           return;
+        }
+        // Clean up retry keys for all batched entries on successful dispatch.
+        for (const entry of entries) {
+          const entryKey = buildSeenMessageKey(entry.message.channel, entry.message.ts);
+          if (entryKey && entryKey !== seenMessageKey) {
+            appMentionRetryKeys.delete(entryKey);
+          }
         }
         appMentionRetryKeys.delete(seenMessageKey);
       }
@@ -218,6 +239,11 @@ export function createSlackMessageHandler(params: {
     ) {
       return;
     }
+    if (shouldLogVerbose() && isSlackDirectMessageChannel(message.channel)) {
+      logVerbose(
+        `slack inbound DM: channel=${message.channel} ts=${message.ts ?? "unknown"} source=${opts.source} user=${message.user ?? message.bot_id ?? "unknown"} subtype=${message.subtype ?? "none"}`,
+      );
+    }
     const seenMessageKey = buildSeenMessageKey(message.channel, message.ts);
     const wasSeen = seenMessageKey ? ctx.markMessageSeen(message.channel, message.ts) : false;
     if (seenMessageKey && opts.source === "message" && !wasSeen) {
@@ -229,6 +255,11 @@ export function createSlackMessageHandler(params: {
       // Allow exactly one app_mention retry if the same ts was previously dropped
       // from the message stream before it reached dispatch.
       if (opts.source !== "app_mention" || !consumeAppMentionRetryKey(seenMessageKey)) {
+        if (shouldLogVerbose()) {
+          logVerbose(
+            `slack inbound: dedup drop channel=${message.channel} ts=${message.ts ?? "unknown"} source=${opts.source}`,
+          );
+        }
         return;
       }
     }
