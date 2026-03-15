@@ -803,6 +803,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Selects which multimodal file types are indexed from extraPaths: "image", "audio", or "all". Keep this narrow to avoid indexing large binary corpora unintentionally.',
   "agents.defaults.memorySearch.multimodal.maxFileBytes":
     "Sets the maximum bytes allowed per multimodal file before it is skipped during memory indexing. Use this to cap upload cost and indexing latency, or raise it for short high-quality audio clips.",
+  "agents.list[].memorySearch.qmd.extraCollections":
+    "Per-agent extra QMD collections to include in memory search.",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
   "agents.defaults.memorySearch.provider":

@@ -1316,6 +1316,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
+- `memorySearch.qmd.extraCollections`: additional QMD collections for this agent's memory search. Useful for cross-agent session search (for example, letting one agent search another agent's session transcripts). Each entry: `{ path, pattern?, name? }`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 

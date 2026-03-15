@@ -108,6 +108,103 @@ describe("resolveMemoryBackendConfig", () => {
     expect(devNames.has("workspace-dev")).toBe(true);
   });
 
+  it("adds per-agent qmd extra collections only for the configured agent", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/workspace/root" },
+        list: [
+          {
+            id: "main",
+            default: true,
+            workspace: "/workspace/root",
+          },
+          {
+            id: "agent-b",
+            workspace: "/workspace/agent-b",
+            memorySearch: {
+              qmd: {
+                extraCollections: [
+                  {
+                    name: "family-sessions",
+                    path: "/workspace/family/qmd/sessions",
+                    pattern: "**/*.md",
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+        },
+      },
+    } as OpenClawConfig;
+
+    const mainResolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const agentBResolved = resolveMemoryBackendConfig({ cfg, agentId: "agent-b" });
+
+    const mainPaths = new Set((mainResolved.qmd?.collections ?? []).map((entry) => entry.path));
+    const agentBCollections = agentBResolved.qmd?.collections ?? [];
+
+    const expectedPath = path.resolve("/workspace/family/qmd/sessions");
+    expect(mainPaths.has(expectedPath)).toBe(false);
+    expect(
+      agentBCollections.some(
+        (entry) =>
+          entry.path === expectedPath && entry.pattern === "**/*.md" && entry.kind === "custom",
+      ),
+    ).toBe(true);
+  });
+
+  it("uses explicit extraCollection names without agent-scoping", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/tmp/memory-test" },
+        list: [
+          {
+            id: "main",
+            default: true,
+            workspace: "/workspace/main",
+            memorySearch: {
+              qmd: {
+                extraCollections: [
+                  {
+                    name: "sessions-family",
+                    path: "/workspace/family/sessions",
+                    pattern: "**/*.md",
+                  },
+                  {
+                    path: "/workspace/auto-named",
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const collections = resolved.qmd?.collections ?? [];
+
+    const explicit = collections.find((c) => c.path === path.resolve("/workspace/family/sessions"));
+    expect(explicit).toBeDefined();
+    expect(explicit?.name).toBe("sessions-family");
+
+    const autoNamed = collections.find((c) => c.path === path.resolve("/workspace/auto-named"));
+    expect(autoNamed).toBeDefined();
+    expect(autoNamed?.name).toContain("main");
+  });
+
   it("resolves qmd update timeout overrides", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },

@@ -330,6 +330,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.multimodal.enabled": "Enable Memory Search Multimodal",
   "agents.defaults.memorySearch.multimodal.modalities": "Memory Search Multimodal Modalities",
   "agents.defaults.memorySearch.multimodal.maxFileBytes": "Memory Search Multimodal Max File Bytes",
+  "agents.list[].memorySearch.qmd.extraCollections": "Agent QMD Extra Collections",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Memory Search Session Index (Experimental)",
   "agents.defaults.memorySearch.provider": "Memory Search Provider",

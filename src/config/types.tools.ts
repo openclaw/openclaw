@@ -328,6 +328,14 @@ export type MemorySearchConfig = {
     /** Max bytes allowed per multimodal file before it is skipped. */
     maxFileBytes?: number;
   };
+  /** Per-agent QMD extra collections. */
+  qmd?: {
+    extraCollections?: Array<{
+      name?: string;
+      path: string;
+      pattern?: string;
+    }>;
+  };
   /** Experimental memory search settings. */
   experimental?: {
     /** Enable session transcript indexing (experimental, default: false). */

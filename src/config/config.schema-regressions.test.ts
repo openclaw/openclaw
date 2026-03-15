@@ -51,6 +51,31 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts per-agent memorySearch.qmd.extraCollections", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "agent-b",
+            memorySearch: {
+              qmd: {
+                extraCollections: [
+                  {
+                    name: "family-sessions",
+                    path: "~/.openclaw/agents/family/qmd/sessions",
+                    pattern: "**/*.md",
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts safe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {

@@ -576,6 +576,22 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
+    qmd: z
+      .object({
+        extraCollections: z
+          .array(
+            z
+              .object({
+                name: z.string().optional(),
+                path: z.string(),
+                pattern: z.string().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
     experimental: z
       .object({
         sessionMemory: z.boolean().optional(),
