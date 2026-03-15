@@ -11,6 +11,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { markFollowupRunsDelivered } from "./enqueue.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
@@ -93,6 +94,7 @@ export function scheduleFollowupDrain(
           // If so, process individually to preserve per-message routing.
           const isCrossChannel = hasCrossChannelItems(queue.items, resolveCrossChannelKey);
 
+          const drainedCollectItem = queue.items[0];
           const collectDrainResult = await drainCollectQueueStep({
             collectState,
             isCrossChannel,
@@ -103,6 +105,9 @@ export function scheduleFollowupDrain(
             break;
           }
           if (collectDrainResult === "drained") {
+            if (drainedCollectItem) {
+              markFollowupRunsDelivered([drainedCollectItem], key);
+            }
             continue;
           }
 
@@ -128,6 +133,7 @@ export function scheduleFollowupDrain(
             ...routing,
           });
           queue.items.splice(0, items.length);
+          markFollowupRunsDelivered(items, key);
           if (summary) {
             clearQueueSummaryState(queue);
           }
@@ -140,6 +146,7 @@ export function scheduleFollowupDrain(
           if (!run) {
             break;
           }
+          const summaryItem = queue.items[0];
           if (
             !(await drainNextQueueItem(queue.items, async (item) => {
               await runFollowup({
@@ -155,12 +162,19 @@ export function scheduleFollowupDrain(
           ) {
             break;
           }
+          if (summaryItem) {
+            markFollowupRunsDelivered([summaryItem], key);
+          }
           clearQueueSummaryState(queue);
           continue;
         }
 
+        const nextItem = queue.items[0];
         if (!(await drainNextQueueItem(queue.items, runFollowup))) {
           break;
+        }
+        if (nextItem) {
+          markFollowupRunsDelivered([nextItem], key);
         }
       }
     } catch (err) {
