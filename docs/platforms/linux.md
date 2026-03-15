@@ -149,7 +149,7 @@ tailscale serve --bg 18789
 Your dashboard is then available at `https://<machine-name>.tail<id>.ts.net`
 from any device on your Tailscale network.
 
-> **Security note:** keep `gateway.bind = "loopback"` in your config.
+> **Security note:** keep `{ gateway: { bind: "loopback" } }` in your config.
 > Tailscale Serve proxies externally; the Gateway itself never binds to a public interface.
 
 ### Using a local GPU with Ollama
@@ -171,16 +171,27 @@ ollama run qwen3:14b "hello"
 
 Then add the Ollama provider to your OpenClaw config:
 
-```json
+```json5
 {
-  "models": {
-    "providers": {
-      "ollama": {
-        "baseUrl": "http://localhost:11434/v1",
-        "models": [{ "id": "qwen3:14b", "name": "Qwen3 14B (local)" }]
-      }
-    }
-  }
+  models: {
+    providers: {
+      ollama: {
+        baseUrl: "http://localhost:11434",
+        apiKey: "ollama-local",
+        models: [
+          {
+            id: "qwen3:14b",
+            name: "Qwen3 14B (local)",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 32768,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
 }
 ```
 
