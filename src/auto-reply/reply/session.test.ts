@@ -1557,6 +1557,100 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.sessionEntry.verboseLevel).toBeUndefined();
     expect(result.sessionEntry.thinkingLevel).toBeUndefined();
   });
+
+  it("does not carry modelOverride or providerOverride across /new", async () => {
+    const storePath = await createStorePath("openclaw-no-model-override-");
+    const sessionKey = "agent:main:telegram:dm:user-model-override";
+    const existingSessionId = "existing-session-model-override";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        // Simulate a fallback-set model/provider override on the old session.
+        modelOverride: "gemini-2.5-pro",
+        providerOverride: "google",
+        // Behavior overrides should still carry over.
+        verboseLevel: "on",
+        thinkingLevel: "high",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user-model-override",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    // modelOverride and providerOverride must NOT persist — they may have been
+    // set by automatic fallback and would pin the new session to a fallback model.
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+    expect(result.sessionEntry.providerOverride).toBeUndefined();
+    // Behavior overrides should still be preserved.
+    expect(result.sessionEntry.verboseLevel).toBe("on");
+    expect(result.sessionEntry.thinkingLevel).toBe("high");
+  });
+
+  it("clears fallback notice fields on /new", async () => {
+    const storePath = await createStorePath("openclaw-clear-fallback-notice-");
+    const sessionKey = "agent:main:telegram:dm:user-fallback-notice";
+    const existingSessionId = "existing-session-fallback-notice";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        // Simulate fallback notice fields left over from the previous session.
+        fallbackNoticeActiveModel: "gemini-2.5-pro",
+        fallbackNoticeSelectedModel: "claude-sonnet-4.6",
+        fallbackNoticeReason: "rate_limit",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user-fallback-notice",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    // Fallback notice fields must be cleared so the new session doesn't show
+    // a stale "using <fallback model> because <reason>" banner.
+    expect(result.sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(result.sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(result.sessionEntry.fallbackNoticeReason).toBeUndefined();
+  });
 });
 
 describe("drainFormattedSystemEvents", () => {

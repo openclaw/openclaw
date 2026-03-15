@@ -362,13 +362,16 @@ export async function initSessionState(params: {
     // When a reset trigger (/new, /reset) starts a new session, carry over
     // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
     // so the user doesn't have to re-enable them every time.
+    // NOTE: modelOverride and providerOverride are intentionally NOT carried
+    // over — they may have been set by automatic fallback (not the user) and
+    // would pin the new session to the fallback model.  If the user wants a
+    // specific model they can use `/new <model>` which calls
+    // applyResetModelOverride() after initSessionState().
     if (resetTriggered && entry) {
       persistedThinking = entry.thinkingLevel;
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
       persistedLabel = entry.label;
     }
   }
@@ -518,6 +521,11 @@ export async function initSessionState(params: {
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.contextTokens = undefined;
+    // Clear fallback notice fields so the new session doesn't show a stale
+    // "using <fallback model> because <reason>" banner from the old session.
+    sessionEntry.fallbackNoticeActiveModel = undefined;
+    sessionEntry.fallbackNoticeSelectedModel = undefined;
+    sessionEntry.fallbackNoticeReason = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
