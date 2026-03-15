@@ -1,0 +1,218 @@
+import { EventEmitter } from "node:events";
+import { describe, expect, it, vi } from "vitest";
+import { runNodeWatchedPaths } from "../../scripts/run-node.mjs";
+import { runWatchMain } from "../../scripts/watch-node.mjs";
+
+const createFakeProcess = () =>
+  Object.assign(new EventEmitter(), {
+    pid: 4242,
+    execPath: "/usr/local/bin/node",
+  }) as unknown as NodeJS.Process;
+
+const createWatchHarness = () => {
+  const child = Object.assign(new EventEmitter(), {
+    kill: vi.fn(() => {}),
+  });
+  const spawn = vi.fn(() => child);
+  const watcher = Object.assign(new EventEmitter(), {
+    close: vi.fn(async () => {}),
+  });
+  const createWatcher = vi.fn(() => watcher);
+  const fakeProcess = createFakeProcess();
+  return { child, spawn, watcher, createWatcher, fakeProcess };
+};
+
+describe("watch-node script", () => {
+  it("wires chokidar watch to run-node with watched source/config paths", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force"],
+      cwd: "/tmp/openclaw",
+      createWatcher,
+      env: { PATH: "/usr/bin" },
+      now: () => 1700000000000,
+      process: fakeProcess,
+      spawn,
+    });
+
+    expect(createWatcher).toHaveBeenCalledTimes(1);
+    const firstWatcherCall = createWatcher.mock.calls[0];
+    expect(firstWatcherCall).toBeDefined();
+    const [watchPaths, watchOptions] = firstWatcherCall as unknown as [
+      string[],
+      { ignoreInitial: boolean; ignored: (watchPath: string) => boolean },
+    ];
+    expect(watchPaths).toEqual(runNodeWatchedPaths);
+    expect(watchPaths).toContain("extensions");
+    expect(watchPaths).toContain("tsdown.config.ts");
+    expect(watchOptions.ignoreInitial).toBe(true);
+    expect(watchOptions.ignored("src/infra/watch-node.test.ts")).toBe(true);
+    expect(watchOptions.ignored("src/infra/watch-node.test.tsx")).toBe(true);
+    expect(watchOptions.ignored("src/infra/watch-node-test-helpers.ts")).toBe(true);
+    expect(watchOptions.ignored("extensions/voice-call/README.md")).toBe(true);
+    expect(watchOptions.ignored("extensions/voice-call/openclaw.plugin.json")).toBe(false);
+    expect(watchOptions.ignored("extensions/voice-call/package.json")).toBe(false);
+    expect(watchOptions.ignored("extensions/voice-call/index.ts")).toBe(false);
+    expect(watchOptions.ignored("extensions/voice-call/src/runtime.ts")).toBe(false);
+    expect(watchOptions.ignored("src/infra/watch-node.ts")).toBe(false);
+    expect(watchOptions.ignored("tsconfig.json")).toBe(false);
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawn).toHaveBeenCalledWith(
+      "/usr/local/bin/node",
+      ["scripts/run-node.mjs", "gateway", "--force"],
+      expect.objectContaining({
+        cwd: "/tmp/openclaw",
+        stdio: "inherit",
+        env: expect.objectContaining({
+          PATH: "/usr/bin",
+          OPENCLAW_WATCH_MODE: "1",
+          OPENCLAW_WATCH_SESSION: "1700000000000-4242",
+          OPENCLAW_WATCH_COMMAND: "gateway --force",
+        }),
+      }),
+    );
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("terminates child on SIGINT and returns shell interrupt code", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force"],
+      createWatcher,
+      process: fakeProcess,
+      spawn,
+    });
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(130);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+    expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("terminates child on SIGTERM and returns shell terminate code", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force"],
+      createWatcher,
+      process: fakeProcess,
+      spawn,
+    });
+
+    fakeProcess.emit("SIGTERM");
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(143);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+    expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("ignores test-only changes and restarts on non-test source changes", async () => {
+    const childA = Object.assign(new EventEmitter(), {
+      kill: vi.fn(function () {
+        queueMicrotask(() => childA.emit("exit", 0, null));
+      }),
+    });
+    const childB = Object.assign(new EventEmitter(), {
+      kill: vi.fn(function () {
+        queueMicrotask(() => childB.emit("exit", 0, null));
+      }),
+    });
+    const childC = Object.assign(new EventEmitter(), {
+      kill: vi.fn(function () {
+        queueMicrotask(() => childC.emit("exit", 0, null));
+      }),
+    });
+    const childD = Object.assign(new EventEmitter(), {
+      kill: vi.fn(() => {}),
+    });
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce(childA)
+      .mockReturnValueOnce(childB)
+      .mockReturnValueOnce(childC)
+      .mockReturnValueOnce(childD);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const createWatcher = vi.fn(() => watcher);
+    const fakeProcess = createFakeProcess();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force"],
+      createWatcher,
+      process: fakeProcess,
+      spawn,
+    });
+
+    watcher.emit("change", "src/infra/watch-node.test.ts");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(childA.kill).not.toHaveBeenCalled();
+
+    watcher.emit("change", "src/infra/watch-node.test.tsx");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(childA.kill).not.toHaveBeenCalled();
+
+    watcher.emit("change", "src/infra/watch-node-test-helpers.ts");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(childA.kill).not.toHaveBeenCalled();
+
+    watcher.emit("change", "extensions/voice-call/README.md");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(childA.kill).not.toHaveBeenCalled();
+
+    watcher.emit("change", "extensions/voice-call/openclaw.plugin.json");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    watcher.emit("change", "extensions/voice-call/package.json");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(childB.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(spawn).toHaveBeenCalledTimes(3);
+
+    watcher.emit("change", "src/infra/watch-node.ts");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(childC.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(spawn).toHaveBeenCalledTimes(4);
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+  });
+
+  it("kills child and exits when watcher emits an error", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force"],
+      createWatcher,
+      process: fakeProcess,
+      spawn,
+    });
+
+    watcher.emit("error", new Error("watch failed"));
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(1);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+});
