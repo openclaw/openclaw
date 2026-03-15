@@ -75,6 +75,20 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts BlueBubbles allowPrivateNetwork for local server setups", () => {
+    const res = validateConfigObject({
+      channels: {
+        bluebubbles: {
+          serverUrl: "http://localhost:1234",
+          password: "test-password",
+          allowPrivateNetwork: true,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects unsafe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {

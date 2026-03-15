@@ -265,7 +265,7 @@ describe("web monitor inbox", () => {
             remoteJid: "999@s.whatsapp.net",
           },
           message: { conversation: "old message" },
-          messageTimestamp: nowSeconds(),
+          messageTimestamp: nowSeconds(-300_000), // 5 min ago — stale append should be skipped
           pushName: "History Sender",
         },
       ],

@@ -1541,6 +1541,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
   "channels.bluebubbles.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
+  "channels.bluebubbles.allowPrivateNetwork":
+    "Allows BlueBubbles requests to target localhost/LAN/private-network server URLs. Enable this when the BlueBubbles server runs on the same machine, behind a trusted reverse proxy, or on a local/private subnet.",
   "channels.discord.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"].',
   "channels.discord.dm.policy":

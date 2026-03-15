@@ -756,6 +756,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.imessage.dmPolicy": "iMessage DM Policy",
   "channels.imessage.configWrites": "iMessage Config Writes",
   "channels.bluebubbles.dmPolicy": "BlueBubbles DM Policy",
+  "channels.bluebubbles.allowPrivateNetwork": "BlueBubbles Allow Private Network",
   "channels.msteams.configWrites": "MS Teams Config Writes",
   "channels.irc.configWrites": "IRC Config Writes",
   "channels.discord.dmPolicy": "Discord DM Policy",
