@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
+import { getMediaDir } from "../media/store.js";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
@@ -361,6 +362,7 @@ describe("gateway server chat", () => {
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
       const reqId = "chat-img";
+      const callsBeforeImage = spyCalls.length;
       ws.send(
         JSON.stringify({
           type: "req",
@@ -389,7 +391,18 @@ describe("gateway server chat", () => {
       );
       expect(imgRes.ok).toBe(true);
       expect(imgRes.payload?.runId).toBeDefined();
+      await waitFor(() => spyCalls.length > callsBeforeImage);
+      const imageCtx = spyCalls.at(-1)?.[0] as
+        | { MediaPath?: string; MediaPaths?: string[]; MediaTypes?: string[]; RawBody?: string }
+        | undefined;
+      expect(imageCtx?.RawBody).toBe("see image");
+      expect(imageCtx?.MediaPath).toBeDefined();
+      expect(imageCtx?.MediaPaths).toEqual([imageCtx?.MediaPath]);
+      expect(imageCtx?.MediaTypes).toEqual(["image/png"]);
+      await fs.access(imageCtx?.MediaPath ?? "");
+      expect(imageCtx?.MediaPath?.startsWith(path.join(getMediaDir(), "inbound"))).toBe(true);
       const reqIdOnly = "chat-img-only";
+      const callsBeforeImageOnly = spyCalls.length;
       ws.send(
         JSON.stringify({
           type: "req",
@@ -418,6 +431,15 @@ describe("gateway server chat", () => {
       );
       expect(imgOnlyRes.ok).toBe(true);
       expect(imgOnlyRes.payload?.runId).toBeDefined();
+      await waitFor(() => spyCalls.length > callsBeforeImageOnly);
+      const imageOnlyCtx = spyCalls.at(-1)?.[0] as
+        | { MediaPath?: string; MediaPaths?: string[]; MediaTypes?: string[]; RawBody?: string }
+        | undefined;
+      expect(imageOnlyCtx?.RawBody).toBe("");
+      expect(imageOnlyCtx?.MediaPath).toBeDefined();
+      expect(imageOnlyCtx?.MediaPaths).toEqual([imageOnlyCtx?.MediaPath]);
+      expect(imageOnlyCtx?.MediaTypes).toEqual(["image/png"]);
+      await fs.access(imageOnlyCtx?.MediaPath ?? "");
 
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);

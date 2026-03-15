@@ -34,6 +34,8 @@ import {
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import { stageWebchatImageAttachments } from "./webchat-media-stage.js";
+import { type MediaPayload } from "../../channels/plugins/media-payload.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -63,6 +65,7 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+import { stageWebchatImageAttachments } from "./webchat-media-stage.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -1259,6 +1262,31 @@ export const chatHandlers: GatewayRequestHandlers = {
         runId: clientRunId,
         status: "started" as const,
       };
+      // Stage media attachments BEFORE acknowledging to avoid sending "started"
+      // then immediately erroring out (which can cause duplicate responses).
+      let stagedMediaPayload: MediaPayload | undefined;
+      if (parsedImages.length > 0) {
+        try {
+          stagedMediaPayload = await stageWebchatImageAttachments({
+            images: parsedImages,
+            runId: clientRunId,
+            log: context.logGateway,
+          });
+        } catch (stagingErr) {
+          // Failed to stage media - send error instead of started
+          const error = errorShape(ErrorCodes.UNAVAILABLE, `media staging failed: ${stagingErr}`);
+          const errorPayload = {
+            runId: clientRunId,
+            status: "error" as const,
+            summary: String(stagingErr),
+          };
+          respond(false, errorPayload, error, {
+            runId: clientRunId,
+            error: formatForLog(stagingErr),
+          });
+          return;
+        }
+      }
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
       const trimmedMessage = parsedMessage.trim();
@@ -1311,6 +1339,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes,
+        ...stagedMediaPayload,
       };
 
       const agentId = resolveSessionAgentId({

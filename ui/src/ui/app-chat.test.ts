@@ -11,6 +11,8 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     connected: true,
     chatMessage: "",
     chatAttachments: [],
+    chatAttachmentReadsPending: 0,
+    chatBufferedAttachments: [],
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
