@@ -476,66 +476,111 @@ async function finishPreparedManualRun(
       return;
     }
 
-    const shouldDelete = applyJobResult(
-      state,
-      job,
-      {
+    let applyCalled = false;
+    try {
+      const shouldDelete = applyJobResult(
+        state,
+        job,
+        {
+          status: coreResult.status,
+          error: coreResult.error,
+          delivered: coreResult.delivered,
+          startedAt,
+          endedAt,
+        },
+        { preserveSchedule: mode === "force" },
+      );
+      applyCalled = true;
+
+      emit(state, {
+        jobId: job.id,
+        action: "finished",
         status: coreResult.status,
         error: coreResult.error,
+        summary: coreResult.summary,
         delivered: coreResult.delivered,
-        startedAt,
-        endedAt,
-      },
-      { preserveSchedule: mode === "force" },
-    );
+        deliveryStatus: job.state.lastDeliveryStatus,
+        deliveryError: job.state.lastDeliveryError,
+        sessionId: coreResult.sessionId,
+        sessionKey: coreResult.sessionKey,
+        runAtMs: startedAt,
+        durationMs: job.state.lastDurationMs,
+        nextRunAtMs: job.state.nextRunAtMs,
+        model: coreResult.model,
+        provider: coreResult.provider,
+        usage: coreResult.usage,
+      });
 
-    emit(state, {
-      jobId: job.id,
-      action: "finished",
-      status: coreResult.status,
-      error: coreResult.error,
-      summary: coreResult.summary,
-      delivered: coreResult.delivered,
-      deliveryStatus: job.state.lastDeliveryStatus,
-      deliveryError: job.state.lastDeliveryError,
-      sessionId: coreResult.sessionId,
-      sessionKey: coreResult.sessionKey,
-      runAtMs: startedAt,
-      durationMs: job.state.lastDurationMs,
-      nextRunAtMs: job.state.nextRunAtMs,
-      model: coreResult.model,
-      provider: coreResult.provider,
-      usage: coreResult.usage,
-    });
+      if (shouldDelete && state.store) {
+        state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
+        emit(state, { jobId: job.id, action: "removed" });
+      }
 
-    if (shouldDelete && state.store) {
-      state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
-      emit(state, { jobId: job.id, action: "removed" });
+      // Manual runs should not advance other due jobs without executing them.
+      // Use maintenance-only recompute to repair missing values while
+      // preserving existing past-due nextRunAtMs entries for future timer ticks.
+      const postRunSnapshot = shouldDelete
+        ? null
+        : {
+            enabled: job.enabled,
+            updatedAtMs: job.updatedAtMs,
+            state: structuredClone(job.state),
+          };
+      const postRunRemoved = shouldDelete;
+      // Isolated Telegram send can persist target writeback directly to disk.
+      // Reload before final persist so manual `cron run` keeps those changes.
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      mergeManualRunSnapshotAfterReload({
+        state,
+        jobId,
+        snapshot: postRunSnapshot,
+        removed: postRunRemoved,
+      });
+      recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+      await persist(state);
+      armTimer(state);
+    } catch (err) {
+      // Ensure the run appears in history even when post-apply operations fail.
+      // Without this, manual runs that throw during reload/persist silently
+      // disappear from the run log while runningAtMs remains set, blocking
+      // all subsequent manual runs.
+      if (applyCalled) {
+        emit(state, {
+          jobId,
+          action: "finished",
+          status: coreResult.status,
+          error: coreResult.error,
+          summary: coreResult.summary,
+          delivered: coreResult.delivered,
+          runAtMs: startedAt,
+          durationMs: endedAt - startedAt,
+          model: coreResult.model,
+          provider: coreResult.provider,
+          usage: coreResult.usage,
+        });
+      } else {
+        // applyJobResult never ran — clear the stale runningAtMs marker
+        // so the job is not permanently blocked.
+        const runningJob = state.store?.jobs.find((entry) => entry.id === jobId);
+        if (runningJob && typeof runningJob.state.runningAtMs === "number") {
+          runningJob.state.runningAtMs = undefined;
+        }
+        emit(state, {
+          jobId,
+          action: "finished",
+          status: "error",
+          error: String(err),
+          runAtMs: startedAt,
+          durationMs: endedAt - startedAt,
+        });
+      }
+      try {
+        await persist(state);
+      } catch {
+        // Best-effort: if persist fails the stale marker will be cleared on next load.
+      }
+      armTimer(state);
     }
-
-    // Manual runs should not advance other due jobs without executing them.
-    // Use maintenance-only recompute to repair missing values while
-    // preserving existing past-due nextRunAtMs entries for future timer ticks.
-    const postRunSnapshot = shouldDelete
-      ? null
-      : {
-          enabled: job.enabled,
-          updatedAtMs: job.updatedAtMs,
-          state: structuredClone(job.state),
-        };
-    const postRunRemoved = shouldDelete;
-    // Isolated Telegram send can persist target writeback directly to disk.
-    // Reload before final persist so manual `cron run` keeps those changes.
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    mergeManualRunSnapshotAfterReload({
-      state,
-      jobId,
-      snapshot: postRunSnapshot,
-      removed: postRunRemoved,
-    });
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
-    await persist(state);
-    armTimer(state);
   });
 }
 
