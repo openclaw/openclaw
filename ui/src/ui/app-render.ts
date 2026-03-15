@@ -726,6 +726,7 @@ export function renderApp(state: AppViewState) {
                   limit: state.sessionsFilterLimit,
                   includeGlobal: state.sessionsIncludeGlobal,
                   includeUnknown: state.sessionsIncludeUnknown,
+                  includeArchived: state.sessionsIncludeArchived,
                   basePath: state.basePath,
                   searchQuery: state.sessionsSearchQuery,
                   sortColumn: state.sessionsSortColumn,
@@ -738,6 +739,18 @@ export function renderApp(state: AppViewState) {
                     state.sessionsFilterLimit = next.limit;
                     state.sessionsIncludeGlobal = next.includeGlobal;
                     state.sessionsIncludeUnknown = next.includeUnknown;
+                    state.sessionsIncludeArchived = next.includeArchived;
+                    const activeMinutes = Number(next.activeMinutes);
+                    const limit = Number(next.limit);
+                    // Reload immediately so filter changes take effect without waiting for polling.
+                    // Empty/invalid inputs fall back to 0 to disable that filter.
+                    void loadSessions(state, {
+                      activeMinutes: Number.isFinite(activeMinutes) ? activeMinutes : 0,
+                      limit: Number.isFinite(limit) ? limit : 0,
+                      includeGlobal: next.includeGlobal,
+                      includeUnknown: next.includeUnknown,
+                      includeArchived: next.includeArchived,
+                    });
                   },
                   onSearchChange: (q) => {
                     state.sessionsSearchQuery = q;

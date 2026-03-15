@@ -439,7 +439,11 @@ export async function initSessionState(params: {
     lastTo,
     lastAccountId,
     lastThreadId,
+    archivedAt: baseEntry?.archivedAt,
   };
+  if (typeof sessionEntry.archivedAt === "number") {
+    sessionEntry.archivedAt = undefined;
+  }
   const metaPatch = deriveSessionMetaPatch({
     ctx: sessionCtxForState,
     sessionKey,

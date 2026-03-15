@@ -1,4 +1,5 @@
 import { resolveConfiguredAcpRoute } from "../../../src/acp/persistent-bindings.route.js";
+import { resolveDefaultAgentId } from "../../../src/agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { logVerbose } from "../../../src/globals.js";
 import { getSessionBindingService } from "../../../src/infra/outbound/session-binding-service.js";
@@ -58,7 +59,12 @@ export function resolveTelegramConversationRoute(params: {
   if (rawTopicAgentId) {
     // Preserve the configured topic agent ID so topic-bound sessions stay stable
     // even when that agent is not present in the current config snapshot.
-    const topicAgentId = sanitizeAgentId(rawTopicAgentId);
+    const normalizedRawTopicAgentId = sanitizeAgentId(rawTopicAgentId);
+    const defaultAgentId = sanitizeAgentId(resolveDefaultAgentId(params.cfg));
+    let topicAgentId = pickFirstExistingAgentId(params.cfg, rawTopicAgentId);
+    if (topicAgentId === defaultAgentId && normalizedRawTopicAgentId !== defaultAgentId) {
+      topicAgentId = normalizedRawTopicAgentId;
+    }
     route = {
       ...route,
       agentId: topicAgentId,

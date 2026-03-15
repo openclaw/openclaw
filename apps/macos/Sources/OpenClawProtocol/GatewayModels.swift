@@ -1213,6 +1213,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let activeminutes: Int?
     public let includeglobal: Bool?
     public let includeunknown: Bool?
+    public let includearchived: Bool?
     public let includederivedtitles: Bool?
     public let includelastmessage: Bool?
     public let label: String?
@@ -1225,6 +1226,7 @@ public struct SessionsListParams: Codable, Sendable {
         activeminutes: Int?,
         includeglobal: Bool?,
         includeunknown: Bool?,
+        includearchived: Bool?,
         includederivedtitles: Bool?,
         includelastmessage: Bool?,
         label: String?,
@@ -1236,6 +1238,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.activeminutes = activeminutes
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
+        self.includearchived = includearchived
         self.includederivedtitles = includederivedtitles
         self.includelastmessage = includelastmessage
         self.label = label
@@ -1249,6 +1252,7 @@ public struct SessionsListParams: Codable, Sendable {
         case activeminutes = "activeMinutes"
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
+        case includearchived = "includeArchived"
         case includederivedtitles = "includeDerivedTitles"
         case includelastmessage = "includeLastMessage"
         case label
@@ -1339,6 +1343,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let subagentcontrolscope: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
+    public let archivedat: AnyCodable?
 
     public init(
         key: String,
@@ -1360,7 +1365,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         subagentrole: AnyCodable?,
         subagentcontrolscope: AnyCodable?,
         sendpolicy: AnyCodable?,
-        groupactivation: AnyCodable?)
+        groupactivation: AnyCodable?,
+        archivedat: AnyCodable?)
     {
         self.key = key
         self.label = label
@@ -1382,6 +1388,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.subagentcontrolscope = subagentcontrolscope
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
+        self.archivedat = archivedat
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1405,6 +1412,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case subagentcontrolscope = "subagentControlScope"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
+        case archivedat = "archivedAt"
     }
 }
 

@@ -49,6 +49,7 @@ export type GatewaySessionRow = {
   lastChannel?: SessionEntry["lastChannel"];
   lastTo?: string;
   lastAccountId?: string;
+  archivedAt?: number | null;
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
