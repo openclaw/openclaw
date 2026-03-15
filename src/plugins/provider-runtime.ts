@@ -29,9 +29,10 @@ export function resolveProviderRuntimePlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin | undefined {
-  return resolvePluginProviders(params).find((plugin) =>
-    matchesProviderId(plugin, params.provider),
-  );
+  return resolvePluginProviders({
+    ...params,
+    bundledProviderAllowlistCompat: true,
+  }).find((plugin) => matchesProviderId(plugin, params.provider));
 }
 
 export function runProviderDynamicModel(params: {
