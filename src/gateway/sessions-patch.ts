@@ -90,7 +90,9 @@ export async function applySessionsPatchToStore(params: {
   storeKey: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
-}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
+}): Promise<
+  { ok: true; entry: SessionEntry; previous?: SessionEntry } | { ok: false; error: ErrorShape }
+> {
   const { cfg, store, storeKey, patch } = params;
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
@@ -232,6 +234,19 @@ export async function applySessionsPatchToStore(params: {
         }
       }
       next.label = parsed.label;
+    }
+  }
+
+  if ("archivedAt" in patch) {
+    const raw = patch.archivedAt;
+    if (raw === null) {
+      delete next.archivedAt;
+    } else if (raw !== undefined) {
+      const numeric = Number(raw);
+      if (!Number.isFinite(numeric) || numeric < 0) {
+        return invalid("invalid archivedAt (use epoch ms >= 0)");
+      }
+      next.archivedAt = Math.floor(numeric);
     }
   }
 
@@ -458,5 +473,5 @@ export async function applySessionsPatchToStore(params: {
   }
 
   store[storeKey] = next;
-  return { ok: true, entry: next };
+  return { ok: true, entry: next, previous: existing };
 }

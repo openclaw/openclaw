@@ -7,6 +7,7 @@ export const SessionsListParamsSchema = Type.Object(
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
+    includeArchived: Type.Optional(Type.Boolean()),
     /**
      * Read first 8KB of each session transcript to derive title from first user message.
      * Performs a file read per session - use `limit` to bound result set on large stores.
@@ -86,6 +87,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     groupActivation: Type.Optional(
       Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
     ),
+    archivedAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
   },
   { additionalProperties: false },
 );

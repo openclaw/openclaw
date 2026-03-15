@@ -8,6 +8,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { writeSessionArchiveSummary } from "../../sessions/archive-summary.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -212,6 +213,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, applied.error);
       return;
     }
+
+    const wasArchived = typeof applied.previous?.archivedAt === "number";
+    const isArchived = typeof applied.entry.archivedAt === "number";
+    if (!wasArchived && isArchived) {
+      void writeSessionArchiveSummary({
+        cfg,
+        key: target.canonicalKey ?? key,
+        entry: applied.entry,
+        storePath,
+        archivedAt: applied.entry.archivedAt ?? undefined,
+      });
+    }
+
     const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
     const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
