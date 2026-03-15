@@ -1,10 +1,11 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { type Api, getEnvApiKey, getModels, type Model } from "@mariozechner/pi-ai";
+import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelApi, ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
+import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
@@ -18,10 +19,17 @@ import {
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
-import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
+import {
+  CUSTOM_LOCAL_AUTH_MARKER,
+  isKnownEnvApiKeyMarker,
+  isNonSecretApiKeyMarker,
+  OLLAMA_LOCAL_AUTH_MARKER,
+} from "./model-auth-markers.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+
+const log = createSubsystemLogger("model-auth");
 
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
@@ -50,28 +58,55 @@ function resolveProviderConfig(
   );
 }
 
-function normalizeHeaders(
-  headers: Record<string, unknown> | undefined,
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    const normalized = normalizeSecretInput(value);
-    if (normalized) {
-      out[key] = normalized;
-    }
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
 export function getCustomProviderApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
   return normalizeOptionalSecretInput(entry?.apiKey);
+}
+
+type ResolvedCustomProviderApiKey = {
+  apiKey: string;
+  source: string;
+};
+
+export function resolveUsableCustomProviderApiKey(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  env?: NodeJS.ProcessEnv;
+}): ResolvedCustomProviderApiKey | null {
+  const customKey = getCustomProviderApiKey(params.cfg, params.provider);
+  if (!customKey) {
+    return null;
+  }
+  if (!isNonSecretApiKeyMarker(customKey)) {
+    return { apiKey: customKey, source: "models.json" };
+  }
+  if (!isKnownEnvApiKeyMarker(customKey)) {
+    return null;
+  }
+  const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[customKey]);
+  if (!envValue) {
+    return null;
+  }
+  const applied = new Set(getShellEnvAppliedKeys());
+  return {
+    apiKey: envValue,
+    source: resolveEnvSourceLabel({
+      applied,
+      envVars: [customKey],
+      label: `${customKey} (models.json marker)`,
+    }),
+  };
+}
+
+export function hasUsableCustomProviderApiKey(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  return Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env }));
 }
 
 function resolveProviderAuthOverride(
@@ -86,15 +121,44 @@ function resolveProviderAuthOverride(
   return undefined;
 }
 
+function isLocalBaseUrl(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "[::1]" ||
+      host === "[::ffff:7f00:1]" ||
+      host === "[::ffff:127.0.0.1]"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
+  return (
+    normalizeOptionalSecretInput(providerConfig.apiKey) !== undefined ||
+    coerceSecretRef(providerConfig.apiKey) !== null
+  );
+}
+
+function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
+  return (
+    typeof providerConfig.baseUrl === "string" &&
+    providerConfig.baseUrl.trim().length > 0 &&
+    typeof providerConfig.api === "string" &&
+    providerConfig.api.trim().length > 0 &&
+    Array.isArray(providerConfig.models) &&
+    providerConfig.models.length > 0
+  );
+}
+
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
 }): ResolvedProviderAuth | null {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  if (normalizedProvider !== "ollama") {
-    return null;
-  }
-
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   if (!providerConfig) {
     return null;
@@ -108,11 +172,38 @@ function resolveSyntheticLocalProviderAuth(params: {
     return null;
   }
 
-  return {
-    apiKey: OLLAMA_LOCAL_AUTH_MARKER,
-    source: "models.providers.ollama (synthetic local key)",
-    mode: "api-key",
-  };
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (normalizedProvider === "ollama") {
+    return {
+      apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+      source: "models.providers.ollama (synthetic local key)",
+      mode: "api-key",
+    };
+  }
+
+  const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
+  if (authOverride && authOverride !== "api-key") {
+    return null;
+  }
+  if (!isCustomLocalProviderConfig(providerConfig)) {
+    return null;
+  }
+  if (hasExplicitProviderApiKeyConfig(providerConfig)) {
+    return null;
+  }
+
+  // Custom providers pointing at a local server (e.g. llama.cpp, vLLM, LocalAI)
+  // typically don't require auth. Synthesize a local key so the auth resolver
+  // doesn't reject them when the user left the API key blank during onboarding.
+  if (providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl)) {
+    return {
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: `models.providers.${params.provider} (synthetic local key)`,
+      mode: "api-key",
+    };
+  }
+
+  return null;
 }
 
 function resolveEnvSourceLabel(params: {
@@ -238,7 +329,9 @@ export async function resolveApiKeyForProvider(params: {
           mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
         };
       }
-    } catch {}
+    } catch (err) {
+      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
+    }
   }
 
   const envResolved = resolveEnvApiKey(provider);
@@ -250,9 +343,9 @@ export async function resolveApiKeyForProvider(params: {
     };
   }
 
-  const customKey = getCustomProviderApiKey(cfg, provider);
+  const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   if (customKey) {
-    return { apiKey: customKey, source: "models.json", mode: "api-key" };
+    return { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" };
   }
 
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
@@ -288,11 +381,14 @@ export async function resolveApiKeyForProvider(params: {
 export type EnvApiKeyResult = { apiKey: string; source: string };
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 
-export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
+export function resolveEnvApiKey(
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+): EnvApiKeyResult | null {
   const normalized = normalizeProviderId(provider);
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
-    const value = normalizeOptionalSecretInput(process.env[envVar]);
+    const value = normalizeOptionalSecretInput(env[envVar]);
     if (!value) {
       return null;
     }
@@ -369,7 +465,7 @@ export function resolveModelAuthMode(
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
   }
 
-  if (getCustomProviderApiKey(cfg, resolved)) {
+  if (hasUsableCustomProviderApiKey(cfg, resolved)) {
     return "api-key";
   }
 
@@ -402,115 +498,24 @@ export function requireApiKey(auth: ResolvedProviderAuth, provider: string): str
   throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
 }
 
-// ---------------------------------------------------------------------------
-// Provider info resolution — exposed to plugins via runtime.models
-// ---------------------------------------------------------------------------
-
-/**
- * Lightweight provider info returned to plugins.
- * Contains the connection details needed to call a provider's API —
- * baseUrl, API protocol type, and optional headers.
- */
-export type ResolvedProviderInfo = {
-  baseUrl: string;
-  api: ModelApi;
-  headers?: Record<string, string>;
-};
-
-/**
- * Resolve a provider's connection info (baseUrl, api type, headers).
- *
- * Resolution order:
- * 1. Explicit config: `cfg.models.providers[provider]`
- * 2. models.json (merged/implicit providers from startup)
- * 3. pi-ai built-in model database (covers providers like kimi-coding,
- *    anthropic, openai, etc. that ship with the library)
- *
- * This gives plugins access to ALL configured providers without
- * hardcoding a list of well-known providers.
- */
-export async function resolveProviderInfo(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-}): Promise<ResolvedProviderInfo | undefined> {
-  const { provider, cfg } = params;
-
-  // 1. Check explicit config first
-  const explicit = resolveProviderConfig(cfg, provider);
-  if (explicit?.baseUrl) {
-    return {
-      baseUrl: explicit.baseUrl,
-      api: explicit.api ?? "openai-completions",
-      headers: normalizeHeaders(explicit.headers),
-    };
+export function applyLocalNoAuthHeaderOverride<T extends Model<Api>>(
+  model: T,
+  auth: ResolvedProviderAuth | null | undefined,
+): T {
+  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || model.api !== "openai-completions") {
+    return model;
   }
 
-  // 2. Read from models.json — contains merged/implicit providers
-  const agentDir = params.agentDir ?? resolveAgentDirForModelsJson();
-  if (agentDir) {
-    try {
-      const modelsJsonPath = path.join(agentDir, "models.json");
-      const raw = await fs.readFile(modelsJsonPath, "utf8");
-      const parsed = JSON.parse(raw) as {
-        providers?: Record<string, ModelProviderConfig>;
-      };
+  // OpenAI's SDK always generates Authorization from apiKey. Keep the non-secret
+  // placeholder so construction succeeds, then clear the header at request build
+  // time for local servers that intentionally do not require auth.
+  const headers = {
+    ...model.headers,
+    Authorization: null,
+  } as unknown as Record<string, string>;
 
-      const providers = parsed?.providers ?? {};
-      const normalized = normalizeProviderId(provider);
-
-      // Direct match
-      const direct = providers[provider] ?? providers[normalized];
-      if (direct?.baseUrl) {
-        return {
-          baseUrl: direct.baseUrl,
-          api: direct.api ?? "openai-completions",
-          headers: normalizeHeaders(direct.headers),
-        };
-      }
-
-      // Fuzzy match by normalized id
-      for (const [key, value] of Object.entries(providers)) {
-        if (normalizeProviderId(key) === normalized && value?.baseUrl) {
-          return {
-            baseUrl: value.baseUrl,
-            api: value.api ?? "openai-completions",
-            headers: normalizeHeaders(value.headers),
-          };
-        }
-      }
-    } catch {
-      // models.json doesn't exist or isn't valid — not fatal
-    }
-  }
-
-  // 3. Check pi-ai built-in model database (covers providers like kimi-coding,
-  //    anthropic, openai, etc. that ship with the library)
-  try {
-    const builtInModels = getModels(provider as never);
-    if (builtInModels.length > 0) {
-      const first = builtInModels[0];
-      return {
-        baseUrl: first.baseUrl,
-        api: first.api as ModelApi,
-        headers: first.headers,
-      };
-    }
-  } catch {
-    // provider not known to pi-ai — not fatal
-  }
-
-  return undefined;
-}
-
-/** Best-effort resolution of the agent dir for reading models.json. */
-function resolveAgentDirForModelsJson(): string | undefined {
-  try {
-    // Dynamically import to avoid circular dependencies
-    const envDir =
-      process.env.OPENCLAW_AGENT_DIR?.trim() || process.env.PI_CODING_AGENT_DIR?.trim();
-    return envDir || undefined;
-  } catch {
-    return undefined;
-  }
+  return {
+    ...model,
+    headers,
+  };
 }
