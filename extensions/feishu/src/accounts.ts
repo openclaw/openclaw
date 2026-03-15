@@ -245,6 +245,7 @@ export function listEnabledFeishuAccounts(cfg: ClawdbotConfig): ResolvedFeishuAc
       } catch (err) {
         console.warn(
           `feishu: skipping account "${accountId}": ${err instanceof Error ? err.message : String(err)}`,
+          err,
         );
         return null;
       }
