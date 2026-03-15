@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **DG-Lab V3 Controller** — Control DG-Lab (Coyote) V3 devices via WebSocket with QR pairing, agent tools, and safety limits.
+  npm: `openclaw-plugin-dg-lab`
+  repo: `https://github.com/FengYing1314/openclaw-plugin-dg-lab`
+  install: `openclaw plugins install openclaw-plugin-dg-lab`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
