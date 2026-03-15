@@ -19,6 +19,7 @@ vi.mock("../logging/diagnostic.js", () => ({
 
 import {
   clearCommandLane,
+  CommandLaneAbortError,
   CommandLaneClearedError,
   enqueueCommand,
   enqueueCommandInLane,
@@ -372,5 +373,90 @@ describe("command queue", () => {
       release();
       commandQueueA.resetAllLanes();
     }
+  });
+
+  it("rejects immediately when abortSignal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort("already cancelled");
+    await expect(
+      enqueueCommand(async () => "nope", { abortSignal: controller.signal }),
+    ).rejects.toBeInstanceOf(CommandLaneAbortError);
+  });
+
+  it("rejects queued task when abortSignal fires while waiting", async () => {
+    const { task: blocker, release } = enqueueBlockedMainTask(async () => "first");
+    const controller = new AbortController();
+
+    const second = enqueueCommand(async () => "second", {
+      abortSignal: controller.signal,
+    });
+
+    // second is queued behind blocker
+    expect(getQueueSize()).toBeGreaterThanOrEqual(2);
+
+    controller.abort("timed out");
+
+    await expect(second).rejects.toBeInstanceOf(CommandLaneAbortError);
+
+    // queue entry is removed; only the active blocker remains
+    expect(getQueueSize()).toBe(1);
+
+    release();
+    await expect(blocker).resolves.toBe("first");
+    expect(getQueueSize()).toBe(0);
+  });
+
+  it("does not reject a task that already started when abortSignal fires", async () => {
+    const controller = new AbortController();
+    let resolveTask!: () => void;
+    const taskBlocker = new Promise<void>((r) => {
+      resolveTask = r;
+    });
+
+    // This task starts immediately (nothing ahead of it in the queue)
+    const task = enqueueCommand(
+      async () => {
+        await taskBlocker;
+        return "completed";
+      },
+      { abortSignal: controller.signal },
+    );
+
+    expect(getActiveTaskCount()).toBe(1);
+
+    // Abort fires after task is already active — should have no effect
+    controller.abort("too late");
+
+    resolveTask();
+    await expect(task).resolves.toBe("completed");
+  });
+
+  it("abort removes only the targeted entry from the queue", async () => {
+    const lane = `abort-targeted-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    const deferred = createDeferred();
+    const first = enqueueCommandInLane(lane, async () => {
+      await deferred.promise;
+      return "first";
+    });
+
+    const controller = new AbortController();
+    const second = enqueueCommandInLane(lane, async () => "second", {
+      abortSignal: controller.signal,
+    });
+    const third = enqueueCommandInLane(lane, async () => "third");
+
+    expect(getQueueSize(lane)).toBeGreaterThanOrEqual(3);
+
+    controller.abort("cancel second");
+    await expect(second).rejects.toBeInstanceOf(CommandLaneAbortError);
+
+    // third should still be queued
+    expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
+
+    deferred.resolve();
+    await expect(first).resolves.toBe("first");
+    await expect(third).resolves.toBe("third");
   });
 });

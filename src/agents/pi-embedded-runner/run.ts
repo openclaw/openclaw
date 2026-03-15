@@ -265,9 +265,13 @@ export async function runEmbeddedPiAgent(
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
+    params.enqueue ??
+    ((task, opts) =>
+      enqueueCommandInLane(globalLane, task, { ...opts, abortSignal: params.abortSignal }));
   const enqueueSession =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(sessionLane, task, opts));
+    params.enqueue ??
+    ((task, opts) =>
+      enqueueCommandInLane(sessionLane, task, { ...opts, abortSignal: params.abortSignal }));
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??

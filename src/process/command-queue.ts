@@ -24,6 +24,17 @@ export class GatewayDrainingError extends Error {
   }
 }
 
+/**
+ * Dedicated error type thrown when a queued command is rejected because
+ * its abort signal fired while it was waiting in the lane queue.
+ */
+export class CommandLaneAbortError extends Error {
+  constructor(lane?: string) {
+    super(lane ? `Command in lane "${lane}" aborted while queued` : "Command aborted while queued");
+    this.name = "CommandLaneAbortError";
+  }
+}
+
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
@@ -36,6 +47,7 @@ type QueueEntry = {
   enqueuedAt: number;
   warnAfterMs: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  abortCleanup?: () => void;
 };
 
 type LaneState = {
@@ -100,6 +112,7 @@ function drainLane(lane: string) {
     try {
       while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
         const entry = state.queue.shift() as QueueEntry;
+        entry.abortCleanup?.();
         const waitedMs = Date.now() - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
           try {
@@ -171,23 +184,43 @@ export function enqueueCommandInLane<T>(
   opts?: {
     warnAfterMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
+    abortSignal?: AbortSignal;
   },
 ): Promise<T> {
   if (queueState.gatewayDraining) {
     return Promise.reject(new GatewayDrainingError());
   }
   const cleaned = lane.trim() || CommandLane.Main;
+  if (opts?.abortSignal?.aborted) {
+    return Promise.reject(new CommandLaneAbortError(cleaned));
+  }
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
-    state.queue.push({
+    const entry: QueueEntry = {
       task: () => task(),
       resolve: (value) => resolve(value as T),
       reject,
       enqueuedAt: Date.now(),
       warnAfterMs,
       onWait: opts?.onWait,
-    });
+    };
+
+    if (opts?.abortSignal) {
+      const signal = opts.abortSignal;
+      const onAbort = () => {
+        const idx = state.queue.indexOf(entry);
+        if (idx !== -1) {
+          state.queue.splice(idx, 1);
+          entry.abortCleanup = undefined;
+          reject(new CommandLaneAbortError(cleaned));
+        }
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      entry.abortCleanup = () => signal.removeEventListener("abort", onAbort);
+    }
+
+    state.queue.push(entry);
     logLaneEnqueue(cleaned, state.queue.length + state.activeTaskIds.size);
     drainLane(cleaned);
   });
@@ -198,6 +231,7 @@ export function enqueueCommand<T>(
   opts?: {
     warnAfterMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
+    abortSignal?: AbortSignal;
   },
 ): Promise<T> {
   return enqueueCommandInLane(CommandLane.Main, task, opts);
@@ -229,6 +263,7 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
   const removed = state.queue.length;
   const pending = state.queue.splice(0);
   for (const entry of pending) {
+    entry.abortCleanup?.();
     entry.reject(new CommandLaneClearedError(cleaned));
   }
   return removed;
