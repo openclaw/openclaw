@@ -5,6 +5,7 @@
  * Creates a new dated memory file with LLM-generated slug
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -207,6 +208,14 @@ const saveSessionToMemory: HookHandler = async (event) => {
     log.debug("Hook triggered for reset/new command", { action: event.action });
 
     const context = event.context || {};
+
+    // NOTE: blockSessionSave and sessionSaveContent are checked in a
+    // postHookActions callback (see bottom of this handler) so that hooks
+    // registered after this bundled handler can still set them.  The file
+    // is written inline (fail-safe: if postHookActions never runs, data is
+    // preserved on disk).  The post-hook callback handles retraction
+    // (blockSessionSave) and content replacement (sessionSaveContent).
+
     const cfg = context.cfg as OpenClawConfig | undefined;
     const contextWorkspaceDir =
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
@@ -224,7 +233,6 @@ const saveSessionToMemory: HookHandler = async (event) => {
       sessionKey: event.sessionKey,
     });
     const memoryDir = path.join(workspaceDir, "memory");
-    await fs.mkdir(memoryDir, { recursive: true });
 
     // Get today's date for filename
     const now = new Date(event.timestamp);
@@ -279,8 +287,22 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     let slug: string | null = null;
     let sessionContent: string | null = null;
+    const hasCustomContent = typeof context.sessionSaveContent === "string";
 
-    if (sessionFile) {
+    // Short-circuit transcript loading and LLM slug generation when
+    // blockSessionSave is already set — no point loading sensitive content
+    // or sending it to a model provider when saving is explicitly blocked.
+    const blockPreSet = context.blockSessionSave === true;
+
+    // Known limitation: if an earlier hook pre-sets sessionSaveContent and
+    // a later hook *clears* it (expecting a revert to the default
+    // transcript), the transcript is not available — it was never loaded
+    // because hasCustomContent was true at this point.  The post-hook
+    // cannot fall back to the default entry without re-reading the session
+    // file and re-running slug generation.  In practice, hooks that want
+    // to override earlier custom content should set their own
+    // sessionSaveContent rather than clearing it.
+    if (sessionFile && !hasCustomContent && !blockPreSet) {
       // Get recent conversation content, with fallback to rotated reset transcript.
       sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
       log.debug("Session content loaded", {
@@ -304,10 +326,15 @@ const saveSessionToMemory: HookHandler = async (event) => {
       }
     }
 
-    // If no slug, use timestamp
+    // If no slug, use timestamp with a random suffix to avoid collisions.
+    // Second-resolution (HHMMSS) alone can collide when automated or
+    // multi-channel setups emit rapid /new or /reset commands within the
+    // same second — both writes target the same filename and the later
+    // one silently overwrites the earlier memory entry.
     if (!slug) {
       const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
-      slug = timeSlug.slice(0, 4); // HHMM
+      const rand = crypto.randomUUID().replace(/-/g, "").slice(0, 4);
+      slug = `${timeSlug.slice(0, 6)}-${rand}`;
       log.debug("Using fallback timestamp slug", { slug });
     }
 
@@ -326,35 +353,268 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const source = (context.commandSource as string) || "unknown";
 
-    // Build Markdown entry
-    const entryParts = [
-      `# Session: ${dateStr} ${timeStr} UTC`,
-      "",
-      `- **Session Key**: ${displaySessionKey}`,
-      `- **Session ID**: ${sessionId}`,
-      `- **Source**: ${source}`,
-      "",
-    ];
+    // Use custom content from upstream hook if available, otherwise build entry.
+    // hasCustomContent (set above) already gates session loading + slug generation.
+    // When blockPreSet is true, skip entry construction entirely — the inline
+    // write won't happen and the value would be discarded.
+    let entry: string;
+    if (blockPreSet) {
+      // Block takes precedence — skip entry construction entirely since the
+      // inline write won't happen and the value would be discarded.
+      entry = "";
+      if (hasCustomContent) {
+        log.debug(
+          "blockSessionSave pre-set — sessionSaveContent was also set but will be ignored " +
+            "(blockSessionSave takes precedence over sessionSaveContent)",
+        );
+      } else {
+        log.debug("Session save blocked by upstream hook (inline check)");
+      }
+    } else if (hasCustomContent) {
+      // An empty string is a valid redaction signal — hooks may intentionally
+      // set it to persist a blank marker while avoiding transcript retention.
+      entry = context.sessionSaveContent as string;
+      log.debug("Using custom session content from upstream hook", {
+        length: entry.length,
+      });
+    } else {
+      const entryParts = [
+        `# Session: ${dateStr} ${timeStr} UTC`,
+        "",
+        `- **Session Key**: ${displaySessionKey}`,
+        `- **Session ID**: ${sessionId}`,
+        `- **Source**: ${source}`,
+        "",
+      ];
 
-    // Include conversation content if available
-    if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
+      if (sessionContent) {
+        entryParts.push("## Conversation Summary", "", sessionContent, "");
+      }
+
+      entry = entryParts.join("\n");
     }
 
-    const entry = entryParts.join("\n");
+    // Write inline (fail-safe: if postHookActions never drains, the file
+    // is preserved on disk with the best content available at this point).
+    // If blockSessionSave was already set by an upstream hook, skip the write.
+    //
+    // Before writing, snapshot any pre-existing file content so that late-block
+    // retraction can restore it instead of deleting — preventing accidental
+    // erasure of prior memory files when LLM slugs collide on the same day.
+    let preExistingContent: string | null = null;
+    if (blockPreSet) {
+      // Already logged above — nothing to write.
+    } else {
+      await fs.mkdir(memoryDir, { recursive: true });
+      try {
+        preExistingContent = await fs.readFile(memoryFilePath, "utf-8");
+      } catch (err: unknown) {
+        // File doesn't exist yet — normal case, nothing to preserve.
+        // Rethrow non-ENOENT errors (EACCES, EISDIR, etc.) to avoid silently
+        // losing preExistingContent, which would cause late-block retraction
+        // to delete the file instead of restoring a prior session's history.
+        if (
+          err instanceof Error &&
+          "code" in err &&
+          (err as NodeJS.ErrnoException).code !== "ENOENT"
+        ) {
+          throw err;
+        }
+      }
+      await writeFileWithinRoot({
+        rootDir: memoryDir,
+        relativePath: filename,
+        data: entry,
+        encoding: "utf-8",
+      });
+      log.debug("Memory file written successfully");
 
-    // Write under memory root with alias-safe file validation.
-    await writeFileWithinRoot({
-      rootDir: memoryDir,
-      relativePath: filename,
-      data: entry,
-      encoding: "utf-8",
+      const relPath = memoryFilePath.replace(os.homedir(), "~");
+      log.info(`Session context saved to ${relPath}`);
+    }
+
+    // Defer retraction/replacement to post-hook phase so that hooks
+    // registered after this handler can set blockSessionSave or
+    // sessionSaveContent and still have them honored.
+    const inlineWriteHappened = !blockPreSet;
+    const writtenEntry = inlineWriteHappened ? entry : null;
+    // Post-hook callback — errors propagate to the framework's per-action
+    // catch in triggerInternalHook, which provides consistent log formatting
+    // and per-action isolation.
+    event.postHookActions.push(async () => {
+      // If a later hook blocked the save, retract the file we just wrote.
+      // If the file existed before our write (slug collision), restore the
+      // original content instead of deleting — avoids erasing prior history.
+      if (event.context.blockSessionSave === true && inlineWriteHappened) {
+        // Privacy note: late-set blockSessionSave retracts the file but does NOT
+        // prevent transcript content from having already been sent to the LLM
+        // provider for slug generation — but only when the transcript was actually
+        // loaded (i.e. no custom content was pre-set). When hasCustomContent is
+        // true, transcript loading and LLM calls were skipped entirely.
+        if (!hasCustomContent && sessionContent) {
+          // Only warn when transcript was actually loaded and potentially
+          // sent to the LLM for slug generation. When sessionFile was null
+          // or sessionContent failed to load, no data left the device.
+          log.warn(
+            "blockSessionSave was set by a late hook — memory file will be retracted, but " +
+              "transcript content may have already been sent to the LLM provider for slug generation. " +
+              "To prevent transcript processing entirely, set blockSessionSave before the " +
+              "session-memory handler runs.",
+          );
+        }
+        // Verify we're reverting our own write before touching the file.
+        // A concurrent session (e.g. /new, /reset) may have written to the
+        // same filename between our inline write and this post-hook drain.
+        // If the current content doesn't match what we wrote, skip retraction
+        // to avoid clobbering the other session's data.
+        let currentContent: string | null = null;
+        try {
+          currentContent = await fs.readFile(memoryFilePath, "utf-8");
+        } catch (err: unknown) {
+          if (
+            err instanceof Error &&
+            "code" in err &&
+            (err as NodeJS.ErrnoException).code === "ENOENT"
+          ) {
+            if (preExistingContent !== null) {
+              // Our inline write overwrote a pre-existing entry (slug collision),
+              // and the file was subsequently deleted externally. Restore the
+              // prior session's content — it was lost to our inline overwrite.
+              await writeFileWithinRoot({
+                rootDir: memoryDir,
+                relativePath: filename,
+                data: preExistingContent,
+                encoding: "utf-8",
+              });
+              log.debug(
+                "Session save retracted by post-hook — pre-existing file restored after external deletion",
+              );
+            } else {
+              // No prior content existed — file was externally deleted, nothing to restore.
+              log.debug("Session save retraction skipped — file already removed");
+            }
+            return;
+          }
+          throw err;
+        }
+
+        if (currentContent !== writtenEntry) {
+          // File content differs from what we wrote — another session has
+          // written to this file since our inline write. Do not clobber.
+          log.warn(
+            "Session save retraction skipped — file was modified by another " +
+              "session since our inline write (concurrent save detected)",
+          );
+          return;
+        }
+
+        if (preExistingContent !== null) {
+          // Slug collision: another entry already existed at this filename
+          // before our inline write. Restore the original content rather
+          // than deleting — preserves the prior session's history.
+          // writeFileWithinRoot errors (e.g. ENOENT if memoryDir was
+          // removed after our inline write) are NOT swallowed — they
+          // indicate a real filesystem inconsistency that must surface.
+          await writeFileWithinRoot({
+            rootDir: memoryDir,
+            relativePath: filename,
+            data: preExistingContent,
+            encoding: "utf-8",
+          });
+          log.debug("Session save retracted by post-hook — pre-existing file restored");
+        } else {
+          await fs.unlink(memoryFilePath);
+          log.debug("Session save retracted by post-hook (blockSessionSave)");
+        }
+        return;
+      }
+
+      // If a later hook set sessionSaveContent, overwrite with new content.
+      // blockSessionSave takes precedence — never create/overwrite a file that
+      // was blocked, even if sessionSaveContent is also set.
+      const postContent = event.context.sessionSaveContent;
+      if (
+        event.context.blockSessionSave !== true &&
+        typeof postContent === "string" &&
+        // Two distinct intents: write if no inline write happened (writtenEntry
+        // is null because blockPreSet was true) OR if the content changed.
+        (writtenEntry === null || postContent !== writtenEntry)
+      ) {
+        // Verify ownership before overwriting — if another concurrent run wrote
+        // to the same file since our inline write, do not clobber their content.
+        // Same TOCTOU guard as the late-block retraction path.
+        if (writtenEntry !== null) {
+          let currentContent: string | null = null;
+          try {
+            currentContent = await fs.readFile(memoryFilePath, "utf-8");
+          } catch (err: unknown) {
+            if (
+              err instanceof Error &&
+              "code" in err &&
+              (err as NodeJS.ErrnoException).code === "ENOENT"
+            ) {
+              // File was externally deleted — safe to recreate with new content.
+              currentContent = null;
+            } else {
+              throw err;
+            }
+          }
+          if (currentContent !== null && currentContent !== writtenEntry) {
+            log.warn(
+              "Session save content replacement skipped — file was modified by another " +
+                "session since our inline write (concurrent save detected)",
+            );
+            return;
+          }
+        }
+
+        // Ensure memoryDir exists — the inline write may have been
+        // skipped (e.g. blockSessionSave was true initially) so mkdir
+        // might never have run.
+        await fs.mkdir(memoryDir, { recursive: true });
+        await writeFileWithinRoot({
+          rootDir: memoryDir,
+          relativePath: filename,
+          data: postContent,
+          encoding: "utf-8",
+        });
+        log.debug("Session save content replaced by post-hook (sessionSaveContent)", {
+          length: postContent.length,
+        });
+      } else if (
+        event.context.blockSessionSave !== true &&
+        writtenEntry === null &&
+        typeof postContent !== "string"
+      ) {
+        // blockSessionSave was pre-set (causing writtenEntry=null and no inline
+        // write), then a later hook cleared it without providing sessionSaveContent.
+        // The transcript was never loaded, so we cannot produce a file. Warn so
+        // plugin authors know to supply content when un-blocking.
+        log.warn(
+          "blockSessionSave was cleared but no sessionSaveContent provided — " +
+            "no memory file written. Transcript was not loaded because " +
+            "sessionSaveContent or blockSessionSave was pre-set during handler " +
+            "execution. To write a file after clearing blockSessionSave, also " +
+            "provide sessionSaveContent with the desired content.",
+        );
+      } else if (
+        event.context.blockSessionSave !== true &&
+        writtenEntry !== null &&
+        typeof postContent !== "string" &&
+        hasCustomContent
+      ) {
+        // sessionSaveContent was pre-set (inline write used custom content),
+        // then a later hook cleared it. The file retains the pre-set content.
+        // This is a no-op — to revert to transcript content, the clearing hook
+        // must provide its own sessionSaveContent. Log for diagnostics so
+        // plugin authors know their clearing was silently ignored.
+        log.debug(
+          "sessionSaveContent was cleared by a post-hook but the inline write " +
+            "already used the pre-set content. File retains pre-set content. " +
+            "To override, set sessionSaveContent to the desired replacement.",
+        );
+      }
     });
-    log.debug("Memory file written successfully");
-
-    // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
-    const relPath = memoryFilePath.replace(os.homedir(), "~");
-    log.info(`Session context saved to ${relPath}`);
   } catch (err) {
     if (err instanceof Error) {
       log.error("Failed to save session memory", {

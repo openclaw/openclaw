@@ -445,6 +445,116 @@ describe("hooks", () => {
     });
   });
 
+  describe("postHookActions", () => {
+    it("executes post-hook actions after all handlers complete", async () => {
+      const order: string[] = [];
+
+      registerInternalHook("command:new", async (event) => {
+        order.push("handler-1");
+        event.postHookActions.push(async () => {
+          order.push("post-action-1");
+        });
+      });
+
+      registerInternalHook("command:new", async () => {
+        order.push("handler-2");
+      });
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+
+      expect(order).toEqual(["handler-1", "handler-2", "post-action-1"]);
+    });
+
+    it("post-hook actions see context set by later handlers", async () => {
+      let sawFlag = false;
+
+      registerInternalHook("command:new", async (event) => {
+        event.postHookActions.push(async () => {
+          sawFlag = event.context.myFlag === true;
+        });
+      });
+
+      registerInternalHook("command:new", async (event) => {
+        event.context.myFlag = true;
+      });
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+
+      expect(sawFlag).toBe(true);
+    });
+
+    it("post-hook action errors don't prevent other post-hook actions", async () => {
+      const executed: string[] = [];
+
+      registerInternalHook("command:new", async (event) => {
+        event.postHookActions.push(async () => {
+          throw new Error("boom");
+        });
+        event.postHookActions.push(async () => {
+          executed.push("second-action");
+        });
+      });
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+
+      expect(executed).toEqual(["second-action"]);
+    });
+
+    it("multiple handlers can push post-hook actions; all execute in order", async () => {
+      const order: string[] = [];
+
+      registerInternalHook("command:new", async (event) => {
+        event.postHookActions.push(() => {
+          order.push("from-handler-1");
+        });
+      });
+
+      registerInternalHook("command:new", async (event) => {
+        event.postHookActions.push(() => {
+          order.push("from-handler-2");
+        });
+      });
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+
+      expect(order).toEqual(["from-handler-1", "from-handler-2"]);
+    });
+
+    it("initializes postHookActions as empty array", () => {
+      const event = createInternalHookEvent("command", "new", "test-session");
+      expect(event.postHookActions).toEqual([]);
+    });
+
+    it("drains post-hook actions even when no handlers are registered", async () => {
+      const event = createInternalHookEvent("command", "new", "test-session");
+      let ran = false;
+      event.postHookActions.push(() => {
+        ran = true;
+      });
+      // No handlers registered — post-hooks should still drain
+      await triggerInternalHook(event);
+      expect(ran).toBe(true);
+    });
+
+    it("clears postHookActions after drain — re-trigger is a no-op", async () => {
+      const event = createInternalHookEvent("command", "new", "test-session");
+      let count = 0;
+      event.postHookActions.push(() => {
+        count++;
+      });
+      await triggerInternalHook(event);
+      expect(count).toBe(1);
+      // Second trigger on same event should not re-execute
+      await triggerInternalHook(event);
+      expect(count).toBe(1);
+      expect(event.postHookActions).toEqual([]);
+    });
+  });
+
   describe("getRegisteredEventKeys", () => {
     it("should return all registered event keys", () => {
       registerInternalHook("command:new", vi.fn());
