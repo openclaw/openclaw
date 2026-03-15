@@ -25,7 +25,9 @@ function resolveRuntimeStoreKey(agentDir?: string): string {
 }
 
 function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
-  return structuredClone(store);
+  // Use JSON.parse instead of structuredClone to avoid native (C++) memory accumulation.
+  // Auth profile stores contain only JSON-serializable data, so this is safe.
+  return JSON.parse(JSON.stringify(store));
 }
 
 function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | null {
