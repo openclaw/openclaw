@@ -103,7 +103,7 @@ export async function sendDiscordComponentMessage(
         `Component file block expects attachment "${expectedAttachmentName}", but the uploaded file is "${fileName}". Update components.blocks[].file or provide a matching filename.`,
       );
     }
-    const fileData = toDiscordFileBlob(media.buffer);
+    const fileData = toDiscordFileBlob(media.buffer, media.contentType);
     files = [{ data: fileData, name: fileName }];
   } else if (expectedAttachmentName) {
     throw new Error(

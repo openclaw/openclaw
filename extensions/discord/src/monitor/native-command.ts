@@ -1774,7 +1774,10 @@ async function deliverDiscordInteractionReply(params: {
   const text = payload.text ?? "";
 
   let hasReplied = false;
-  const sendMessage = async (content: string, files?: { name: string; data: Buffer }[]) => {
+  const sendMessage = async (
+    content: string,
+    files?: { name: string; data: Buffer; contentType?: string }[],
+  ) => {
     const payload =
       files && files.length > 0
         ? {
@@ -1784,7 +1787,14 @@ async function deliverDiscordInteractionReply(params: {
                 return { name: file.name, data: file.data };
               }
               const arrayBuffer = Uint8Array.from(file.data).buffer;
-              return { name: file.name, data: new Blob([arrayBuffer]) };
+              // Preserve the original content-type so Discord receives the correct MIME type.
+              return {
+                name: file.name,
+                data: new Blob(
+                  [arrayBuffer],
+                  file.contentType ? { type: file.contentType } : undefined,
+                ),
+              };
             }),
           }
         : { content };
@@ -1808,6 +1818,7 @@ async function deliverDiscordInteractionReply(params: {
         return {
           name: loaded.fileName ?? "upload",
           data: loaded.buffer,
+          contentType: loaded.contentType,
         };
       }),
     );

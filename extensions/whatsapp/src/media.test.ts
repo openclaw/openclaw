@@ -345,6 +345,63 @@ describe("web media loading", () => {
     expect(result.contentType).toBe("image/jpeg");
     expect(result.buffer.length).toBeLessThanOrEqual(fallbackPngCap);
   });
+
+  it("preserves WebP from URL without JPEG conversion", async () => {
+    // Minimal valid WebP (1x1 lossy) generated via sharp.
+    const webpBuffer = await sharp({
+      create: { width: 1, height: 1, channels: 3, background: "#ff0000" },
+    })
+      .webp()
+      .toBuffer();
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      body: true,
+      arrayBuffer: async () =>
+        webpBuffer.buffer.slice(
+          webpBuffer.byteOffset,
+          webpBuffer.byteOffset + webpBuffer.byteLength,
+        ),
+      headers: { get: () => "image/webp" },
+      status: 200,
+    } as unknown as Response);
+
+    const result = await loadWebMedia("https://example.com/sticker.webp", 1024 * 1024);
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/webp");
+    // WebP magic: starts with "RIFF"
+    expect(result.buffer.slice(0, 4).toString()).toBe("RIFF");
+
+    fetchMock.mockRestore();
+  });
+
+  it("preserves WebP from local file without optimization", async () => {
+    const webpBuffer = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: "#0000ff" },
+    })
+      .webp()
+      .toBuffer();
+    const webpFile = await writeTempFile(webpBuffer, ".webp");
+
+    const result = await loadWebMedia(webpFile, 1024 * 1024);
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/webp");
+    // Buffer should be unchanged (no optimization applied).
+    expect(result.buffer.length).toBe(webpBuffer.length);
+  });
+
+  it("throws descriptive error when WebP exceeds size cap", async () => {
+    const webpBuffer = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: "#0000ff" },
+    })
+      .webp()
+      .toBuffer();
+    const webpFile = await writeTempFile(webpBuffer, ".webp");
+
+    await expect(loadWebMedia(webpFile, { maxBytes: 1 })).rejects.toThrow(/WebP exceeds/i);
+  });
 });
 
 describe("Discord voice message input hardening", () => {
