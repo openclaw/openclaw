@@ -172,6 +172,10 @@
   display: none;
 }
 
+.chat-tools-summary::marker {
+  content: "";
+}
+
 .chat-tools-summary::before {
   content: "▸";
   font-size: 10px;
@@ -257,6 +261,10 @@
   display: none;
 }
 
+.chat-json-summary::marker {
+  content: "";
+}
+
 .chat-json-summary::before {
   content: "▸";
   font-size: 10px;
@@ -339,6 +347,10 @@
 
 .chat-tool-msg-summary::-webkit-details-marker {
   display: none;
+}
+
+.chat-tool-msg-summary::marker {
+  content: "";
 }
 
 .chat-tool-msg-summary::before {
