@@ -35,6 +35,7 @@ const {
   createDiscordMessageHandlerMock,
   createNoopThreadBindingManagerMock,
   createThreadBindingManagerMock,
+  reconcileDiscordNativeCommandsMock,
   reconcileAcpThreadBindingsOnStartupMock,
   createdBindingManagers,
   getAcpSessionStatusMock,
@@ -80,6 +81,18 @@ const {
       createdBindingManagers.push(manager);
       return manager;
     }),
+    reconcileDiscordNativeCommandsMock: vi.fn(async () => ({
+      mode: "reconcile",
+      liveCount: 0,
+      savedCount: 0,
+      summary: {
+        unchanged: 0,
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        leftAlone: 0,
+      },
+    })),
     reconcileAcpThreadBindingsOnStartupMock: vi.fn(() => ({
       checked: 0,
       removed: 0,
@@ -151,12 +164,24 @@ vi.mock("@buape/carbon", () => {
   }
   class Client {
     listeners: unknown[];
-    rest: { put: ReturnType<typeof vi.fn> };
+    rest: {
+      delete: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+      patch: ReturnType<typeof vi.fn>;
+      post: ReturnType<typeof vi.fn>;
+      put: ReturnType<typeof vi.fn>;
+    };
     options: unknown;
     constructor(options: unknown, handlers: { listeners?: unknown[] }) {
       this.options = options;
       this.listeners = handlers.listeners ?? [];
-      this.rest = { put: vi.fn(async () => undefined) };
+      this.rest = {
+        delete: vi.fn(async () => undefined),
+        get: vi.fn(async () => []),
+        patch: vi.fn(async () => undefined),
+        post: vi.fn(async () => undefined),
+        put: vi.fn(async () => undefined),
+      };
       clientConstructorOptionsMock(options);
     }
     async handleDeployRequest() {
@@ -248,6 +273,18 @@ vi.mock("../token.js", () => ({
 }));
 
 vi.mock("../voice/command.js", () => ({
+  buildDiscordVoiceCommandDeploymentDefinition: () => ({
+    name: "vc",
+    description: "Voice channel controls",
+    type: 1,
+    options: [
+      {
+        name: "join",
+        description: "Join a voice channel",
+        type: 1,
+      },
+    ],
+  }),
   createDiscordVoiceCommand: () => ({ name: "voice-command" }),
 }));
 
@@ -309,6 +346,10 @@ vi.mock("./native-command.js", () => ({
   createDiscordModelPickerFallbackButton: () => ({ id: "model-fallback-btn" }),
   createDiscordModelPickerFallbackSelect: () => ({ id: "model-fallback-select" }),
   createDiscordNativeCommand: createDiscordNativeCommandMock,
+}));
+
+vi.mock("./native-command-state.js", () => ({
+  reconcileDiscordNativeCommands: reconcileDiscordNativeCommandsMock,
 }));
 
 vi.mock("./presence.js", () => ({
@@ -413,6 +454,18 @@ describe("monitorDiscordProvider", () => {
     createDiscordNativeCommandMock.mockClear().mockReturnValue({ name: "mock-command" });
     createNoopThreadBindingManagerMock.mockClear();
     createThreadBindingManagerMock.mockClear();
+    reconcileDiscordNativeCommandsMock.mockClear().mockResolvedValue({
+      mode: "reconcile",
+      liveCount: 0,
+      savedCount: 0,
+      summary: {
+        unchanged: 0,
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        leftAlone: 0,
+      },
+    });
     reconcileAcpThreadBindingsOnStartupMock.mockClear().mockReturnValue({
       checked: 0,
       removed: 0,
@@ -795,19 +848,91 @@ describe("monitorDiscordProvider", () => {
       },
     );
     rateLimitError.discordCode = 30034;
-    clientHandleDeployRequestMock.mockRejectedValueOnce(rateLimitError);
+    reconcileDiscordNativeCommandsMock.mockRejectedValueOnce(rateLimitError);
 
     await monitorDiscordProvider({
       config: baseConfig(),
       runtime,
     });
 
-    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
+    expect(reconcileDiscordNativeCommandsMock).toHaveBeenCalledTimes(1);
     expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("native command deploy skipped"),
+      expect.stringContaining("native command reconcile skipped"),
     );
+  });
+
+  it("uses the reconcile path by default", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(reconcileDiscordNativeCommandsMock).toHaveBeenCalledTimes(1);
+    expect(clientHandleDeployRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the legacy deploy path for a guild-scoped command", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    createDiscordNativeCommandMock.mockReturnValue({
+      name: "mock-command",
+      guildIds: ["guild-1"],
+    } as unknown as { name: string });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(reconcileDiscordNativeCommandsMock).not.toHaveBeenCalled();
+    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes plugin commands into the reconcile path", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    getPluginCommandSpecsMock.mockReturnValue([
+      { name: "cron_jobs", description: "List cron jobs", acceptsArgs: false },
+    ]);
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(reconcileDiscordNativeCommandsMock).toHaveBeenCalledTimes(1);
+    const firstCallArg = (
+      reconcileDiscordNativeCommandsMock.mock.calls.at(0) as unknown as
+        | [{ commands?: Array<{ name: string }> }]
+        | undefined
+    )?.[0];
+    const commands = firstCallArg?.commands;
+    expect(commands?.map((command) => command.name)).toEqual(["mock-command", "mock-command"]);
+  });
+
+  it("passes the managed voice command into the reconcile path when voice is enabled", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    mockResolvedDiscordAccountConfig({
+      voice: { enabled: true },
+    });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const firstCallArg = (
+      reconcileDiscordNativeCommandsMock.mock.calls.at(0) as unknown as
+        | [
+            {
+              commands?: Array<{ name: string }>;
+            },
+          ]
+        | undefined
+    )?.[0];
+    expect(firstCallArg?.commands?.some((entry) => entry.name === "voice-command")).toBe(true);
   });
 
   it("reports connected status on startup and shutdown", async () => {

@@ -74,6 +74,7 @@ import {
   registerDiscordListener,
 } from "./listeners.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
+import { reconcileDiscordNativeCommands } from "./native-command-state.js";
 import {
   createDiscordCommandArgFallbackButton,
   createDiscordModelPickerFallbackButton,
@@ -105,6 +106,7 @@ export type MonitorDiscordOpts = {
 };
 
 type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
+type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 
 type DiscordVoiceRuntimeModule = typeof import("../voice/manager.runtime.js");
 
@@ -237,15 +239,19 @@ async function probeDiscordAcpBindingHealth(params: {
   return { status: "healthy" };
 }
 
-async function deployDiscordCommands(params: {
+type DiscordNativeCommandSyncOutcome = "applied" | "skipped" | "failed";
+
+async function runDiscordNativeCommandSyncOperation(params: {
   client: Client;
   runtime: RuntimeEnv;
   enabled: boolean;
   accountId?: string;
   startupStartedAt?: number;
-}) {
+  action: "deploy" | "reconcile";
+  operation: () => Promise<void>;
+}): Promise<DiscordNativeCommandSyncOutcome> {
   if (!params.enabled) {
-    return;
+    return "skipped";
   }
   const startupStartedAt = params.startupStartedAt ?? Date.now();
   const accountId = params.accountId ?? "default";
@@ -298,16 +304,16 @@ async function deployDiscordCommands(params: {
     }
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        await params.client.handleDeployRequest();
-        return;
+        await params.operation();
+        return "applied";
       } catch (err) {
         if (isDailyCreateLimit(err)) {
           params.runtime.log?.(
             warn(
-              `discord: native command deploy skipped for ${accountId}; daily application command create limit reached. Existing slash commands stay active until Discord resets the quota.`,
+              `discord: native command ${params.action} skipped for ${accountId}; daily application command create limit reached. Existing slash commands stay active until Discord resets the quota.`,
             ),
           );
-          return;
+          return "skipped";
         }
         if (!(err instanceof RateLimitError) || attempt >= maxAttempts) {
           throw err;
@@ -316,14 +322,14 @@ async function deployDiscordCommands(params: {
         if (retryAfterMs > maxRetryDelayMs) {
           params.runtime.log?.(
             warn(
-              `discord: native command deploy skipped for ${accountId}; retry_after=${retryAfterMs}ms exceeds startup budget. Existing slash commands stay active.`,
+              `discord: native command ${params.action} skipped for ${accountId}; retry_after=${retryAfterMs}ms exceeds startup budget. Existing slash commands stay active.`,
             ),
           );
-          return;
+          return "skipped";
         }
         if (shouldLogVerbose()) {
           params.runtime.log?.(
-            `discord startup [${accountId}] deploy-retry ${Math.max(0, Date.now() - startupStartedAt)}ms attempt=${attempt}/${maxAttempts - 1} retryAfterMs=${retryAfterMs} scope=${err.scope ?? "unknown"} code=${err.discordCode ?? "unknown"}`,
+            `discord startup [${accountId}] ${params.action}-retry ${Math.max(0, Date.now() - startupStartedAt)}ms attempt=${attempt}/${maxAttempts - 1} retryAfterMs=${retryAfterMs} scope=${err.scope ?? "unknown"} code=${err.discordCode ?? "unknown"}`,
           );
         }
         await sleep(retryAfterMs);
@@ -332,14 +338,39 @@ async function deployDiscordCommands(params: {
   } catch (err) {
     const details = formatDiscordDeployErrorDetails(err);
     params.runtime.error?.(
-      danger(`discord: failed to deploy native commands: ${formatErrorMessage(err)}${details}`),
+      danger(
+        `discord: failed to ${params.action} native commands: ${formatErrorMessage(err)}${details}`,
+      ),
     );
+    return "failed";
   } finally {
     if (restClient.options) {
       restClient.options.queueRequests = previousQueueRequests;
     }
     restClient.put = originalPut;
   }
+
+  return "failed";
+}
+
+async function deployDiscordCommands(params: {
+  client: Client;
+  runtime: RuntimeEnv;
+  enabled: boolean;
+  accountId?: string;
+  startupStartedAt?: number;
+}): Promise<DiscordNativeCommandSyncOutcome> {
+  return await runDiscordNativeCommandSyncOperation({
+    action: "deploy",
+    client: params.client,
+    runtime: params.runtime,
+    enabled: params.enabled,
+    accountId: params.accountId,
+    startupStartedAt: params.startupStartedAt,
+    operation: async () => {
+      await params.client.handleDeployRequest();
+    },
+  });
 }
 
 function formatDiscordStartupGatewayState(gateway?: GatewayPlugin): string {
@@ -368,6 +399,76 @@ function logDiscordStartupPhase(params: {
   );
 }
 
+function resolveDiscordNativeCommandReconcileFallbackReason(params: {
+  client: Client;
+  commands: BaseCommand[];
+}): string | null {
+  const clientOptions = params.client as unknown as {
+    options?: { devGuilds?: string[] };
+  };
+  if (
+    Array.isArray(clientOptions.options?.devGuilds) &&
+    clientOptions.options.devGuilds.length > 0
+  ) {
+    return "devGuilds are configured";
+  }
+  for (const command of params.commands) {
+    const guildIds = (command as { guildIds?: string[] }).guildIds;
+    if (Array.isArray(guildIds) && guildIds.length > 0) {
+      return `command "/${command.name}" is guild-scoped`;
+    }
+  }
+  return null;
+}
+
+async function deployDiscordCommandsWithOptionalReconcile(params: {
+  client: Client;
+  commands: BaseCommand[];
+  runtime: RuntimeEnv;
+  enabled: boolean;
+  accountId: string;
+  applicationId: string;
+  startupStartedAt?: number;
+}) {
+  if (!params.enabled) {
+    return;
+  }
+  const reconcileFallbackReason = resolveDiscordNativeCommandReconcileFallbackReason({
+    client: params.client,
+    commands: params.commands,
+  });
+  if (reconcileFallbackReason) {
+    params.runtime.log?.(
+      `discord: native command reconcile only supports global commands; falling back to legacy deploy path because ${reconcileFallbackReason}`,
+    );
+    await deployDiscordCommands({
+      client: params.client,
+      runtime: params.runtime,
+      enabled: params.enabled,
+      accountId: params.accountId,
+      startupStartedAt: params.startupStartedAt,
+    });
+    return;
+  }
+  params.runtime.log?.("discord: native commands using reconcile path");
+  await runDiscordNativeCommandSyncOperation({
+    action: "reconcile",
+    client: params.client,
+    runtime: params.runtime,
+    enabled: params.enabled,
+    accountId: params.accountId,
+    startupStartedAt: params.startupStartedAt,
+    operation: async () => {
+      await reconcileDiscordNativeCommands({
+        client: params.client,
+        runtime: params.runtime,
+        accountId: params.accountId,
+        applicationId: params.applicationId,
+        commands: params.commands,
+      });
+    },
+  });
+}
 function formatDiscordDeployErrorDetails(err: unknown): string {
   if (!err || typeof err !== "object") {
     return "";
@@ -524,7 +625,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       emptyText: "any",
     });
     logVerbose(
-      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"} threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
+      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} nativeReconcile=on accessGroups=${useAccessGroups ? "on" : "off"} threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
     );
   }
 
@@ -790,13 +891,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       phase: "deploy-commands:start",
       startAt: startupStartedAt,
       gateway: lifecycleGateway,
-      details: `native=${nativeEnabled ? "on" : "off"} commandCount=${commands.length}`,
+      details: `native=${nativeEnabled ? "on" : "off"} reconcile=on commandCount=${commands.length}`,
     });
-    await deployDiscordCommands({
+    await deployDiscordCommandsWithOptionalReconcile({
       client,
+      commands,
       runtime,
       enabled: nativeEnabled,
       accountId: account.accountId,
+      applicationId,
       startupStartedAt,
     });
     logDiscordStartupPhase({
