@@ -315,13 +315,12 @@ export async function tryDispatchAcpReply(params: {
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
     const routedCounts = delivery.getRoutedCounts();
-    // Only deliver final TTS/text if no final reply has been sent yet.
-    // Check routedCounts.final because block delivery is expected during streaming
-    // and should not prevent the final fallback.
+    // Skip fallback if any routed delivery has already happened (block or final).
+    // This prevents duplicate output in normal ACP flows where blocks are sent first.
     // See analogous guard in dispatch-from-config.ts (replies.length === 0).
-    const hasFinalDelivered = routedCounts.final > 0;
+    const hasRoutedDelivery = routedCounts.block > 0 || routedCounts.final > 0;
     // Skip fallback for ttsMode="all" because blocks were already processed with TTS.
-    const shouldSkipFallback = hasFinalDelivered || ttsMode === "all";
+    const shouldSkipFallback = hasRoutedDelivery || ttsMode === "all";
     if (!shouldSkipFallback && accumulatedBlockText.trim()) {
       let ttsSucceeded = false;
       // Only attempt final TTS synthesis for ttsMode="final".
@@ -354,9 +353,12 @@ export async function tryDispatchAcpReply(params: {
         }
       }
       // Fallback to text-only delivery (no TTS) if TTS didn't succeed.
-      // Use delivery.deliver to ensure proper routing in cross-provider ACP turns.
+      // For routed flows, use delivery.deliver for proper routing.
+      // For non-routed flows, use dispatcher directly to avoid re-running TTS.
       if (!ttsSucceeded) {
-        const delivered = await delivery.deliver("final", { text: accumulatedBlockText });
+        const delivered = params.shouldRouteToOriginating
+          ? await delivery.deliver("final", { text: accumulatedBlockText })
+          : params.dispatcher.sendFinalReply({ text: accumulatedBlockText });
         queuedFinal = queuedFinal || delivered;
       }
     }
