@@ -388,10 +388,7 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  const logging = cfg.logging;
-  if (!logging) {
-    return cfg;
-  }
+  const logging = cfg.logging ?? {};
   if (logging.redactSensitive) {
     return cfg;
   }
