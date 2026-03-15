@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
+  formatAssistantErrorForTranscript,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
 } from "./pi-embedded-helpers.js";
@@ -151,5 +152,21 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
+  });
+});
+
+describe("formatAssistantErrorForTranscript", () => {
+  it("reduces verbose API payloads to a short user-safe line", () => {
+    const text = formatAssistantErrorForTranscript(
+      '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}',
+    );
+    expect(text).toBe("The AI service is temporarily overloaded. Please try again in a moment.");
+  });
+
+  it("caps very long unknown errors", () => {
+    const raw = `boom:${"x".repeat(500)}`;
+    const text = formatAssistantErrorForTranscript(raw);
+    expect(text.length).toBeLessThanOrEqual(221);
+    expect(text.endsWith("…")).toBe(true);
   });
 });
