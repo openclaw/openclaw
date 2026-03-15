@@ -10,6 +10,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import JSON5 from "json5";
 
 export const DEFAULT_KEEP_BACKUPS = 10;
 
@@ -271,9 +272,9 @@ export async function attemptConfigRollback(
     try {
       const content = await ioFs.readFile(backup.path);
 
-      // Validate the backup content is valid JSON
+      // Validate the backup content is valid JSON5 (supports comments, trailing commas)
       try {
-        JSON.parse(content);
+        JSON5.parse(content);
       } catch {
         continue; // Skip invalid backups
       }
