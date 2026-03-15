@@ -688,12 +688,47 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
-  "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
+  "tools.web.search.enabled":
+    "Enable managed web_search and optional Codex-native search for eligible models.",
   "tools.web.search.provider":
     "Search provider id. Auto-detected from available API keys if omitted.",
   "tools.web.search.maxResults": "Number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
+  "tools.web.search.openaiCodex.enabled":
+    "Enable native Codex web search for Codex-capable models.",
+  "tools.web.search.openaiCodex.mode":
+    'Native Codex web search mode: "cached" (default) or "live".',
+  "tools.web.search.openaiCodex.allowedDomains":
+    "Optional domain allowlist passed to the native Codex web_search tool.",
+  "tools.web.search.openaiCodex.contextSize":
+    'Native Codex search context size hint: "low", "medium", or "high".',
+  "tools.web.search.openaiCodex.userLocation.country":
+    "Approximate country sent to native Codex web search.",
+  "tools.web.search.openaiCodex.userLocation.region":
+    "Approximate region/state sent to native Codex web search.",
+  "tools.web.search.openaiCodex.userLocation.city":
+    "Approximate city sent to native Codex web search.",
+  "tools.web.search.openaiCodex.userLocation.timezone":
+    "Approximate timezone sent to native Codex web search.",
+  "tools.web.search.brave.mode":
+    'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
+  "tools.web.search.gemini.apiKey":
+    "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
+  "tools.web.search.gemini.model": 'Gemini model override (default: "gemini-2.5-flash").',
+  "tools.web.search.grok.apiKey": "Grok (xAI) API key (fallback: XAI_API_KEY env var).", // pragma: allowlist secret
+  "tools.web.search.grok.model": 'Grok model override (default: "grok-4-1-fast").',
+  "tools.web.search.kimi.apiKey":
+    "Moonshot/Kimi API key (fallback: KIMI_API_KEY or MOONSHOT_API_KEY env var).",
+  "tools.web.search.kimi.baseUrl":
+    'Kimi base URL override (default: "https://api.moonshot.ai/v1").',
+  "tools.web.search.kimi.model": 'Kimi model override (default: "moonshot-v1-128k").',
+  "tools.web.search.perplexity.apiKey":
+    "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). Direct Perplexity keys default to the Search API; OpenRouter keys use Sonar chat completions.",
+  "tools.web.search.perplexity.baseUrl":
+    "Optional Perplexity/OpenRouter chat-completions base URL override. Setting this opts Perplexity into the legacy Sonar/OpenRouter compatibility path.",
+  "tools.web.search.perplexity.model":
+    'Optional Sonar/OpenRouter model override (default: "perplexity/sonar-pro"). Setting this opts Perplexity into the legacy chat-completions compatibility path.',
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":

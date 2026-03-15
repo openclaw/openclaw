@@ -480,6 +480,8 @@ export async function compactEmbeddedPiSessionDirect(
       modelProvider: model.provider,
       modelId,
       modelCompat: effectiveModel.compat,
+      modelApi: model.api,
+      modelCompat: effectiveModel.compat,
       modelContextWindowTokens: ctxInfo.tokens,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });

@@ -536,6 +536,62 @@ function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" 
   return "oauth";
 }
 
+async function runBuiltInOpenAICodexLogin(params: {
+  opts: LoginOptions;
+  runtime: RuntimeEnv;
+  prompter: ReturnType<typeof createClackPrompter>;
+  agentDir: string;
+}) {
+  const creds = await loginOpenAICodexOAuth({
+    prompter: params.prompter,
+    runtime: params.runtime,
+    isRemote: isRemoteEnvironment(),
+    openUrl: async (url) => {
+      await openUrl(url);
+    },
+    localBrowserMessage: "Complete sign-in in browser…",
+  });
+  if (!creds) {
+    throw new Error("OpenAI Codex OAuth did not return credentials.");
+  }
+
+  const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
+    syncSiblingAgents: true,
+  });
+  await updateConfig((cfg) => {
+    let next = applyAuthProfileConfig(cfg, {
+      profileId,
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    if (params.opts.setDefault) {
+      next = applyOpenAICodexModelDefault(next).next;
+    }
+    return next;
+  });
+
+  logConfigUpdated(params.runtime);
+  params.runtime.log(`Auth profile: ${profileId} (openai-codex/oauth)`);
+  if (params.opts.setDefault) {
+    params.runtime.log(`Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`);
+  } else {
+    params.runtime.log(
+      `Default model available: ${OPENAI_CODEX_DEFAULT_MODEL} (use --set-default to apply)`,
+    );
+  }
+  params.runtime.log(
+    "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
+  );
+}
+
+function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {
+  if (providerId !== "openai-codex") {
+    return;
+  }
+  runtime.log(
+    "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
+  );
+}
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error("models auth login requires an interactive TTY.");
@@ -587,4 +643,5 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     prompter,
     setDefault: opts.setDefault,
   });
+  maybeLogOpenAICodexNativeSearchTip(runtime, selectedProvider.id);
 }

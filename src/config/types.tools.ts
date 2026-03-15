@@ -497,7 +497,7 @@ export type ToolsConfig = {
   byProvider?: Record<string, ToolPolicyConfig>;
   web?: {
     search?: {
-      /** Enable web search tool (default: true when API key is present). */
+      /** Enable managed web_search and optional Codex-native web search. */
       enabled?: boolean;
       /** Search provider id. */
       provider?: string;
@@ -509,6 +509,24 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
+      /** Optional native Codex web search for Codex-capable models. */
+      openaiCodex?: {
+        /** Enable native Codex web search for eligible models. */
+        enabled?: boolean;
+        /** Use cached or live external web access. Default: "cached". */
+        mode?: "cached" | "live";
+        /** Optional allowlist of domains passed to the native Codex tool. */
+        allowedDomains?: string[];
+        /** Optional Codex native search context size hint. */
+        contextSize?: "low" | "medium" | "high";
+        /** Optional approximate user location passed to the native Codex tool. */
+        userLocation?: {
+          country?: string;
+          region?: string;
+          city?: string;
+          timezone?: string;
+        };
+      };
       /** @deprecated Legacy Brave scoped config. */
       brave?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Firecrawl scoped config. */

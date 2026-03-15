@@ -260,6 +260,37 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
   }
 }).optional();
 
+const TrimmedOptionalConfigStringSchema = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}, z.string().optional());
+
+const CodexAllowedDomainsSchema = z
+  .array(z.string())
+  .transform((values) => {
+    const deduped = [
+      ...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)),
+    ];
+    return deduped.length > 0 ? deduped : undefined;
+  })
+  .optional();
+
+const CodexUserLocationSchema = z
+  .object({
+    country: TrimmedOptionalConfigStringSchema,
+    region: TrimmedOptionalConfigStringSchema,
+    city: TrimmedOptionalConfigStringSchema,
+    timezone: TrimmedOptionalConfigStringSchema,
+  })
+  .strict()
+  .transform((value) => {
+    return value.country || value.region || value.city || value.timezone ? value : undefined;
+  })
+  .optional();
+
 export const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -268,6 +299,16 @@ export const ToolsWebSearchSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
+    openaiCodex: z
+      .object({
+        enabled: z.boolean().optional(),
+        mode: z.union([z.literal("cached"), z.literal("live")]).optional(),
+        allowedDomains: CodexAllowedDomainsSchema,
+        contextSize: z.union([z.literal("low"), z.literal("medium"), z.literal("high")]).optional(),
+        userLocation: CodexUserLocationSchema,
+      })
+      .strict()
+      .optional(),
     brave: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),

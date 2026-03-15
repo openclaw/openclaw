@@ -154,8 +154,11 @@ function createEnabledWebSearchConfig(provider: string, pluginEntry: Record<stri
   });
 }
 
-function setupBaseWizardState() {
-  mocks.readConfigFileSnapshot.mockResolvedValue(EMPTY_CONFIG_SNAPSHOT);
+function setupBaseWizardState(config: OpenClawConfig = {}) {
+  mocks.readConfigFileSnapshot.mockResolvedValue({
+    ...EMPTY_CONFIG_SNAPSHOT,
+    config,
+  });
   mocks.resolveGatewayPort.mockReturnValue(18789);
   mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
   mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
@@ -363,6 +366,89 @@ describe("runConfigureWizard", () => {
     await runWebConfigureWizard();
 
     expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.setupSearch).toHaveBeenCalledOnce();
+  });
+
+  it("can enable native Codex search without configuring a managed provider", async () => {
+    setupBaseWizardState({
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+    });
+    queueWizardPrompts({
+      select: ["local", "cached"],
+      confirm: [true, true, false, true],
+    });
+
+    await runWebConfigureWizard();
+
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          web: expect.objectContaining({
+            search: expect.objectContaining({
+              enabled: true,
+              openaiCodex: expect.objectContaining({
+                enabled: true,
+                mode: "cached",
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(mocks.setupSearch).not.toHaveBeenCalled();
+  });
+
+  it("preserves disabled native Codex search when toggled off", async () => {
+    setupBaseWizardState({
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            openaiCodex: {
+              enabled: true,
+              mode: "live",
+            },
+          },
+        },
+      },
+    });
+    queueWizardPrompts({
+      select: ["firecrawl"],
+      confirm: [true, false, true, false],
+    });
+
+    await runWebConfigureWizard();
+
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          web: expect.objectContaining({
+            search: expect.objectContaining({
+              enabled: true,
+              openaiCodex: expect.objectContaining({
+                enabled: false,
+                mode: "live",
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
   });
 });
