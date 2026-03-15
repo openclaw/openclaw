@@ -7,7 +7,7 @@ title: "Zalo"
 
 # Zalo (Bot API)
 
-Status: experimental. DMs are supported; group handling is available with explicit group policy controls.
+Status: experimental. DMs are supported. For the currently tested Zalo Bot Creator / Marketplace bot flow, groups are not currently available.
 
 ## Plugin required
 
@@ -25,7 +25,7 @@ Zalo ships as a plugin and is not bundled with the core install.
    - Or pick **Zalo** in onboarding and confirm the install prompt
 2. Set the token:
    - Env: `ZALO_BOT_TOKEN=...`
-   - Or config: `channels.zalo.botToken: "..."`.
+   - Or config: `channels.zalo.accounts.default.botToken: "..."`.
 3. Restart the gateway (or finish onboarding).
 4. DM access is pairing by default; approve the pairing code on first contact.
 
@@ -36,8 +36,13 @@ Minimal config:
   channels: {
     zalo: {
       enabled: true,
-      botToken: "12345689:abc-xyz",
-      dmPolicy: "pairing",
+      accounts: {
+        default: {
+          botToken: "12345689:abc-xyz",
+          dmPolicy: "pairing",
+          groupPolicy: "disabled",
+        },
+      },
     },
   },
 }
@@ -48,10 +53,13 @@ Minimal config:
 Zalo is a Vietnam-focused messaging app; its Bot API lets the Gateway run a bot for 1:1 conversations.
 It is a good fit for support or notifications where you want deterministic routing back to Zalo.
 
+This page reflects the currently verified OpenClaw behavior for **Zalo Bot Creator / Marketplace bots**.
+**Zalo Official Account (OA) bots** are a different Zalo product surface and may behave differently.
+
 - A Zalo Bot API channel owned by the Gateway.
 - Deterministic routing: replies go back to Zalo; the model never chooses channels.
 - DMs share the agent's main session.
-- Groups are supported with policy controls (`groupPolicy` + `groupAllowFrom`) and default to fail-closed allowlist behavior.
+- For the currently tested Marketplace bot flow, groups are not currently available because the bot could not be added to a group in testing.
 
 ## Setup (fast path)
 
@@ -59,7 +67,7 @@ It is a good fit for support or notifications where you want deterministic routi
 
 1. Go to [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) and sign in.
 2. Create a new bot and configure its settings.
-3. Copy the bot token (format: `12345689:abc-xyz`).
+3. Copy the full bot token (typically `numeric_id:secret`). In current testing, the usable runtime token appeared in the bot's welcome message after creation.
 
 ### 2) Configure the token (env or config)
 
@@ -70,8 +78,13 @@ Example:
   channels: {
     zalo: {
       enabled: true,
-      botToken: "12345689:abc-xyz",
-      dmPolicy: "pairing",
+      accounts: {
+        default: {
+          botToken: "12345689:abc-xyz",
+          dmPolicy: "pairing",
+          groupPolicy: "disabled",
+        },
+      },
     },
   },
 }
@@ -109,13 +122,16 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
 
 ## Access control (Groups)
 
+For the currently tested **Zalo Bot Creator / Marketplace bot** flow, group support was not available in practice because the bot could not be added to a group at all.
+
+That means the group-related config keys below exist in the schema, but were not usable in current Marketplace-bot testing:
+
 - `channels.zalo.groupPolicy` controls group inbound handling: `open | allowlist | disabled`.
-- Default behavior is fail-closed: `allowlist`.
 - `channels.zalo.groupAllowFrom` restricts which sender IDs can trigger the bot in groups.
 - If `groupAllowFrom` is unset, Zalo falls back to `allowFrom` for sender checks.
-- `groupPolicy: "disabled"` blocks all group messages.
-- `groupPolicy: "open"` allows any group member (mention-gated).
 - Runtime note: if `channels.zalo` is missing entirely, runtime still falls back to `groupPolicy="allowlist"` for safety.
+
+If you are using a different Zalo bot product surface and have verified working group behavior, document that separately rather than assuming it matches the Marketplace-bot flow.
 
 ## Long-polling vs webhook
 
@@ -134,22 +150,30 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
 ## Supported message types
 
 - **Text messages**: Full support with 2000 character chunking.
-- **Image messages**: Download and process inbound images; send images via `sendPhoto`.
-- **Stickers**: Logged but not fully processed (no agent response).
-- **Unsupported types**: Logged (e.g., messages from protected users).
+- **Plain URLs in text**: Behave like normal text input.
+- **Link previews / rich link cards**: Did not reliably trigger a reply in current Marketplace-bot testing.
+- **Image messages**: Inbound image handling was not reliable in current Marketplace-bot testing (typing indicator without a final reply), so verify in your environment before relying on it.
+- **Stickers**: No normal agent response in current testing.
+- **Voice notes / audio files / video / generic file attachments**: No normal agent response in current testing.
+- **Unsupported types**: Logged (for example, messages from protected users).
 
 ## Capabilities
 
-| Feature         | Status                                                   |
-| --------------- | -------------------------------------------------------- |
-| Direct messages | ✅ Supported                                             |
-| Groups          | ⚠️ Supported with policy controls (allowlist by default) |
-| Media (images)  | ✅ Supported                                             |
-| Reactions       | ❌ Not supported                                         |
-| Threads         | ❌ Not supported                                         |
-| Polls           | ❌ Not supported                                         |
-| Native commands | ❌ Not supported                                         |
-| Streaming       | ⚠️ Blocked (2000 char limit)                             |
+| Feature                     | Status                                                                  |
+| --------------------------- | ----------------------------------------------------------------------- |
+| Direct messages             | ✅ Supported                                                            |
+| Groups                      | ❌ Not available in current Marketplace-bot testing                     |
+| Media (inbound images)      | ⚠️ Limited / verify in your environment                                 |
+| Plain URLs in text          | ✅ Supported                                                            |
+| Link previews               | ⚠️ Unreliable / no reply observed in current Marketplace-bot testing    |
+| Reactions                   | ❌ Not supported                                                        |
+| Stickers                    | ⚠️ Received but no normal agent reply observed                          |
+| Voice notes / audio / video | ❌ No normal agent reply observed in current Marketplace-bot testing    |
+| File attachments            | ❌ No normal agent reply observed in current Marketplace-bot testing    |
+| Threads                     | ❌ Not supported                                                        |
+| Polls                       | ❌ Not supported                                                        |
+| Native commands             | ❌ Not supported                                                        |
+| Streaming                   | ⚠️ Blocked (2000 char limit)                                            |
 
 ## Delivery targets (CLI/cron)
 
@@ -182,7 +206,7 @@ Provider options:
 - `channels.zalo.tokenFile`: read token from a regular file path. Symlinks are rejected.
 - `channels.zalo.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.zalo.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`. The wizard will ask for numeric IDs.
-- `channels.zalo.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
+- `channels.zalo.groupPolicy`: `open | allowlist | disabled` (default: allowlist). Present in config, but not usable for the current Marketplace-bot flow when the bot cannot be added to groups.
 - `channels.zalo.groupAllowFrom`: group sender allowlist (user IDs). Falls back to `allowFrom` when unset.
 - `channels.zalo.mediaMaxMb`: inbound/outbound media cap (MB, default 5).
 - `channels.zalo.webhookUrl`: enable webhook mode (HTTPS required).
