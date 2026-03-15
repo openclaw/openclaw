@@ -1,8 +1,10 @@
 import {
   installLaunchAgent,
   isLaunchAgentLoaded,
+  launchAgentPlistExists,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
+  repairLaunchAgentBootstrap,
   restartLaunchAgent,
   stopLaunchAgent,
   uninstallLaunchAgent,
@@ -64,6 +66,16 @@ export type GatewayService = {
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
   readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
+  /**
+   * Attempt to re-register and start a service that was previously installed
+   * but is no longer loaded (e.g. after macOS sleep/idle unloads the
+   * LaunchAgent).  Returns `{ ok: true }` when the service was successfully
+   * re-bootstrapped, `{ ok: false }` when the service definition does not
+   * exist on disk (caller should fall through to install hints).
+   *
+   * Optional — platforms that do not experience silent unloads can omit this.
+   */
+  repairNotLoaded?: (args: GatewayServiceEnvArgs) => Promise<{ ok: boolean; detail?: string }>;
 };
 
 export function describeGatewayServiceRestart(
@@ -105,6 +117,14 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     isLoaded: isLaunchAgentLoaded,
     readCommand: readLaunchAgentProgramArguments,
     readRuntime: readLaunchAgentRuntime,
+    repairNotLoaded: async (args) => {
+      const env = args.env ?? (process.env as Record<string, string | undefined>);
+      const plistExists = await launchAgentPlistExists(env);
+      if (!plistExists) {
+        return { ok: false, detail: "plist not found on disk" };
+      }
+      return await repairLaunchAgentBootstrap({ env });
+    },
   },
   linux: {
     label: "systemd",

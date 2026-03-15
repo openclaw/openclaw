@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   listOutput: "",
   printOutput: "",
   bootstrapError: "",
+  bootstrapCode: 1,
   kickstartError: "",
   kickstartFailuresRemaining: 0,
   dirs: new Set<string>(),
@@ -75,7 +76,7 @@ vi.mock("./exec-file.js", () => ({
       return { stdout: state.printOutput, stderr: "", code: 0 };
     }
     if (call[0] === "bootstrap" && state.bootstrapError) {
-      return { stdout: "", stderr: state.bootstrapError, code: 1 };
+      return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
     }
     if (call[0] === "kickstart" && state.kickstartError && state.kickstartFailuresRemaining > 0) {
       state.kickstartFailuresRemaining -= 1;
@@ -152,6 +153,7 @@ beforeEach(() => {
   state.listOutput = "";
   state.printOutput = "";
   state.bootstrapError = "";
+  state.bootstrapCode = 1;
   state.kickstartError = "";
   state.kickstartFailuresRemaining = 0;
   state.dirs.clear();
@@ -254,6 +256,49 @@ describe("launchd bootstrap repair", () => {
 
     expect(kickstartIndex).toBeGreaterThanOrEqual(0);
     expect(bootstrapIndex).toBeLessThan(kickstartIndex);
+  });
+
+  it("treats bootstrap exit 130 as success (race condition)", async () => {
+    state.bootstrapError = "Service already loaded";
+    state.bootstrapCode = 130;
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+    const repair = await repairLaunchAgentBootstrap({ env });
+    expect(repair.ok).toBe(true);
+    // Should still kickstart even though bootstrap returned 130
+    const kickCalls = state.launchctlCalls.filter((c) => c[0] === "kickstart");
+    expect(kickCalls.length).toBe(1);
+  });
+
+  it("treats 'already exists in domain' as success (race condition)", async () => {
+    state.bootstrapError =
+      "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
+    state.bootstrapCode = 1;
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+    const repair = await repairLaunchAgentBootstrap({ env });
+    expect(repair.ok).toBe(true);
+    const kickCalls = state.launchctlCalls.filter((c) => c[0] === "kickstart");
+    expect(kickCalls.length).toBe(1);
+  });
+
+  it("returns ok:false for non-race bootstrap failures", async () => {
+    state.bootstrapError = "Could not find specified service";
+    state.bootstrapCode = 1;
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+    const repair = await repairLaunchAgentBootstrap({ env });
+    expect(repair.ok).toBe(false);
+    expect(repair.detail).toContain("Could not find specified service");
+    // Should NOT kickstart when bootstrap genuinely failed
+    const kickCalls = state.launchctlCalls.filter((c) => c[0] === "kickstart");
+    expect(kickCalls.length).toBe(0);
   });
 });
 

@@ -194,13 +194,41 @@ export async function runServiceStart(params: {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "start", json });
 
-  const loaded = await resolveServiceLoadedOrFail({
+  let loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
     service: params.service,
     fail,
   });
   if (loaded === null) {
     return;
+  }
+  if (!loaded && params.service.repairNotLoaded) {
+    // Pre-flight config validation before attempting repair — don't re-register
+    // a service that will immediately crash due to invalid config.  (#35862)
+    const configError = await getConfigValidationError();
+    if (configError) {
+      fail(
+        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+      );
+      return;
+    }
+    // The service was previously installed but is no longer loaded (e.g.
+    // macOS LaunchAgent silently unloaded after sleep/idle).  Attempt to
+    // re-register the existing service definition before falling through
+    // to the "not loaded" install hints.  See #43602.
+    try {
+      const repair = await params.service.repairNotLoaded({ env: process.env });
+      if (repair.ok) {
+        loaded = true;
+        if (!json) {
+          defaultRuntime.log(
+            `${params.serviceNoun} was not loaded — re-registered from existing service definition.`,
+          );
+        }
+      }
+    } catch {
+      // Best-effort repair; fall through to normal not-loaded handling.
+    }
   }
   if (!loaded) {
     await handleServiceNotLoaded({
@@ -356,7 +384,7 @@ export async function runServiceRestart(params: {
     return true;
   };
 
-  const loaded = await resolveServiceLoadedOrFail({
+  let loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
     service: params.service,
     fail,
@@ -383,6 +411,26 @@ export async function runServiceRestart(params: {
     } catch (err) {
       fail(`${params.serviceNoun} restart failed: ${String(err)}`);
       return false;
+    }
+    if (!handledNotLoaded && params.service.repairNotLoaded) {
+      // No running process to signal, but the service definition may still
+      // exist on disk (e.g. macOS LaunchAgent unloaded after sleep/idle).
+      // Re-register it so `restart` can proceed normally.  See #43602.
+      try {
+        const repair = await params.service.repairNotLoaded({ env: process.env });
+        if (repair.ok) {
+          loaded = true;
+          handledNotLoaded = {
+            result: "restarted",
+            message: `${params.serviceNoun} was not loaded — re-registered from existing service definition.`,
+          };
+          if (!json) {
+            defaultRuntime.log(handledNotLoaded.message);
+          }
+        }
+      } catch {
+        // Best-effort repair; fall through to normal not-loaded handling.
+      }
     }
     if (!handledNotLoaded) {
       await handleServiceNotLoaded({
