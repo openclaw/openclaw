@@ -7,6 +7,7 @@ import { isPluginOwnedSessionBindingRecord } from "../../../src/plugins/conversa
 import {
   buildAgentSessionKey,
   deriveLastRoutePolicy,
+  pickFirstExistingAgentId,
   resolveAgentRoute,
 } from "../../../src/routing/resolve-route.js";
 import {
