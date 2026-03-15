@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatCliCommand } from "./command-format.js";
-import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+import { applyCliProfileEnv, parseCliProfileArgs, resolveEffectiveCliProfile } from "./profile.js";
 
 describe("parseCliProfileArgs", () => {
   it("leaves gateway --dev for subcommands", () => {
@@ -26,6 +26,243 @@ describe("parseCliProfileArgs", () => {
     }
     expect(res.profile).toBe("dev");
     expect(res.argv).toEqual(["node", "openclaw", "gateway"]);
+  });
+
+  it("parses --profile after subcommand", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "gateway",
+      "--profile",
+      "invest",
+      "--port",
+      "18795",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("invest");
+    expect(res.argv).toEqual(["node", "openclaw", "gateway", "--port", "18795"]);
+  });
+
+  it("parses --profile=NAME after subcommand", () => {
+    const res = parseCliProfileArgs(["node", "openclaw", "gateway", "--profile=work"]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "gateway"]);
+  });
+
+  it("keeps --dev and strips --profile when both appear after subcommand", () => {
+    const res = parseCliProfileArgs(["node", "openclaw", "gateway", "--dev", "--profile", "work"]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "gateway", "--dev"]);
+  });
+
+  it("rejects --dev before subcommand combined with --profile after subcommand", () => {
+    const res = parseCliProfileArgs(["node", "openclaw", "--dev", "gateway", "--profile", "work"]);
+    expect(res.ok).toBe(false);
+  });
+
+  it("does not intercept --profile after passthrough terminator", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "nodes",
+      "run",
+      "--node",
+      "abc123",
+      "--",
+      "aws",
+      "--profile",
+      "prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "nodes",
+      "run",
+      "--node",
+      "abc123",
+      "--",
+      "aws",
+      "--profile",
+      "prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+  });
+
+  it("does not intercept --profile in nodes run argv without passthrough terminator", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "nodes",
+      "run",
+      "--node",
+      "abc123",
+      "aws",
+      "--profile",
+      "prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "nodes",
+      "run",
+      "--node",
+      "abc123",
+      "aws",
+      "--profile",
+      "prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+  });
+
+  it("does not intercept --profile in docs query args", () => {
+    const res = parseCliProfileArgs(["node", "openclaw", "docs", "aws", "--profile", "prod"]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual(["node", "openclaw", "docs", "aws", "--profile", "prod"]);
+  });
+
+  it("does not intercept --profile in acp client server args", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "acp",
+      "client",
+      "--server-args",
+      "--profile",
+      "work",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "acp",
+      "client",
+      "--server-args",
+      "--profile",
+      "work",
+    ]);
+  });
+
+  it("preserves acp client server args after root option values", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--log-level",
+      "debug",
+      "acp",
+      "client",
+      "--server-args",
+      "--profile",
+      "work",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "--log-level",
+      "debug",
+      "acp",
+      "client",
+      "--server-args",
+      "--profile",
+      "work",
+    ]);
+  });
+
+  it("keeps passthrough --profile when global --profile is set before terminator", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--profile",
+      "work",
+      "nodes",
+      "run",
+      "--",
+      "aws",
+      "--profile=prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "nodes",
+      "run",
+      "--",
+      "aws",
+      "--profile=prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+  });
+
+  it("consumes root option values before command-path passthrough guard", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--log-level",
+      "debug",
+      "nodes",
+      "run",
+      "--",
+      "aws",
+      "--profile",
+      "prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "--log-level",
+      "debug",
+      "nodes",
+      "run",
+      "--",
+      "aws",
+      "--profile",
+      "prod",
+      "sts",
+      "get-caller-identity",
+    ]);
   });
 
   it("parses --profile value and strips it", () => {
@@ -66,7 +303,7 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19001");
   });
 
-  it("does not override explicit env values", () => {
+  it("does not override explicit OPENCLAW_STATE_DIR env value", () => {
     const env: Record<string, string | undefined> = {
       OPENCLAW_STATE_DIR: "/custom",
       OPENCLAW_GATEWAY_PORT: "19099",
@@ -79,6 +316,47 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_STATE_DIR).toBe("/custom");
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19099");
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));
+  });
+
+  it("preserves explicit OPENCLAW_GATEWAY_PORT for non-dev profiles", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    applyCliProfileEnv({
+      profile: "work",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("18789");
+  });
+
+  it("preserves service override env vars", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_GATEWAY_PORT: "18789",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+      OPENCLAW_SERVICE_VERSION: "2026.1.0",
+    };
+    applyCliProfileEnv({
+      profile: "work",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("18789");
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
+    expect(env.OPENCLAW_SERVICE_VERSION).toBe("2026.1.0");
+    expect(env.OPENCLAW_PROFILE).toBe("work");
+  });
+
+  it("uses 19001 for dev profile only when OPENCLAW_GATEWAY_PORT is unset", () => {
+    const env: Record<string, string | undefined> = {};
+    applyCliProfileEnv({
+      profile: "dev",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("19001");
   });
 
   it("uses OPENCLAW_HOME when deriving profile state dir", () => {
@@ -97,6 +375,40 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_CONFIG_PATH).toBe(
       path.join(resolvedHome, ".openclaw-work", "openclaw.json"),
     );
+  });
+});
+
+describe("resolveEffectiveCliProfile", () => {
+  it("prefers parsed profile over env profile", () => {
+    const res = resolveEffectiveCliProfile({
+      parsedProfile: "work",
+      envProfile: "dev",
+    });
+    expect(res).toEqual({ ok: true, profile: "work" });
+  });
+
+  it("falls back to env profile when parsed profile is absent", () => {
+    const res = resolveEffectiveCliProfile({
+      parsedProfile: null,
+      envProfile: "dev",
+    });
+    expect(res).toEqual({ ok: true, profile: "dev" });
+  });
+
+  it("treats blank env profile as unset", () => {
+    const res = resolveEffectiveCliProfile({
+      parsedProfile: null,
+      envProfile: "   ",
+    });
+    expect(res).toEqual({ ok: true, profile: null });
+  });
+
+  it("rejects invalid env profile values", () => {
+    const res = resolveEffectiveCliProfile({
+      parsedProfile: null,
+      envProfile: "bad profile",
+    });
+    expect(res.ok).toBe(false);
   });
 });
 

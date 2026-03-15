@@ -4,7 +4,11 @@ import { enableCompileCache } from "node:module";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
-import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
+import {
+  applyCliProfileEnv,
+  parseCliProfileArgs,
+  resolveEffectiveCliProfile,
+} from "./cli/profile.js";
 import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
@@ -173,10 +177,21 @@ if (
       process.exit(2);
     }
 
-    if (parsed.profile) {
-      applyCliProfileEnv({ profile: parsed.profile });
+    const effectiveProfile = resolveEffectiveCliProfile({
+      parsedProfile: parsed.profile,
+      envProfile: process.env.OPENCLAW_PROFILE,
+    });
+    if (!effectiveProfile.ok) {
+      console.error(`[openclaw] ${effectiveProfile.error}`);
+      process.exit(2);
+    }
+
+    if (effectiveProfile.profile) {
+      applyCliProfileEnv({ profile: effectiveProfile.profile });
       // Keep Commander and ad-hoc argv checks consistent.
-      process.argv = parsed.argv;
+      if (parsed.profile) {
+        process.argv = parsed.argv;
+      }
     }
 
     if (!tryHandleRootVersionFastPath(process.argv) && !tryHandleRootHelpFastPath(process.argv)) {

@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -22,6 +25,10 @@ const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
   snapshot: { exists: false } as Record<string, unknown>,
 }));
+const resolveStateDir = vi.fn<(env?: NodeJS.ProcessEnv) => string>(() => "/tmp");
+const resolveConfigPath = vi.fn((_env: NodeJS.ProcessEnv, stateDir: string) => {
+  return `${stateDir}/openclaw.json`;
+});
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -29,7 +36,8 @@ vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   loadConfig: () => configState.cfg,
   readConfigFileSnapshot: async () => configState.snapshot,
-  resolveStateDir: () => "/tmp",
+  resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
+  resolveStateDir: (env?: NodeJS.ProcessEnv) => resolveStateDir(env),
   resolveGatewayPort: () => 18789,
 }));
 
@@ -137,6 +145,16 @@ describe("gateway run option collisions", () => {
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
+    resolveStateDir.mockReset();
+    resolveStateDir.mockReturnValue("/tmp");
+    resolveConfigPath.mockReset();
+    resolveConfigPath.mockImplementation((_env: NodeJS.ProcessEnv, stateDir: string) => {
+      return `${stateDir}/openclaw.json`;
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -152,6 +170,24 @@ describe("gateway run option collisions", () => {
         }),
       }),
     );
+  }
+
+  async function expectGatewayExit(argv: string[]) {
+    await expect(runGatewayCli(argv)).rejects.toThrow("__exit__:1");
+  }
+
+  async function withTempPasswordFile<T>(
+    password: string,
+    run: (params: { passwordFile: string }) => Promise<T>,
+  ): Promise<T> {
+    const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-run-"));
+    const passwordFile = path.join(dir, "password.txt");
+    try {
+      await fsPromises.writeFile(passwordFile, password, "utf8");
+      return await run({ passwordFile });
+    } finally {
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    }
   }
 
   it("forwards parent-captured options to `gateway run` subcommand", async () => {
@@ -236,21 +272,17 @@ describe("gateway run option collisions", () => {
   });
 
   it("reads gateway password from --password-file", async () => {
-    await withTempSecretFiles(
-      "openclaw-gateway-run-",
-      { password: "pw_from_file\n" },
-      async ({ passwordFile }) => {
-        await runGatewayCli([
-          "gateway",
-          "run",
-          "--auth",
-          "password",
-          "--password-file",
-          passwordFile ?? "",
-          "--allow-unconfigured",
-        ]);
-      },
-    );
+    await withTempPasswordFile("pw_from_file\n", async ({ passwordFile }) => {
+      await runGatewayCli([
+        "gateway",
+        "run",
+        "--auth",
+        "password",
+        "--password-file",
+        passwordFile ?? "",
+        "--allow-unconfigured",
+      ]);
+    });
 
     expect(startGatewayServer).toHaveBeenCalledWith(
       18789,
@@ -283,24 +315,155 @@ describe("gateway run option collisions", () => {
   });
 
   it("rejects using both --password and --password-file", async () => {
-    await withTempSecretFiles(
-      "openclaw-gateway-run-",
-      { password: "pw_from_file\n" },
-      async ({ passwordFile }) => {
-        await expect(
-          runGatewayCli([
-            "gateway",
-            "run",
-            "--password",
-            "pw_inline",
-            "--password-file",
-            passwordFile ?? "",
-            "--allow-unconfigured",
-          ]),
-        ).rejects.toThrow("__exit__:1");
-      },
-    );
+    await withTempPasswordFile("pw_from_file\n", async ({ passwordFile }) => {
+      await expect(
+        runGatewayCli([
+          "gateway",
+          "run",
+          "--password",
+          "pw_inline",
+          "--password-file",
+          passwordFile ?? "",
+          "--allow-unconfigured",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+    });
 
     expect(runtimeErrors).toContain("Use either --password or --password-file.");
+  });
+
+  it("hard-stops --dev --reset when target resolves to default profile paths", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    resolveStateDir.mockReturnValue("/Users/test/.openclaw");
+    resolveConfigPath.mockImplementation((_env: NodeJS.ProcessEnv, stateDir: string) => {
+      return `${stateDir}/openclaw.json`;
+    });
+
+    await expectGatewayExit(["gateway", "run", "--dev", "--reset"]);
+
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain(
+      "Refusing to run `gateway --dev --reset` because the reset target is not dev-isolated.",
+    );
+    expect(runtimeErrors.join("\n")).toContain("/Users/test/.openclaw");
+  });
+
+  it("allows --dev --reset when target resolves to dev profile paths", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    resolveStateDir.mockReturnValue("/Users/test/.openclaw-dev");
+    resolveConfigPath.mockImplementation((_env: NodeJS.ProcessEnv, stateDir: string) => {
+      return `${stateDir}/openclaw.json`;
+    });
+
+    await runGatewayCli(["gateway", "run", "--dev", "--reset", "--allow-unconfigured"]);
+
+    expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
+  });
+
+  it("allows --dev --reset for explicit non-default custom state/config paths", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/custom-dev");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/custom-dev/openclaw.json");
+    resolveStateDir.mockReturnValue("/tmp/custom-dev");
+    resolveConfigPath.mockReturnValue("/tmp/custom-dev/openclaw.json");
+
+    await runGatewayCli(["gateway", "run", "--dev", "--reset", "--allow-unconfigured"]);
+
+    expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
+  });
+
+  it("allows --dev --reset for explicit non-default legacy state/config paths", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    vi.stubEnv("CLAWDBOT_STATE_DIR", "/tmp/custom-dev");
+    vi.stubEnv("CLAWDBOT_CONFIG_PATH", "/tmp/custom-dev/openclaw.json");
+    resolveStateDir.mockReturnValue("/tmp/custom-dev");
+    resolveConfigPath.mockReturnValue("/tmp/custom-dev/openclaw.json");
+
+    await runGatewayCli(["gateway", "run", "--dev", "--reset", "--allow-unconfigured"]);
+
+    expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
+  });
+
+  it("hard-stops --dev --reset when state/config match non-dev profile defaults", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/test/.openclaw-work");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/Users/test/.openclaw-work/openclaw.json");
+    resolveStateDir.mockReturnValue("/Users/test/.openclaw-work");
+    resolveConfigPath.mockReturnValue("/Users/test/.openclaw-work/openclaw.json");
+
+    await expectGatewayExit(["gateway", "run", "--dev", "--reset"]);
+
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain(
+      "Refusing to run `gateway --dev --reset` because the reset target is not dev-isolated.",
+    );
+  });
+
+  it("hard-stops --dev --reset when legacy env resolves to non-dev profile defaults", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    vi.stubEnv("CLAWDBOT_STATE_DIR", "/Users/test/.openclaw-work");
+    vi.stubEnv("CLAWDBOT_CONFIG_PATH", "/Users/test/.openclaw-work/openclaw.json");
+    resolveStateDir.mockReturnValue("/Users/test/.openclaw-work");
+    resolveConfigPath.mockReturnValue("/Users/test/.openclaw-work/openclaw.json");
+
+    await expectGatewayExit(["gateway", "run", "--dev", "--reset"]);
+
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain(
+      "Refusing to run `gateway --dev --reset` because the reset target is not dev-isolated.",
+    );
+  });
+
+  it("hard-stops --dev --reset when state is profile-default but config is custom", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/test/.openclaw-work");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/custom-dev/openclaw.json");
+    resolveStateDir.mockReturnValue("/Users/test/.openclaw-work");
+    resolveConfigPath.mockReturnValue("/tmp/custom-dev/openclaw.json");
+
+    await expectGatewayExit(["gateway", "run", "--dev", "--reset"]);
+
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain(
+      "Refusing to run `gateway --dev --reset` because the reset target is not dev-isolated.",
+    );
+  });
+
+  it("treats symlinked default paths as default reset targets", async () => {
+    const home = "/Users/test";
+    const defaultStateDir = path.join(home, ".openclaw");
+    const defaultConfigPath = path.join(defaultStateDir, "openclaw.json");
+    const aliasStateDir = path.join(home, ".openclaw-alias");
+    const aliasConfigPath = path.join(aliasStateDir, "openclaw.json");
+    const realpathSpy = vi.spyOn(fs, "realpathSync").mockImplementation((candidate) => {
+      const resolved = path.resolve(String(candidate));
+      if (resolved === path.resolve(aliasStateDir)) {
+        return path.resolve(defaultStateDir);
+      }
+      if (resolved === path.resolve(aliasConfigPath)) {
+        return path.resolve(defaultConfigPath);
+      }
+      return resolved;
+    });
+
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("OPENCLAW_STATE_DIR", aliasStateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", aliasConfigPath);
+    resolveStateDir.mockReturnValue(aliasStateDir);
+    resolveConfigPath.mockReturnValue(aliasConfigPath);
+
+    try {
+      await expectGatewayExit(["gateway", "run", "--dev", "--reset"]);
+    } finally {
+      realpathSpy.mockRestore();
+    }
+
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain(
+      "Refusing to run `gateway --dev --reset` because the reset target is not dev-isolated.",
+    );
   });
 });

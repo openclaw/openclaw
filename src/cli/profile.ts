@@ -7,6 +7,10 @@ export type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
 
+export type EffectiveCliProfileResult =
+  | { ok: true; profile: string | null }
+  | { ok: false; error: string };
+
 function takeValue(
   raw: string,
   next: string | undefined,
@@ -23,6 +27,74 @@ function takeValue(
   return { value: trimmed || null, consumedNext: Boolean(next) };
 }
 
+const ARBITRARY_ARG_COMMAND_PATHS = [["nodes", "run"], ["docs"], ["acp", "client"]] as const;
+const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
+const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
+
+function isRootOptionValueToken(arg: string | undefined): boolean {
+  if (!arg || arg === "--") {
+    return false;
+  }
+  if (!arg.startsWith("-")) {
+    return true;
+  }
+  return /^-\d+(?:\.\d+)?$/.test(arg);
+}
+
+function shouldGuardTrailingArgsFromProfileParsing(args: string[]): boolean {
+  const commandTokens: string[] = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg || arg === "--") {
+      break;
+    }
+
+    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+
+    if (arg.startsWith("--profile=") || arg.startsWith("--log-level=")) {
+      continue;
+    }
+
+    if (ROOT_VALUE_FLAGS.has(arg)) {
+      const next = args[i + 1];
+      if (isRootOptionValueToken(next)) {
+        i += 1;
+      }
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      continue;
+    }
+
+    commandTokens.push(arg);
+
+    if (
+      ARBITRARY_ARG_COMMAND_PATHS.some(
+        (commandPath) =>
+          commandPath.length === commandTokens.length &&
+          commandPath.every((part, idx) => part === commandTokens[idx]),
+      )
+    ) {
+      return true;
+    }
+
+    const couldStillMatch = ARBITRARY_ARG_COMMAND_PATHS.some(
+      (commandPath) =>
+        commandTokens.length <= commandPath.length &&
+        commandTokens.every((part, idx) => commandPath[idx] === part),
+    );
+    if (!couldStillMatch) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   if (argv.length < 2) {
     return { ok: true, profile: null, argv };
@@ -32,15 +104,43 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   let profile: string | null = null;
   let sawDev = false;
   let sawCommand = false;
+  let sawTerminator = false;
 
   const args = argv.slice(2);
+  const guardTrailingArgs = shouldGuardTrailingArgsFromProfileParsing(args);
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === undefined) {
       continue;
     }
 
-    if (sawCommand) {
+    if (sawTerminator) {
+      out.push(arg);
+      continue;
+    }
+
+    if (arg === "--") {
+      sawTerminator = true;
+      out.push(arg);
+      continue;
+    }
+
+    if (arg === "--log-level" || arg.startsWith("--log-level=")) {
+      out.push(arg);
+      if (arg === "--log-level") {
+        const next = args[i + 1];
+        if (isRootOptionValueToken(next)) {
+          out.push(next);
+          i += 1;
+        }
+      }
+      continue;
+    }
+
+    if (
+      sawCommand &&
+      (guardTrailingArgs || (arg !== "--profile" && !arg.startsWith("--profile=")))
+    ) {
       out.push(arg);
       continue;
     }
@@ -86,6 +186,27 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   }
 
   return { ok: true, profile, argv: out };
+}
+
+export function resolveEffectiveCliProfile(params: {
+  parsedProfile: string | null;
+  envProfile?: string;
+}): EffectiveCliProfileResult {
+  if (params.parsedProfile) {
+    return { ok: true, profile: params.parsedProfile };
+  }
+  const envProfile = params.envProfile?.trim() || "";
+  if (!envProfile) {
+    return { ok: true, profile: null };
+  }
+  if (!isValidProfileName(envProfile)) {
+    return {
+      ok: false,
+      error:
+        'Invalid OPENCLAW_PROFILE (use letters, numbers, "_", "-" only, or unset the variable)',
+    };
+  }
+  return { ok: true, profile: envProfile };
 }
 
 function resolveProfileStateDir(
