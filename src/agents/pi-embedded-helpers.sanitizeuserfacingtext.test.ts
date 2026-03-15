@@ -15,6 +15,36 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  it("strips raw tool_call/tool_result XML tags (#45856)", () => {
+    // Full tag pairs with content
+    expect(
+      sanitizeUserFacingText('Here is the result: <tool_call>{"name":"bash"}</tool_call> done.'),
+    ).toBe("Here is the result:  done.");
+    expect(sanitizeUserFacingText("Output: <tool_result>Success</tool_result>")).toBe("Output: ");
+
+    // Orphaned/self-closing tags
+    expect(sanitizeUserFacingText("Text <tool_call /> more")).toBe("Text  more");
+    expect(sanitizeUserFacingText("Before </tool_result> after")).toBe("Before  after");
+
+    // Mixed with final tags
+    expect(sanitizeUserFacingText("<final>Result</final><tool_call>data</tool_call>")).toBe(
+      "Result",
+    );
+
+    // Multiline content in tags
+    expect(sanitizeUserFacingText("Start\n<tool_result>\nline1\nline2\n</tool_result>\nEnd")).toBe(
+      "Start\n\nEnd",
+    );
+
+    // Word boundary — should NOT match tags that merely start with tool_call/tool_result
+    expect(sanitizeUserFacingText("<tool_calling>data</tool_calling>")).toBe(
+      "<tool_calling>data</tool_calling>",
+    );
+    expect(sanitizeUserFacingText("<tool_results>data</tool_results>")).toBe(
+      "<tool_results>data</tool_results>",
+    );
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {
