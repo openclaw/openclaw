@@ -40,7 +40,6 @@ export async function probeGateway(opts: {
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
 
-
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
     const settle = (result: Omit<GatewayProbeResult, "url">) => {
