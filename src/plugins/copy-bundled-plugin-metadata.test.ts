@@ -193,4 +193,51 @@ describe("copyBundledPluginMetadata", () => {
     );
     expect(fs.existsSync(staleNodeModulesDir)).toBe(false);
   });
+
+  it("removes generated outputs for plugins no longer present in source", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-removed-");
+    const staleBundledSkillDir = path.join(
+      repoRoot,
+      "dist",
+      "extensions",
+      "removed-plugin",
+      "bundled-skills",
+      "@scope",
+      "skill",
+    );
+    fs.mkdirSync(staleBundledSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(staleBundledSkillDir, "SKILL.md"), "# stale\n", "utf8");
+    const staleNodeModulesDir = path.join(
+      repoRoot,
+      "dist",
+      "extensions",
+      "removed-plugin",
+      "node_modules",
+    );
+    fs.mkdirSync(staleNodeModulesDir, { recursive: true });
+    writeJson(path.join(repoRoot, "dist", "extensions", "removed-plugin", "openclaw.plugin.json"), {
+      id: "removed-plugin",
+      configSchema: { type: "object" },
+      skills: ["./bundled-skills/@scope/skill"],
+    });
+    writeJson(path.join(repoRoot, "dist", "extensions", "removed-plugin", "package.json"), {
+      name: "@openclaw/removed-plugin",
+    });
+    fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(
+      fs.existsSync(
+        path.join(repoRoot, "dist", "extensions", "removed-plugin", "openclaw.plugin.json"),
+      ),
+    ).toBe(false);
+    expect(
+      fs.existsSync(path.join(repoRoot, "dist", "extensions", "removed-plugin", "package.json")),
+    ).toBe(false);
+    expect(
+      fs.existsSync(path.join(repoRoot, "dist", "extensions", "removed-plugin", "bundled-skills")),
+    ).toBe(false);
+    expect(fs.existsSync(staleNodeModulesDir)).toBe(false);
+  });
 });
