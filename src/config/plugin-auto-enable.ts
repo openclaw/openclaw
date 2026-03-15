@@ -401,6 +401,59 @@ function resolvePreferredOverIds(pluginId: string, env: NodeJS.ProcessEnv): stri
   return catalogEntry?.meta.preferOver ?? [];
 }
 
+/**
+ * Check if any third-party plugin is explicitly enabled that handles the same
+ * channel as the plugin we're considering to auto-enable.
+ * This prevents conflicts when users have installed third-party plugins (e.g.,
+ * openclaw-lark) to replace built-in channels or bundled extensions (e.g., feishu).
+ */
+function isAnotherPluginHandlingChannel(
+  cfg: OpenClawConfig,
+  pluginId: string,
+  registry: PluginManifestRegistry,
+): boolean {
+  const entries = cfg.plugins?.entries;
+  if (!entries || typeof entries !== "object") {
+    return false;
+  }
+
+  // Get the list of channels handled by the plugin we're about to auto-enable
+  const channelToPluginId = buildChannelToPluginIdMap(registry);
+  const channelsHandledByThisPlugin: string[] = [];
+  for (const [channelId, mappedPluginId] of channelToPluginId) {
+    if (mappedPluginId === pluginId) {
+      channelsHandledByThisPlugin.push(channelId);
+    }
+  }
+
+  // If no channels are mapped, fall back to using the pluginId as the channel
+  if (channelsHandledByThisPlugin.length === 0) {
+    channelsHandledByThisPlugin.push(pluginId);
+  }
+
+  for (const [otherPluginId, entry] of Object.entries(entries)) {
+    // Skip if this is the same plugin we're about to enable
+    if (otherPluginId === pluginId) {
+      continue;
+    }
+
+    // Skip if this plugin is not explicitly enabled
+    if (!isRecord(entry) || entry.enabled !== true) {
+      continue;
+    }
+
+    // Check if this other plugin handles any of the same channels
+    for (const channelId of channelsHandledByThisPlugin) {
+      const mappedPluginId = channelToPluginId.get(channelId);
+      if (mappedPluginId === otherPluginId) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function shouldSkipPreferredPluginAutoEnable(
   cfg: OpenClawConfig,
   entry: PluginEnableChange,
@@ -503,6 +556,10 @@ export function applyPluginAutoEnable(params: {
       continue;
     }
     if (shouldSkipPreferredPluginAutoEnable(next, entry, configured, env)) {
+      continue;
+    }
+    // Skip auto-enabling if another plugin is already handling the same channel
+    if (isAnotherPluginHandlingChannel(next, entry.pluginId, registry)) {
       continue;
     }
     const allow = next.plugins?.allow;
