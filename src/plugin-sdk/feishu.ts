@@ -39,6 +39,7 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixContext } from "../channels/reply-prefix.js";
 export { createTypingCallbacks } from "../channels/typing.js";
 export type { OpenClawConfig as ClawdbotConfig, OpenClawConfig } from "../config/config.js";
+export { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,

@@ -237,6 +237,64 @@ describe("FeishuConfigSchema actions", () => {
   });
 });
 
+describe("FeishuConfigSchema tool policies", () => {
+  it("accepts groups toolsBySender with alsoAllow", () => {
+    const result = FeishuConfigSchema.parse({
+      groups: {
+        "*": {
+          tools: { allow: ["read"], deny: ["exec"] },
+          toolsBySender: {
+            "id:ou_owner": {
+              alsoAllow: ["fd_*"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.groups?.["*"]?.toolsBySender?.["id:ou_owner"]).toEqual({
+      alsoAllow: ["fd_*"],
+    });
+  });
+
+  it("accepts dms tool policies", () => {
+    const result = FeishuConfigSchema.parse({
+      dms: {
+        "*": {
+          historyLimit: 5,
+          tools: { allow: ["read"], deny: ["exec"] },
+        },
+        ou_owner: {
+          tools: { alsoAllow: ["fd_*"] },
+          toolsBySender: {
+            "id:ou_owner": { alsoAllow: ["gateway"] },
+          },
+        },
+      },
+    });
+
+    expect(result.dms?.["*"]?.historyLimit).toBe(5);
+    expect(result.dms?.ou_owner?.tools).toEqual({ alsoAllow: ["fd_*"] });
+    expect(result.dms?.ou_owner?.toolsBySender?.["id:ou_owner"]).toEqual({
+      alsoAllow: ["gateway"],
+    });
+  });
+
+  it("rejects undefined toolsBySender values", () => {
+    const result = FeishuConfigSchema.safeParse({
+      groups: {
+        "*": {
+          toolsBySender: {
+            "id:ou_owner": undefined,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("FeishuConfigSchema defaultAccount", () => {
   it("accepts defaultAccount when it matches an account key", () => {
     const result = FeishuConfigSchema.safeParse({
