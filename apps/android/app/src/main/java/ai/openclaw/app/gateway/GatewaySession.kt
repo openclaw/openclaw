@@ -5,6 +5,11 @@ import ai.openclaw.android.gateway.GATEWAY_PROTOCOL_VERSION
 import ai.openclaw.android.gateway.GatewayClientInfo
 import ai.openclaw.android.gateway.GatewayConnectOptions
 import ai.openclaw.android.gateway.GatewayConnectProfiles
+import ai.openclaw.android.gateway.asBooleanOrNull
+import ai.openclaw.android.gateway.asLongOrNull
+import ai.openclaw.android.gateway.asObjectOrNull
+import ai.openclaw.android.gateway.asStringOrNull
+import ai.openclaw.android.gateway.parseJsonOrNull
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -859,43 +864,7 @@ class GatewaySession(
   }
 }
 
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
-
-private fun JsonElement?.asStringOrNull(): String? =
-  when (this) {
-    is JsonNull -> null
-    is JsonPrimitive -> content
-    else -> null
-  }
-
-private fun JsonElement?.asBooleanOrNull(): Boolean? =
-  when (this) {
-    is JsonPrimitive -> {
-      val c = content.trim()
-      when {
-        c.equals("true", ignoreCase = true) -> true
-        c.equals("false", ignoreCase = true) -> false
-        else -> null
-      }
-    }
-    else -> null
-  }
-
-private fun JsonElement?.asLongOrNull(): Long? =
-  when (this) {
-    is JsonPrimitive -> content.toLongOrNull()
-    else -> null
-  }
-
-private fun parseJsonOrNull(payload: String): JsonElement? {
-  val trimmed = payload.trim()
-  if (trimmed.isEmpty()) return null
-  return try {
-    Json.parseToJsonElement(trimmed)
-  } catch (_: Throwable) {
-    null
-  }
-}
+// JSON helpers imported from ai.openclaw.android.gateway.GatewayJsonHelpers
 
 internal fun replaceCanvasCapabilityInScopedHostUrl(
   scopedUrl: String,
