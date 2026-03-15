@@ -1,5 +1,5 @@
 import DOMPurify from "dompurify";
-import { marked } from "marked";
+import MarkdownIt from "markdown-it";
 import { truncateText } from "./format.ts";
 
 const allowedTags = [
@@ -107,6 +107,96 @@ function installHooks() {
   });
 }
 
+// ── markdown-it instance with custom renderers ──
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function normalizeMarkdownImageLabel(text?: string | null): string {
+  const trimmed = text?.trim();
+  return trimmed ? trimmed : "image";
+}
+
+export const md = new MarkdownIt({
+  html: false,
+  breaks: true,
+  linkify: false,
+});
+
+// Override html_block and html_inline to escape raw HTML (#13937)
+md.renderer.rules.html_block = (tokens, idx) => {
+  return `<p>${escapeHtml(tokens[idx].content)}</p>\n`;
+};
+md.renderer.rules.html_inline = (tokens, idx) => {
+  return escapeHtml(tokens[idx].content);
+};
+
+// Override image to only allow base64 data URIs (#15437)
+md.renderer.rules.image = (tokens, idx) => {
+  const token = tokens[idx];
+  const src = token.attrGet("src")?.trim() ?? "";
+  const alt = normalizeMarkdownImageLabel(token.content);
+  if (!INLINE_DATA_IMAGE_RE.test(src)) {
+    return escapeHtml(alt);
+  }
+  return `<img class="markdown-inline-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}">`;
+};
+
+// Override fenced code blocks with copy button + JSON collapse
+md.renderer.rules.fence = (tokens, idx) => {
+  const token = tokens[idx];
+  const lang = token.info.trim();
+  const text = token.content;
+  const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
+  const safeText = escapeHtml(text);
+  const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
+  const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
+  const attrSafe = text
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
+  const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
+
+  const trimmed = text.trim();
+  const isJson =
+    lang === "json" ||
+    (!lang &&
+      ((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+        (trimmed.startsWith("[") && trimmed.endsWith("]"))));
+
+  if (isJson) {
+    const lineCount = text.split("\n").length;
+    const label = lineCount > 1 ? `JSON &middot; ${lineCount} lines` : "JSON";
+    return `<details class="json-collapse"><summary>${label}</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details>`;
+  }
+
+  return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
+};
+
+// Override indented code blocks (code_block) with the same treatment
+md.renderer.rules.code_block = (tokens, idx) => {
+  const token = tokens[idx];
+  const text = token.content;
+  const safeText = escapeHtml(text);
+  const codeBlock = `<pre><code>${safeText}</code></pre>`;
+  const attrSafe = text
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
+  const header = `<div class="code-block-header">${copyBtn}</div>`;
+  return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
+};
+
 export function toSanitizedMarkdownHtml(markdown: string): string {
   const input = markdown.trim();
   if (!input) {
@@ -136,15 +226,10 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   }
   let rendered: string;
   try {
-    rendered = marked.parse(`${truncated.text}${suffix}`, {
-      renderer: htmlEscapeRenderer,
-      gfm: true,
-      breaks: true,
-    }) as string;
+    rendered = md.render(`${truncated.text}${suffix}`);
   } catch (err) {
-    // Fall back to escaped plain text when marked.parse() throws (e.g.
-    // infinite recursion on pathological markdown patterns — #36213).
-    console.warn("[markdown] marked.parse failed, falling back to plain text:", err);
+    // Fall back to escaped plain text when md.render() throws (#36213).
+    console.warn("[markdown] md.render failed, falling back to plain text:", err);
     const escaped = escapeHtml(`${truncated.text}${suffix}`);
     rendered = `<pre class="code-block">${escaped}</pre>`;
   }
@@ -153,72 +238,6 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     setCachedMarkdown(input, sanitized);
   }
   return sanitized;
-}
-
-// Prevent raw HTML in chat messages from being rendered as formatted HTML.
-// Display it as escaped text so users see the literal markup.
-// Security is handled by DOMPurify, but rendering pasted HTML (e.g. error
-// pages) as formatted output is confusing UX (#13937).
-const htmlEscapeRenderer = new marked.Renderer();
-htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
-htmlEscapeRenderer.image = (token: { href?: string | null; text?: string | null }) => {
-  const label = normalizeMarkdownImageLabel(token.text);
-  const href = token.href?.trim() ?? "";
-  if (!INLINE_DATA_IMAGE_RE.test(href)) {
-    return escapeHtml(label);
-  }
-  return `<img class="markdown-inline-image" src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
-};
-
-function normalizeMarkdownImageLabel(text?: string | null): string {
-  const trimmed = text?.trim();
-  return trimmed ? trimmed : "image";
-}
-
-htmlEscapeRenderer.code = ({
-  text,
-  lang,
-  escaped,
-}: {
-  text: string;
-  lang?: string;
-  escaped?: boolean;
-}) => {
-  const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
-  const safeText = escaped ? text : escapeHtml(text);
-  const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
-  const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
-  const attrSafe = text
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
-  const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
-
-  const trimmed = text.trim();
-  const isJson =
-    lang === "json" ||
-    (!lang &&
-      ((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-        (trimmed.startsWith("[") && trimmed.endsWith("]"))));
-
-  if (isJson) {
-    const lineCount = text.split("\n").length;
-    const label = lineCount > 1 ? `JSON &middot; ${lineCount} lines` : "JSON";
-    return `<details class="json-collapse"><summary>${label}</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details>`;
-  }
-
-  return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
-};
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 function renderEscapedPlainTextHtml(value: string): string {

@@ -1,6 +1,5 @@
-import { marked } from "marked";
 import { describe, expect, it, vi } from "vitest";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { md, toSanitizedMarkdownHtml } from "./markdown.ts";
 
 describe("toSanitizedMarkdownHtml", () => {
   it("renders basic markdown", () => {
@@ -19,7 +18,9 @@ describe("toSanitizedMarkdownHtml", () => {
       ].join("\n"),
     );
     expect(html).not.toContain("<script");
-    expect(html).not.toContain("javascript:");
+    // markdown-it blocks javascript: from becoming a live link; the literal
+    // text may still appear as escaped content which is safe.
+    expect(html).not.toContain('href="javascript:');
     expect(html).toContain("https://example.com");
   });
 
@@ -46,7 +47,9 @@ describe("toSanitizedMarkdownHtml", () => {
   it("flattens non-data markdown image urls", () => {
     const html = toSanitizedMarkdownHtml("![X](javascript:alert(1))");
     expect(html).not.toContain("<img");
-    expect(html).not.toContain("javascript:");
+    // markdown-it blocks javascript: from becoming a live element; the literal
+    // text may still appear as escaped content which is safe.
+    expect(html).not.toContain('src="javascript:');
     expect(html).toContain("X");
   });
 
@@ -105,6 +108,60 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("link");
   });
 
+  // Regression test for marked.js ReDoS that caused UI freeze.
+  //
+  // Background (old code — marked.js):
+  //   When a toolResult message contained a nested session transcript (JSONL),
+  //   the text passed to marked.parse() included double-escaped newlines (\\n)
+  //   that prevented ``` from forming fenced code blocks. marked's regex-based
+  //   inline tokenizer then saw many unmatched backticks interleaved with []
+  //   brackets and entered catastrophic backtracking — e.g. 8 repeats → 781ms,
+  //   10 repeats → 31s, real sessions → infinite hang freezing the UI.
+  //
+  // No minimal synthetic pattern was found that reliably triggers the issue;
+  // the structure below is extracted and desensitized from a real session that
+  // caused the hang. The HEADER provides the nested JSONL context, and each
+  // RECORD_UNIT adds 6 backticks + 4 brackets via ``` fences and [link](url).
+  //
+  // Fix: replaced marked.js (regex engine) with markdown-it (state machine),
+  // which is immune to ReDoS. markdown-it handles 20 repeats in ~9ms.
+  //
+  // If a future refactor reintroduces a regex-based markdown parser:
+  //   - { timeout: 2_000 } lets vitest kill the test from outside the blocked
+  //     event loop (CPU-bound marked.parse blocks setTimeout/setInterval too)
+  //   - expect(elapsed).toBeLessThan(500) catches the exponential growth even
+  //     if the parser eventually returns
+  it("does not hang on backtick + bracket ReDoS pattern", { timeout: 2_000 }, () => {
+    // Nested JSONL structure that sets up the context for inline backtick chaos
+    const HEADER =
+      '{"type":"message","id":"aaa","parentId":"bbb",' +
+      '"timestamp":"2000-01-01T00:00:00.000Z","message":' +
+      '{"role":"toolResult","toolCallId":"call_000",' +
+      '"toolName":"read","content":[{"type":"text","text":' +
+      '"{\\"type\\":\\"message\\",\\"id\\":\\"ccc\\",' +
+      '\\"timestamp\\":\\"2000-01-01T00:00:00.000Z\\",' +
+      '\\"message\\":{\\"role\\":\\"toolResult\\",' +
+      '\\"toolCallId\\":\\"call_111\\",\\"toolName\\":\\"read\\",' +
+      '\\"content\\":[{\\"type\\":\\"text\\",' +
+      '\\"text\\":\\"# Memory Index\\\\n\\\\n';
+
+    // Each unit: 6 backticks (``` x2) + 4 brackets ([tag] + [link](url))
+    // Double-escaped \\n keeps everything on one "line" for the parser
+    const RECORD_UNIT =
+      "## 2000-01-01 00:00:00 done [tag]\\\\n" +
+      "**question**:\\\\n```\\\\nsome question text here\\\\n```\\\\n" +
+      "**details**: [see details](./2000.01.01/00000000/INFO.md)\\\\n\\\\n";
+
+    const poison = HEADER + RECORD_UNIT.repeat(9);
+
+    const start = performance.now();
+    const html = toSanitizedMarkdownHtml(poison);
+    const elapsed = performance.now() - start;
+
+    expect(elapsed).toBeLessThan(500);
+    expect(html.length).toBeGreaterThan(0);
+  });
+
   it("keeps oversized plain-text replies readable instead of forcing code-block chrome", () => {
     const input =
       Array.from(
@@ -146,9 +203,9 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(second).toBe(first);
   });
 
-  it("falls back to escaped plain text if marked.parse throws (#36213)", () => {
-    const parseSpy = vi.spyOn(marked, "parse").mockImplementation(() => {
-      throw new Error("forced parse failure");
+  it("falls back to escaped plain text if md.render throws (#36213)", () => {
+    const renderSpy = vi.spyOn(md, "render").mockImplementation(() => {
+      throw new Error("forced render failure");
     });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const input = `Fallback **probe** ${Date.now()}`;
@@ -158,7 +215,7 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(html).toContain("Fallback **probe**");
       expect(warnSpy).toHaveBeenCalledOnce();
     } finally {
-      parseSpy.mockRestore();
+      renderSpy.mockRestore();
       warnSpy.mockRestore();
     }
   });

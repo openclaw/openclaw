@@ -568,9 +568,9 @@ importers:
       lit:
         specifier: ^3.3.2
         version: 3.3.2
-      marked:
-        specifier: ^17.0.4
-        version: 17.0.4
+      markdown-it:
+        specifier: ^14.1.1
+        version: 14.1.1
       signal-polyfill:
         specifier: ^0.2.2
         version: 0.2.2
@@ -581,6 +581,9 @@ importers:
         specifier: 8.0.0
         version: 8.0.0(@types/node@25.5.0)(esbuild@0.27.3)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)
     devDependencies:
+      '@types/markdown-it':
+        specifier: ^14.1.2
+        version: 14.1.2
       '@vitest/browser-playwright':
         specifier: 4.1.0
         version: 4.1.0(playwright@1.58.2)(vite@8.0.0(@types/node@25.5.0)(esbuild@0.27.3)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2))(vitest@4.1.0)
@@ -5207,11 +5210,6 @@ packages:
   marked@15.0.12:
     resolution: {integrity: sha512-8dD6FusOQSrpv9Z1rdNMdlSgQOIP880DHqnohobOmYLElGEqAL/JvxvuxZO16r4HtjTlfPRDC1hbvxC9dPN2nA==}
     engines: {node: '>= 18'}
-    hasBin: true
-
-  marked@17.0.4:
-    resolution: {integrity: sha512-NOmVMM+KAokHMvjWmC5N/ZOvgmSWuqJB8FoYI019j4ogb/PeRMKoKIjReZ2w3376kkA8dSJIP8uD993Kxc0iRQ==}
-    engines: {node: '>= 20'}
     hasBin: true
 
   math-intrinsics@1.1.0:
@@ -12474,8 +12472,6 @@ snapshots:
       repeat-string: 1.6.1
 
   marked@15.0.12: {}
-
-  marked@17.0.4: {}
 
   math-intrinsics@1.1.0: {}
 
