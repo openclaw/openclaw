@@ -1,10 +1,12 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   loadConfig,
   projectConfigOntoRuntimeSourceSnapshot,
@@ -13,6 +15,14 @@ import {
   writeConfigFile,
 } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 function createSourceConfig(): OpenClawConfig {
   return {
@@ -248,6 +258,117 @@ describe("runtime config snapshot writes", () => {
         releaseRefresh();
         await writePromise;
       } finally {
+        resetRuntimeConfigState();
+      }
+    });
+  });
+
+  it("does not overwrite a runtime snapshot installed after a queued write starts", async () => {
+    await withTempHome("openclaw-config-runtime-late-snapshot-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, "{}\n", "utf8");
+
+      const renameEntered = createDeferred();
+      const allowRename = createDeferred();
+      const originalRename = fsSync.promises.rename.bind(fsSync.promises);
+      let blockedFinalRename = false;
+
+      const renameSpy = vi.spyOn(fsSync.promises, "rename").mockImplementation(async (from, to) => {
+        if (
+          !blockedFinalRename &&
+          typeof from === "string" &&
+          from.endsWith(".tmp") &&
+          to === configPath
+        ) {
+          blockedFinalRename = true;
+          renameEntered.resolve();
+          await allowRename.promise;
+        }
+        return await originalRename(from, to);
+      });
+
+      const sourceConfig = createSourceConfig();
+      const runtimeConfig: OpenClawConfig = {
+        ...createRuntimeConfig(),
+        gateway: { auth: { mode: "token" as const } },
+      };
+
+      try {
+        const writePromise = writeConfigFile({ gateway: { mode: "local", port: 18789 } });
+        await renameEntered.promise;
+
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+        allowRename.resolve();
+        await writePromise;
+
+        expect(getRuntimeConfigSnapshot()).toEqual(runtimeConfig);
+        expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
+        expect(loadConfig()).toEqual(runtimeConfig);
+      } finally {
+        renameSpy.mockRestore();
+        resetRuntimeConfigState();
+      }
+    });
+  });
+
+  it("does not call a refresh handler installed after a queued write starts", async () => {
+    await withTempHome("openclaw-config-runtime-late-handler-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, "{}\n", "utf8");
+
+      const renameEntered = createDeferred();
+      const allowRename = createDeferred();
+      const originalRename = fsSync.promises.rename.bind(fsSync.promises);
+      let blockedFinalRename = false;
+
+      const renameSpy = vi.spyOn(fsSync.promises, "rename").mockImplementation(async (from, to) => {
+        if (
+          !blockedFinalRename &&
+          typeof from === "string" &&
+          from.endsWith(".tmp") &&
+          to === configPath
+        ) {
+          blockedFinalRename = true;
+          renameEntered.resolve();
+          await allowRename.promise;
+        }
+        return await originalRename(from, to);
+      });
+
+      const sourceConfig = createSourceConfig();
+      const runtimeConfig = createRuntimeConfig();
+      const refreshCalls: OpenClawConfig[] = [];
+
+      try {
+        const writePromise = writeConfigFile({ gateway: { mode: "local", port: 18789 } });
+        await renameEntered.promise;
+
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        setRuntimeConfigSnapshotRefreshHandler({
+          refresh: async ({ sourceConfig: refreshedSource }) => {
+            refreshCalls.push(refreshedSource);
+            setRuntimeConfigSnapshot(
+              {
+                ...runtimeConfig,
+                gateway: { auth: { mode: "token" as const } },
+              },
+              refreshedSource,
+            );
+            return true;
+          },
+        });
+
+        allowRename.resolve();
+        await writePromise;
+
+        expect(refreshCalls).toEqual([]);
+        expect(getRuntimeConfigSnapshot()).toEqual(runtimeConfig);
+        expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
+      } finally {
+        renameSpy.mockRestore();
         resetRuntimeConfigState();
       }
     });
