@@ -1,0 +1,44 @@
+{
+  "id": "acp-standard",
+  "name": "Standard ACP Runtime",
+  "description": "ACP runtime backend for any standard ACP agent (Kiro, Copilot, Cline, etc.) via JSON-RPC 2.0 over stdio.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string"
+      },
+      "args": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "cwd": {
+        "type": "string"
+      },
+      "env": {
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+      }
+    }
+  },
+  "uiHints": {
+    "command": {
+      "label": "Agent Command",
+      "help": "Binary command for the ACP agent (e.g. kiro-cli, copilot, cline)."
+    },
+    "args": {
+      "label": "Agent Arguments",
+      "help": "Arguments to start ACP mode (e.g. ['acp'] for kiro-cli, ['--acp', '--stdio'] for others)."
+    },
+    "cwd": {
+      "label": "Working Directory",
+      "help": "Default cwd for ACP session operations."
+    },
+    "env": {
+      "label": "Environment Variables",
+      "help": "Extra environment variables passed to the agent process.",
+      "advanced": true
+    }
+  }
+}
