@@ -12,7 +12,7 @@ import {
   getStatusCode,
   logoutWeb,
   readWebSelfId,
-  waitForCredsSaveQueue,
+  waitForCredsSaveQueueWithTimeout,
   waitForWaConnection,
   webAuthExists,
 } from "./session.js";
@@ -89,14 +89,7 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
     info("WhatsApp asked for a restart after pairing (code 515); waiting for creds to save…"),
   );
   closeSocket(login.sock);
-  // Flush pending creds writes before reopening; bound to avoid hanging on stalled I/O.
-  let flushTimeout: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([
-    waitForCredsSaveQueue(login.authDir),
-    new Promise<void>((resolve) => {
-      flushTimeout = setTimeout(resolve, 15_000);
-    }),
-  ]).finally(() => clearTimeout(flushTimeout));
+  await waitForCredsSaveQueueWithTimeout(login.authDir);
   try {
     const sock = await createWaSocket(false, login.verbose, {
       authDir: login.authDir,

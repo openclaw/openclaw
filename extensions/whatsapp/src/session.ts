@@ -33,6 +33,7 @@ export {
 
 // Per-authDir queues so multi-account creds saves don't block each other.
 const credsSaveQueues = new Map<string, Promise<void>>();
+const CREDS_SAVE_FLUSH_TIMEOUT_MS = 15_000;
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -203,6 +204,24 @@ export function waitForCredsSaveQueue(authDir?: string): Promise<void> {
     return credsSaveQueues.get(authDir) ?? Promise.resolve();
   }
   return Promise.all(credsSaveQueues.values()).then(() => {});
+}
+
+/** Await pending credential saves, but don't hang forever on stalled I/O. */
+export async function waitForCredsSaveQueueWithTimeout(
+  authDir: string,
+  timeoutMs = CREDS_SAVE_FLUSH_TIMEOUT_MS,
+): Promise<void> {
+  let flushTimeout: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    waitForCredsSaveQueue(authDir),
+    new Promise<void>((resolve) => {
+      flushTimeout = setTimeout(resolve, timeoutMs);
+    }),
+  ]).finally(() => {
+    if (flushTimeout) {
+      clearTimeout(flushTimeout);
+    }
+  });
 }
 
 function safeStringify(value: unknown, limit = 800): string {

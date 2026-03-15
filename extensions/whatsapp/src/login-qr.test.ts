@@ -3,7 +3,7 @@ import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
 import {
   createWaSocket,
   logoutWeb,
-  waitForCredsSaveQueue,
+  waitForCredsSaveQueueWithTimeout,
   waitForWaConnection,
 } from "./session.js";
 
@@ -28,7 +28,7 @@ vi.mock("./session.js", () => {
   const webAuthExists = vi.fn(async () => false);
   const readWebSelfId = vi.fn(() => ({ e164: null, jid: null }));
   const logoutWeb = vi.fn(async () => true);
-  const waitForCredsSaveQueue = vi.fn(async () => {});
+  const waitForCredsSaveQueueWithTimeout = vi.fn(async () => {});
   return {
     createWaSocket,
     waitForWaConnection,
@@ -37,7 +37,7 @@ vi.mock("./session.js", () => {
     webAuthExists,
     readWebSelfId,
     logoutWeb,
-    waitForCredsSaveQueue,
+    waitForCredsSaveQueueWithTimeout,
   };
 });
 
@@ -47,8 +47,13 @@ vi.mock("./qr-image.js", () => ({
 
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
-const waitForCredsSaveQueueMock = vi.mocked(waitForCredsSaveQueue);
+const waitForCredsSaveQueueWithTimeoutMock = vi.mocked(waitForCredsSaveQueueWithTimeout);
 const logoutWebMock = vi.mocked(logoutWeb);
+
+async function flushTasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 describe("login-qr", () => {
   beforeEach(() => {
@@ -56,20 +61,32 @@ describe("login-qr", () => {
   });
 
   it("restarts login once on status 515 and completes", async () => {
+    let releaseCredsFlush: (() => void) | undefined;
+    const credsFlushGate = new Promise<void>((resolve) => {
+      releaseCredsFlush = resolve;
+    });
     waitForWaConnectionMock
       // Baileys v7 wraps the error: { error: BoomError(515) }
       .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
       .mockResolvedValueOnce(undefined);
+    waitForCredsSaveQueueWithTimeoutMock.mockReturnValueOnce(credsFlushGate);
 
     const start = await startWebLoginWithQr({ timeoutMs: 5000 });
     expect(start.qrDataUrl).toBe("data:image/png;base64,base64");
 
-    const result = await waitForWebLogin({ timeoutMs: 5000 });
+    const resultPromise = waitForWebLogin({ timeoutMs: 5000 });
+    await flushTasks();
+    await flushTasks();
+
+    expect(createWaSocketMock).toHaveBeenCalledTimes(1);
+    expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledOnce();
+    expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledWith(expect.any(String));
+
+    releaseCredsFlush?.();
+    const result = await resultPromise;
 
     expect(result.connected).toBe(true);
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(waitForCredsSaveQueueMock).toHaveBeenCalledOnce();
-    expect(waitForCredsSaveQueueMock).toHaveBeenCalledWith(expect.any(String));
     expect(logoutWebMock).not.toHaveBeenCalled();
   });
 });
