@@ -266,11 +266,24 @@ export const ToolsWebSearchSchema = z
     provider: z
       .union([
         z.literal("brave"),
-        z.literal("perplexity"),
-        z.literal("grok"),
         z.literal("gemini"),
+        z.literal("grok"),
         z.literal("kimi"),
+        z.literal("perplexity"),
+        z.literal("tavily"),
       ])
+      .optional(),
+    fallbacks: z
+      .array(
+        z.union([
+          z.literal("brave"),
+          z.literal("gemini"),
+          z.literal("grok"),
+          z.literal("kimi"),
+          z.literal("perplexity"),
+          z.literal("tavily"),
+        ]),
+      )
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     maxResults: z.number().int().positive().optional(),
@@ -312,6 +325,13 @@ export const ToolsWebSearchSchema = z
     brave: z
       .object({
         mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
+      })
+      .strict()
+      .optional(),
+    tavily: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        searchDepth: z.union([z.literal("basic"), z.literal("advanced")]).optional(),
       })
       .strict()
       .optional(),
