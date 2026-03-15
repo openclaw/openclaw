@@ -436,16 +436,19 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("delivers accumulated block text as fallback when no block was routed", async () => {
+  it("delivers accumulated block text as fallback when TTS synthesis returns no media", async () => {
     setReadyAcpResolution();
     // Configure TTS mode as "final" but TTS synthesis returns no mediaUrl
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
-    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce(
+    // Mock TTS to return no mediaUrl for final-stage synthesis
+    // Note: block delivery path will also call maybeApplyTtsToPayload,
+    // so we use mockResolvedValue to handle both calls
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValue(
       {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
     );
 
-    // Simulate a scenario where projector did not route any blocks
-    // (e.g., deliveryMode="final_only" but block delivery failed)
+    // Simulate a scenario where projector did not deliver blocks
+    // (e.g., deliveryMode="final_only" with no block delivery)
     managerMocks.runTurn.mockImplementation(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
         await onEvent({ type: "text_delta", text: "CODEX_OK", tag: "agent_message_chunk" });
@@ -460,7 +463,7 @@ describe("tryDispatchAcpReply", () => {
       shouldRouteToOriginating: true,
     });
 
-    // Should deliver final text as fallback when no block was routed
+    // Should deliver final text as fallback when TTS produced no media
     expect(result?.counts.final).toBe(1);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
     expect(routeMocks.routeReply).toHaveBeenCalledWith(
