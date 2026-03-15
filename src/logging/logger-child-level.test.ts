@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  getChildLogger,
-  registerLogTransport,
-  resetLogger,
-  setLoggerOverride,
-} from "./logger.js";
+import { getChildLogger, registerLogTransport, resetLogger, setLoggerOverride } from "./logger.js";
 
 describe("getChildLogger", () => {
   beforeEach(() => {
@@ -21,14 +16,7 @@ describe("getChildLogger", () => {
     const seen: string[] = [];
     const unregister = registerLogTransport((logObj) => {
       const level = String(logObj._meta?.logLevelName ?? "").toUpperCase();
-      const text = [
-        logObj[0],
-        logObj[1],
-        logObj[2],
-        logObj["0"],
-        logObj["1"],
-        logObj["2"],
-      ]
+      const text = [logObj[0], logObj[1], logObj[2], logObj["0"], logObj["1"], logObj["2"]]
         .filter((v) => typeof v === "string")
         .join(" ");
       seen.push(`${level}:${text}`);
@@ -50,14 +38,7 @@ describe("getChildLogger", () => {
     const seen: string[] = [];
     const unregister = registerLogTransport((logObj) => {
       const level = String(logObj._meta?.logLevelName ?? "").toUpperCase();
-      const text = [
-        logObj[0],
-        logObj[1],
-        logObj[2],
-        logObj["0"],
-        logObj["1"],
-        logObj["2"],
-      ]
+      const text = [logObj[0], logObj[1], logObj[2], logObj["0"], logObj["1"], logObj["2"]]
         .filter((v) => typeof v === "string")
         .join(" ");
       seen.push(`${level}:${text}`);
