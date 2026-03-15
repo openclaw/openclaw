@@ -1,6 +1,15 @@
+import type { OpenClawConfig } from "../../config/config.js";
 import { withTimeout } from "../../node-host/with-timeout.js";
 
-export const EMBEDDED_COMPACTION_TIMEOUT_MS = 300_000;
+export const EMBEDDED_COMPACTION_TIMEOUT_MS = 900_000;
+
+export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
+  const raw = cfg?.agents?.defaults?.compaction?.timeoutSeconds;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw) * 1000;
+  }
+  return EMBEDDED_COMPACTION_TIMEOUT_MS;
+}
 
 export async function compactWithSafetyTimeout<T>(
   compact: () => Promise<T>,
