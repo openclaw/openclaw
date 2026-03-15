@@ -1,7 +1,41 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
+import { resolveContextTokensForModel } from "./context.js";
 
 export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
+
+/**
+ * Calculates adaptive reserveTokensFloor based on model context window size.
+ * Uses tiered strategy to ensure adequate headroom for compaction API calls.
+ *
+ * Tier 1 (≤64k): Fixed 20k floor - sufficient for small models
+ * Tier 2 (64k-256k): 10% of context window - balances safety and efficiency
+ * Tier 3 (>256k): 5% with 30k minimum - ensures meaningful buffer for large models
+ *
+ * Examples:
+ * - GPT-4 (8k): 20k floor
+ * - GPT-4o (128k): 12.8k → 20k (min applies)
+ * - Claude 3.5 (200k): 20k floor
+ * - Kimi K2.5 (262k): 26k floor (vs 20k default)
+ * - Gemini 1M: 50k floor (vs 20k default)
+ */
+export function calculateAdaptiveReserveTokensFloor(contextWindow: number): number {
+  // Small models: fixed 20k floor
+  if (contextWindow <= 65536) {
+    return DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
+  }
+
+  // Medium models: 10% buffer
+  if (contextWindow <= 262144) {
+    const calculated = Math.floor(contextWindow * 0.1);
+    // Don't go below default for medium models
+    return Math.max(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR, calculated);
+  }
+
+  // Large models: 5% with 30k minimum
+  const calculated = Math.floor(contextWindow * 0.05);
+  return Math.max(30000, calculated);
+}
 
 type PiSettingsManagerLike = {
   getCompactionReserveTokens: () => number;
@@ -33,11 +67,22 @@ export function ensurePiCompactionReserveTokens(params: {
   return { didOverride: true, reserveTokens: minReserveTokens };
 }
 
-export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
+export function resolveCompactionReserveTokensFloor(
+  cfg?: OpenClawConfig,
+  contextWindow?: number,
+): number {
+  // User-defined override takes highest precedence
   const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
     return Math.floor(raw);
   }
+
+  // Use adaptive calculation if context window is available
+  if (typeof contextWindow === "number" && contextWindow > 0) {
+    return calculateAdaptiveReserveTokensFloor(contextWindow);
+  }
+
+  // Fall back to default for backward compatibility
   return DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
 }
 
@@ -58,6 +103,7 @@ function toPositiveInt(value: unknown): number | undefined {
 export function applyPiCompactionSettingsFromConfig(params: {
   settingsManager: PiSettingsManagerLike;
   cfg?: OpenClawConfig;
+  contextWindow?: number;
 }): {
   didOverride: boolean;
   compaction: { reserveTokens: number; keepRecentTokens: number };
@@ -68,7 +114,20 @@ export function applyPiCompactionSettingsFromConfig(params: {
 
   const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
-  const reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
+
+  // Try to get context window from model config if not provided
+  let contextWindow = params.contextWindow;
+  if (contextWindow === undefined && params.cfg) {
+    const primaryModel = params.cfg.agents?.defaults?.model?.primary;
+    if (primaryModel) {
+      contextWindow = resolveContextTokensForModel({
+        cfg: params.cfg,
+        model: primaryModel,
+      });
+    }
+  }
+
+  const reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg, contextWindow);
 
   const targetReserveTokens = Math.max(
     configuredReserveTokens ?? currentReserveTokens,
