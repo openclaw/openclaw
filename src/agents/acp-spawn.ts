@@ -42,6 +42,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { deliveryContextFromSession, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { isDeliverableMessageChannel, isInternalMessageChannel } from "../utils/message-channel.js";
 import {
   type AcpSpawnParentRelayHandle,
   resolveAcpSpawnStreamLogPath,
@@ -49,7 +50,12 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
-import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
+import { registerSubagentRun } from "./subagent-registry.js";
+import {
+  resolveDisplaySessionKey,
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
 
@@ -400,6 +406,48 @@ function prepareAcpThreadBinding(params: {
   };
 }
 
+/**
+ * Register an ACP spawn in the subagent registry so the lifecycle management
+ * (waitForSubagentCompletion, announce-back, cleanup) works for ACP runs just
+ * as it does for regular subagent spawns.
+ */
+function registerAcpSubagentRun(params: {
+  runId: string;
+  childSessionKey: string;
+  requesterSessionKey: string;
+  requesterOrigin?: ReturnType<typeof normalizeDeliveryContext>;
+  task: string;
+  label?: string;
+  spawnMode: SpawnAcpMode;
+  cfg: OpenClawConfig;
+}): void {
+  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+  const displayKey = resolveDisplaySessionKey({
+    key: params.requesterSessionKey,
+    alias,
+    mainKey,
+  });
+  try {
+    registerSubagentRun({
+      runId: params.runId,
+      childSessionKey: params.childSessionKey,
+      requesterSessionKey: params.requesterSessionKey,
+      requesterOrigin: params.requesterOrigin,
+      requesterDisplayKey: displayKey,
+      task: params.task,
+      label: params.label || undefined,
+      spawnMode: params.spawnMode,
+      cleanup: "keep",
+      expectsCompletionMessage: false,
+    });
+  } catch (err) {
+    log.warn("Failed to register ACP subagent run", {
+      runId: params.runId,
+      error: String(err),
+    });
+  }
+}
+
 export async function spawnAcpDirect(
   params: SpawnAcpParams,
   ctx: SpawnAcpContext,
@@ -674,6 +722,20 @@ export async function spawnAcpDirect(
   // decide how to relay status. Inline delivery is reserved for thread-bound sessions.
   const useInlineDelivery =
     hasDeliveryTarget && spawnMode === "session" && !effectiveStreamToParent;
+  // For "run" mode spawned from an external (non-webchat) channel, enable direct delivery
+  // so the ACP turn output is routed to the originating channel. Without this, ACP output
+  // is only streamed internally and never persisted to chat.history, making it unreachable
+  // by the subagent announce mechanism.
+  const isExternalChannel =
+    requesterOrigin?.channel &&
+    isDeliverableMessageChannel(requesterOrigin.channel) &&
+    !isInternalMessageChannel(requesterOrigin.channel);
+  const useExternalRunDelivery =
+    !useInlineDelivery &&
+    !effectiveStreamToParent &&
+    spawnMode === "run" &&
+    isExternalChannel &&
+    hasDeliveryTarget;
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   const streamLogPath =
@@ -695,17 +757,18 @@ export async function spawnAcpDirect(
     });
   }
   try {
+    const shouldDeliver = useInlineDelivery || useExternalRunDelivery;
     const response = await callGateway<{ runId?: string }>({
       method: "agent",
       params: {
         message: params.task,
         sessionKey,
-        channel: useInlineDelivery ? requesterOrigin?.channel : undefined,
-        to: useInlineDelivery ? inferredDeliveryTo : undefined,
-        accountId: useInlineDelivery ? (requesterOrigin?.accountId ?? undefined) : undefined,
-        threadId: useInlineDelivery ? deliveryThreadId : undefined,
+        channel: shouldDeliver ? requesterOrigin?.channel : undefined,
+        to: shouldDeliver ? inferredDeliveryTo : undefined,
+        accountId: shouldDeliver ? (requesterOrigin?.accountId ?? undefined) : undefined,
+        threadId: shouldDeliver ? deliveryThreadId : undefined,
         idempotencyKey: childIdem,
-        deliver: useInlineDelivery,
+        deliver: shouldDeliver,
         label: params.label || undefined,
       },
       timeoutMs: 10_000,
@@ -742,6 +805,16 @@ export async function spawnAcpDirect(
       });
     }
     parentRelay?.notifyStarted();
+    registerAcpSubagentRun({
+      runId: childRunId,
+      childSessionKey: sessionKey,
+      requesterSessionKey: requesterInternalKey,
+      requesterOrigin,
+      task: params.task,
+      label: params.label,
+      spawnMode,
+      cfg,
+    });
     return {
       status: "accepted",
       childSessionKey: sessionKey,
@@ -752,6 +825,22 @@ export async function spawnAcpDirect(
     };
   }
 
+  // When useExternalRunDelivery is active, the gateway handles delivery directly
+  // via deliver=true. Skip registerSubagentRun to avoid triggering the announce
+  // mechanism, which would read empty chat.history ("(no output)") and cause the
+  // main agent to redundantly re-analyze the task.
+  if (!useExternalRunDelivery) {
+    registerAcpSubagentRun({
+      runId: childRunId,
+      childSessionKey: sessionKey,
+      requesterSessionKey: requesterInternalKey,
+      requesterOrigin,
+      task: params.task,
+      label: params.label,
+      spawnMode,
+      cfg,
+    });
+  }
   return {
     status: "accepted",
     childSessionKey: sessionKey,
