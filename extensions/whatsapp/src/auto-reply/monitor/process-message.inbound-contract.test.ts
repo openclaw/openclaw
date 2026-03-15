@@ -280,7 +280,7 @@ describe("web processMessage inbound contract", () => {
     expect(groupHistories.get("whatsapp:default:group:123@g.us") ?? []).toHaveLength(0);
   });
 
-  it("suppresses non-final WhatsApp payload delivery", async () => {
+  it("suppresses tool payload delivery but allows block and final", async () => {
     const rememberSentText = vi.fn();
     await processMessage(createWhatsAppDirectStreamingArgs({ rememberSentText }));
 
@@ -291,20 +291,70 @@ describe("web processMessage inbound contract", () => {
     expect(deliver).toBeTypeOf("function");
 
     await deliver?.({ text: "tool payload" }, { kind: "tool" });
-    await deliver?.({ text: "block payload" }, { kind: "block" });
     expect(deliverWebReplyMock).not.toHaveBeenCalled();
-    expect(rememberSentText).not.toHaveBeenCalled();
+
+    await deliver?.({ text: "block payload" }, { kind: "block" });
+    expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
 
     await deliver?.({ text: "final payload" }, { kind: "final" });
-    expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
-    expect(rememberSentText).toHaveBeenCalledTimes(1);
+    expect(deliverWebReplyMock).toHaveBeenCalledTimes(2);
+    expect(rememberSentText).toHaveBeenCalledTimes(2);
   });
 
-  it("forces disableBlockStreaming for WhatsApp dispatch", async () => {
+  it("respects per-account blockStreaming config for disableBlockStreaming", async () => {
     await processMessage(createWhatsAppDirectStreamingArgs());
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const replyOptions = (capturedDispatchParams as any)?.replyOptions;
+    // blockStreaming: true in config → disableBlockStreaming: false
+    expect(replyOptions?.disableBlockStreaming).toBe(false);
+  });
+
+  it("leaves disableBlockStreaming undefined when blockStreaming not configured", async () => {
+    const args = makeProcessMessageArgs({
+      routeSessionKey: "agent:main:whatsapp:direct:+1555",
+      groupHistoryKey: "+1555",
+      cfg: {
+        messages: {},
+        session: { store: sessionStorePath },
+      } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>,
+      msg: {
+        id: "msg1",
+        from: "+1555",
+        to: "+2000",
+        chatType: "direct",
+        body: "hi",
+      },
+    });
+    await processMessage(args);
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const replyOptions = (capturedDispatchParams as any)?.replyOptions;
+    expect(replyOptions?.disableBlockStreaming).toBeUndefined();
+  });
+
+  it("disables block streaming when blockStreaming is explicitly false", async () => {
+    const args = makeProcessMessageArgs({
+      routeSessionKey: "agent:main:whatsapp:direct:+1555",
+      groupHistoryKey: "+1555",
+      cfg: {
+        channels: { whatsapp: { blockStreaming: false } },
+        messages: {},
+        session: { store: sessionStorePath },
+      } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>,
+      msg: {
+        id: "msg1",
+        from: "+1555",
+        to: "+2000",
+        chatType: "direct",
+        body: "hi",
+      },
+    });
+    await processMessage(args);
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const replyOptions = (capturedDispatchParams as any)?.replyOptions;
+    // blockStreaming: false in config → disableBlockStreaming: true
     expect(replyOptions?.disableBlockStreaming).toBe(true);
   });
 
