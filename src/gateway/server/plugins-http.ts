@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
@@ -63,9 +64,14 @@ export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
   log: SubsystemLogger;
 }): PluginHttpRequestHandler {
-  const { registry, log } = params;
+  const { registry: _registry, log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
-    const routes = registry.httpRoutes ?? [];
+    // Use the CURRENT active registry to find routes.
+    // Channel plugins (like BlueBubbles) register webhook routes via requireActivePluginRegistry()
+    // after the HTTP handler is created. The handler's captured `registry` may be stale
+    // because setActivePluginRegistry() replaces it during per-agent plugin loading.
+    const effectiveRegistry = requireActivePluginRegistry();
+    const routes = effectiveRegistry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;
     }
@@ -76,7 +82,7 @@ export function createGatewayPluginRequestHandler(params: {
         const url = new URL(req.url ?? "/", "http://localhost");
         return resolvePluginRoutePathContext(url.pathname);
       })();
-    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+    const matchedRoutes = findMatchingPluginHttpRoutes(effectiveRegistry, pathContext);
     if (matchedRoutes.length === 0) {
       return false;
     }
