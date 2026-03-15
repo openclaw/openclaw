@@ -123,6 +123,9 @@ describe("message hook mappers", () => {
       channelId: "telegram",
       accountId: "acc-1",
       messageId: "out-1",
+      threadId: "thread-1",
+      sessionKey: "agent:agent-1:telegram:chat:456",
+      agentId: "agent-1",
       isGroup: true,
       groupId: "telegram:chat:456",
     });
@@ -137,6 +140,17 @@ describe("message hook mappers", () => {
       content: "reply",
       success: false,
       error: "network error",
+      metadata: {
+        channel: "telegram",
+        accountId: "acc-1",
+        conversationId: "telegram:chat:456",
+        messageId: "out-1",
+        threadId: "thread-1",
+        sessionKey: "agent:agent-1:telegram:chat:456",
+        agentId: "agent-1",
+        isGroup: true,
+        groupId: "telegram:chat:456",
+      },
     });
     expect(toInternalMessageSentContext(canonical)).toEqual({
       to: "telegram:chat:456",

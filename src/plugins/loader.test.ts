@@ -14,25 +14,29 @@ async function importFreshPluginTestModules() {
   vi.unmock("./hooks.js");
   vi.unmock("./loader.js");
   vi.unmock("jiti");
-  const [loader, hookRunnerGlobal, hooks] = await Promise.all([
+  const [loader, hookRunnerGlobal, hooks, sharedRuntimeOptions] = await Promise.all([
     import("./loader.js"),
     import("./hook-runner-global.js"),
     import("./hooks.js"),
+    import("./runtime/shared-runtime-options.js"),
   ]);
   return {
     ...loader,
     ...hookRunnerGlobal,
     ...hooks,
+    ...sharedRuntimeOptions,
   };
 }
 
 const {
   __testing,
   clearPluginLoaderCache,
+  clearSharedPluginRuntimeOptions,
   createHookRunner,
   getGlobalHookRunner,
   loadOpenClawPlugins,
   resetGlobalHookRunner,
+  setSharedPluginRuntimeOptions,
 } = await importFreshPluginTestModules();
 
 type TempPlugin = { dir: string; file: string; id: string };
@@ -302,6 +306,8 @@ function createExtensionApiAliasFixture(params?: { srcBody?: string; distBody?: 
 
 afterEach(() => {
   clearPluginLoaderCache();
+  clearSharedPluginRuntimeOptions();
+  resetGlobalHookRunner();
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -484,6 +490,236 @@ describe("loadOpenClawPlugins", () => {
     expect(getGlobalHookRunner()).not.toBeNull();
 
     resetGlobalHookRunner();
+  });
+
+  it("does not reuse cached registries across runtime capability changes", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "runtime-capability-cache",
+      filename: "runtime-capability-cache.cjs",
+      body: `module.exports = {
+        id: "runtime-capability-cache",
+        register(api) {
+          api.on("agent_end", async () => {
+            await api.runtime.subagent.run({ sessionKey: "runtime-capability", message: "hello" });
+          });
+        },
+      };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["runtime-capability-cache"],
+        },
+      },
+    };
+
+    const first = loadOpenClawPlugins(options);
+    await expect(
+      createHookRunner(first, { catchErrors: false }).runAgentEnd(
+        { messages: [], success: true, durationMs: 1 },
+        { workspaceDir: plugin.dir },
+      ),
+    ).rejects.toThrow(
+      "Plugin runtime subagent methods are only available during a gateway request.",
+    );
+
+    const subagent = {
+      run: vi.fn(async () => ({ runId: "run-1" })),
+      enqueue: vi.fn(async () => ({ runId: "run-1" })),
+      abort: vi.fn(async () => ({ aborted: true })),
+      waitForRun: vi.fn(async () => ({ status: "ok" as const })),
+      getSessionMessages: vi.fn(async () => ({ messages: [] })),
+      getSession: vi.fn(async () => ({ messages: [] })),
+      deleteSession: vi.fn(async () => undefined),
+    };
+
+    const second = loadOpenClawPlugins({
+      ...options,
+      runtimeOptions: { subagent },
+    });
+
+    expect(second).not.toBe(first);
+    await expect(
+      createHookRunner(second).runAgentEnd(
+        { messages: [], success: true, durationMs: 1 },
+        { workspaceDir: plugin.dir },
+      ),
+    ).resolves.toBeUndefined();
+    expect(subagent.run).toHaveBeenCalledWith({
+      sessionKey: "runtime-capability",
+      message: "hello",
+    });
+  });
+
+  it("does not inherit shared runtime options without explicit opt-in", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "shared-runtime-options-no-inherit",
+      filename: "shared-runtime-options-no-inherit.cjs",
+      body: `module.exports = {
+        id: "shared-runtime-options-no-inherit",
+        register(api) {
+          api.on("agent_end", async () => {
+            await api.runtime.subagent.run({ sessionKey: "shared-runtime-no-inherit", message: "hello" });
+          });
+        },
+      };`,
+    });
+
+    const subagent = {
+      run: vi.fn(async () => ({ runId: "run-shared" })),
+      enqueue: vi.fn(async () => ({ runId: "run-shared" })),
+      abort: vi.fn(async () => ({ aborted: true })),
+      waitForRun: vi.fn(async () => ({ status: "ok" as const })),
+      getSessionMessages: vi.fn(async () => ({ messages: [] })),
+      getSession: vi.fn(async () => ({ messages: [] })),
+      deleteSession: vi.fn(async () => undefined),
+    };
+    setSharedPluginRuntimeOptions({ subagent });
+
+    const registry = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["shared-runtime-options-no-inherit"],
+        },
+      },
+    });
+
+    await expect(
+      createHookRunner(registry, { catchErrors: false }).runAgentEnd(
+        { messages: [], success: true, durationMs: 1 },
+        { workspaceDir: plugin.dir },
+      ),
+    ).rejects.toThrow(
+      "Plugin runtime subagent methods are only available during a gateway request.",
+    );
+    expect(subagent.run).not.toHaveBeenCalled();
+  });
+
+  it("does not replace the global hook runner when activation is disabled", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "shared-runtime-options-no-global-replace",
+      filename: "shared-runtime-options-no-global-replace.cjs",
+      body: `module.exports = {
+        id: "shared-runtime-options-no-global-replace",
+        register(api) {
+          api.on("agent_end", async () => {
+            await api.runtime.subagent.run({ sessionKey: "shared-runtime-preserved", message: "hello" });
+          });
+        },
+      };`,
+    });
+
+    const subagent = {
+      run: vi.fn(async () => ({ runId: "run-shared" })),
+      enqueue: vi.fn(async () => ({ runId: "run-shared" })),
+      abort: vi.fn(async () => ({ aborted: true })),
+      waitForRun: vi.fn(async () => ({ status: "ok" as const })),
+      getSessionMessages: vi.fn(async () => ({ messages: [] })),
+      getSession: vi.fn(async () => ({ messages: [] })),
+      deleteSession: vi.fn(async () => undefined),
+    };
+
+    const first = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      runtimeOptions: { subagent },
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["shared-runtime-options-no-global-replace"],
+        },
+      },
+    });
+    const globalHookRunner = getGlobalHookRunner();
+
+    expect(globalHookRunner).not.toBeNull();
+
+    const second = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      activateGlobalHookRunner: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["shared-runtime-options-no-global-replace"],
+        },
+      },
+    });
+
+    expect(second).not.toBe(first);
+    expect(getGlobalHookRunner()).toBe(globalHookRunner);
+    await expect(
+      createHookRunner(second, { catchErrors: false }).runAgentEnd(
+        { messages: [], success: true, durationMs: 1 },
+        { workspaceDir: plugin.dir },
+      ),
+    ).rejects.toThrow(
+      "Plugin runtime subagent methods are only available during a gateway request.",
+    );
+    await expect(
+      globalHookRunner?.runAgentEnd(
+        { messages: [], success: true, durationMs: 1 },
+        { workspaceDir: plugin.dir },
+      ),
+    ).resolves.toBeUndefined();
+    expect(subagent.run).toHaveBeenCalledWith({
+      sessionKey: "shared-runtime-preserved",
+      message: "hello",
+    });
+  });
+  it("uses shared runtime options when explicit runtime options are absent and inheritance is enabled", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "shared-runtime-options",
+      filename: "shared-runtime-options.cjs",
+      body: `module.exports = {
+        id: "shared-runtime-options",
+        register(api) {
+          api.on("agent_end", async () => {
+            await api.runtime.subagent.run({ sessionKey: "shared-runtime", message: "hello" });
+          });
+        },
+      };`,
+    });
+
+    const subagent = {
+      run: vi.fn(async () => ({ runId: "run-shared" })),
+      enqueue: vi.fn(async () => ({ runId: "run-shared" })),
+      abort: vi.fn(async () => ({ aborted: true })),
+      waitForRun: vi.fn(async () => ({ status: "ok" as const })),
+      getSessionMessages: vi.fn(async () => ({ messages: [] })),
+      getSession: vi.fn(async () => ({ messages: [] })),
+      deleteSession: vi.fn(async () => undefined),
+    };
+    setSharedPluginRuntimeOptions({ subagent });
+
+    const registry = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      inheritSharedRuntimeOptions: true,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["shared-runtime-options"],
+        },
+      },
+    });
+
+    await expect(
+      createHookRunner(registry).runAgentEnd(
+        { messages: [], success: true, durationMs: 1 },
+        { workspaceDir: plugin.dir },
+      ),
+    ).resolves.toBeUndefined();
+    expect(subagent.run).toHaveBeenCalledWith({
+      sessionKey: "shared-runtime",
+      message: "hello",
+    });
   });
 
   it("does not reuse cached bundled plugin registries across env changes", () => {

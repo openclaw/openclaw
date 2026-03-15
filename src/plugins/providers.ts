@@ -15,6 +15,7 @@ export function resolvePluginProviders(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    activateGlobalHookRunner: false,
     logger: createPluginLoaderLogger(log),
   });
 

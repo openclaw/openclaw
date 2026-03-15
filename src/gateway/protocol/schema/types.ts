@@ -18,6 +18,7 @@ export type AgentEvent = SchemaType<"AgentEvent">;
 export type AgentIdentityParams = SchemaType<"AgentIdentityParams">;
 export type AgentIdentityResult = SchemaType<"AgentIdentityResult">;
 export type PollParams = SchemaType<"PollParams">;
+export type AgentAbortParams = SchemaType<"AgentAbortParams">;
 export type AgentWaitParams = SchemaType<"AgentWaitParams">;
 export type WakeParams = SchemaType<"WakeParams">;
 export type NodePairRequestParams = SchemaType<"NodePairRequestParams">;

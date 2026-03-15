@@ -4,6 +4,7 @@ import type { HealthSummary } from "../../commands/health.js";
 import type { CronService } from "../../cron/service.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
+import type { AgentAbortControllerEntry } from "../agent-abort.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { NodeRegistry } from "../node-registry.js";
@@ -53,6 +54,7 @@ export type GatewayRequestContext = {
   hasExecApprovalClients?: () => boolean;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
+  agentAbortControllers: Map<string, AgentAbortControllerEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatAbortedRuns: Map<string, number>;
   chatRunBuffers: Map<string, string>;

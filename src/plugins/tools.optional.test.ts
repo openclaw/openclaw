@@ -154,6 +154,21 @@ describe("resolvePluginTools optional tools", () => {
     expect(registry.diagnostics).toHaveLength(0);
   });
 
+  it("loads plugin tools without re-initializing the global hook runner", () => {
+    setOptionalDemoRegistry();
+
+    resolvePluginTools({
+      context: createContext() as never,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inheritSharedRuntimeOptions: true,
+        activateGlobalHookRunner: false,
+      }),
+    );
+  });
   it("forwards an explicit env to plugin loading", () => {
     setOptionalDemoRegistry();
     const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;

@@ -96,6 +96,8 @@ const BASE_METHODS = [
   "system-event",
   "send",
   "agent",
+  "agent.enqueue",
+  "agent.abort",
   "agent.identity.get",
   "agent.wait",
   "browser.request",

@@ -25,6 +25,10 @@ import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./
 import { resolvePluginCacheInputs } from "./roots.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime, type CreatePluginRuntimeOptions } from "./runtime/index.js";
+import {
+  getPluginRuntimeCapabilityKey,
+  getSharedPluginRuntimeOptions,
+} from "./runtime/shared-runtime-options.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import type {
@@ -45,6 +49,8 @@ export type PluginLoadOptions = {
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   runtimeOptions?: CreatePluginRuntimeOptions;
+  inheritSharedRuntimeOptions?: boolean;
+  activateGlobalHookRunner?: boolean;
   cache?: boolean;
   mode?: "full" | "validate";
 };
@@ -238,6 +244,7 @@ function buildCacheKey(params: {
   plugins: NormalizedPluginsConfig;
   installs?: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
+  runtimeOptions?: CreatePluginRuntimeOptions;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
@@ -264,6 +271,7 @@ function buildCacheKey(params: {
     ...params.plugins,
     installs,
     loadPaths,
+    runtimeCapabilities: getPluginRuntimeCapabilityKey(params.runtimeOptions),
   })}`;
 }
 
@@ -623,9 +631,15 @@ function warnAboutUntrackedLoadedPlugins(params: {
   }
 }
 
-function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
+function activatePluginRegistry(
+  registry: PluginRegistry,
+  cacheKey: string,
+  activateGlobalHookRunner: boolean,
+): void {
   setActivePluginRegistry(registry, cacheKey);
-  initializeGlobalHookRunner(registry);
+  if (activateGlobalHookRunner) {
+    initializeGlobalHookRunner(registry);
+  }
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
@@ -636,17 +650,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
   const normalized = normalizePluginsConfig(cfg.plugins);
+  const effectiveRuntimeOptions =
+    options.runtimeOptions ??
+    (options.inheritSharedRuntimeOptions ? getSharedPluginRuntimeOptions() : undefined);
+  const shouldActivateGlobalHookRunner = options.activateGlobalHookRunner !== false;
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
     plugins: normalized,
     installs: cfg.plugins?.installs,
     env,
+    runtimeOptions: effectiveRuntimeOptions,
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
-      activatePluginRegistry(cached, cacheKey);
+      activatePluginRegistry(cached, cacheKey, shouldActivateGlobalHookRunner);
       return cached;
     }
   }
@@ -658,7 +677,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   // not eagerly load every channel runtime dependency.
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
-    resolvedRuntime ??= createPluginRuntime(options.runtimeOptions);
+    resolvedRuntime ??= createPluginRuntime(effectiveRuntimeOptions);
     return resolvedRuntime;
   };
   const runtime = new Proxy({} as PluginRuntime, {
@@ -1016,7 +1035,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, registry);
   }
-  activatePluginRegistry(registry, cacheKey);
+  activatePluginRegistry(registry, cacheKey, shouldActivateGlobalHookRunner);
   return registry;
 }
 

@@ -128,6 +128,14 @@ export const AgentWaitParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentAbortParamsSchema = Type.Object(
+  {
+    runId: NonEmptyString,
+    sessionKey: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const WakeParamsSchema = Type.Object(
   {
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),

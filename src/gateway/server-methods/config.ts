@@ -249,6 +249,8 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
     config: cfg,
     cache: true,
     workspaceDir,
+    inheritSharedRuntimeOptions: true,
+    activateGlobalHookRunner: false,
     logger: {
       info: () => {},
       warn: () => {},

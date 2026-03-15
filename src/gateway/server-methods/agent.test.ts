@@ -83,6 +83,7 @@ vi.mock("../../utils/delivery-context.js", async () => {
 
 const makeContext = (): GatewayRequestContext =>
   ({
+    agentAbortControllers: new Map(),
     dedupe: new Map(),
     addChatRun: vi.fn(),
     logGateway: { info: vi.fn(), error: vi.fn() },
@@ -517,6 +518,31 @@ describe("gateway agent handler", () => {
     // Should be undefined, not cause an error
     expect(capturedEntry?.cliSessionIds).toBeUndefined();
     expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("aborts active agent runs by run id", () => {
+    const respond = vi.fn();
+    const controller = new AbortController();
+    const context = makeContext();
+    context.agentAbortControllers.set("run-1", {
+      controller,
+      sessionKey: "agent:main:main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    void agentHandlers["agent.abort"]({
+      params: { runId: "run-1", sessionKey: "agent:main:main" },
+      respond: respond as never,
+      context,
+      req: { type: "req", id: "agent-abort-1", method: "agent.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(context.agentAbortControllers.has("run-1")).toBe(false);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: true, runId: "run-1" });
   });
 
   it("prunes legacy main alias keys when writing a canonical session entry", async () => {
