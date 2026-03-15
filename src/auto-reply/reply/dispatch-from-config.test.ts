@@ -34,8 +34,8 @@ const hookMocks = vi.hoisted(() => ({
     hasHooks: vi.fn(() => false),
     runInboundClaim: vi.fn(async () => undefined),
     runInboundClaimForPlugin: vi.fn(async () => undefined),
-    runInboundClaimForPluginOutcome: vi.fn<() => Promise<PluginTargetedInboundClaimOutcome>>(
-      async () => ({ status: "no_handler" as const }),
+    runInboundClaimForPluginOutcome: vi.fn(
+      async (): Promise<PluginTargetedInboundClaimOutcome> => ({ status: "no_handler" }),
     ),
     runMessageReceived: vi.fn(async () => {}),
   },
