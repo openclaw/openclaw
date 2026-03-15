@@ -633,10 +633,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       }
     }
     if (!allowedWorkspace && !allowedAdditional) {
-      throw new Error("path required");
+      throw new Error("path is outside the memory workspace");
     }
     if (!absPath.endsWith(".md")) {
-      throw new Error("path required");
+      throw new Error("only .md files are supported");
     }
     const statResult = await statRegularFile(absPath);
     if (statResult.missing) {
