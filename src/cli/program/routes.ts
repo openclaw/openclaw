@@ -34,8 +34,7 @@ const routeHealth: RouteSpec = {
 
 const routeStatus: RouteSpec = {
   match: (path) => path[0] === "status",
-  // Keep the JSON fast path lean; the text path still benefits from plugin-backed details.
-  loadPlugins: (argv) => !hasFlag(argv, "--json"),
+  loadPlugins: true,
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
     const deep = hasFlag(argv, "--deep");
