@@ -57,6 +57,8 @@ const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
 const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
+const DEFAULT_EDGE_CHINESE_VOICE = "zh-CN-XiaoxiaoNeural";
+const DEFAULT_EDGE_CHINESE_LANG = "zh-CN";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
@@ -518,6 +520,28 @@ function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {
   return config.edge.outputFormat;
 }
 
+function containsChineseCharacters(text: string): boolean {
+  return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u.test(text);
+}
+
+function usesChineseEdgeVoice(config: ResolvedTtsConfig["edge"]): boolean {
+  return config.lang.toLowerCase().startsWith("zh") || config.voice.toLowerCase().startsWith("zh-");
+}
+
+function resolveEdgeVoiceConfigForText(
+  text: string,
+  config: ResolvedTtsConfig["edge"],
+): ResolvedTtsConfig["edge"] {
+  if (!containsChineseCharacters(text) || usesChineseEdgeVoice(config)) {
+    return config;
+  }
+  return {
+    ...config,
+    voice: DEFAULT_EDGE_CHINESE_VOICE,
+    lang: DEFAULT_EDGE_CHINESE_LANG,
+  };
+}
+
 export function resolveTtsApiKey(
   config: ResolvedTtsConfig,
   provider: TtsProvider,
@@ -623,10 +647,7 @@ export async function textToSpeech(params: {
         const tempRoot = resolvePreferredOpenClawTmpDir();
         mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
         const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-        let edgeOutputFormat = resolveEdgeOutputFormat(config);
-        const fallbackEdgeOutputFormat =
-          edgeOutputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
-
+        const edgeVoiceConfig = resolveEdgeVoiceConfigForText(params.text, config.edge);
         const attemptEdgeTts = async (outputFormat: string) => {
           const extension = inferEdgeExtension(outputFormat);
           const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
@@ -634,7 +655,7 @@ export async function textToSpeech(params: {
             text: params.text,
             outputPath: audioPath,
             config: {
-              ...config.edge,
+              ...edgeVoiceConfig,
               outputFormat,
             },
             timeoutMs: config.timeoutMs,
@@ -642,17 +663,22 @@ export async function textToSpeech(params: {
           return { audioPath, outputFormat };
         };
 
+        let currentOutputFormat = edgeVoiceConfig.outputFormat;
+        const fallbackEdgeOutputFormat =
+          currentOutputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT
+            ? DEFAULT_EDGE_OUTPUT_FORMAT
+            : undefined;
         let edgeResult: { audioPath: string; outputFormat: string };
         try {
-          edgeResult = await attemptEdgeTts(edgeOutputFormat);
+          edgeResult = await attemptEdgeTts(currentOutputFormat);
         } catch (err) {
-          if (fallbackEdgeOutputFormat && fallbackEdgeOutputFormat !== edgeOutputFormat) {
+          if (fallbackEdgeOutputFormat && fallbackEdgeOutputFormat !== currentOutputFormat) {
             logVerbose(
-              `TTS: Edge output ${edgeOutputFormat} failed; retrying with ${fallbackEdgeOutputFormat}.`,
+              `TTS: Edge output ${currentOutputFormat} failed; retrying with ${fallbackEdgeOutputFormat}.`,
             );
-            edgeOutputFormat = fallbackEdgeOutputFormat;
+            currentOutputFormat = fallbackEdgeOutputFormat;
             try {
-              edgeResult = await attemptEdgeTts(edgeOutputFormat);
+              edgeResult = await attemptEdgeTts(currentOutputFormat);
             } catch (fallbackErr) {
               try {
                 rmSync(tempDir, { recursive: true, force: true });

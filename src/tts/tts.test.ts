@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
@@ -5,6 +7,7 @@ import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
+import * as ttsCore from "./tts-core.js";
 import * as tts from "./tts.js";
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
@@ -633,6 +636,64 @@ describe("tts", () => {
 
     it("includes instructions for gpt-4o-mini-tts", async () => {
       await expectTelephonyInstructions("gpt-4o-mini-tts", "Speak warmly");
+    });
+  });
+
+  describe("textToSpeech – edge Chinese voice selection", () => {
+    const baseCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: { provider: "edge" } },
+    };
+
+    it("switches to a Chinese Edge voice for Han text when config still uses English defaults", async () => {
+      const edgeSpy = vi
+        .spyOn(ttsCore, "edgeTTS")
+        .mockImplementation(async ({ outputPath, config }) => {
+          mkdirSync(path.dirname(outputPath), { recursive: true });
+          writeFileSync(outputPath, Buffer.from(config.voice));
+        });
+
+      try {
+        const result = await tts.textToSpeech({
+          text: "你好，这是一个中文语音测试。",
+          cfg: baseCfg,
+          channel: "telegram",
+          prefsPath: `/tmp/tts-edge-chinese-${Date.now()}.json`,
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.provider).toBe("edge");
+        expect(edgeSpy).toHaveBeenCalledTimes(1);
+        expect(edgeSpy.mock.calls[0]?.[0].config.voice).toBe("zh-CN-XiaoxiaoNeural");
+        expect(edgeSpy.mock.calls[0]?.[0].config.lang).toBe("zh-CN");
+      } finally {
+        edgeSpy.mockRestore();
+      }
+    });
+
+    it("keeps the configured English Edge voice for non-Chinese text", async () => {
+      const edgeSpy = vi
+        .spyOn(ttsCore, "edgeTTS")
+        .mockImplementation(async ({ outputPath, config }) => {
+          mkdirSync(path.dirname(outputPath), { recursive: true });
+          writeFileSync(outputPath, Buffer.from(config.voice));
+        });
+
+      try {
+        const result = await tts.textToSpeech({
+          text: "Hello from an English voice check.",
+          cfg: baseCfg,
+          channel: "telegram",
+          prefsPath: `/tmp/tts-edge-english-${Date.now()}.json`,
+        });
+
+        expect(result.success).toBe(true);
+        expect(edgeSpy).toHaveBeenCalledTimes(1);
+        expect(edgeSpy.mock.calls[0]?.[0].config.voice).toBe("en-US-MichelleNeural");
+        expect(edgeSpy.mock.calls[0]?.[0].config.lang).toBe("en-US");
+      } finally {
+        edgeSpy.mockRestore();
+      }
     });
   });
 
