@@ -23,9 +23,13 @@ const state: RegistryState = (() => {
 })();
 
 export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {
-  // Preserve httpRoutes from the previous registry so channel-registered webhook routes
-  // (e.g. BlueBubbles) survive per-agent plugin loader cycles that replace the registry.
-  // Clone to avoid mutating the caller's object (the loader may retain a reference).
+  // Preserve the httpRoutes reference across registry replacements. Channel plugins
+  // (e.g. BlueBubbles) register webhook routes into the active registry's httpRoutes
+  // during channel startup. The per-agent plugin loader replaces the registry with a
+  // fresh one, but channels are not re-started, so their routes would be lost.
+  // By sharing the same httpRoutes array, channel-registered routes survive loader cycles.
+  // When a channel is disabled and its provider stops, it calls its own unregister()
+  // teardown which removes its entries from this shared array.
   const prevRoutes = state.registry?.httpRoutes;
   if (
     prevRoutes &&
