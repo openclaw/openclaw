@@ -345,6 +345,10 @@ async function deliverToTargets(params: {
         to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
+        toolContext: {
+          currentChannelId: target.to,
+          currentChannelProvider: channel,
+        },
         payloads: [payload],
       });
     } catch (err) {

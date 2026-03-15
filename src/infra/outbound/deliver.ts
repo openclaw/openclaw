@@ -15,6 +15,7 @@ import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
+  ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
@@ -189,6 +190,7 @@ function createChannelOutboundContextBase(
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
     deps: params.deps,
+    toolContext: params.toolContext,
     silent: params.silent,
     mediaLocalRoots: params.mediaLocalRoots,
   };
@@ -208,6 +210,7 @@ type DeliverOutboundPayloadsCoreParams = {
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  toolContext?: ChannelThreadingToolContext;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
