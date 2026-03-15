@@ -20,9 +20,48 @@ const ExecApprovalForwardingSchema = z
   .strict()
   .optional();
 
+const ToolApprovalForwardingSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: z.union([z.literal("session"), z.literal("targets"), z.literal("both")]).optional(),
+    agentFilter: z.array(z.string()).optional(),
+    sessionFilter: z.array(z.string()).optional(),
+    targets: z.array(ExecApprovalForwardTargetSchema).optional(),
+  })
+  .strict()
+  .optional();
+
+const ToolAllowlistEntrySchema = z
+  .object({
+    pattern: z.string().min(1),
+  })
+  .strict();
+
+const ToolApprovalsAgentSchema = z
+  .object({
+    security: z.string().optional(),
+    ask: z.string().optional(),
+    askFallback: z.string().optional(),
+    allowlist: z.array(ToolAllowlistEntrySchema).optional(),
+  })
+  .strict();
+
+const ToolApprovalsToolConfigSchema = z
+  .object({
+    security: z.string().optional(),
+    ask: z.string().optional(),
+    askFallback: z.string().optional(),
+    agents: z.record(z.string(), ToolApprovalsAgentSchema).optional(),
+    allowlist: z.array(ToolAllowlistEntrySchema).optional(),
+  })
+  .strict()
+  .optional();
+
 export const ApprovalsSchema = z
   .object({
     exec: ExecApprovalForwardingSchema,
+    tool: ToolApprovalForwardingSchema,
+    toolPolicy: ToolApprovalsToolConfigSchema,
   })
   .strict()
   .optional();

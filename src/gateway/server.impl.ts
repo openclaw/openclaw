@@ -87,6 +87,7 @@ import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { createSecretsHandlers } from "./server-methods/secrets.js";
+import { createToolApprovalHandlers } from "./server-methods/tool-approval.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
@@ -793,6 +794,13 @@ export async function startGatewayServer(
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,
   });
+  // Tool approvals share the same manager type but use a separate instance
+  // so pending IDs do not collide between exec and tool approval namespaces.
+  const toolApprovalManager = new ExecApprovalManager();
+  const toolApprovalForwarder = createExecApprovalForwarder();
+  const toolApprovalHandlers = createToolApprovalHandlers(toolApprovalManager, {
+    forwarder: toolApprovalForwarder,
+  });
   const secretsHandlers = createSecretsHandlers({
     reloadSecrets: async () => {
       const active = getActiveSecretsRuntimeSnapshot();
@@ -895,6 +903,7 @@ export async function startGatewayServer(
     extraHandlers: {
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
+      ...toolApprovalHandlers,
       ...secretsHandlers,
     },
     broadcast,

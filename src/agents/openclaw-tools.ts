@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveToolApprovalPolicy } from "../infra/tool-approval-policy.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -13,6 +14,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { withToolApprovalGate } from "./tools/mcp-tool-approval.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
@@ -216,15 +218,19 @@ export function createOpenClawTools(
     ...(pdfTool ? [pdfTool] : []),
   ];
 
+  const toolApprovalAgentId =
+    options?.requesterAgentIdOverride ??
+    resolveSessionAgentId({
+      sessionKey: options?.agentSessionKey,
+      config: options?.config,
+    });
+
   const pluginTools = resolvePluginTools({
     context: {
       config: options?.config,
       workspaceDir,
       agentDir: options?.agentDir,
-      agentId: resolveSessionAgentId({
-        sessionKey: options?.agentSessionKey,
-        config: options?.config,
-      }),
+      agentId: toolApprovalAgentId,
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
       messageChannel: options?.agentChannel,
@@ -237,5 +243,27 @@ export function createOpenClawTools(
     toolAllowlist: options?.pluginToolAllowlist,
   });
 
-  return [...tools, ...pluginTools];
+  // Resolve the tool approval policy once. If the policy is permissive (default),
+  // skip wrapping entirely to avoid overhead on every plugin tool call.
+  const toolPolicy = resolveToolApprovalPolicy({
+    cfg: options?.config ?? ({} as OpenClawConfig),
+    agentId: toolApprovalAgentId,
+  });
+  const needsToolApprovalGate = !(toolPolicy.security === "full" && toolPolicy.ask === "off");
+
+  const gatedPluginTools = needsToolApprovalGate
+    ? pluginTools.map((tool) =>
+        withToolApprovalGate(tool, {
+          config: options?.config,
+          agentId: toolApprovalAgentId,
+          sessionKey: options?.agentSessionKey,
+          turnSourceChannel: options?.agentChannel,
+          turnSourceTo: options?.agentTo,
+          turnSourceAccountId: options?.agentAccountId,
+          turnSourceThreadId: options?.agentThreadId,
+        }),
+      )
+    : pluginTools;
+
+  return [...tools, ...gatedPluginTools];
 }
