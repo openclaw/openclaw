@@ -179,8 +179,12 @@ export async function deliverSlackSlashReplies(params: {
       chunkMode === "newline"
         ? chunkMarkdownTextWithMode(combined, chunkLimit, chunkMode)
         : [combined];
+    // Slash replies use response_url which doesn't support Block Kit table
+    // attachments.  Fall back to "code" mode so table content isn't silently
+    // dropped when the default table mode is "block".
+    const effectiveTableMode = params.tableMode === "block" ? "code" : params.tableMode;
     const chunks = markdownChunks.flatMap((markdown) =>
-      markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode: params.tableMode }),
+      markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode: effectiveTableMode }),
     );
     if (!chunks.length && combined) {
       chunks.push(combined);
