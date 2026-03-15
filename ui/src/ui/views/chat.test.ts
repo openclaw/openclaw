@@ -48,7 +48,15 @@ function createChatHeaderState(
         defaults: { model: "gpt-5", contextTokens: null },
         sessions: omitSessionFromList
           ? []
-          : [{ key: "main", kind: "direct", updatedAt: null, model: currentModel }],
+          : [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                model: currentModel,
+                modelProvider: "openai",
+              },
+            ],
       };
     }
     if (method === "models.list") {
@@ -67,7 +75,15 @@ function createChatHeaderState(
       defaults: { model: "gpt-5", contextTokens: null },
       sessions: omitSessionFromList
         ? []
-        : [{ key: "main", kind: "direct", updatedAt: null, model: currentModel }],
+        : [
+            {
+              key: "main",
+              kind: "direct",
+              updatedAt: null,
+              model: currentModel,
+              modelProvider: "openai",
+            },
+          ],
     },
     chatModelOverrides: {},
     chatModelCatalog: catalog,
@@ -565,16 +581,16 @@ describe("chat view", () => {
     expect(modelSelect).not.toBeNull();
     expect(modelSelect?.value).toBe("");
 
-    modelSelect!.value = "gpt-5-mini";
+    modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
-      model: "gpt-5-mini",
+      model: "openai/gpt-5-mini",
     });
     expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
-    expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
+    expect(state.sessionsResult?.sessions[0]?.model).toBe("openai/gpt-5-mini");
     vi.unstubAllGlobals();
   });
 
@@ -593,7 +609,9 @@ describe("chat view", () => {
       'select[data-chat-model-select="true"]',
     );
     expect(modelSelect).not.toBeNull();
-    expect(modelSelect?.value).toBe("gpt-5-mini");
+    // Session was initialized with model="gpt-5-mini" and modelProvider="openai";
+    // the picker should pre-select the full "openai/gpt-5-mini" catalog entry.
+    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
 
     modelSelect!.value = "";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -637,7 +655,7 @@ describe("chat view", () => {
     );
     expect(modelSelect).not.toBeNull();
 
-    modelSelect!.value = "gpt-5-mini";
+    modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
     render(renderChatSessionSelect(state), container);
@@ -645,7 +663,7 @@ describe("chat view", () => {
     const rerendered = container.querySelector<HTMLSelectElement>(
       'select[data-chat-model-select="true"]',
     );
-    expect(rerendered?.value).toBe("gpt-5-mini");
+    expect(rerendered?.value).toBe("openai/gpt-5-mini");
     vi.unstubAllGlobals();
   });
 

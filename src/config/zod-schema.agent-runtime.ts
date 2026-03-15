@@ -754,6 +754,10 @@ export const AgentEntrySchema = z
     subagents: z
       .object({
         allowAgents: z.array(z.string()).optional(),
+        /** @deprecated Use `allowAgents` instead. Accepted as an alias for backward compatibility. */
+        allow: z.array(z.string()).optional(),
+        /** @deprecated Use `allowAgents` instead. Accepted as an alias for backward compatibility. */
+        allowlist: z.array(z.string()).optional(),
         model: z
           .union([
             z.string(),
