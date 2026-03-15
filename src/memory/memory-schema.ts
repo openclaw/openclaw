@@ -79,6 +79,95 @@ export function ensureMemoryIndexSchema(params: {
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);`);
 
+  // Tasks table — action items extracted from sessions or added by the agent/user.
+  params.db.exec(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id          TEXT PRIMARY KEY,
+      text        TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'open',
+      due         TEXT,
+      priority    TEXT NOT NULL DEFAULT 'normal',
+      source      TEXT NOT NULL DEFAULT 'user',
+      session_key TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due);`);
+
+  // Migration: add notified_at column for proactive task notifications.
+  ensureTaskColumn(params.db, "notified_at", "TEXT");
+
+  // Message log — structured record of every inbound and outbound message.
+  params.db.exec(`
+    CREATE TABLE IF NOT EXISTS message_log (
+      id            TEXT PRIMARY KEY,
+      session_key   TEXT NOT NULL,
+      direction     TEXT NOT NULL,
+      role          TEXT NOT NULL,
+      channel       TEXT,
+      account_id    TEXT,
+      sender_id     TEXT,
+      sender_name   TEXT,
+      recipient     TEXT,
+      body          TEXT,
+      media_url     TEXT,
+      media_type    TEXT,
+      media_urls    TEXT,
+      chat_type     TEXT,
+      group_subject TEXT,
+      thread_id     TEXT,
+      reply_to_id   TEXT,
+      message_sid   TEXT,
+      lang          TEXT,
+      sentiment     TEXT,
+      theme         TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      enriched_at   TEXT
+    );
+  `);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_msglog_session ON message_log(session_key);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_msglog_channel ON message_log(channel);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_msglog_created ON message_log(created_at);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_msglog_sender  ON message_log(sender_id);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_msglog_dir     ON message_log(direction);`);
+
+  // FTS5 for full-text search on message bodies.
+  if (params.ftsEnabled) {
+    try {
+      params.db.exec(
+        `CREATE VIRTUAL TABLE IF NOT EXISTS message_log_fts USING fts5(\n` +
+          `  body,\n` +
+          `  id UNINDEXED,\n` +
+          `  session_key UNINDEXED,\n` +
+          `  channel UNINDEXED,\n` +
+          `  sender_id UNINDEXED\n` +
+          `);`,
+      );
+    } catch {
+      // Non-fatal: FTS for message_log is optional.
+    }
+  }
+
+  // Entities table — structured knowledge extracted from conversations.
+  params.db.exec(`
+    CREATE TABLE IF NOT EXISTS entities (
+      id            TEXT PRIMARY KEY,
+      type          TEXT NOT NULL,
+      name          TEXT NOT NULL,
+      detail        TEXT,
+      confidence    REAL NOT NULL DEFAULT 0.5,
+      source        TEXT NOT NULL DEFAULT 'auto-capture',
+      session_key   TEXT,
+      first_seen    TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen     TEXT NOT NULL DEFAULT (datetime('now')),
+      superseded_by TEXT
+    );
+  `);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);`);
+
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }
 
@@ -93,4 +182,12 @@ function ensureColumn(
     return;
   }
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+function ensureTaskColumn(db: DatabaseSync, column: string, definition: string): void {
+  const rows = db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>;
+  if (rows.some((row) => row.name === column)) {
+    return;
+  }
+  db.exec(`ALTER TABLE tasks ADD COLUMN ${column} ${definition}`);
 }
