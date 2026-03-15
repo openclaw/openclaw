@@ -1,5 +1,6 @@
 import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
@@ -8,6 +9,7 @@ import {
   requireApiKey,
   resolveApiKeyForProvider,
   resolveAwsSdkEnvVarName,
+  resolveBedrockBearerToken,
   resolveModelAuthMode,
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
@@ -68,36 +70,105 @@ describe("resolveModelAuthMode", () => {
     expect(resolveModelAuthMode("openai", undefined, store)).toBe("mixed");
   });
 
-  it("returns aws-sdk when provider auth is overridden", () => {
-    expect(
-      resolveModelAuthMode(
-        "amazon-bedrock",
-        {
-          models: {
-            providers: {
-              "amazon-bedrock": {
-                baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                models: [],
-                auth: "aws-sdk",
+  it("returns aws-sdk when provider auth is overridden", async () => {
+    await withEnvAsync({ AWS_BEARER_TOKEN_BEDROCK: undefined }, async () => {
+      expect(
+        resolveModelAuthMode(
+          "amazon-bedrock",
+          {
+            models: {
+              providers: {
+                "amazon-bedrock": {
+                  baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+                  models: [],
+                  auth: "aws-sdk",
+                },
               },
             },
           },
-        },
-        { version: 1, profiles: {} },
-      ),
-    ).toBe("aws-sdk");
+          { version: 1, profiles: {} },
+        ),
+      ).toBe("aws-sdk");
+    });
   });
 
-  it("returns aws-sdk for bedrock alias without explicit auth override", () => {
-    expect(resolveModelAuthMode("bedrock", undefined, { version: 1, profiles: {} })).toBe(
-      "aws-sdk",
+  it("returns aws-sdk for bedrock alias without explicit auth override", async () => {
+    await withEnvAsync({ AWS_BEARER_TOKEN_BEDROCK: undefined }, async () => {
+      expect(resolveModelAuthMode("bedrock", undefined, { version: 1, profiles: {} })).toBe(
+        "aws-sdk",
+      );
+    });
+  });
+
+  it("returns aws-sdk for aws-bedrock alias without explicit auth override", async () => {
+    await withEnvAsync({ AWS_BEARER_TOKEN_BEDROCK: undefined }, async () => {
+      expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
+        "aws-sdk",
+      );
+    });
+  });
+
+  it("returns api-key for bedrock even with explicit aws-sdk override when bearer token is set", async () => {
+    await withEnvAsync(
+      {
+        AWS_BEARER_TOKEN_BEDROCK: "bedrock-bearer-override", // pragma: allowlist secret
+        AWS_ACCESS_KEY_ID: undefined,
+        AWS_SECRET_ACCESS_KEY: undefined,
+        AWS_PROFILE: undefined,
+      },
+      async () => {
+        expect(
+          resolveModelAuthMode(
+            "amazon-bedrock",
+            {
+              models: {
+                providers: {
+                  "amazon-bedrock": {
+                    baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+                    models: [],
+                    auth: "aws-sdk",
+                  },
+                },
+              },
+            },
+            { version: 1, profiles: {} },
+          ),
+        ).toBe("api-key");
+      },
     );
   });
 
-  it("returns aws-sdk for aws-bedrock alias without explicit auth override", () => {
-    expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
-      "aws-sdk",
+  it("returns api-key for bedrock when bearer token is set", async () => {
+    await withEnvAsync(
+      {
+        AWS_BEARER_TOKEN_BEDROCK: "bedrock-bearer-test", // pragma: allowlist secret
+        AWS_ACCESS_KEY_ID: undefined,
+        AWS_SECRET_ACCESS_KEY: undefined,
+        AWS_PROFILE: undefined,
+      },
+      async () => {
+        expect(
+          resolveModelAuthMode("amazon-bedrock", undefined, { version: 1, profiles: {} }),
+        ).toBe("api-key");
+      },
     );
+  });
+});
+
+describe("resolveBedrockBearerToken", () => {
+  it("returns the trimmed token value when set", () => {
+    const env = { AWS_BEARER_TOKEN_BEDROCK: "  my-token  " } as NodeJS.ProcessEnv;
+    expect(resolveBedrockBearerToken(env)).toBe("my-token");
+  });
+
+  it("returns undefined when env var is missing", () => {
+    expect(resolveBedrockBearerToken({} as NodeJS.ProcessEnv)).toBeUndefined();
+  });
+
+  it("returns undefined when env var is empty/whitespace", () => {
+    expect(
+      resolveBedrockBearerToken({ AWS_BEARER_TOKEN_BEDROCK: "  " } as NodeJS.ProcessEnv),
+    ).toBeUndefined();
   });
 });
 
@@ -468,23 +539,54 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     ).rejects.toThrow('No API key found for provider "custom"');
   });
 
+  it("does not leak bearer token to non-bedrock provider with aws-sdk auth", async () => {
+    await withEnvAsync(
+      {
+        AWS_BEARER_TOKEN_BEDROCK: "bedrock-only-token", // pragma: allowlist secret
+        AWS_ACCESS_KEY_ID: "access",
+        AWS_SECRET_ACCESS_KEY: "secret", // pragma: allowlist secret
+      },
+      async () => {
+        const auth = await resolveApiKeyForProvider({
+          provider: "google-vertex",
+          cfg: {
+            models: {
+              providers: {
+                "google-vertex": {
+                  auth: "aws-sdk",
+                  models: [],
+                },
+              },
+            },
+          },
+        });
+
+        // Non-Bedrock provider should get aws-sdk mode, not the bearer token.
+        expect(auth.mode).toBe("aws-sdk");
+        expect(auth.apiKey).toBeUndefined();
+      },
+    );
+  });
+
   it("keeps built-in aws-sdk fallback for local baseUrl overrides", async () => {
-    const auth = await resolveApiKeyForProvider({
-      provider: "amazon-bedrock",
-      cfg: {
-        models: {
-          providers: {
-            "amazon-bedrock": {
-              baseUrl: "http://127.0.0.1:8080/v1",
-              models: [],
+    await withEnvAsync({ AWS_BEARER_TOKEN_BEDROCK: undefined }, async () => {
+      const auth = await resolveApiKeyForProvider({
+        provider: "amazon-bedrock",
+        cfg: {
+          models: {
+            providers: {
+              "amazon-bedrock": {
+                baseUrl: "http://*********:8080/v1",
+                models: [],
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    expect(auth.mode).toBe("aws-sdk");
-    expect(auth.apiKey).toBeUndefined();
+      expect(auth.mode).toBe("aws-sdk");
+      expect(auth.apiKey).toBeUndefined();
+    });
   });
 });
 

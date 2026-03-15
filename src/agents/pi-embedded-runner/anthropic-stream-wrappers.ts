@@ -356,6 +356,34 @@ export function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined):
     });
 }
 
+/**
+ * Injects `Authorization: Bearer <token>` for Bedrock requests that use
+ * bearer-token auth instead of AWS SDK signing.
+ */
+export function createBedrockBearerTokenWrapper(
+  baseStreamFn: StreamFn | undefined,
+  bearerToken: string,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const merged: Record<string, string> = {};
+    // Copy existing headers, stripping any case-insensitive Authorization
+    // variant to avoid duplicate/comma-joined values in the request.
+    if (options?.headers) {
+      for (const [key, value] of Object.entries(options.headers)) {
+        if (key.toLowerCase() !== "authorization") {
+          merged[key] = value;
+        }
+      }
+    }
+    merged.Authorization = `Bearer ${bearerToken}`;
+    return underlying(model, context, {
+      ...options,
+      headers: merged,
+    });
+  };
+}
+
 export function isAnthropicBedrockModel(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
   return normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude");

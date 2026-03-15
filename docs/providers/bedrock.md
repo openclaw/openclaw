@@ -8,15 +8,38 @@ title: "Amazon Bedrock"
 
 # Amazon Bedrock
 
-OpenClaw can use **Amazon Bedrock** models via pi‑ai’s **Bedrock Converse**
-streaming provider. Bedrock auth uses the **AWS SDK default credential chain**,
-not an API key.
+OpenClaw can use **Amazon Bedrock** models via pi‑ai's **Bedrock Converse**
+streaming provider.
+
+## Authentication
+
+Bedrock supports two authentication methods. When both are available, bearer
+token auth takes precedence.
+
+**Auth precedence (highest → lowest):**
+
+1. **Bearer token** — `AWS_BEARER_TOKEN_BEDROCK` env var. Sends `Authorization: Bearer <token>` directly; no AWS SDK signing required.
+2. **AWS SDK credential chain** — `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, `AWS_PROFILE`, instance roles, etc.
+
+### Bearer token (API key) authentication
+
+Generate a Bedrock API key from the [Amazon Bedrock console](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-generate.html),
+then export it:
+
+```bash
+export AWS_BEARER_TOKEN_BEDROCK="your-bedrock-api-key"
+export AWS_REGION="us-east-1"
+openclaw gateway
+```
+
+When this env var is set, OpenClaw bypasses AWS SDK signing and sends the token
+as an `Authorization: Bearer` header on every Bedrock request.
 
 ## What pi‑ai supports
 
 - Provider: `amazon-bedrock`
 - API: `bedrock-converse-stream`
-- Auth: AWS credentials (env vars, shared config, or instance role)
+- Auth: Bearer token (`AWS_BEARER_TOKEN_BEDROCK`) or AWS credentials (env vars, shared config, or instance role)
 - Region: `AWS_REGION` or `AWS_DEFAULT_REGION` (default: `us-east-1`)
 
 ## Automatic model discovery
@@ -167,9 +190,9 @@ openclaw models list
 - Bedrock requires **model access** enabled in your AWS account/region.
 - Automatic discovery needs the `bedrock:ListFoundationModels` permission.
 - If you use profiles, set `AWS_PROFILE` on the gateway host.
-- OpenClaw surfaces the credential source in this order: `AWS_BEARER_TOKEN_BEDROCK`,
+- Auth precedence: `AWS_BEARER_TOKEN_BEDROCK` (bearer token, highest priority),
   then `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, then `AWS_PROFILE`, then the
-  default AWS SDK chain.
+  default AWS SDK chain. When bearer token is set, AWS SDK signing is bypassed.
 - Reasoning support depends on the model; check the Bedrock model card for
   current capabilities.
 - If you prefer a managed key flow, you can also place an OpenAI‑compatible

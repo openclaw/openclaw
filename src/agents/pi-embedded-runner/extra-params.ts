@@ -1,12 +1,15 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { resolveBedrockBearerToken } from "../../agents/model-auth.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
+  createBedrockBearerTokenWrapper,
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
   resolveAnthropicFastMode,
@@ -422,9 +425,17 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
   }
 
-  if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
+  if (normalizeProviderId(provider) === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
     log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
     agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
+  }
+
+  if (normalizeProviderId(provider) === "amazon-bedrock") {
+    const bearerToken = resolveBedrockBearerToken();
+    if (bearerToken) {
+      log.debug(`applying Bedrock bearer token auth header for ${provider}/${modelId}`);
+      agent.streamFn = createBedrockBearerTokenWrapper(agent.streamFn, bearerToken);
+    }
   }
 
   // Enable Z.AI tool_stream for real-time tool call streaming.

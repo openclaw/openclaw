@@ -40,11 +40,17 @@ async function resolveBedrockProvider() {
 async function expectBedrockAuthSource(params: {
   env: Record<string, string | undefined>;
   expectedSource: string;
+  expectedMode?: "aws-sdk" | "api-key";
+  expectedApiKey?: string;
 }) {
   await withEnvAsync(params.env, async () => {
     const resolved = await resolveBedrockProvider();
-    expect(resolved.mode).toBe("aws-sdk");
-    expect(resolved.apiKey).toBeUndefined();
+    expect(resolved.mode).toBe(params.expectedMode ?? "aws-sdk");
+    if (params.expectedApiKey !== undefined) {
+      expect(resolved.apiKey).toBe(params.expectedApiKey);
+    } else {
+      expect(resolved.apiKey).toBeUndefined();
+    }
     expect(resolved.source).toContain(params.expectedSource);
   });
 }
@@ -323,6 +329,8 @@ describe("getApiKeyForModel", () => {
         AWS_PROFILE: "profile",
       },
       expectedSource: "AWS_BEARER_TOKEN_BEDROCK",
+      expectedMode: "api-key",
+      expectedApiKey: "bedrock-token",
     });
   });
 
