@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
 import {
   collectSecretInputAssignment,
   type ResolverContext,
@@ -22,8 +23,11 @@ export function collectPluginConfigAssignments(params: {
     return;
   }
 
-  // When the top-level plugins surface is disabled, all entries are inactive
-  const pluginSurfaceEnabled = params.config.plugins?.enabled !== false;
+  // Use the same enable-state logic the plugin loader uses so that entries
+  // disabled by denylist, allowlist, or other config-level rules are treated
+  // as inactive. We pass origin "config" because these entries are defined in
+  // the config file and that is the most accurate origin we can infer here.
+  const normalizedConfig = normalizePluginsConfig(params.config.plugins);
 
   for (const [pluginId, entry] of Object.entries(entries)) {
     if (!isRecord(entry)) {
@@ -33,11 +37,12 @@ export function collectPluginConfigAssignments(params: {
     if (!isRecord(pluginConfig)) {
       continue;
     }
-    const pluginActive = pluginSurfaceEnabled && entry.enabled !== false;
+    const enableState = resolveEnableState(pluginId, "config", normalizedConfig);
     collectMcpServerEnvAssignments({
       pluginId,
       pluginConfig,
-      active: pluginActive,
+      active: enableState.enabled,
+      inactiveReason: enableState.reason ?? "plugin is disabled.",
       defaults: params.defaults,
       context: params.context,
     });
@@ -48,6 +53,7 @@ function collectMcpServerEnvAssignments(params: {
   pluginId: string;
   pluginConfig: Record<string, unknown>;
   active: boolean;
+  inactiveReason: string;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
@@ -73,7 +79,7 @@ function collectMcpServerEnvAssignments(params: {
         defaults: params.defaults,
         context: params.context,
         active: params.active,
-        inactiveReason: "plugin surface or entry is disabled.",
+        inactiveReason: `plugin "${params.pluginId}": ${params.inactiveReason}`,
         apply: (value) => {
           env[envKey] = value;
         },

@@ -227,6 +227,78 @@ describe("collectPluginConfigAssignments", () => {
     expect(context.assignments).toHaveLength(1);
   });
 
+  it("skips assignments when plugin is in denylist", () => {
+    const config = asConfig({
+      plugins: {
+        deny: ["acpx"],
+        entries: {
+          acpx: {
+            config: {
+              mcpServers: {
+                s1: { command: "node", env: { K: envRef("K") } },
+              },
+            },
+          },
+        },
+      },
+    });
+    const context = makeContext(config);
+
+    collectPluginConfigAssignments({ config, defaults: undefined, context });
+
+    expect(context.assignments).toHaveLength(0);
+    expect(context.warnings.some((w) => w.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")).toBe(
+      true,
+    );
+  });
+
+  it("skips assignments when allowlist is set and plugin is not in it", () => {
+    const config = asConfig({
+      plugins: {
+        allow: ["other-plugin"],
+        entries: {
+          acpx: {
+            config: {
+              mcpServers: {
+                s1: { command: "node", env: { K: envRef("K") } },
+              },
+            },
+          },
+        },
+      },
+    });
+    const context = makeContext(config);
+
+    collectPluginConfigAssignments({ config, defaults: undefined, context });
+
+    expect(context.assignments).toHaveLength(0);
+    expect(context.warnings.some((w) => w.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")).toBe(
+      true,
+    );
+  });
+
+  it("collects assignments when plugin is in allowlist", () => {
+    const config = asConfig({
+      plugins: {
+        allow: ["acpx"],
+        entries: {
+          acpx: {
+            config: {
+              mcpServers: {
+                s1: { command: "node", env: { K: envRef("K") } },
+              },
+            },
+          },
+        },
+      },
+    });
+    const context = makeContext(config);
+
+    collectPluginConfigAssignments({ config, defaults: undefined, context });
+
+    expect(context.assignments).toHaveLength(1);
+  });
+
   it("ignores plain string env values", () => {
     const config = asConfig({
       plugins: {
