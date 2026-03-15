@@ -5,6 +5,7 @@ import {
   approveDevicePairing,
   listDevicePairing,
   summarizeDeviceTokens,
+  updatePairedDeviceMetadata,
   type PairedDevice as InfraPairedDevice,
 } from "../infra/device-pairing.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
@@ -147,9 +148,10 @@ async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePair
 async function approvePairingWithFallback(
   opts: DevicesRpcOpts,
   requestId: string,
+  displayName?: string,
 ): Promise<Record<string, unknown> | null> {
   try {
-    return await callGatewayCli("device.pair.approve", opts, { requestId });
+    return await callGatewayCli("device.pair.approve", opts, { requestId, displayName });
   } catch (error) {
     if (!shouldUseLocalPairingFallback(opts, error)) {
       throw error;
@@ -160,6 +162,18 @@ async function approvePairingWithFallback(
     const approved = await approveDevicePairing(requestId);
     if (!approved) {
       return null;
+    }
+    if (displayName && approved.device) {
+      try {
+        await updatePairedDeviceMetadata(approved.device.deviceId, { displayName });
+        approved.device.displayName = displayName;
+      } catch (err) {
+        if (!opts.json) {
+          defaultRuntime.log(
+            theme.warn(`device pairing approved but displayName update failed device=${approved.device.deviceId}: ${err}`),
+          );
+        }
+      }
     }
     return {
       requestId,
@@ -366,10 +380,17 @@ export function registerDevicesCli(program: Command) {
       .command("approve")
       .description("Approve a pending device pairing request")
       .argument("[requestId]", "Pending request id")
+      .argument("[displayName]", "Display name / 备注名称 (optional)", undefined)
       .option("--latest", "Approve the most recent pending request", false)
-      .action(async (requestId: string | undefined, opts: DevicesRpcOpts) => {
+      .action(async (requestId: string | undefined, displayName: string | undefined, opts: DevicesRpcOpts) => {
         let resolvedRequestId = requestId?.trim();
-        if (!resolvedRequestId || opts.latest) {
+        // When --latest is used and requestId is provided but displayName is empty,
+        // it means the user passed displayName as first argument, promote it
+        if (opts.latest && resolvedRequestId && !displayName) {
+          displayName = resolvedRequestId;
+          resolvedRequestId = undefined;
+        }
+        if (!resolvedRequestId) {
           const latest = selectLatestPendingRequest((await listPairingWithFallback(opts)).pending);
           resolvedRequestId = latest?.requestId?.trim();
         }
@@ -378,7 +399,7 @@ export function registerDevicesCli(program: Command) {
           defaultRuntime.exit(1);
           return;
         }
-        const result = await approvePairingWithFallback(opts, resolvedRequestId);
+        const result = await approvePairingWithFallback(opts, resolvedRequestId, displayName);
         if (!result) {
           defaultRuntime.error("unknown requestId");
           defaultRuntime.exit(1);
@@ -389,8 +410,10 @@ export function registerDevicesCli(program: Command) {
           return;
         }
         const deviceId = (result as { device?: { deviceId?: string } })?.device?.deviceId;
+        const displayLabel = (result as { device?: { displayName?: string } })?.device?.displayName;
+        const display = displayLabel ? `${displayLabel} (${deviceId})` : (deviceId ?? "ok");
         defaultRuntime.log(
-          `${theme.success("Approved")} ${theme.command(deviceId ?? "ok")} ${theme.muted(`(${resolvedRequestId})`)}`,
+          `${theme.success("Approved")} ${theme.command(display)} ${theme.muted(`(${resolvedRequestId})`)}`,
         );
       }),
   );

@@ -10,6 +10,7 @@ const buildGatewayConnectionDetails = vi.fn(() => ({
 const listDevicePairing = vi.fn();
 const approveDevicePairing = vi.fn();
 const summarizeDeviceTokens = vi.fn();
+const updatePairedDeviceMetadata = vi.fn();
 const withProgress = vi.fn(async (_opts: unknown, fn: () => Promise<unknown>) => await fn());
 const runtime = {
   log: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock("../infra/device-pairing.js", () => ({
   listDevicePairing,
   approveDevicePairing,
   summarizeDeviceTokens,
+  updatePairedDeviceMetadata,
 }));
 
 vi.mock("../runtime.js", () => ({
