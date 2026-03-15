@@ -12,6 +12,7 @@ type ExecuteDeps = {
   stripe: StripeClient;
   env?: NodeJS.ProcessEnv;
   runId?: string;
+  logger?: { warn: (...args: unknown[]) => void };
 };
 
 function newRunId(): string {
@@ -49,7 +50,7 @@ export async function executeRevenueCommand(
 
   const contact =
     contactLookup ??
-    (console.log(
+    (deps.logger?.warn(
       "[debug] createContact payload:",
       JSON.stringify({
         name: parsed.contactName,
@@ -68,7 +69,7 @@ export async function executeRevenueCommand(
     let opportunityId: string | undefined;
     let opportunityError: string | undefined;
     try {
-      console.log(
+      deps.logger?.warn(
         "[debug] createOpportunity payload:",
         JSON.stringify({
           contactId: contact.id,
@@ -82,11 +83,11 @@ export async function executeRevenueCommand(
         name: parsed.opportunityName,
         amount: parsed.price,
         locationId,
-    });
-    opportunityId = opp.id;
-  } catch (error) {
-    opportunityError = error instanceof Error ? error.message : String(error);
-  }
+      });
+      opportunityId = opp.id;
+    } catch (error) {
+      opportunityError = error instanceof Error ? error.message : String(error);
+    }
 
   let paymentUrl: string | undefined;
   let paymentError: string | undefined;

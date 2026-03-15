@@ -179,11 +179,12 @@ export function createRevenueTools(api: OpenClawPluginApi): AnyAgentTool[] {
       description:
         "End-to-end revenue flow: parse command, dedupe/create contact, create opportunity, and create Stripe payment link.",
       parameters: commandSchema,
-      async execute(_id: string, params: Record<string, unknown>) {
-        const result = await executeRevenueCommand(parseInput(params), {
-          ghl,
-          stripe,
-        });
+        async execute(_id: string, params: Record<string, unknown>) {
+          const result = await executeRevenueCommand(parseInput(params), {
+            ghl,
+            stripe,
+            logger: api.logger,
+          });
 
         const callbackUrl =
           typeof api.pluginConfig?.callbackUrl === "string"
