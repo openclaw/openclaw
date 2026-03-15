@@ -333,11 +333,17 @@ function deriveIdHint(params: {
   const unscoped = rawPackageName.includes("/")
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
+  const canonicalPackageId =
+    {
+      "ollama-provider": "ollama",
+      "sglang-provider": "sglang",
+      "vllm-provider": "vllm",
+    }[unscoped] ?? unscoped;
 
   if (!params.hasMultipleExtensions) {
-    return unscoped;
+    return canonicalPackageId;
   }
-  return `${unscoped}/${base}`;
+  return `${canonicalPackageId}/${base}`;
 }
 
 function addCandidate(params: {
