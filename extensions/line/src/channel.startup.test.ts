@@ -129,3 +129,116 @@ describe("linePlugin gateway.startAccount", () => {
     await task;
   });
 });
+
+describe("linePlugin status", () => {
+  it("does not report missing token or secret when snapshot came from file-backed config", async () => {
+    const snapshot = await linePlugin.status?.buildAccountSnapshot?.({
+      account: {
+        accountId: "default",
+        name: "Default",
+        enabled: true,
+        channelAccessToken: "token-from-file",
+        channelSecret: "secret-from-file",
+        tokenSource: "file",
+        config: {} as ResolvedLineAccount["config"],
+      } as never,
+      cfg: {} as OpenClawConfig,
+      runtime: undefined,
+      probe: undefined,
+      audit: undefined,
+    });
+
+    expect(snapshot?.configured).toBe(true);
+    expect(linePlugin.status?.collectStatusIssues?.([snapshot as never])).toEqual([]);
+  });
+
+  it("keeps per-field warnings when only one credential is missing", async () => {
+    const snapshot = await linePlugin.status?.buildAccountSnapshot?.({
+      account: {
+        accountId: "default",
+        name: "Default",
+        enabled: true,
+        channelAccessToken: "   ",
+        channelSecret: "secret-from-file",
+        tokenSource: "file",
+        config: {} as ResolvedLineAccount["config"],
+      } as never,
+      cfg: {} as OpenClawConfig,
+      runtime: undefined,
+      probe: undefined,
+      audit: undefined,
+    });
+
+    expect(snapshot?.configured).toBe(false);
+    expect(linePlugin.status?.collectStatusIssues?.([snapshot as never])).toEqual([
+      {
+        channel: "line",
+        accountId: "default",
+        kind: "config",
+        message: "LINE channel access token not configured",
+      },
+    ]);
+  });
+
+  it("keeps per-field warnings when only the channel secret is missing", async () => {
+    const snapshot = await linePlugin.status?.buildAccountSnapshot?.({
+      account: {
+        accountId: "default",
+        name: "Default",
+        enabled: true,
+        channelAccessToken: "token-from-file",
+        channelSecret: "   ",
+        tokenSource: "file",
+        config: {} as ResolvedLineAccount["config"],
+      } as never,
+      cfg: {} as OpenClawConfig,
+      runtime: undefined,
+      probe: undefined,
+      audit: undefined,
+    });
+
+    expect(snapshot?.configured).toBe(false);
+    expect(linePlugin.status?.collectStatusIssues?.([snapshot as never])).toEqual([
+      {
+        channel: "line",
+        accountId: "default",
+        kind: "config",
+        message: "LINE channel secret not configured",
+      },
+    ]);
+  });
+
+  it("reports both warnings when both file-backed credentials are missing", async () => {
+    const snapshot = await linePlugin.status?.buildAccountSnapshot?.({
+      account: {
+        accountId: "default",
+        name: "Default",
+        enabled: true,
+        channelAccessToken: "   ",
+        channelSecret: "   ",
+        tokenSource: "file",
+        config: {} as ResolvedLineAccount["config"],
+      } as never,
+      cfg: {} as OpenClawConfig,
+      runtime: undefined,
+      probe: undefined,
+      audit: undefined,
+    });
+
+    expect(snapshot?.configured).toBe(false);
+    expect(linePlugin.status?.collectStatusIssues?.([snapshot as never])).toEqual([
+      {
+        channel: "line",
+        accountId: "default",
+        kind: "config",
+        message: "LINE channel access token not configured",
+      },
+      {
+        channel: "line",
+        accountId: "default",
+        kind: "config",
+        message: "LINE channel secret not configured",
+      },
+    ]);
+  });
+});
