@@ -276,6 +276,26 @@ describe("redactConfigSnapshot", () => {
     expect(result.hash).toBe("abc123");
   });
 
+  it("keeps config.get redaction stable when sensitive fields are empty strings", () => {
+    const config = {
+      channels: {
+        qzone: { cookie: "" },
+        youtube: { oauthClientSecret: "" },
+        discourse: { apiKey: "abcdef1234567890ghij" }, // pragma: allowlist secret
+      },
+    };
+    const snapshot = makeSnapshot(config, JSON5.stringify(config));
+
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+    const redactedRaw = result.raw ?? "";
+
+    expect(redactedRaw).not.toContain("abcdef1234567890ghij");
+    expect(redactedRaw).toContain(REDACTED_SENTINEL);
+    expect(redactedRaw).toContain("cookie:''");
+    expect(redactedRaw).toContain("oauthClientSecret:''");
+    expect(redactedRaw.length).toBeLessThan((snapshot.raw?.length ?? 0) * 3);
+  });
+
   it("redacts secrets in raw field via text-based redaction", () => {
     const config = { token: "abcdef1234567890ghij" };
     const raw = '{ "token": "abcdef1234567890ghij" }';
