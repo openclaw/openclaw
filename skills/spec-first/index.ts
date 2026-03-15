@@ -32,6 +32,61 @@ interface Question {
   why: string;
 }
 
+interface Task {
+  id: string;
+  name: string;
+  status: "pending" | "processing" | "completed";
+  phase: string;
+}
+
+// ============================================
+// Task Status Management
+// ============================================
+
+/**
+ * Update task status in tasks.md file
+ */
+async function updateTaskStatus(
+  session: Session,
+  taskNumber: string,
+  status: "pending" | "processing" | "completed",
+): Promise<void> {
+  if (!session.tasks) return;
+
+  const checkbox = status === "completed" ? "[x]" : status === "processing" ? "[~]" : "[ ]";
+
+  // Find and replace the task line
+  const lines = session.tasks.split("\n");
+  const taskPattern = new RegExp(`^- \\[.\\] ${taskNumber}\\.`, "m");
+
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].match(taskPattern)) {
+      lines[i] = lines[i].replace(/^- \[.\]/, `- ${checkbox}`);
+      break;
+    }
+  }
+
+  const updatedTasks = lines.join("\n");
+  session.tasks = updatedTasks;
+
+  // Write back to file
+  await writeSessionFile(session, "tasks.md", updatedTasks);
+}
+
+/**
+ * Mark task as processing
+ */
+async function markTaskProcessing(session: Session, taskNumber: string): Promise<void> {
+  await updateTaskStatus(session, taskNumber, "processing");
+}
+
+/**
+ * Mark task as completed
+ */
+async function markTaskCompleted(session: Session, taskNumber: string): Promise<void> {
+  await updateTaskStatus(session, taskNumber, "completed");
+}
+
 // ============================================
 // Session Store & File Management
 // ============================================
@@ -344,28 +399,90 @@ Organize tasks in logical phases with dependencies.`,
 }
 
 // ============================================
-// Task Execution
+// Task Execution with Status Updates
 // ============================================
 
-async function executeSpec(spec: string): Promise<string> {
+async function executeSpec(session: Session): Promise<string> {
+  if (!session.tasks) {
+    return "❌ No tasks generated. Run `/spec tasks` first";
+  }
+
   const result = await sessions_spawn({
     runtime: "subagent",
     label: "execute-spec",
-    task: `Execute this spec step by step.
+    task: `Execute tasks from this spec with progress tracking.
 
 Spec:
-${spec}
+${session.spec}
 
-For each deliverable:
-1. Create/modify the file
-2. Test it works
-3. Report progress
+Tasks:
+${session.tasks}
 
-Return a summary of what was done.`,
+For each task:
+1. Mark as processing: [~] Task X
+2. Complete the task
+3. Mark as completed: [x] Task X
+4. Report progress
+
+Return a summary with task numbers completed.
+
+Format response like:
+- ✅ Task 1.1: Completed - description
+- ✅ Task 1.2: Completed - description
+- 🔄 Task 2.1: In progress...`,
     mode: "run",
   });
 
-  return result.output;
+  // Parse result to update task statuses
+  const output = result.output;
+
+  // Look for completed tasks in output
+  const completedMatches = output.match(/(?:✅|Task\s+(\d+\.\d+).*?(?:Completed|Done))/gi);
+  if (completedMatches) {
+    for (const match of completedMatches) {
+      const taskNum = match.match(/\d+\.\d+/)?.[0];
+      if (taskNum) {
+        await markTaskCompleted(session, taskNum);
+      }
+    }
+  }
+
+  // Look for processing tasks
+  const processingMatches = output.match(/(?:🔄|Task\s+(\d+\.\d+).*?(?:In progress|Processing))/gi);
+  if (processingMatches) {
+    for (const match of processingMatches) {
+      const taskNum = match.match(/\d+\.\d+/)?.[0];
+      if (taskNum) {
+        await markTaskProcessing(session, taskNum);
+      }
+    }
+  }
+
+  let summary = `🚀 **Execution Progress**\n\n`;
+  summary += "─".repeat(50) + "\n";
+  summary += output + "\n";
+  summary += "─".repeat(50) + "\n\n";
+
+  // Count tasks
+  const completedCount = (session.tasks.match(/\[x\]/g) || []).length;
+  const processingCount = (session.tasks.match(/\[~\]/g) || []).length;
+  const pendingCount = (session.tasks.match(/\[ \]/g) || []).length;
+  const total = completedCount + processingCount + pendingCount;
+
+  summary += `📊 **Progress**: ${completedCount}/${total} completed`;
+  if (processingCount > 0) {
+    summary += ` (${processingCount} in progress)`;
+  }
+  summary += `\n\n`;
+
+  if (completedCount === total) {
+    summary += `🎉 **All tasks completed!**\n`;
+    session.status = "done";
+  } else {
+    summary += `💡 **Next**: Continue with remaining tasks or run \`/spec execute\` again\n`;
+  }
+
+  return summary;
 }
 
 // ============================================
@@ -583,16 +700,14 @@ export async function spec_execute(): Promise<string> {
     return "❌ No approved spec. Run `/spec approve` first";
   }
 
+  if (!session.tasks) {
+    return "❌ No tasks generated. Run `/spec tasks` first";
+  }
+
   session.status = "executing";
-  const result = await executeSpec(session.spec);
-  session.status = "done";
+  const result = await executeSpec(session);
 
-  let output = `🚀 **Execution Complete**\n\n`;
-  output += "─".repeat(50) + "\n";
-  output += result + "\n";
-  output += "─".repeat(50) + "\n";
-
-  return output;
+  return result;
 }
 
 /**
