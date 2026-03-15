@@ -185,7 +185,7 @@ describe("promptCustomApiConfig", () => {
 
     const firstCall = fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined;
     expect(firstCall?.body).toBeDefined();
-    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
+    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1024 });
   });
 
   it("uses azure-specific headers and body for openai verification probes", async () => {
@@ -239,7 +239,7 @@ describe("promptCustomApiConfig", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const secondCall = fetchMock.mock.calls[1]?.[1] as { body?: string } | undefined;
     expect(secondCall?.body).toBeDefined();
-    expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
+    expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({ max_tokens: 1024 });
   });
 
   it("re-prompts base url when unknown detection fails", async () => {
