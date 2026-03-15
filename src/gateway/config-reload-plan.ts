@@ -41,6 +41,16 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-health-monitor"],
   },
+  {
+    prefix: "gateway.channelStaleEventThresholdMinutes",
+    kind: "hot",
+    actions: ["restart-health-monitor"],
+  },
+  {
+    prefix: "gateway.channelMaxRestartsPerHour",
+    kind: "hot",
+    actions: ["restart-health-monitor"],
+  },
   // Stuck-session warning threshold is read by the diagnostics heartbeat loop.
   { prefix: "diagnostics.stuckSessionWarnMs", kind: "none" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
