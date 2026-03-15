@@ -339,6 +339,8 @@ export type MemorySearchConfig = {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
+    /** Encoding format for embedding vectors (float or base64). */
+    encodingFormat?: "float" | "base64";
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
       enabled?: boolean;

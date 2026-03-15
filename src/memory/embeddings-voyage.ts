@@ -9,6 +9,7 @@ export type VoyageEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  encodingFormat?: "float" | "base64";
 };
 
 export const DEFAULT_VOYAGE_EMBEDDING_MODEL = "voyage-4-large";

@@ -597,6 +597,7 @@ export const MemorySearchSchema = z
         baseUrl: z.string().optional(),
         apiKey: SecretInputSchema.optional().register(sensitive),
         headers: z.record(z.string(), z.string()).optional(),
+        encodingFormat: z.union([z.literal("float"), z.literal("base64")]).optional(),
         batch: z
           .object({
             enabled: z.boolean().optional(),

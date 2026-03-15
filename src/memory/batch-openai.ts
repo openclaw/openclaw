@@ -243,7 +243,13 @@ export async function runOpenAiEmbeddingBatches(
       const remaining = new Set(group.map((request) => request.custom_id));
 
       for (const line of outputLines) {
-        applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+        applyEmbeddingBatchOutputLine({
+          line,
+          remaining,
+          errors,
+          byCustomId,
+          encodingFormat: params.openAi.encodingFormat,
+        });
       }
 
       if (errors.length > 0) {
