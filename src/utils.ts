@@ -290,6 +290,22 @@ export function resolveConfigDir(
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
+
+  // If OPENCLAW_HOME is explicitly set, use it directly as the config directory.
+  // This prevents nested .openclaw/.openclaw when OPENCLAW_HOME already points to .openclaw.
+  const explicitHome = env.OPENCLAW_HOME?.trim();
+  if (explicitHome) {
+    const resolvedHome = resolveRequiredHomeDir(env, homedir);
+    try {
+      if (fs.existsSync(resolvedHome)) {
+        return resolvedHome;
+      }
+    } catch {
+      // best-effort
+    }
+    return resolvedHome;
+  }
+
   const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
   try {
     const hasNew = fs.existsSync(newDir);
