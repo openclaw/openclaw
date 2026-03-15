@@ -136,6 +136,14 @@ export type AgentDefaultsConfig = {
   repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
+  /**
+   * Controls when workspace context files (AGENTS.md, SOUL.md, etc.) are
+   * injected into the system prompt:
+   * - always: inject on every message (current default, backwards-compatible)
+   * - first-message-only: inject only on the first message of a session,
+   *   reducing token costs by ~93% for multi-message conversations
+   */
+  contextInjection?: "always" | "first-message-only";
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
