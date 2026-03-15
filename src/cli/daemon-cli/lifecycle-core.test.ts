@@ -131,7 +131,9 @@ describe("runServiceRestart token drift", () => {
 
     const payload = readJsonLog<{ warnings?: string[] }>();
     expect(payload.warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("Unable to verify gateway token drift: read command failed")]),
+      expect.arrayContaining([
+        expect.stringContaining("Unable to verify gateway token drift: read command failed"),
+      ]),
     );
   });
 
