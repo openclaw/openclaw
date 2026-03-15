@@ -915,7 +915,7 @@ export function renderChat(props: ChatProps) {
             `;
           }
           if (item.kind === "reading-indicator") {
-            return renderReadingIndicatorGroup(assistantIdentity, props.basePath);
+            return renderReadingIndicatorGroup(assistantIdentity, props.basePath, item.key);
           }
           if (item.kind === "stream") {
             return renderStreamingGroup(
@@ -924,6 +924,8 @@ export function renderChat(props: ChatProps) {
               props.onOpenSidebar,
               assistantIdentity,
               props.basePath,
+              item.key,
+              item.isLive,
             );
           }
           if (item.kind === "group") {
@@ -937,6 +939,7 @@ export function renderChat(props: ChatProps) {
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
               basePath: props.basePath,
+              blockId: item.key,
               contextWindow:
                 activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
               onDelete: () => {
@@ -1438,6 +1441,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
         key: `stream-seg:${props.sessionKey}:${i}`,
         text: segments[i].text,
         startedAt: segments[i].ts,
+        isLive: false,
       });
     }
     if (i < tools.length && props.showToolCalls) {
@@ -1457,6 +1461,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
         key,
         text: props.stream,
         startedAt: props.streamStartedAt ?? Date.now(),
+        isLive: true,
       });
     } else {
       items.push({ kind: "reading-indicator", key });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
+import type { ChatAutoScrollMode } from "./app-scroll.ts";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -26,6 +27,14 @@ function createScrollHost(
     scrollTop,
     clientHeight,
     style: { overflowY } as unknown as CSSStyleDeclaration,
+    scrollTo: undefined as ((options?: ScrollToOptions) => void) | undefined,
+  };
+  const threadInner: {
+    lastElementChild: null;
+    querySelectorAll: (selector: string) => HTMLElement[];
+  } = {
+    lastElementChild: null,
+    querySelectorAll: vi.fn((): HTMLElement[] => []),
   };
 
   // Make getComputedStyle return the overflowY value
@@ -35,11 +44,26 @@ function createScrollHost(
 
   const host = {
     updateComplete: Promise.resolve(),
-    querySelector: vi.fn().mockReturnValue(container),
+    querySelector: vi.fn().mockImplementation((selector: string) => {
+      if (selector === ".chat-thread") {
+        return container as unknown as Element;
+      }
+      if (selector === ".chat-thread-inner") {
+        return threadInner as unknown as Element;
+      }
+      return null;
+    }),
     style: { setProperty: vi.fn() } as unknown as CSSStyleDeclaration,
     chatScrollFrame: null as number | null,
     chatScrollTimeout: null as number | null,
     chatHasAutoScrolled: false,
+    chatLastScrollTop: null as number | null,
+    chatProgrammaticScrollFrom: null as number | null,
+    chatProgrammaticScrollTarget: null as number | null,
+    chatAutoScrollBlockId: null as string | null,
+    chatAutoScrollMode: "bottom" as ChatAutoScrollMode,
+    chatBottomFollowPinned: false,
+    chatSuppressedBlockId: null as string | null,
     chatUserNearBottom: true,
     chatNewMessagesBelow: false,
     logsScrollFrame: null as number | null,
@@ -47,7 +71,7 @@ function createScrollHost(
     topbarObserver: null as ResizeObserver | null,
   };
 
-  return { host, container };
+  return { host, container, threadInner };
 }
 
 function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight: number) {
@@ -56,12 +80,27 @@ function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight
   } as unknown as Event;
 }
 
+function maxScrollTop(container: { scrollHeight: number; clientHeight: number }) {
+  return container.scrollHeight - container.clientHeight;
+}
+
+function createChatBlock(offsetTop: number, id: string, opts: { streaming?: boolean } = {}) {
+  const block = document.createElement("div");
+  block.setAttribute("data-chat-block", "");
+  block.dataset.chatBlockId = id;
+  if (opts.streaming) {
+    block.setAttribute("data-chat-streaming", "");
+  }
+  Object.defineProperty(block, "offsetTop", { value: offsetTop, configurable: true });
+  return block;
+}
+
 /* ------------------------------------------------------------------ */
 /*  handleChatScroll – threshold tests                                 */
 /* ------------------------------------------------------------------ */
 
 describe("handleChatScroll", () => {
-  it("sets chatUserNearBottom=true when within the 450px threshold", () => {
+  it("sets chatUserNearBottom=true when exactly at the bottom", () => {
     const { host } = createScrollHost({});
     // distanceFromBottom = 2000 - 1600 - 400 = 0 → clearly near bottom
     const event = createScrollEvent(2000, 1600, 400);
@@ -69,35 +108,16 @@ describe("handleChatScroll", () => {
     expect(host.chatUserNearBottom).toBe(true);
   });
 
-  it("sets chatUserNearBottom=true when distance is just under threshold", () => {
+  it("sets chatUserNearBottom=false after even a tiny upward scroll", () => {
     const { host } = createScrollHost({});
-    // distanceFromBottom = 2000 - 1151 - 400 = 449 → just under threshold
-    const event = createScrollEvent(2000, 1151, 400);
+    const event = createScrollEvent(2000, 1599, 400);
     handleChatScroll(host, event);
-    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatUserNearBottom).toBe(false);
   });
 
-  it("sets chatUserNearBottom=false when distance is exactly at threshold", () => {
+  it("sets chatUserNearBottom=false when distance from bottom is larger", () => {
     const { host } = createScrollHost({});
-    // distanceFromBottom = 2000 - 1150 - 400 = 450 → at threshold (uses strict <)
     const event = createScrollEvent(2000, 1150, 400);
-    handleChatScroll(host, event);
-    expect(host.chatUserNearBottom).toBe(false);
-  });
-
-  it("sets chatUserNearBottom=false when scrolled well above threshold", () => {
-    const { host } = createScrollHost({});
-    // distanceFromBottom = 2000 - 500 - 400 = 1100 → way above threshold
-    const event = createScrollEvent(2000, 500, 400);
-    handleChatScroll(host, event);
-    expect(host.chatUserNearBottom).toBe(false);
-  });
-
-  it("sets chatUserNearBottom=false when user scrolled up past one long message (>200px <450px)", () => {
-    const { host } = createScrollHost({});
-    // distanceFromBottom = 2000 - 1250 - 400 = 350 → old threshold would say "near", new says "near"
-    // distanceFromBottom = 2000 - 1100 - 400 = 500 → old threshold would say "not near", new also "not near"
-    const event = createScrollEvent(2000, 1100, 400);
     handleChatScroll(host, event);
     expect(host.chatUserNearBottom).toBe(false);
   });
@@ -133,7 +153,7 @@ describe("scheduleChatScroll", () => {
     scheduleChatScroll(host);
     await host.updateComplete;
 
-    expect(container.scrollTop).toBe(container.scrollHeight);
+    expect(container.scrollTop).toBe(maxScrollTop(container));
   });
 
   it("does NOT scroll when user is scrolled up and no force", async () => {
@@ -183,7 +203,81 @@ describe("scheduleChatScroll", () => {
     await host.updateComplete;
 
     // On initial load, force should work regardless
-    expect(container.scrollTop).toBe(container.scrollHeight);
+    expect(container.scrollTop).toBe(maxScrollTop(container));
+  });
+
+  it("keeps force=true pinned to the true bottom for streaming blocks", async () => {
+    const { host, container, threadInner } = createScrollHost({
+      scrollHeight: 2600,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    host.chatHasAutoScrolled = false;
+    host.chatUserNearBottom = false;
+    const latestBlock = createChatBlock(1700, "stream:1", { streaming: true });
+    threadInner.querySelectorAll = vi.fn(() => [latestBlock]);
+
+    scheduleChatScroll(host, true);
+    await host.updateComplete;
+
+    expect(host.chatAutoScrollMode).toBe("bottom");
+    expect(container.scrollTop).toBe(maxScrollTop(container));
+    expect(host.chatSuppressedBlockId).toBeNull();
+  });
+
+  it("switches the same block from bottom-follow to clamp when streaming starts", async () => {
+    const { host, container, threadInner } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    const readingBlock = createChatBlock(1700, "stream:1");
+    const streamingBlock = createChatBlock(1700, "stream:1", { streaming: true });
+    threadInner.querySelectorAll = vi
+      .fn<() => HTMLElement[]>()
+      .mockReturnValueOnce([readingBlock])
+      .mockReturnValue([streamingBlock]);
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(host.chatAutoScrollMode).toBe("bottom");
+    expect(container.scrollTop).toBe(maxScrollTop(container));
+
+    container.scrollHeight = 2600;
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(host.chatAutoScrollMode).toBe("clamp");
+    expect(container.scrollTop).toBe(1700);
+  });
+
+  it("keeps an explicit bottom pin across a reading-indicator to stream transition", async () => {
+    const { host, container, threadInner } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    const readingBlock = createChatBlock(1700, "stream:1");
+    const streamingBlock = createChatBlock(1700, "stream:1", { streaming: true });
+    threadInner.querySelectorAll = vi
+      .fn<() => HTMLElement[]>()
+      .mockReturnValueOnce([readingBlock])
+      .mockReturnValue([streamingBlock]);
+
+    scheduleChatScroll(host, true);
+    await host.updateComplete;
+
+    expect(host.chatAutoScrollMode).toBe("bottom");
+    expect(host.chatBottomFollowPinned).toBe(true);
+
+    container.scrollHeight = 2600;
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(host.chatAutoScrollMode).toBe("bottom");
+    expect(container.scrollTop).toBe(maxScrollTop(container));
   });
 
   it("sets chatNewMessagesBelow when not scrolling due to user position", async () => {
@@ -200,6 +294,175 @@ describe("scheduleChatScroll", () => {
     await host.updateComplete;
 
     expect(host.chatNewMessagesBelow).toBe(true);
+  });
+
+  it("scrolls once for a new block, then stops following that block as it grows", async () => {
+    const { host, container, threadInner } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    const latestBlock = createChatBlock(1700, "stream:1", { streaming: true });
+    threadInner.querySelectorAll = vi.fn(() => [latestBlock]);
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+    expect(container.scrollTop).toBe(maxScrollTop(container));
+
+    container.scrollHeight = 2600;
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(1700);
+    expect(host.chatSuppressedBlockId).toBe("stream:1");
+
+    container.scrollTop = 1800;
+    container.scrollHeight = 2800;
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(1800);
+  });
+
+  it("stops auto-scroll for the current block after a small upward user scroll", async () => {
+    const { host, container, threadInner } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    const latestBlock = createChatBlock(1700, "stream:1", { streaming: true });
+    threadInner.querySelectorAll = vi.fn(() => [latestBlock]);
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+    expect(container.scrollTop).toBe(maxScrollTop(container));
+
+    container.scrollTop = 1590;
+    handleChatScroll(host, {
+      currentTarget: container,
+    } as unknown as Event);
+
+    container.scrollHeight = 2600;
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(1590);
+  });
+
+  it("lets the user resume bottom-follow for the current stream by scrolling back to bottom", async () => {
+    const { host, container, threadInner } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    const latestBlock = createChatBlock(1700, "stream:1", { streaming: true });
+    threadInner.querySelectorAll = vi.fn(() => [latestBlock]);
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    container.scrollHeight = 2600;
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(1700);
+    expect(host.chatSuppressedBlockId).toBe("stream:1");
+
+    container.scrollTop = maxScrollTop(container);
+    handleChatScroll(host, {
+      currentTarget: container,
+    } as unknown as Event);
+
+    expect(host.chatAutoScrollMode).toBe("bottom");
+    expect(host.chatSuppressedBlockId).toBeNull();
+
+    container.scrollHeight = 2800;
+    container.scrollTo = undefined;
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(maxScrollTop(container));
+    expect(host.chatSuppressedBlockId).toBeNull();
+  });
+
+  it("keeps following bottom for a loading indicator block", async () => {
+    const { host, container, threadInner } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    const latestBlock = createChatBlock(1700, "loading:1");
+    threadInner.querySelectorAll = vi.fn(() => [latestBlock]);
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+    expect(container.scrollTop).toBe(maxScrollTop(container));
+
+    container.scrollHeight = 2600;
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(maxScrollTop(container));
+    expect(host.chatSuppressedBlockId).toBeNull();
+  });
+
+  it("stores the intended smooth-scroll destination for follow-state tracking", async () => {
+    const { host, container, threadInner } = createScrollHost({
+      scrollHeight: 2600,
+      scrollTop: 1800,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatAutoScrollBlockId = "stream:1";
+    host.chatAutoScrollMode = "clamp";
+    const latestBlock = createChatBlock(1700, "stream:1", { streaming: true });
+    threadInner.querySelectorAll = vi.fn(() => [latestBlock]);
+    container.scrollTo = vi.fn();
+
+    scheduleChatScroll(host, false, true);
+    await host.updateComplete;
+
+    expect(container.scrollTo).toHaveBeenCalledWith({ top: 1700, behavior: "smooth" });
+    expect(container.scrollTop).toBe(1800);
+    expect(host.chatLastScrollTop).toBe(1700);
+    expect(host.chatProgrammaticScrollFrom).toBe(1800);
+    expect(host.chatProgrammaticScrollTarget).toBe(1700);
+  });
+
+  it("does not suppress follow mode during a smooth jump-to-bottom animation", async () => {
+    const { host, container, threadInner } = createScrollHost({
+      scrollHeight: 2600,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    host.chatHasAutoScrolled = false;
+    host.chatUserNearBottom = false;
+    const latestBlock = createChatBlock(1700, "stream:1", { streaming: true });
+    threadInner.querySelectorAll = vi.fn(() => [latestBlock]);
+    container.scrollTo = vi.fn();
+
+    scheduleChatScroll(host, true, true);
+    await host.updateComplete;
+
+    container.scrollTop = 1000;
+    handleChatScroll(host, {
+      currentTarget: container,
+    } as unknown as Event);
+
+    expect(host.chatSuppressedBlockId).toBeNull();
+    expect(host.chatBottomFollowPinned).toBe(true);
+
+    container.scrollHeight = 2800;
+    container.scrollTo = undefined;
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(host.chatNewMessagesBelow).toBe(false);
+    expect(container.scrollTop).toBe(maxScrollTop(container));
   });
 });
 
@@ -253,7 +516,7 @@ describe("streaming scroll behavior", () => {
     scheduleChatScroll(host);
     await host.updateComplete;
 
-    expect(container.scrollTop).toBe(container.scrollHeight);
+    expect(container.scrollTop).toBe(maxScrollTop(container));
   });
 });
 
@@ -265,11 +528,25 @@ describe("resetChatScroll", () => {
   it("resets state for new chat session", () => {
     const { host } = createScrollHost({});
     host.chatHasAutoScrolled = true;
+    host.chatLastScrollTop = 1700;
+    host.chatProgrammaticScrollFrom = 1800;
+    host.chatProgrammaticScrollTarget = 1700;
+    host.chatAutoScrollBlockId = "stream:1";
+    host.chatAutoScrollMode = "clamp";
+    host.chatBottomFollowPinned = true;
+    host.chatSuppressedBlockId = "stream:1";
     host.chatUserNearBottom = false;
 
     resetChatScroll(host);
 
     expect(host.chatHasAutoScrolled).toBe(false);
+    expect(host.chatLastScrollTop).toBeNull();
+    expect(host.chatProgrammaticScrollFrom).toBeNull();
+    expect(host.chatProgrammaticScrollTarget).toBeNull();
+    expect(host.chatAutoScrollBlockId).toBeNull();
+    expect(host.chatAutoScrollMode).toBe("bottom");
+    expect(host.chatBottomFollowPinned).toBe(false);
+    expect(host.chatSuppressedBlockId).toBeNull();
     expect(host.chatUserNearBottom).toBe(true);
   });
 });
