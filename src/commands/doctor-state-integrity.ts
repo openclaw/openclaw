@@ -484,10 +484,12 @@ export async function noteStateIntegrity(
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const storeDir = path.dirname(storePath);
   const absoluteStorePath = path.resolve(storePath);
+  const sessionsDirForChecks = cfg.session?.store ? storeDir : sessionsDir;
   const displayStateDir = shortenHomePath(stateDir);
   const displayOauthDir = shortenHomePath(oauthDir);
   const displaySessionsDir = shortenHomePath(sessionsDir);
   const displayStoreDir = shortenHomePath(storeDir);
+  const displaySessionsDirForChecks = shortenHomePath(sessionsDirForChecks);
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
@@ -715,14 +717,16 @@ export async function noteStateIntegrity(
       let transcriptExists = false;
       if (entry.sessionFile) {
         try {
-          const transcriptPath = resolveSessionFilePath(sessionId, entry, { sessionsDir });
+          const transcriptPath = resolveSessionFilePath(sessionId, entry, {
+            sessionsDir: sessionsDirForChecks,
+          });
           transcriptExists = existsFile(transcriptPath);
         } catch {
           // ignore invalid paths
         }
       }
       if (!transcriptExists) {
-        const transcriptPath = resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
+        const transcriptPath = resolveSessionTranscriptPathInDir(sessionId, sessionsDirForChecks);
         transcriptExists = existsFile(transcriptPath);
       }
       return !transcriptExists;
@@ -741,12 +745,15 @@ export async function noteStateIntegrity(
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      let transcriptPath = resolveSessionTranscriptPathInDir(mainEntry.sessionId, sessionsDir);
+      let transcriptPath = resolveSessionTranscriptPathInDir(
+        mainEntry.sessionId,
+        sessionsDirForChecks,
+      );
       let transcriptExists = existsFile(transcriptPath);
       if (mainEntry.sessionFile && !transcriptExists) {
         try {
           const customPath = resolveSessionFilePath(mainEntry.sessionId, mainEntry, {
-            sessionsDir,
+            sessionsDir: sessionsDirForChecks,
           });
           if (existsFile(customPath)) {
             transcriptPath = customPath;
@@ -771,7 +778,7 @@ export async function noteStateIntegrity(
     }
   }
 
-  if (existsDir(sessionsDir)) {
+  if (existsDir(sessionsDirForChecks)) {
     const referencedTranscriptPaths = new Set<string>();
     for (const [, entry] of entries) {
       if (!entry?.sessionId) {
@@ -781,11 +788,11 @@ export async function noteStateIntegrity(
         let transcriptPath: string;
         if (entry.sessionFile) {
           transcriptPath = path.resolve(
-            resolveSessionFilePath(entry.sessionId, entry, { sessionsDir }),
+            resolveSessionFilePath(entry.sessionId, entry, { sessionsDir: sessionsDirForChecks }),
           );
         } else {
           transcriptPath = path.resolve(
-            resolveSessionTranscriptPathInDir(entry.sessionId, sessionsDir),
+            resolveSessionTranscriptPathInDir(entry.sessionId, sessionsDirForChecks),
           );
         }
         referencedTranscriptPaths.add(transcriptPath);
@@ -793,17 +800,17 @@ export async function noteStateIntegrity(
         // ignore invalid legacy paths
       }
     }
-    const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    const sessionDirEntries = fs.readdirSync(sessionsDirForChecks, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
+      .map((entry) => path.resolve(path.join(sessionsDirForChecks, entry.name)))
       .filter((filePath) => !referencedTranscriptPaths.has(filePath));
     if (orphanTranscriptPaths.length > 0) {
       warnings.push(
-        `- Found ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}. They are not referenced by sessions.json and can consume disk over time.`,
+        `- Found ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDirForChecks}. They are not referenced by sessions.json and can consume disk over time.`,
       );
       const archiveOrphans = await prompter.confirmSkipInNonInteractive({
-        message: `Archive ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}?`,
+        message: `Archive ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDirForChecks}?`,
         initialValue: false,
       });
       if (archiveOrphans) {
