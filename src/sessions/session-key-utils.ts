@@ -47,7 +47,7 @@ export function deriveSessionChatType(sessionKey: string | undefined | null): Se
   if (tokens.has("channel")) {
     return "channel";
   }
-  if (tokens.has("direct") || tokens.has("dm")) {
+  if (tokens.has("direct") || tokens.has("dm") || tokens.has("dm-named")) {
     return "direct";
   }
   // Legacy Discord keys can be shaped like:
@@ -157,6 +157,9 @@ export function buildNamedDmSessionKey(params: {
   const name = params.name.trim().toLowerCase();
   if (!agentId || !peerId || !name) {
     throw new Error("buildNamedDmSessionKey: agentId, peerId, and name are required");
+  }
+  if (name.includes(":")) {
+    throw new Error(`buildNamedDmSessionKey: name must not contain ":" (got: "${name}")`);
   }
   return `agent:${agentId}:dm-named:${peerId}:${name}`;
 }

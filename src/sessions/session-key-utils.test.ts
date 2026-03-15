@@ -4,6 +4,11 @@ import {
   isNamedDmSessionKey,
   parseNamedDmSessionKey,
 } from "./session-key-utils.js";
+import {
+  getActiveNamedSessionKey,
+  setActiveNamedSession,
+} from "../gateway/session-utils.js";
+import type { SessionEntry } from "../config/sessions.js";
 
 describe("Named DM Session Keys (ETH-608)", () => {
   describe("buildNamedDmSessionKey", () => {
@@ -180,6 +185,74 @@ describe("Named DM Session Keys (ETH-608)", () => {
         peerId: "user123",
         name: "mysession",
       });
+    });
+  });
+
+  describe("setActiveNamedSession", () => {
+    it("sets activeNamedSession on the entry and returns true", () => {
+      const entry = {} as SessionEntry;
+      const result = setActiveNamedSession({ mainEntry: entry, name: "work" });
+      expect(result).toBe(true);
+      expect(entry.activeNamedSession).toBe("work");
+    });
+
+    it("is idempotent — returns false when called twice with same name", () => {
+      const entry = {} as SessionEntry;
+      setActiveNamedSession({ mainEntry: entry, name: "work" });
+      const result = setActiveNamedSession({ mainEntry: entry, name: "work" });
+      expect(result).toBe(false);
+    });
+
+    it("clears activeNamedSession when name is null and returns true", () => {
+      const entry = { activeNamedSession: "work" } as SessionEntry;
+      const result = setActiveNamedSession({ mainEntry: entry, name: null });
+      expect(result).toBe(true);
+      expect(entry.activeNamedSession).toBeUndefined();
+    });
+
+    it("returns false when clearing an already-cleared entry", () => {
+      const entry = {} as SessionEntry;
+      const result = setActiveNamedSession({ mainEntry: entry, name: null });
+      expect(result).toBe(false);
+    });
+
+    it("rejects names containing colons and returns false", () => {
+      const entry = {} as SessionEntry;
+      const result = setActiveNamedSession({ mainEntry: entry, name: "foo:bar" });
+      expect(result).toBe(false);
+      expect(entry.activeNamedSession).toBeUndefined();
+    });
+
+    it("normalizes name to lowercase", () => {
+      const entry = {} as SessionEntry;
+      setActiveNamedSession({ mainEntry: entry, name: "Work" });
+      expect(entry.activeNamedSession).toBe("work");
+    });
+  });
+
+  describe("getActiveNamedSessionKey", () => {
+    it("returns null when mainEntry is undefined", () => {
+      const result = getActiveNamedSessionKey({ mainEntry: undefined, agentId: "main", peerId: "123" });
+      expect(result).toBeNull();
+    });
+
+    it("returns null when activeNamedSession is not set", () => {
+      const entry = {} as SessionEntry;
+      const result = getActiveNamedSessionKey({ mainEntry: entry, agentId: "main", peerId: "123" });
+      expect(result).toBeNull();
+    });
+
+    it("returns null when activeNamedSession is whitespace-only", () => {
+      const entry = { activeNamedSession: "   " } as SessionEntry;
+      const result = getActiveNamedSessionKey({ mainEntry: entry, agentId: "main", peerId: "123" });
+      expect(result).toBeNull();
+    });
+
+    it("returns the correct named session key on round-trip", () => {
+      const entry = {} as SessionEntry;
+      setActiveNamedSession({ mainEntry: entry, name: "work" });
+      const result = getActiveNamedSessionKey({ mainEntry: entry, agentId: "main", peerId: "123" });
+      expect(result).toBe("agent:main:dm-named:123:work");
     });
   });
 });

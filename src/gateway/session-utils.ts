@@ -884,6 +884,9 @@ export function setActiveNamedSession(params: {
     return false;
   }
   const normalized = trimmed.toLowerCase();
+  if (normalized.includes(":")) {
+    return false;
+  }
   if (params.mainEntry.activeNamedSession !== normalized) {
     params.mainEntry.activeNamedSession = normalized;
     return true;
