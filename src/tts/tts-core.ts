@@ -703,6 +703,11 @@ export async function edgeTTS(params: {
   timeoutMs: number;
 }): Promise<void> {
   const { text, outputPath, config, timeoutMs } = params;
+
+  if (!text || text.trim().length === 0) {
+    throw new Error("Edge TTS requires non-empty text.");
+  }
+
   const tts = new EdgeTTS({
     voice: config.voice,
     lang: config.lang,
@@ -714,11 +719,17 @@ export async function edgeTTS(params: {
     volume: config.volume,
     timeout: config.timeoutMs ?? timeoutMs,
   });
+
   await tts.ttsPromise(text, outputPath);
 
-  const { size } = statSync(outputPath);
+  let { size } = statSync(outputPath);
 
   if (size === 0) {
-    throw new Error("Edge TTS produced empty audio file");
+    await tts.ttsPromise(text, outputPath);
+    ({ size } = statSync(outputPath));
+
+    if (size === 0) {
+      throw new Error("Edge TTS produced empty audio file after retry");
+    }
   }
 }
