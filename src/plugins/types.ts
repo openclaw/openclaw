@@ -542,6 +542,15 @@ export type PluginHookBeforePromptBuildResult = {
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
    */
   appendSystemContext?: string;
+  /**
+   * Generic key-value bag for plugins to attach metadata to the persisted
+   * user message. Plugins return flat meta (e.g. `{ displayStripPatterns: [...] }`)
+   * and the hook runner automatically wraps it under the plugin's ID
+   * (e.g. `{ "memory-lancedb": { displayStripPatterns: [...] } }`).
+   * This ensures each plugin's data is isolated — a plugin cannot write
+   * into another plugin's namespace.
+   */
+  messageMeta?: Record<string, unknown>;
 };
 
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
@@ -549,6 +558,7 @@ export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "prependContext",
   "prependSystemContext",
   "appendSystemContext",
+  "messageMeta",
 ] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
 
 type MissingPluginPromptMutationResultFields = Exclude<

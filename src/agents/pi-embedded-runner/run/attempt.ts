@@ -1165,6 +1165,50 @@ function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   };
 }
 
+/** Shallow-merge two optional messageMeta bags (plugin-namespaced objects are deep-merged, arrays concatenated). */
+function mergeShallowMeta(
+  a: Record<string, unknown> | undefined,
+  b: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!a) {
+    return b;
+  }
+  if (!b) {
+    return a;
+  }
+  const merged: Record<string, unknown> = { ...a };
+  for (const key of Object.keys(b)) {
+    const aVal = a[key];
+    const bVal = b[key];
+    // Deep-merge plugin namespace objects
+    if (
+      aVal &&
+      bVal &&
+      typeof aVal === "object" &&
+      !Array.isArray(aVal) &&
+      typeof bVal === "object" &&
+      !Array.isArray(bVal)
+    ) {
+      const innerMerged: Record<string, unknown> = {
+        ...(aVal as Record<string, unknown>),
+      };
+      for (const innerKey of Object.keys(bVal as Record<string, unknown>)) {
+        const av = (aVal as Record<string, unknown>)[innerKey];
+        const bv = (bVal as Record<string, unknown>)[innerKey];
+        if (Array.isArray(av) && Array.isArray(bv)) {
+          innerMerged[innerKey] = [...av, ...bv];
+        } else {
+          innerMerged[innerKey] = bv;
+        }
+      }
+      merged[key] = innerMerged;
+    } else {
+      merged[key] = bVal;
+    }
+  }
+  return merged;
+}
+
 export async function resolvePromptBuildHookResult(params: {
   prompt: string;
   messages: unknown[];
@@ -1218,6 +1262,7 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.appendSystemContext,
       legacyResult?.appendSystemContext,
     ]),
+    messageMeta: mergeShallowMeta(promptBuildResult?.messageMeta, legacyResult?.messageMeta),
   };
 }
 
@@ -2379,6 +2424,22 @@ export async function runEmbeddedAttempt(
             log.debug(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );
+          }
+          // Install a one-shot interceptor that injects messageMeta into the next
+          // persisted user message so the UI / API clients can use it for display
+          // stripping (e.g. displayStripPatterns from memory-lancedb).
+          if (hookResult?.messageMeta && sessionManager) {
+            const pendingMeta = hookResult.messageMeta;
+            const innerAppend = sessionManager.appendMessage.bind(sessionManager);
+            sessionManager.appendMessage = ((msg: unknown) => {
+              const message = msg as Record<string, unknown>;
+              if (message.role === "user") {
+                message.messageMeta = pendingMeta;
+                // Restore original after first user message (one-shot).
+                sessionManager!.appendMessage = innerAppend;
+              }
+              return innerAppend(msg as never);
+            }) as typeof sessionManager.appendMessage;
           }
           const legacySystemPrompt =
             typeof hookResult?.systemPrompt === "string" ? hookResult.systemPrompt.trim() : "";
