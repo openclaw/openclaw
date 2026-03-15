@@ -45,6 +45,67 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   };
 }
 
+// ── Process-global gateway subagent runtime ─────────────────────────
+// The gateway creates a real subagent runtime during startup, but plugins may
+// be loaded (and cached) before the gateway path runs — or may be re-loaded
+// by non-gateway code paths (e.g. loadSchemaWithPlugins) that don't pass
+// subagent options. A process-global holder lets any plugin runtime resolve
+// the gateway subagent dynamically, regardless of load order or caching.
+
+const GATEWAY_SUBAGENT_SYMBOL: unique symbol = Symbol.for(
+  "openclaw.plugin.gatewaySubagentRuntime",
+) as unknown as typeof GATEWAY_SUBAGENT_SYMBOL;
+
+type GatewaySubagentState = {
+  subagent: PluginRuntime["subagent"] | undefined;
+};
+
+const gatewaySubagentState: GatewaySubagentState = (() => {
+  const g = globalThis as typeof globalThis & {
+    [GATEWAY_SUBAGENT_SYMBOL]?: GatewaySubagentState;
+  };
+  const existing = g[GATEWAY_SUBAGENT_SYMBOL];
+  if (existing) {
+    return existing;
+  }
+  const created: GatewaySubagentState = { subagent: undefined };
+  g[GATEWAY_SUBAGENT_SYMBOL] = created;
+  return created;
+})();
+
+/**
+ * Set the process-global gateway subagent runtime.
+ * Called once during gateway startup so that all plugin runtimes — including
+ * those created before the gateway or by non-gateway load paths — can
+ * resolve subagent methods dynamically.
+ */
+export function setGatewaySubagentRuntime(subagent: PluginRuntime["subagent"]): void {
+  gatewaySubagentState.subagent = subagent;
+}
+
+/**
+ * Create a late-binding subagent that resolves to:
+ * 1. An explicitly provided subagent (from runtimeOptions), OR
+ * 2. The process-global gateway subagent (set during gateway startup), OR
+ * 3. The unavailable fallback (throws with a clear error message).
+ */
+function createLateBindingSubagent(
+  explicit?: PluginRuntime["subagent"],
+): PluginRuntime["subagent"] {
+  if (explicit) {
+    return explicit;
+  }
+
+  const unavailable = createUnavailableSubagentRuntime();
+
+  return new Proxy(unavailable, {
+    get(_target, prop, receiver) {
+      const resolved = gatewaySubagentState.subagent ?? unavailable;
+      return Reflect.get(resolved, prop, receiver);
+    },
+  });
+}
+
 export type CreatePluginRuntimeOptions = {
   subagent?: PluginRuntime["subagent"];
 };
@@ -53,7 +114,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   const runtime = {
     version: resolveVersion(),
     config: createRuntimeConfig(),
-    subagent: _options.subagent ?? createUnavailableSubagentRuntime(),
+    subagent: createLateBindingSubagent(_options.subagent),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     tts: { textToSpeechTelephony },
