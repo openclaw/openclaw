@@ -85,6 +85,7 @@ export function renderStreamingGroup(
   assistant?: AssistantIdentity,
   basePath?: string,
   blockId?: string,
+  isLive = false,
 ) {
   const timestamp = new Date(startedAt).toLocaleTimeString([], {
     hour: "numeric",
@@ -96,7 +97,7 @@ export function renderStreamingGroup(
     <div
       class="chat-group assistant"
       data-chat-block
-      data-chat-streaming
+      ?data-chat-streaming=${isLive}
       data-chat-block-id=${blockId ?? ""}
     >
       ${renderAvatar("assistant", assistant, basePath)}
