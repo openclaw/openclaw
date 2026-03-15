@@ -3,7 +3,7 @@ summary: "Günlüğe kaydetmeye genel bakış: dosya günlükleri, konsol çıkt
 read_when:
   - Günlüğe kaydetmeye başlangıç düzeyinde genel bakışa ihtiyacınız var
   - Günlük düzeylerini veya formatlarını yapılandırmak istiyorsunuz
-  - Sorun gendiriyorsunuz ve günlükleri hızlıca bulmanız gerekiyor
+  - Sorun gideriyorsunuz ve günlükleri hızlıca bulmanız gerekiyor
 title: "Günlüğe Kaydetme"
 ---
 
@@ -18,7 +18,7 @@ Bu sayfa, günlüklerin nerede olduğunu, nasıl okunacağını ve günlük düz
 
 ## Günlüklerin konumu
 
-Varsayılan olarak, Gateway aşağıdaki dönerü günlük dosyasını yazar:
+Varsayılan olarak, Gateway aşağıdaki dönen günlük dosyasını yazar:
 
 `/tmp/openclaw/openclaw-YYYY-MM-DD.log`
 
@@ -125,7 +125,7 @@ Her ikisini de **`OPENCLAW_LOG_LEVEL`** ortam değişkeniyle geçersiz kılabili
 `logging.consoleStyle`:
 
 - `pretty`: insan dostu, renkli, zaman damgalı.
-- `kompakt`: daha sıkı çıktı (uzun oturumlar için en iyisi).
+- `compact`: daha sıkı çıktı (uzun oturumlar için en iyisi).
 - `json`: satır başına JSON (günlük işlemciler için).
 
 ### Yeniden düzenleme

@@ -9,7 +9,7 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw, giden yanıtları ElevenLabs, OpenAI veya Edge TTS kullanarak sese dönüştübrebilir.
+OpenClaw, giden yanıtları ElevenLabs, OpenAI veya Edge TTS kullanarak sese dönüştürebilir.
 OpenClaw'un ses gönderebildiği her yerde çalışır; Telegram yuvarlak ses notu baloncuğu alır.
 
 ## Desteklenen Servisler

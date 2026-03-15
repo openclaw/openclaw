@@ -343,7 +343,7 @@ export async function ensureFunnel(
       },
     );
     if (stdout.trim()) {
-      logVerbose(stdout.trim());
+      console.log(stdout.trim());
     }
   } catch (err) {
     const errOutput = err as { stdout?: unknown; stderr?: unknown };
