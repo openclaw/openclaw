@@ -78,6 +78,7 @@ export type GatewaySessionList = {
       lastAccountId?: string;
       derivedTitle?: string;
       lastMessagePreview?: string;
+      totalTokensFresh?: boolean;
     }
   >;
 };
