@@ -201,13 +201,16 @@
 
 ## Agent-Specific Notes
 
-- Pre-Live Telegram Check (REQUIRED):
+- Pre-Live Telegram Check (REQUIRED before any live Telegram validation):
   - You MUST confirm the current git branch is named and NOT `HEAD`.
   - You MUST confirm gateway runtime is owned by the current worktree path.
-  - If runtime path mismatches, you MUST restart gateway from the current worktree before any live Telegram test.
+  - If runtime path mismatches, you MUST restart gateway from the current worktree and re-check runtime ownership before testing.
   - If `.env.local` is missing, you MUST run `bash scripts/assign-bot.sh` before starting gateway.
   - You MUST NOT print raw token values.
-  - You MUST record proof lines in the run log: `branch=<...>` and `runtime_worktree=<...>`.
+  - You MUST emit proof lines in logs/output: `branch=<...>` and `runtime_worktree=<...>`.
+
+- Known Failure Pattern (Telegram live checks):
+  - Code/tests can be correct while live results are false if Telegram is handled by the wrong runtime process (not the current worktree). Always verify runtime ownership first.
 
 - Worktree credential bootstrap (Telegram live checks):
   - Source of truth is the main checkout at `/Users/user/Programming_Projects/openclaw`.
