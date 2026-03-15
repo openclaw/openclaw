@@ -94,39 +94,36 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
 
 ### 4. 配置应用权限
 
-在 **权限管理** 页面，点击 **批量导入** 按钮，粘贴以下 JSON 配置一键导入所需权限：
+Lark 的权限界面这些年有过调整，官方示例里现在也经常会出现一大串 `user` scopes。OpenClaw 的 Feishu/Lark 渠道使用的是自建应用 + `App ID` + `App Secret` + `tenant_access_token`，因此正常的机器人收发消息**不需要** `offline_access`，也不需要那套通用的 user OAuth 权限。
+
+在 **权限管理** 页面，点击 **批量导入** 按钮，先导入下面这组 tenant scopes：
 
 ```json
 {
   "scopes": {
     "tenant": [
-      "aily:file:read",
-      "aily:file:write",
-      "application:application.app_message_stats.overview:readonly",
       "application:application:self_manage",
-      "application:bot.menu:write",
+      "cardkit:card:read",
       "cardkit:card:write",
-      "contact:user.employee_id:readonly",
-      "corehr:file:download",
-      "docs:document.content:read",
-      "event:ip_list",
-      "im:chat",
-      "im:chat.access_event.bot_p2p_chat:read",
-      "im:chat.members:bot_access",
-      "im:message",
+      "contact:user.base:readonly",
+      "im:chat.members:read",
+      "im:chat:read",
       "im:message.group_at_msg:readonly",
-      "im:message.group_msg",
       "im:message.p2p_msg:readonly",
       "im:message:readonly",
       "im:message:send_as_bot",
-      "im:resource",
-      "sheets:spreadsheet",
-      "wiki:wiki:readonly"
-    ],
-    "user": ["aily:file:read", "aily:file:write", "im:chat.access_event.bot_p2p_chat:read"]
+      "im:message:update",
+      "im:resource"
+    ]
   }
 }
 ```
+
+说明：
+
+- 一些 Lark 页面仍会出现较旧或不一致的权限名，例如 `im:chat` 或 `im:message.group_msg`。请以你的 Lark 控制台当前实际接受的权限名为准。
+- 在应用配置里，联系人权限请以 `contact:user.base:readonly` 作为标准写法。你仍然可能在旧文档或错误信息里看到过时别名 `contact:contact.base:readonly`；OpenClaw 在构造权限修复链接时会把它重写成正确名称。
+- 如果你启用了 OpenClaw 的可选 Feishu 工具，还需要额外补上对应 API 所需的 Lark 权限。常见的有文档（`docx:*`）、云盘文件（`drive:*`）、知识库（`wiki:*`）以及多维表格/应用（`base:*`）。
 
 ![配置应用权限](/images/feishu-step4-permissions.png)
 

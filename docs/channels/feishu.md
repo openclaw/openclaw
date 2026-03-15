@@ -96,35 +96,44 @@ From **Credentials & Basic Info**, copy:
 
 ### 4. Configure permissions
 
-On **Permissions**, click **Batch import** and paste:
+Lark's permissions UI has changed over time, and some official examples now show a much larger
+`user` scope list. OpenClaw's Feishu/Lark channel uses a self-built app with `App ID` +
+`App Secret` and `tenant_access_token`, so you do **not** need `offline_access` or the generic
+user-OAuth scope bundle for normal bot messaging.
+
+On **Permissions**, click **Batch import** and start with this tenant-scope set:
 
 ```json
 {
   "scopes": {
     "tenant": [
-      "aily:file:read",
-      "aily:file:write",
-      "application:application.app_message_stats.overview:readonly",
       "application:application:self_manage",
-      "application:bot.menu:write",
       "cardkit:card:read",
       "cardkit:card:write",
-      "contact:user.employee_id:readonly",
-      "corehr:file:download",
-      "event:ip_list",
-      "im:chat.access_event.bot_p2p_chat:read",
-      "im:chat.members:bot_access",
-      "im:message",
+      "contact:user.base:readonly",
+      "im:chat.members:read",
+      "im:chat:read",
       "im:message.group_at_msg:readonly",
       "im:message.p2p_msg:readonly",
       "im:message:readonly",
       "im:message:send_as_bot",
+      "im:message:update",
       "im:resource"
-    ],
-    "user": ["aily:file:read", "aily:file:write", "im:chat.access_event.bot_p2p_chat:read"]
+    ]
   }
 }
 ```
+
+Notes:
+
+- Some Lark pages still use older or inconsistent names such as `im:chat` or
+  `im:message.group_msg`. Use the current scope name that your Lark console accepts.
+- Use `contact:user.base:readonly` as the canonical contact scope in app configuration. You may
+  still see the stale alias `contact:contact.base:readonly` in older docs or error text; OpenClaw
+  rewrites that alias internally when building permission-help links.
+- If you enable OpenClaw's optional Feishu tools, add the matching Lark scopes for the APIs you
+  plan to use. Common examples are document (`docx:*`), drive/file (`drive:*`), wiki (`wiki:*`),
+  and bitable/base (`base:*`) permissions.
 
 ![Configure permissions](../images/feishu-step4-permissions.png)
 

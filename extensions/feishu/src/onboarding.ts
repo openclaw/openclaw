@@ -88,7 +88,7 @@ async function noteFeishuCredentialHelp(prompter: WizardPrompter): Promise<void>
       "1) Go to Feishu Open Platform (open.feishu.cn)",
       "2) Create a self-built app",
       "3) Get App ID and App Secret from Credentials page",
-      "4) Enable required permissions: im:message, im:chat, contact:user.base:readonly",
+      "4) Enable the required tenant permissions from the channel docs",
       "5) Publish the app or add it to a test group",
       "Tip: you can also set FEISHU_APP_ID / FEISHU_APP_SECRET env vars.",
       `Docs: ${formatDocsLink("/channels/feishu", "feishu")}`,
