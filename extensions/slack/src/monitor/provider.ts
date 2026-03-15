@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import SlackBolt from "@slack/bolt";
+import * as SlackBolt from "@slack/bolt";
 import { resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../../../src/auto-reply/reply/history.js";
 import {

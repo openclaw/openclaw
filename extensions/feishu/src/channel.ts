@@ -37,6 +37,9 @@ import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
 import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 
+// Track which accounts have already received the dmPolicy migration warning this session.
+const warnedDmPolicyMigration = new Set<string>();
+
 const meta: ChannelMeta = {
   id: "feishu",
   label: "Feishu",
@@ -478,6 +481,43 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       ctx.log?.info(
         `starting feishu[${ctx.accountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
       );
+
+      // Migration warning: dmPolicy default changed from 'open' to 'pairing' in v2026.2.14.
+      // Warn once per account per session when dmPolicy was not explicitly set by the user.
+      if (!warnedDmPolicyMigration.has(ctx.accountId)) {
+        const rawFeishu = ctx.cfg.channels?.feishu as FeishuConfig | undefined;
+        const accountsMap = rawFeishu?.accounts;
+        const isMultiAccount = accountsMap != null && Object.keys(accountsMap).length > 0;
+        // Determine whether dmPolicy was implicitly left to the default:
+        //
+        // Multi-account: warn only when neither the root nor the account explicitly set dmPolicy.
+        // Root-level dmPolicy is inherited by all named accounts, so any explicit root setting
+        // (including 'open', 'pairing', or 'allowlist') should suppress the migration warning.
+        //
+        // Single-account: AJV / schema validation does not inject default values into the
+        // raw config object, so the field may be undefined even when the runtime falls back
+        // to 'pairing' via `feishuCfg?.dmPolicy ?? 'pairing'` in bot.ts. Detect implicit config
+        // by key presence (explicit vs absent) to avoid false positives when users intentionally
+        // configured dmPolicy: 'pairing'.
+        const rootHasDmPolicy =
+          rawFeishu != null && Object.prototype.hasOwnProperty.call(rawFeishu, "dmPolicy");
+        const accountHasDmPolicy =
+          isMultiAccount &&
+          accountsMap?.[ctx.accountId] != null &&
+          Object.prototype.hasOwnProperty.call(accountsMap[ctx.accountId]!, "dmPolicy");
+        const dmPolicyImplicit = isMultiAccount
+          ? !rootHasDmPolicy && !accountHasDmPolicy
+          : !rootHasDmPolicy;
+        if (dmPolicyImplicit) {
+          warnedDmPolicyMigration.add(ctx.accountId);
+          ctx.log?.warn(
+            `[feishu] Feishu dmPolicy default changed from 'open' to 'pairing' in v2026.2.14. ` +
+              `If your bot stopped responding to DMs, add \`dmPolicy: 'open'\` to your Feishu config. ` +
+              `See https://github.com/openclaw/openclaw/issues/17741`,
+          );
+        }
+      }
+
       return monitorFeishuProvider({
         config: ctx.cfg,
         runtime: ctx.runtime,
