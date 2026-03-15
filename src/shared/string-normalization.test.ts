@@ -29,10 +29,20 @@ describe("shared/string-normalization", () => {
     expect(normalizeHyphenSlug(null)).toBe("");
   });
 
+  it("collapses repeated separators and trims leading/trailing punctuation", () => {
+    expect(normalizeHyphenSlug("  ...Hello   /  World---  ")).toBe("hello-world");
+    expect(normalizeHyphenSlug(" ###Team@@@Room### ")).toBe("###team@@@room###");
+  });
+
   it("normalizes @/# prefixed slugs used by channel allowlists", () => {
     expect(normalizeAtHashSlug(" #My_Channel + Alerts ")).toBe("my-channel-alerts");
     expect(normalizeAtHashSlug("@@Room___Name")).toBe("room-name");
     expect(normalizeAtHashSlug(undefined)).toBe("");
     expect(normalizeAtHashSlug(null)).toBe("");
+  });
+
+  it("strips repeated prefixes and collapses separator-only results", () => {
+    expect(normalizeAtHashSlug("###__Room  Name__")).toBe("room-name");
+    expect(normalizeAtHashSlug("@@@___")).toBe("");
   });
 });

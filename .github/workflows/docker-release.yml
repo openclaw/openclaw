@@ -12,19 +12,65 @@ on:
       - "**/*.mdx"
       - ".agents/**"
       - "skills/**"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to backfill (for example v2026.3.13)
+        required: true
+        type: string
 
 concurrency:
-  group: docker-release-${{ github.workflow }}-${{ github.ref }}
+  group: docker-release-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
   cancel-in-progress: false
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  validate_manual_backfill:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Validate tag input format
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-beta\.[1-9][0-9]*)?$ ]]; then
+            echo "Invalid release tag: ${RELEASE_TAG}"
+            exit 1
+          fi
+
+      - name: Checkout selected tag
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+
+  approve_manual_backfill:
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate_manual_backfill
+    # WARNING: KEEP MANUAL BACKFILLS GATED BY THE docker-release ENVIRONMENT.
+    runs-on: ubuntu-24.04
+    environment: docker-release
+    steps:
+      - name: Approve Docker backfill
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: echo "Approved Docker backfill for $RELEASE_TAG"
+
+  # KEEP THIS WORKFLOW ON GITHUB-HOSTED RUNNERS.
+  # DO NOT MOVE IT BACK TO BLACKSMITH WITHOUT RE-VALIDATING TAG BUILDS AND BACKFILLS.
   # Build amd64 images (default + slim share the build stage cache)
   build-amd64:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    needs: [approve_manual_backfill]
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
+    runs-on: ubuntu-24.04
     permissions:
       packages: write
       contents: read
@@ -33,13 +79,16 @@ jobs:
       slim-digest: ${{ steps.build-slim.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -50,21 +99,22 @@ jobs:
         shell: bash
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
         run: |
           set -euo pipefail
           tags=()
           slim_tags=()
-          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             tags+=("${IMAGE}:main-amd64")
             slim_tags+=("${IMAGE}:main-slim-amd64")
           fi
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            version="${GITHUB_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
+            version="${SOURCE_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}-amd64")
             slim_tags+=("${IMAGE}:${version}-slim-amd64")
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
-            echo "::error::No amd64 tags resolved for ref ${GITHUB_REF}"
+            echo "::error::No amd64 tags resolved for ref ${SOURCE_REF}"
             exit 1
           fi
           {
@@ -81,19 +131,22 @@ jobs:
       - name: Resolve OCI labels (amd64)
         id: labels
         shell: bash
+        env:
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
         run: |
           set -euo pipefail
-          version="${GITHUB_SHA}"
-          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+          source_sha="$(git rev-parse HEAD)"
+          version="${source_sha}"
+          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             version="main"
           fi
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            version="${GITHUB_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
+            version="${SOURCE_REF#refs/tags/v}"
           fi
           created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           {
             echo "value<<EOF"
-            echo "org.opencontainers.image.revision=${GITHUB_SHA}"
+            echo "org.opencontainers.image.revision=${source_sha}"
             echo "org.opencontainers.image.version=${version}"
             echo "org.opencontainers.image.created=${created}"
             echo "EOF"
@@ -101,7 +154,8 @@ jobs:
 
       - name: Build and push amd64 image
         id: build
-        uses: useblacksmith/build-push-action@v2
+        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
@@ -112,7 +166,8 @@ jobs:
 
       - name: Build and push amd64 slim image
         id: build-slim
-        uses: useblacksmith/build-push-action@v2
+        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
@@ -125,7 +180,10 @@ jobs:
 
   # Build arm64 images (default + slim share the build stage cache)
   build-arm64:
-    runs-on: blacksmith-16vcpu-ubuntu-2404-arm
+    needs: [approve_manual_backfill]
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
+    runs-on: ubuntu-24.04-arm
     permissions:
       packages: write
       contents: read
@@ -134,13 +192,16 @@ jobs:
       slim-digest: ${{ steps.build-slim.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -151,21 +212,22 @@ jobs:
         shell: bash
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
         run: |
           set -euo pipefail
           tags=()
           slim_tags=()
-          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             tags+=("${IMAGE}:main-arm64")
             slim_tags+=("${IMAGE}:main-slim-arm64")
           fi
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            version="${GITHUB_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
+            version="${SOURCE_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}-arm64")
             slim_tags+=("${IMAGE}:${version}-slim-arm64")
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
-            echo "::error::No arm64 tags resolved for ref ${GITHUB_REF}"
+            echo "::error::No arm64 tags resolved for ref ${SOURCE_REF}"
             exit 1
           fi
           {
@@ -182,19 +244,22 @@ jobs:
       - name: Resolve OCI labels (arm64)
         id: labels
         shell: bash
+        env:
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
         run: |
           set -euo pipefail
-          version="${GITHUB_SHA}"
-          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+          source_sha="$(git rev-parse HEAD)"
+          version="${source_sha}"
+          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             version="main"
           fi
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            version="${GITHUB_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
+            version="${SOURCE_REF#refs/tags/v}"
           fi
           created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           {
             echo "value<<EOF"
-            echo "org.opencontainers.image.revision=${GITHUB_SHA}"
+            echo "org.opencontainers.image.revision=${source_sha}"
             echo "org.opencontainers.image.version=${version}"
             echo "org.opencontainers.image.created=${created}"
             echo "EOF"
@@ -202,7 +267,8 @@ jobs:
 
       - name: Build and push arm64 image
         id: build
-        uses: useblacksmith/build-push-action@v2
+        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/arm64
@@ -213,7 +279,8 @@ jobs:
 
       - name: Build and push arm64 slim image
         id: build-slim
-        uses: useblacksmith/build-push-action@v2
+        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/arm64
@@ -226,17 +293,22 @@ jobs:
 
   # Create multi-platform manifests
   create-manifest:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    needs: [approve_manual_backfill, build-amd64, build-arm64]
+    if: ${{ always() && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
+    runs-on: ubuntu-24.04
     permissions:
       packages: write
       contents: read
-    needs: [build-amd64, build-arm64]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -247,25 +319,28 @@ jobs:
         shell: bash
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: |
           set -euo pipefail
           tags=()
           slim_tags=()
-          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             tags+=("${IMAGE}:main")
             slim_tags+=("${IMAGE}:main-slim")
           fi
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            version="${GITHUB_REF#refs/tags/v}"
+          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
+            version="${SOURCE_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}")
             slim_tags+=("${IMAGE}:${version}-slim")
-            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+            # Manual backfills should only republish the requested version tags.
+            if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
               tags+=("${IMAGE}:latest")
               slim_tags+=("${IMAGE}:slim")
             fi
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
-            echo "::error::No manifest tags resolved for ref ${GITHUB_REF}"
+            echo "::error::No manifest tags resolved for ref ${SOURCE_REF}"
             exit 1
           fi
           {
