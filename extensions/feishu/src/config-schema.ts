@@ -70,6 +70,20 @@ const ChannelHeartbeatVisibilitySchema = z
   .optional();
 
 /**
+ * Thread binding configuration for /focus and session binding features.
+ */
+const ThreadBindingsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    idleHours: z.number().nonnegative().optional(),
+    maxAgeHours: z.number().nonnegative().optional(),
+    spawnSubagentSessions: z.boolean().optional(),
+    spawnAcpSessions: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+/**
  * Dynamic agent creation configuration.
  * When enabled, a new agent is created for each unique DM user.
  */
@@ -182,6 +196,7 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  threadBindings: ThreadBindingsSchema,
 };
 
 /**

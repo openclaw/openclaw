@@ -366,14 +366,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           let first = true;
 
           if (info?.kind === "block") {
-            // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
-            if (!(streamingEnabled && useCard)) {
-              return;
+            if (streamingEnabled && useCard) {
+              startStreaming();
+              if (streamingStartPromise) {
+                await streamingStartPromise;
+              }
             }
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
+            // When streaming is active, the block is consumed via streaming card
+            // update below. Otherwise suppress: block payloads from the normal
+            // inference pipeline are disabled via disableBlockStreaming and should
+            // not leak as plain messages.
+            if (!streaming?.isActive()) {
+              return;
             }
           }
 
@@ -469,8 +473,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       },
     });
 
+  // Feishu suppresses block payloads from the normal inference pipeline
+  // (disableBlockStreaming: true below). Tell ACP dispatch to promote its
+  // block chunks to finals so they reach the user instead of being dropped.
+  const feishuDispatcher = { ...dispatcher, promoteAcpBlocksToFinals: true as const };
+
   return {
-    dispatcher,
+    dispatcher: feishuDispatcher,
     replyOptions: {
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,

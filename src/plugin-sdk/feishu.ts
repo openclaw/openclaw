@@ -85,3 +85,25 @@ export {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "./webhook-memory-guards.js";
 export { applyBasicWebhookRequestGuards } from "./webhook-request-guards.js";
+
+// Thread bindings / session binding adapter support (used by extensions/feishu thread-bindings)
+export {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  type BindingTargetKind,
+  type SessionBindingRecord,
+  type SessionBindingBindInput,
+  type SessionBindingUnbindInput,
+} from "../infra/outbound/session-binding-service.js";
+export { resolveStateDir } from "../config/paths.js";
+export { logVerbose } from "../globals.js";
+export { writeJsonFileAtomically } from "./json-store.js";
+export { resolveThreadBindingConversationIdFromBindingId } from "../channels/thread-binding-id.js";
+export { formatThreadBindingDurationLabel } from "../channels/thread-bindings-messages.js";
+export {
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
+  resolveThreadBindingSpawnPolicy,
+} from "../channels/thread-bindings-policy.js";
+export { isAcpSessionKey } from "../sessions/session-key-utils.js";
+export { readAcpSessionEntry } from "../acp/runtime/session-meta.js";

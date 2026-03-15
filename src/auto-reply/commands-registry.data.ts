@@ -378,9 +378,18 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "unfocus",
       nativeName: "unfocus",
-      description: "Remove the current thread (Discord) or topic/conversation (Telegram) binding.",
+      description:
+        "Remove the current thread (Discord) or topic/conversation (Telegram, Feishu) binding.",
       textAlias: "/unfocus",
       category: "management",
+      args: [
+        {
+          name: "target",
+          description: "Ignored (unfocus always applies to the current conversation)",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
     }),
     defineChatCommand({
       key: "agents",

@@ -31,6 +31,7 @@ import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
+import { getFeishuThreadBindingManager } from "./thread-bindings.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -1211,6 +1212,42 @@ export async function handleFeishuMessage(params: {
           });
           log(
             `feishu[${account.accountId}]: dynamic agent created, new route: ${route.sessionKey}`,
+          );
+        }
+      }
+    }
+
+    // Resolve session binding: if this conversation is focused, route to the bound session.
+    const bindingManager = getFeishuThreadBindingManager(account.accountId);
+    if (bindingManager) {
+      // Build conversation ID matching the format used by /focus:
+      // DMs: senderOpenId, group topics: chatId:topic:rootId
+      // Prefer root_id over thread_id — root_id is the stable canonical
+      // identifier for Feishu topic threads.
+      const bindingConversationId = isGroup
+        ? ctx.rootId || ctx.threadId
+          ? `${ctx.chatId}:topic:${ctx.rootId || ctx.threadId}`
+          : undefined
+        : ctx.senderOpenId;
+
+      if (bindingConversationId) {
+        const binding = bindingManager.getByConversationId(bindingConversationId);
+        const boundSessionKey = binding?.targetSessionKey?.trim();
+        if (binding && boundSessionKey) {
+          // Extract agentId from session key (format: agent:<agentId>:<rest>)
+          const agentIdFromKey = boundSessionKey.startsWith("agent:")
+            ? normalizeAgentId(boundSessionKey.split(":")[1])
+            : route.agentId;
+          route = {
+            ...route,
+            sessionKey: boundSessionKey,
+            agentId: agentIdFromKey,
+            lastRoutePolicy: boundSessionKey === route.mainSessionKey ? "main" : "session",
+            matchedBy: "binding.channel",
+          };
+          bindingManager.touchConversation(bindingConversationId);
+          log(
+            `feishu[${account.accountId}]: routed via binding ${bindingConversationId} -> ${boundSessionKey}`,
           );
         }
       }

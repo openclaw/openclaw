@@ -16,17 +16,19 @@ import type { CommandHandlerResult } from "../commands-types.js";
 import {
   type SubagentsCommandContext,
   isDiscordSurface,
+  isFeishuSurface,
   isTelegramSurface,
   resolveChannelAccountId,
   resolveCommandSurfaceChannel,
   resolveDiscordChannelIdForFocus,
+  resolveFeishuConversationId,
   resolveFocusTargetSession,
   resolveTelegramConversationId,
   stopWithText,
 } from "./shared.js";
 
 type FocusBindingContext = {
-  channel: "discord" | "telegram";
+  channel: "discord" | "telegram" | "feishu";
   accountId: string;
   conversationId: string;
   placement: "current" | "child";
@@ -65,6 +67,19 @@ function resolveFocusBindingContext(
       labelNoun: "conversation",
     };
   }
+  if (isFeishuSurface(params)) {
+    const conversationId = resolveFeishuConversationId(params);
+    if (!conversationId) {
+      return null;
+    }
+    return {
+      channel: "feishu",
+      accountId: resolveChannelAccountId(params),
+      conversationId,
+      placement: "current",
+      labelNoun: "conversation",
+    };
+  }
   return null;
 }
 
@@ -73,8 +88,8 @@ export async function handleSubagentsFocusAction(
 ): Promise<CommandHandlerResult> {
   const { params, runs, restTokens } = ctx;
   const channel = resolveCommandSurfaceChannel(params);
-  if (channel !== "discord" && channel !== "telegram") {
-    return stopWithText("⚠️ /focus is only available on Discord and Telegram.");
+  if (channel !== "discord" && channel !== "telegram" && channel !== "feishu") {
+    return stopWithText("⚠️ /focus is only available on Discord, Telegram, and Feishu.");
   }
 
   const token = restTokens.join(" ").trim();
@@ -89,7 +104,12 @@ export async function handleSubagentsFocusAction(
     accountId,
   });
   if (!capabilities.adapterAvailable || !capabilities.bindSupported) {
-    const label = channel === "discord" ? "Discord thread" : "Telegram conversation";
+    const label =
+      channel === "discord"
+        ? "Discord thread"
+        : channel === "feishu"
+          ? "Feishu conversation"
+          : "Telegram conversation";
     return stopWithText(`⚠️ ${label} bindings are unavailable for this account.`);
   }
 
@@ -103,6 +123,11 @@ export async function handleSubagentsFocusAction(
     if (channel === "telegram") {
       return stopWithText(
         "⚠️ /focus on Telegram requires a topic context in groups, or a direct-message conversation.",
+      );
+    }
+    if (channel === "feishu") {
+      return stopWithText(
+        "⚠️ /focus on Feishu requires a topic thread in groups, or a direct-message conversation.",
       );
     }
     return stopWithText("⚠️ Could not resolve a Discord channel for /focus.");
