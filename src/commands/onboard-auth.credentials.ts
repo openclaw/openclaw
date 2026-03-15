@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import {
+  loadAuthProfileStoreForSecretsRuntime,
+  upsertAuthProfile,
+  type AuthProfileCredential,
+} from "../agents/auth-profiles.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   coerceSecretRef,
@@ -155,16 +159,105 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   return result;
 }
 
+function base64UrlDecode(input: string): string | null {
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  try {
+    return Buffer.from(padded, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+function extractOpenAICodexProfileEmailFromAccessToken(access?: string): string | undefined {
+  const token = typeof access === "string" ? access.trim() : "";
+  if (!token) {
+    return undefined;
+  }
+  const parts = token.split(".");
+  if (parts.length < 2) {
+    return undefined;
+  }
+  const decodedPayload = base64UrlDecode(parts[1] ?? "");
+  if (!decodedPayload) {
+    return undefined;
+  }
+  try {
+    const payload = JSON.parse(decodedPayload) as Record<string, unknown>;
+    const emailClaim = payload["https://api.openai.com/profile.email"];
+    const plainEmail = payload.email;
+    const value = typeof emailClaim === "string" ? emailClaim : plainEmail;
+    const trimmed = typeof value === "string" ? value.trim().toLowerCase() : "";
+    return trimmed || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeProfileSuffix(raw: string): string {
+  const trimmed = raw.trim().toLowerCase();
+  const slug = trimmed
+    .replace(/[^a-z0-9._@-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "default";
+}
+
+function isSameOAuthIdentity(existing: AuthProfileCredential | undefined, creds: OAuthCredentials): boolean {
+  if (!existing) {
+    return false;
+  }
+  if (existing.type !== "oauth" && existing.type !== "token") {
+    return false;
+  }
+  if (existing.access && creds.access && existing.access === creds.access) {
+    return true;
+  }
+  if (existing.refresh && creds.refresh && existing.refresh === creds.refresh) {
+    return true;
+  }
+  return false;
+}
+
+function resolveUniqueOAuthProfileId(params: {
+  provider: string;
+  preferredSuffix: string;
+  creds: OAuthCredentials;
+  agentDir: string;
+}): string {
+  const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+  const baseId = `${params.provider}:${normalizeProfileSuffix(params.preferredSuffix)}`;
+  const existingBase = store.profiles[baseId];
+  if (!existingBase || isSameOAuthIdentity(existingBase, params.creds)) {
+    return baseId;
+  }
+
+  for (let n = 2; n < 1000; n++) {
+    const candidate = `${baseId}-${n}`;
+    const existing = store.profiles[candidate];
+    if (!existing || isSameOAuthIdentity(existing, params.creds)) {
+      return candidate;
+    }
+  }
+  return `${baseId}-${Date.now()}`;
+}
+
 export async function writeOAuthCredentials(
   provider: string,
   creds: OAuthCredentials,
   agentDir?: string,
   options?: WriteOAuthCredentialsOptions,
 ): Promise<string> {
-  const email =
-    typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
-  const profileId = `${provider}:${email}`;
   const resolvedAgentDir = path.resolve(resolveAuthAgentDir(agentDir));
+  const providedEmail = typeof creds.email === "string" ? creds.email.trim() : "";
+  const derivedCodexEmail =
+    provider === "openai-codex" ? extractOpenAICodexProfileEmailFromAccessToken(creds.access) : undefined;
+  const profileId = resolveUniqueOAuthProfileId({
+    provider,
+    preferredSuffix: providedEmail || derivedCodexEmail || "default",
+    creds,
+    agentDir: resolvedAgentDir,
+  });
   const targetAgentDirs = options?.syncSiblingAgents
     ? resolveSiblingAgentDirs(resolvedAgentDir)
     : [resolvedAgentDir];
