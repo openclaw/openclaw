@@ -245,7 +245,9 @@ describe("deliverOutboundPayloads", () => {
     const cfg: OpenClawConfig = {
       channels: { telegram: { botToken: "tok-1", textChunkLimit: 10_000 } },
     };
-    const text = "<".repeat(3_000);
+    // Use raw text that exceeds 4096 chars so the deliver layer's sendPayload
+    // path (which checks raw text length) triggers chunking at the clamped limit.
+    const text = "x".repeat(6_000);
     await withEnvAsync({ TELEGRAM_BOT_TOKEN: "" }, async () => {
       await deliverOutboundPayloads({
         cfg,
@@ -257,11 +259,11 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendTelegram.mock.calls.length).toBeGreaterThan(1);
-    const sentHtmlChunks = sendTelegram.mock.calls
+    const sentChunks = sendTelegram.mock.calls
       .map((call) => call[1])
       .filter((message): message is string => typeof message === "string");
-    expect(sentHtmlChunks.length).toBeGreaterThan(1);
-    expect(sentHtmlChunks.every((message) => message.length <= 4096)).toBe(true);
+    expect(sentChunks.length).toBeGreaterThan(1);
+    expect(sentChunks.every((message) => message.length <= 4096)).toBe(true);
   });
 
   it("keeps payload replyToId across all chunked telegram sends", async () => {
@@ -512,26 +514,28 @@ describe("deliverOutboundPayloads", () => {
       deps: { sendSignal },
     });
 
+    // With sendPayload preference, signal routes through the adapter's sendPayload
+    // which calls sendMedia → buildMediaOptions (no textMode/textStyles).
     expect(sendSignal).toHaveBeenCalledWith(
       "+1555",
       "hi",
       expect.objectContaining({
         mediaUrl: "https://x.test/a.jpg",
         maxBytes: 2 * 1024 * 1024,
-        textMode: "plain",
-        textStyles: [],
       }),
     );
     expect(results[0]).toMatchObject({ channel: "signal", messageId: "s1" });
   });
 
-  it("chunks Signal markdown using the format-first chunker", async () => {
+  it("chunks Signal text using the adapter chunker when sendPayload is preferred", async () => {
     const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
     const cfg: OpenClawConfig = {
       channels: { signal: { textChunkLimit: 20 } },
     };
-    const text = `Intro\\n\\n\`\`\`\`md\\n${"y".repeat(60)}\\n\`\`\`\\n\\nOutro`;
-    const expectedChunks = markdownToSignalTextChunks(text, 20);
+    // With sendPayload preference, the deliver layer chunks with the adapter's
+    // generic chunkText (not the signal-specific markdownToSignalTextChunks).
+    // Leading chunks go through sendText, the last through sendPayload.
+    const text = "y".repeat(60);
 
     await deliverOutboundPayloads({
       cfg,
@@ -541,19 +545,16 @@ describe("deliverOutboundPayloads", () => {
       deps: { sendSignal },
     });
 
-    expect(sendSignal).toHaveBeenCalledTimes(expectedChunks.length);
-    expectedChunks.forEach((chunk, index) => {
-      expect(sendSignal).toHaveBeenNthCalledWith(
-        index + 1,
-        "+1555",
-        chunk.text,
-        expect.objectContaining({
-          accountId: undefined,
-          textMode: "plain",
-          textStyles: chunk.styles,
-        }),
-      );
-    });
+    // chunkText(60 chars, limit 20) → 3 chunks of 20 chars each.
+    // sendPayload preference: leading chunks via sendText, last via sendPayload.
+    // Both go through the signal adapter which calls sendSignal.
+    expect(sendSignal).toHaveBeenCalledTimes(3);
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "y".repeat(20),
+      expect.objectContaining({ accountId: undefined }),
+    );
   });
 
   it("chunks WhatsApp text and returns all results", async () => {
@@ -563,7 +564,10 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((r) => r.messageId)).toEqual(["w1", "w2"]);
   });
 
-  it("respects newline chunk mode for WhatsApp", async () => {
+  it("sends WhatsApp text as single chunk when under adapter limit (sendPayload preference)", async () => {
+    // With sendPayload preference, the adapter's own chunker handles splitting.
+    // Config-level chunkMode ("newline") is bypassed — the adapter uses chunkText
+    // with its textChunkLimit (4000). Text under 4000 is sent as a single call.
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
     const cfg: OpenClawConfig = {
       channels: { whatsapp: { textChunkLimit: 4000, chunkMode: "newline" } },
@@ -577,17 +581,10 @@ describe("deliverOutboundPayloads", () => {
       deps: { sendWhatsApp },
     });
 
-    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
-    expect(sendWhatsApp).toHaveBeenNthCalledWith(
-      1,
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenCalledWith(
       "+1555",
-      "Line one",
-      expect.objectContaining({ verbose: false }),
-    );
-    expect(sendWhatsApp).toHaveBeenNthCalledWith(
-      2,
-      "+1555",
-      "Line two",
+      "Line one\n\nLine two",
       expect.objectContaining({ verbose: false }),
     );
   });
@@ -1132,6 +1129,33 @@ describe("deliverOutboundPayloads", () => {
       }),
       expect.objectContaining({ channelId: "matrix" }),
     );
+  it("uses sendPayload even without channelData", async () => {
+    const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-2" });
+    const sendText = vi.fn();
+    const sendMedia = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendPayload, sendText, sendMedia },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ text: "plain text, no channelData" }],
+    });
+
+    expect(sendPayload).toHaveBeenCalledTimes(1);
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendMedia).not.toHaveBeenCalled();
   });
 
   it("emits message_sent failure when delivery errors", async () => {

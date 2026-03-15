@@ -697,13 +697,33 @@ async function deliverOutboundPayloadsCore(
         threadId: params.threadId ?? undefined,
         forceDocument: params.forceDocument,
       };
-      if (handler.sendPayload && effectivePayload.channelData) {
-        const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
-        results.push(delivery);
+      // Prefer sendPayload when the adapter supports it (handles all payload fields
+      // including channelData, media, text in a single call).
+      // When text exceeds the adapter's chunk limit, split leading chunks via sendText
+      // and send only the final chunk through sendPayload (preserving channelData on
+      // the last message).
+      if (handler.sendPayload) {
+        const text = payloadSummary.text;
+        if (textLimit !== undefined && text.length > textLimit && handler.chunker) {
+          const chunks = handler.chunker(text, textLimit);
+          if (chunks.length > 1) {
+            for (let i = 0; i < chunks.length - 1; i++) {
+              throwIfAborted(abortSignal);
+              results.push(await handler.sendText(chunks[i], sendOverrides));
+            }
+            const lastChunk = chunks.at(-1)!;
+            const chunkedPayload = { ...effectivePayload, text: lastChunk };
+            results.push(await handler.sendPayload(chunkedPayload, sendOverrides));
+          } else {
+            results.push(await handler.sendPayload(effectivePayload, sendOverrides));
+          }
+        } else {
+          results.push(await handler.sendPayload(effectivePayload, sendOverrides));
+        }
         emitMessageSent({
           success: true,
           content: payloadSummary.text,
-          messageId: delivery.messageId,
+          messageId: results.at(-1)?.messageId,
         });
         continue;
       }
