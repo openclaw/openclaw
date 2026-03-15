@@ -71,9 +71,9 @@ describe("update global helpers", () => {
     expect(
       resolveGlobalInstallSpec({
         packageName: "openclaw",
-        tag: "github:openclaw/openclaw#vincentkoc-code/test",
+        tag: "github:openclaw/openclaw#feature/my-branch",
       }),
-    ).toBe("github:openclaw/openclaw#vincentkoc-code/test");
+    ).toBe("github:openclaw/openclaw#feature/my-branch");
     expect(
       resolveGlobalInstallSpec({
         packageName: "openclaw",
