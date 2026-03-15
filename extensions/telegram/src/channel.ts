@@ -40,7 +40,15 @@ import {
   type ResolvedTelegramAccount,
   type TelegramProbe,
 } from "openclaw/plugin-sdk/telegram";
+import {
+  type OutboundSendDeps,
+  resolveOutboundSendDep,
+} from "../../../src/infra/outbound/send-deps.js";
 import { getTelegramRuntime } from "./runtime.js";
+
+type TelegramSendFn = ReturnType<
+  typeof getTelegramRuntime
+>["channel"]["telegram"]["sendMessageTelegram"];
 
 const meta = getChatChannelMeta("telegram");
 
@@ -78,9 +86,6 @@ function formatDuplicateTelegramTokenReason(params: {
   );
 }
 
-type TelegramSendFn = ReturnType<
-  typeof getTelegramRuntime
->["channel"]["telegram"]["sendMessageTelegram"];
 type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
 
 function buildTelegramSendOptions(params: {
@@ -91,6 +96,7 @@ function buildTelegramSendOptions(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean | null;
+  forceDocument?: boolean | null;
 }): TelegramSendOptions {
   return {
     verbose: false,
@@ -101,6 +107,7 @@ function buildTelegramSendOptions(params: {
     replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
     accountId: params.accountId ?? undefined,
     silent: params.silent ?? undefined,
+    forceDocument: params.forceDocument ?? undefined,
   };
 }
 
@@ -111,13 +118,14 @@ async function sendTelegramOutbound(params: {
   mediaUrl?: string | null;
   mediaLocalRoots?: readonly string[] | null;
   accountId?: string | null;
-  deps?: { sendTelegram?: TelegramSendFn };
+  deps?: OutboundSendDeps;
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean | null;
 }) {
   const send =
-    params.deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
+    resolveOutboundSendDep<TelegramSendFn>(params.deps, "telegram") ??
+    getTelegramRuntime().channel.telegram.sendMessageTelegram;
   return await send(
     params.to,
     params.text,
@@ -380,8 +388,11 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       replyToId,
       threadId,
       silent,
+      forceDocument,
     }) => {
-      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
+      const send =
+        resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
+        getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const result = await sendTelegramPayloadMessages({
         send,
         to,
@@ -393,6 +404,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
           replyToId,
           threadId,
           silent,
+          forceDocument,
         }),
       });
       return { channel: "telegram", ...result };

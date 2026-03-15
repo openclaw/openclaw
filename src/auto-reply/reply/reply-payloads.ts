@@ -1,14 +1,27 @@
+import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
-import { parseTelegramTarget } from "../../telegram/targets.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
+
+export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
+  const text = payload.text?.trim();
+  if (!text) {
+    return payload.text;
+  }
+  const question = payload.btw?.question?.trim();
+  if (!question) {
+    return payload.text;
+  }
+  const formatted = `BTW\nQuestion: ${question}\n\n${text}`;
+  return text === formatted || text.startsWith("BTW\nQuestion:") ? text : formatted;
+}
 
 function resolveReplyThreadingForPayload(params: {
   payload: ReplyPayload;

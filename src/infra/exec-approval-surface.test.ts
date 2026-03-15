@@ -11,20 +11,20 @@ vi.mock("../config/config.js", () => ({
   loadConfig: (...args: unknown[]) => loadConfigMock(...args),
 }));
 
-vi.mock("../discord/accounts.js", () => ({
+vi.mock("../../extensions/discord/src/accounts.js", () => ({
   listEnabledDiscordAccounts: (...args: unknown[]) => listEnabledDiscordAccountsMock(...args),
 }));
 
-vi.mock("../discord/exec-approvals.js", () => ({
+vi.mock("../../extensions/discord/src/exec-approvals.js", () => ({
   isDiscordExecApprovalClientEnabled: (...args: unknown[]) =>
     isDiscordExecApprovalClientEnabledMock(...args),
 }));
 
-vi.mock("../telegram/accounts.js", () => ({
+vi.mock("../../extensions/telegram/src/accounts.js", () => ({
   listEnabledTelegramAccounts: (...args: unknown[]) => listEnabledTelegramAccountsMock(...args),
 }));
 
-vi.mock("../telegram/exec-approvals.js", () => ({
+vi.mock("../../extensions/telegram/src/exec-approvals.js", () => ({
   isTelegramExecApprovalClientEnabled: (...args: unknown[]) =>
     isTelegramExecApprovalClientEnabledMock(...args),
 }));
