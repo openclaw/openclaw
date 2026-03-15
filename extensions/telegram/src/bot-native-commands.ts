@@ -41,8 +41,12 @@ import {
   getPluginCommandSpecs,
   matchPluginCommand,
 } from "../../../src/plugins/commands.js";
-import { resolveAgentRoute } from "../../../src/routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
+import {
+  buildAgentSessionKey,
+  deriveLastRoutePolicy,
+  resolveAgentRoute,
+} from "../../../src/routing/resolve-route.js";
+import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
@@ -59,6 +63,7 @@ import {
   buildTelegramThreadParams,
   buildSenderName,
   buildTelegramGroupFrom,
+  resolveTelegramDirectPeerId,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
@@ -506,6 +511,35 @@ export const registerTelegramNativeCommands = ({
         });
         return null;
       }
+    }
+    const isNamedAccountFallback =
+      route.accountId !== DEFAULT_ACCOUNT_ID && route.matchedBy === "default";
+    if (isNamedAccountFallback && isGroup) {
+      logVerbose(
+        `telegram native command: non-default account requires explicit binding (group ${chatId})`,
+      );
+      return null;
+    }
+    if (isNamedAccountFallback && !isGroup) {
+      const overriddenSessionKey = buildAgentSessionKey({
+        agentId: route.agentId,
+        channel: "telegram",
+        accountId: route.accountId,
+        peer: {
+          kind: "direct",
+          id: resolveTelegramDirectPeerId({ chatId, senderId }),
+        },
+        dmScope: "per-account-channel-peer",
+        identityLinks: cfg.session?.identityLinks,
+      }).toLowerCase();
+      route = {
+        ...route,
+        sessionKey: overriddenSessionKey,
+        lastRoutePolicy: deriveLastRoutePolicy({
+          sessionKey: overriddenSessionKey,
+          mainSessionKey: route.mainSessionKey,
+        }),
+      };
     }
     const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
     const tableMode = resolveMarkdownTableMode({

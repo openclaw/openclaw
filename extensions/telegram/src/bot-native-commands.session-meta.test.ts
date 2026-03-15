@@ -185,6 +185,7 @@ function buildStatusTopicCommandContext() {
 
 function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
+  accountId?: string;
   allowFrom?: string[];
   groupAllowFrom?: string[];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
@@ -192,10 +193,11 @@ function registerAndResolveStatusHandler(params: {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
 } {
-  const { cfg, allowFrom, groupAllowFrom, resolveTelegramGroupConfig } = params;
+  const { cfg, accountId, allowFrom, groupAllowFrom, resolveTelegramGroupConfig } = params;
   return registerAndResolveCommandHandlerBase({
     commandName: "status",
     cfg,
+    accountId: accountId ?? "default",
     allowFrom: allowFrom ?? ["*"],
     groupAllowFrom: groupAllowFrom ?? [],
     useAccessGroups: true,
@@ -206,6 +208,7 @@ function registerAndResolveStatusHandler(params: {
 function registerAndResolveCommandHandlerBase(params: {
   commandName: string;
   cfg: OpenClawConfig;
+  accountId?: string;
   allowFrom: string[];
   groupAllowFrom: string[];
   useAccessGroups: boolean;
@@ -217,6 +220,7 @@ function registerAndResolveCommandHandlerBase(params: {
   const {
     commandName,
     cfg,
+    accountId,
     allowFrom,
     groupAllowFrom,
     useAccessGroups,
@@ -236,6 +240,7 @@ function registerAndResolveCommandHandlerBase(params: {
         }),
       } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
       cfg,
+      accountId: accountId ?? "default",
       allowFrom,
       groupAllowFrom,
       useAccessGroups,
@@ -251,6 +256,7 @@ function registerAndResolveCommandHandlerBase(params: {
 function registerAndResolveCommandHandler(params: {
   commandName: string;
   cfg: OpenClawConfig;
+  accountId?: string;
   allowFrom?: string[];
   groupAllowFrom?: string[];
   useAccessGroups?: boolean;
@@ -262,6 +268,7 @@ function registerAndResolveCommandHandler(params: {
   const {
     commandName,
     cfg,
+    accountId,
     allowFrom,
     groupAllowFrom,
     useAccessGroups,
@@ -270,6 +277,7 @@ function registerAndResolveCommandHandler(params: {
   return registerAndResolveCommandHandlerBase({
     commandName,
     cfg,
+    accountId: accountId ?? "default",
     allowFrom: allowFrom ?? [],
     groupAllowFrom: groupAllowFrom ?? [],
     useAccessGroups: useAccessGroups ?? true,
@@ -474,6 +482,38 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       >
     )[0]?.[0];
     expect(sessionMetaCall?.sessionKey).toBe("agent:codex:telegram:slash:200");
+  });
+
+  it("routes Telegram native commands through named-account DM sessions", async () => {
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {
+        session: { dmScope: "per-channel-peer" },
+      },
+      accountId: "knowledge",
+      allowFrom: ["200"],
+    });
+    await handler(buildStatusCommandContext());
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string } }]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(
+      "agent:main:telegram:knowledge:direct:200",
+    );
+  });
+
+  it("blocks native commands in groups for named accounts without explicit binding", async () => {
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      accountId: "knowledge",
+      allowFrom: ["200"],
+      groupAllowFrom: ["200"],
+    });
+    await handler(buildStatusTopicCommandContext());
+
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
   it("routes Telegram native commands through topic-specific agent sessions", async () => {
