@@ -82,6 +82,7 @@ function maxScrollTop(container: { scrollHeight: number; clientHeight: number })
 
 function createChatBlock(offsetTop: number, id: string, opts: { streaming?: boolean } = {}) {
   const block = document.createElement("div");
+  block.setAttribute("data-chat-block", "");
   block.dataset.chatBlockId = id;
   if (opts.streaming) {
     block.setAttribute("data-chat-streaming", "");
