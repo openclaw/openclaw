@@ -555,8 +555,14 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   }
 
   const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
+  // Use a dedicated lane for manual runs to avoid deadlocking with the
+  // inner `CommandLane.Cron` enqueue performed by `runEmbeddedPiAgent`
+  // inside `executeJobCoreWithTimeout`.  The cron lane has
+  // `maxConcurrent: 1`, so nesting two enqueues on the same lane causes
+  // the outer task to hold the single slot while the inner enqueue waits
+  // for a free slot — a classic deadlock.
   void enqueueCommandInLane(
-    CommandLane.Cron,
+    CommandLane.CronManual,
     async () => {
       const result = await run(state, id, mode);
       if (result.ok && "ran" in result && !result.ran) {

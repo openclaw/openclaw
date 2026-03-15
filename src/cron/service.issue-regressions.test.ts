@@ -1565,13 +1565,13 @@ describe("Cron issue regressions", () => {
       expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
     });
 
-    clearCommandLane(CommandLane.Cron);
+    clearCommandLane(CommandLane.CronManual);
   });
 
   it("logs unexpected queued manual run background failures once", async () => {
     vi.useRealTimers();
-    clearCommandLane(CommandLane.Cron);
-    setCommandLaneConcurrency(CommandLane.Cron, 1);
+    clearCommandLane(CommandLane.CronManual);
+    setCommandLaneConcurrency(CommandLane.CronManual, 1);
 
     const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
     const job = createDueIsolatedJob({ id: "queued-failure", nowMs: dueAt, nextRunAtMs: dueAt });
@@ -1593,7 +1593,7 @@ describe("Cron issue regressions", () => {
       "cron: queued manual run background execution failed",
     );
 
-    clearCommandLane(CommandLane.Cron);
+    clearCommandLane(CommandLane.CronManual);
   });
 
   // Regression: isolated cron runs must not abort at 1/3 of configured timeoutSeconds.
