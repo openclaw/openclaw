@@ -72,11 +72,18 @@ function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string):
     if (host.sessionKey !== triggerSessionKey) {
       return;
     }
+    // Skip if an agent run is actively streaming — reload would clear chatStream
+    if (host.chatRunId) {
+      return;
+    }
     void loadChatHistory(host as unknown as OpenClawApp);
     // Second refresh: wait for message persistence to complete.
     _chatInboundTimerSlow = setTimeout(() => {
       _chatInboundTimerSlow = null;
       if (host.sessionKey !== triggerSessionKey) {
+        return;
+      }
+      if (host.chatRunId) {
         return;
       }
       void loadChatHistory(host as unknown as OpenClawApp);

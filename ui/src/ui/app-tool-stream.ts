@@ -411,7 +411,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (
     (payload.stream === "assistant" || payload.stream === "thinking") &&
     (host as unknown as { tab?: string }).tab === "chat" &&
-    payload.sessionKey === host.sessionKey
+    payload.sessionKey === host.sessionKey &&
+    (!host.chatRunId || host.chatRunId === payload.runId)
   ) {
     const text = typeof payload.data?.text === "string" ? payload.data.text : null;
     if (text) {
