@@ -28,6 +28,12 @@ describe("imessage targets", () => {
     expect(target).toEqual({ kind: "handle", to: "+1555", service: "sms" });
   });
 
+  it("rejects non-numeric chat_id values", () => {
+    expect(() => parseIMessageTarget("chat_id:2ecba0e20f3a4299")).toThrow(/Invalid chat_id/);
+    expect(() => parseIMessageTarget("chat_id:abc")).toThrow(/Invalid chat_id/);
+    expect(() => parseIMessageTarget("chat_id:12abc")).toThrow(/Invalid chat_id/);
+  });
+
   it("normalizes handles", () => {
     expect(normalizeIMessageHandle("Name@Example.com")).toBe("name@example.com");
     expect(normalizeIMessageHandle(" +1 (555) 222-3333 ")).toBe("+15552223333");
