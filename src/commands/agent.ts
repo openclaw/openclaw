@@ -36,6 +36,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import type { FailoverReason } from "../agents/pi-embedded-helpers.js";
 import { prepareSessionManagerForRun } from "../agents/pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
@@ -139,11 +140,44 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   params.sessionStore[params.sessionKey] = persisted;
 }
 
-function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boolean }): string {
-  if (!params.isFallbackRetry) {
-    return params.body;
+function resolveRetryImages(
+  images: AgentCommandOpts["images"],
+  isFallbackRetry: boolean,
+  previousFailureReason?: FailoverReason,
+  primaryProvider?: string,
+  currentProvider?: string,
+): AgentCommandOpts["images"] {
+  if (!isFallbackRetry) {
+    return images;
   }
-  return "Continue where you left off. The previous model attempt failed or timed out.";
+  // Cross-provider fallback: strip images to avoid unintended third-party disclosure
+  if (primaryProvider && currentProvider && primaryProvider !== currentProvider) {
+    return undefined;
+  }
+  // Same-provider format error: strip images (model can't handle modality)
+  if (previousFailureReason === "format") {
+    return undefined;
+  }
+  return images;
+}
+
+function buildPartialExecutionSystemContext(partialExecution?: {
+  toolNames: string[];
+  didSendViaMessagingTool: boolean;
+}): string | undefined {
+  if (!partialExecution || partialExecution.toolNames.length === 0) {
+    return undefined;
+  }
+  const toolList = partialExecution.toolNames.join(", ");
+  const messagingWarning = partialExecution.didSendViaMessagingTool
+    ? " Messages were already sent to the user — do NOT re-send them."
+    : "";
+  return (
+    `The previous model attempt partially executed before failing. ` +
+    `It completed these tool calls: ${toolList}.${messagingWarning} ` +
+    `Do not repeat actions that have already been performed. ` +
+    `Review the conversation history and continue from where the previous attempt left off.`
+  );
 }
 
 function prependInternalEventContext(
@@ -344,16 +378,29 @@ function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
+  previousFailureReason?: FailoverReason;
+  previousPartialExecution?: { toolNames: string[]; didSendViaMessagingTool: boolean };
 }) {
-  const effectivePrompt = resolveFallbackRetryPrompt({
-    body: params.body,
-    isFallbackRetry: params.isFallbackRetry,
-  });
+  // Fallback retries only fire on thrown errors (not partial streaming results),
+  // so the original prompt is always safe to re-send. The orphaned-user-message
+  // repair in attempt.ts handles any residual duplicate user turns.
+  const effectivePrompt = params.body;
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+  // Suppress partial execution context on cross-provider retries to avoid
+  // leaking internal tool names to a different LLM provider (CWE-200).
+  const isCrossProviderRetry =
+    params.isFallbackRetry &&
+    !!params.primaryProvider &&
+    params.primaryProvider !== params.providerOverride;
+  const partialExecContext = isCrossProviderRetry
+    ? undefined
+    : buildPartialExecutionSystemContext(params.previousPartialExecution);
+  const effectiveExtraSystemPrompt =
+    [params.opts.extraSystemPrompt, partialExecContext].filter(Boolean).join("\n\n") || undefined;
   if (isCliProvider(params.providerOverride, params.cfg)) {
     const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
     const runCliWithSession = (nextCliSessionId: string | undefined) =>
@@ -370,11 +417,17 @@ function runAgentAttempt(params: {
         thinkLevel: params.resolvedThinkLevel,
         timeoutMs: params.timeoutMs,
         runId: params.runId,
-        extraSystemPrompt: params.opts.extraSystemPrompt,
+        extraSystemPrompt: effectiveExtraSystemPrompt,
         cliSessionId: nextCliSessionId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
-        images: params.isFallbackRetry ? undefined : params.opts.images,
+        images: resolveRetryImages(
+          params.opts.images,
+          params.isFallbackRetry,
+          params.previousFailureReason,
+          params.primaryProvider,
+          params.providerOverride,
+        ),
         streamParams: params.opts.streamParams,
       });
     return runCliWithSession(cliSessionId).catch(async (err) => {
@@ -478,7 +531,13 @@ function runAgentAttempt(params: {
     config: params.cfg,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
-    images: params.isFallbackRetry ? undefined : params.opts.images,
+    images: resolveRetryImages(
+      params.opts.images,
+      params.isFallbackRetry,
+      params.previousFailureReason,
+      params.primaryProvider,
+      params.providerOverride,
+    ),
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
     model: params.modelOverride,
@@ -490,11 +549,12 @@ function runAgentAttempt(params: {
     runId: params.runId,
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
-    extraSystemPrompt: params.opts.extraSystemPrompt,
+    extraSystemPrompt: effectiveExtraSystemPrompt,
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    suppressPromptImageDetection: isCrossProviderRetry,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
@@ -1108,6 +1168,8 @@ async function agentCommandInternal(
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
         run: (providerOverride, modelOverride, runOptions) => {
+          // TODO: isFallbackRetry is derivable from `runOptions?.previousFailureReason !== undefined`;
+          // consider removing it in a future cleanup pass.
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
           return runAgentAttempt({
@@ -1136,6 +1198,8 @@ async function agentCommandInternal(
             sessionStore,
             storePath,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            previousFailureReason: runOptions?.previousFailureReason,
+            previousPartialExecution: runOptions?.previousPartialExecution,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
@@ -1255,3 +1319,6 @@ export async function agentCommandFromIngress(
     deps,
   );
 }
+
+/** @internal – exposed for unit tests only */
+export const _testInternals = { resolveRetryImages, buildPartialExecutionSystemContext } as const;
