@@ -562,9 +562,6 @@ describe("createOllamaStreamFn", () => {
         expect(events[0]?.type).toBe("start");
         expect((events[0] as { partial: { content: unknown[] } }).partial.content).toEqual([]);
 
-        // `partial` is a single mutable reference shared across all text_delta events;
-        // only `delta` reliably reflects the per-chunk value. See the
-        // "text_delta partial accumulates content across chunks" test for details.
         expect(events[1]).toMatchObject({ type: "text_delta", delta: "hello", contentIndex: 0 });
         expect(events[2]).toMatchObject({ type: "text_delta", delta: " world", contentIndex: 0 });
 
@@ -593,7 +590,7 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("text_delta partial accumulates content across chunks", async () => {
+  it("text_delta partial carries only the current chunk delta", async () => {
     await withMockNdjsonFetch(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"a"},"done":false}',
@@ -613,10 +610,11 @@ describe("createOllamaStreamFn", () => {
         );
         expect(deltas).toHaveLength(3);
 
-        // The partial's content text should reflect accumulated state
-        // (using a single mutable object, so the final value wins)
-        const lastPartialText = deltas[2].partial.content[0]?.text;
-        expect(lastPartialText).toBe("abc");
+        // partial.content carries only the current chunk's delta text,
+        // matching the OpenAI WebSocket provider contract
+        expect(deltas[0].partial.content[0]?.text).toBe("a");
+        expect(deltas[1].partial.content[0]?.text).toBe("b");
+        expect(deltas[2].partial.content[0]?.text).toBe("c");
       },
     );
   });

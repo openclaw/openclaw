@@ -498,12 +498,6 @@ export function createOllamaStreamFn(
         const reader = response.body.getReader();
         let accumulatedContent = "";
         let emittedStart = false;
-        const partialTextNode = { type: "text" as const, text: "" };
-        const partial = buildAssistantMessageWithZeroUsage({
-          model,
-          content: [partialTextNode],
-          stopReason: "stop",
-        });
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
 
@@ -521,12 +515,15 @@ export function createOllamaStreamFn(
               });
             }
             accumulatedContent += chunk.message.content;
-            partialTextNode.text = accumulatedContent;
             stream.push({
               type: "text_delta",
               contentIndex: 0,
               delta: chunk.message.content,
-              partial,
+              partial: buildAssistantMessageWithZeroUsage({
+                model,
+                content: [{ type: "text", text: chunk.message.content }],
+                stopReason: "stop",
+              }),
             });
           }
 
