@@ -580,6 +580,81 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("uses the explicit telegram heartbeat target session when no session override is set", async () => {
+    const tmpDir = await createCaseDir("hb-explicit-telegram-session");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "telegram", to: "-100123" },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
+      const telegramSessionKey = buildAgentPeerSessionKey({
+        agentId,
+        channel: "telegram",
+        peerKind: "group",
+        peerId: "-100123",
+      });
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [mainSessionKey]: {
+            sessionId: "sid-main",
+            updatedAt: Date.now(),
+          },
+          [telegramSessionKey]: {
+            sessionId: "sid-telegram",
+            updatedAt: Date.now() + 1_000,
+            lastChannel: "telegram",
+            lastTo: "-100123",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Final alert" }]);
+      const sendTelegram = vi.fn<NonNullable<HeartbeatDeps["sendTelegram"]>>().mockResolvedValue({
+        messageId: "m1",
+        chatId: "-100123",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          ...createHeartbeatDeps(
+            vi
+              .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+              .mockResolvedValue({ messageId: "w1", toJid: "jid" }),
+          ),
+          sendTelegram,
+        },
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram).toHaveBeenCalledWith("-100123", "Final alert", expect.any(Object));
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: telegramSessionKey,
+          OriginatingChannel: "telegram",
+          OriginatingTo: "-100123",
+          Provider: "heartbeat",
+        }),
+        expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
+        cfg,
+      );
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   it("uses per-agent heartbeat overrides and session keys", async () => {
     const tmpDir = await createCaseDir("hb-agent-overrides");
     const storePath = path.join(tmpDir, "sessions.json");
