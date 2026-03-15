@@ -12,12 +12,12 @@ import {
   listProfilesForProvider,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-import { findNormalizedProviderValue } from "./model-selection.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import { findNormalizedProviderValue } from "./model-selection.js";
 import {
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,
@@ -960,7 +960,7 @@ export async function resolveImplicitCopilotProvider(params: {
     });
     const configuredOrder =
       orderedProfileIds.length === 0
-        ? findNormalizedProviderValue(params.config?.auth?.order, "github-copilot")?.filter(
+        ? (findNormalizedProviderValue(params.config?.auth?.order, "github-copilot")?.filter(
             (profileId) =>
               resolveAuthProfileEligibility({
                 cfg: params.config,
@@ -968,7 +968,7 @@ export async function resolveImplicitCopilotProvider(params: {
                 provider: "github-copilot",
                 profileId,
               }).eligible,
-          ) ?? []
+          ) ?? [])
         : [];
     const profileIds =
       orderedProfileIds.length > 0
