@@ -141,6 +141,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     deps,
     replyToId,
     threadId,
+    forceDocument,
   }) => {
     const { send, baseOpts } = resolveTelegramSendContext({
       cfg,
@@ -156,6 +157,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       baseOpts: {
         ...baseOpts,
         mediaLocalRoots,
+        forceDocument: forceDocument ?? false,
       },
     });
     return { channel: "telegram", ...result };

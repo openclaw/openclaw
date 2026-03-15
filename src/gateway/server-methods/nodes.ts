@@ -26,6 +26,7 @@ import {
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import {
+  type ConnectParams,
   ErrorCodes,
   errorShape,
   validateNodeDescribeParams,
@@ -216,6 +217,38 @@ function enqueuePendingNodeAction(params: {
 
 function listPendingNodeActions(nodeId: string): PendingNodeAction[] {
   return prunePendingNodeActions(nodeId, Date.now());
+}
+
+function resolveAllowedPendingNodeActions(params: {
+  nodeId: string;
+  client: { connect?: ConnectParams | null } | null;
+}): PendingNodeAction[] {
+  const pending = listPendingNodeActions(params.nodeId);
+  if (pending.length === 0) {
+    return pending;
+  }
+  const connect = params.client?.connect;
+  const declaredCommands = Array.isArray(connect?.commands) ? connect.commands : [];
+  const allowlist = resolveNodeCommandAllowlist(loadConfig(), {
+    platform: connect?.client?.platform,
+    deviceFamily: connect?.client?.deviceFamily,
+  });
+  const allowed = pending.filter((entry) => {
+    const result = isNodeCommandAllowed({
+      command: entry.command,
+      declaredCommands,
+      allowlist,
+    });
+    return result.ok;
+  });
+  if (allowed.length !== pending.length) {
+    if (allowed.length === 0) {
+      pendingNodeActionsById.delete(params.nodeId);
+    } else {
+      pendingNodeActionsById.set(params.nodeId, allowed);
+    }
+  }
+  return allowed;
 }
 
 function ackPendingNodeActions(nodeId: string, ids: string[]): PendingNodeAction[] {
@@ -805,7 +838,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const pending = listPendingNodeActions(trimmedNodeId);
+    const pending = resolveAllowedPendingNodeActions({ nodeId: trimmedNodeId, client });
     respond(
       true,
       {

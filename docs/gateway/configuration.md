@@ -170,7 +170,7 @@ When validation fails:
     ```
 
     - **Metadata mentions**: native @-mentions (WhatsApp tap-to-mention, Telegram @bot, etc.)
-    - **Text patterns**: regex patterns in `mentionPatterns`
+    - **Text patterns**: safe regex patterns in `mentionPatterns`
     - See [full reference](/gateway/configuration-reference#group-chat-mention-gating) for per-channel overrides and self-chat mode.
 
   </Accordion>
