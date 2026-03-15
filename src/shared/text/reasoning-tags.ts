@@ -30,7 +30,7 @@ export function stripReasoningTagsFromText(
     return text;
   }
 
-  const mode = options?.mode ?? "strict";
+  const _mode = options?.mode ?? "strict";
   const trimMode = options?.trim ?? "both";
 
   let cleaned = text;
@@ -84,7 +84,7 @@ export function stripReasoningTagsFromText(
     lastIndex = idx + match[0].length;
   }
 
-  if (!inThinking || mode === "preserve") {
+  if (!inThinking || _mode !== "strict") {
     result += cleaned.slice(lastIndex);
   }
 

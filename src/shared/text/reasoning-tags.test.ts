@@ -200,6 +200,16 @@ describe("stripReasoningTagsFromText", () => {
       }
     });
 
+    it("suppresses text inside unclosed <think> in strict mode (#37696)", () => {
+      expect(stripReasoningTagsFromText("<think>Hello")).toBe("");
+      expect(
+        stripReasoningTagsFromText("Response <think>reasoning but no close tag — real answer here"),
+      ).toBe("Response");
+      expect(
+        stripReasoningTagsFromText("<think>closed</think>Visible <think>unclosed trailing text"),
+      ).toBe("Visible");
+    });
+
     it("still strips fully closed reasoning blocks in preserve mode", () => {
       expect(stripReasoningTagsFromText("A <think>hidden</think> B", { mode: "preserve" })).toBe(
         "A  B",
