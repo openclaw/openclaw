@@ -25,6 +25,7 @@ import {
   untrackSessionBrowserTab,
 } from "../../browser/session-tab-registry.js";
 import { loadConfig } from "../../config/config.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import {
   executeActAction,
   executeConsoleAction,
@@ -513,7 +514,7 @@ export function createBrowserTool(opts?: {
           });
         case "screenshot": {
           const targetId = readStringParam(params, "targetId");
-          const fullPage = Boolean(params.fullPage);
+          const fullPage = readBooleanParam(params, "fullPage") ?? false;
           const ref = readStringParam(params, "ref");
           const element = readStringParam(params, "element");
           const type = params.type === "jpeg" ? "jpeg" : "png";
@@ -636,7 +637,7 @@ export function createBrowserTool(opts?: {
           );
         }
         case "dialog": {
-          const accept = Boolean(params.accept);
+          const accept = readBooleanParam(params, "accept") ?? false;
           const promptText = typeof params.promptText === "string" ? params.promptText : undefined;
           const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {

@@ -454,6 +454,40 @@ describe("browser tool snapshot maxChars", () => {
   });
 });
 
+describe("browser tool boolean param parsing", () => {
+  registerBrowserToolAfterEachReset();
+
+  it('treats screenshot fullPage="false" as false', async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      fullPage: "false",
+    });
+
+    expect(browserActionsMocks.browserScreenshotAction).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        fullPage: false,
+      }),
+    );
+  });
+
+  it('treats dialog accept="false" as false', async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "dialog",
+      accept: "false",
+    });
+
+    expect(browserActionsMocks.browserArmDialog).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        accept: false,
+      }),
+    );
+  });
+});
+
 describe("browser tool url alias support", () => {
   registerBrowserToolAfterEachReset();
 

@@ -4,7 +4,13 @@ import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { isWebSocketUrl } from "./cdp.helpers.js";
-import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
+import {
+  captureScreenshot,
+  createTargetViaCdp,
+  evaluateJavaScript,
+  normalizeCdpWsUrl,
+  snapshotAria,
+} from "./cdp.js";
 import { parseHttpUrl } from "./config.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 
@@ -261,6 +267,69 @@ describe("cdp", () => {
         url: "https://example.com",
       }),
     ).rejects.toThrow("CDP /json/version missing webSocketDebuggerUrl");
+  });
+
+  it("keeps viewport screenshot bounded when fullPage is false", async () => {
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method === "Page.enable") {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        return;
+      }
+      if (msg.method === "Page.captureScreenshot") {
+        expect(msg.params?.captureBeyondViewport).toBe(false);
+        expect(msg.params?.clip).toBeUndefined();
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { data: Buffer.from("png").toString("base64") },
+          }),
+        );
+      }
+    });
+
+    const image = await captureScreenshot({
+      wsUrl: `ws://127.0.0.1:${wsPort}`,
+      fullPage: false,
+    });
+
+    expect(image.byteLength).toBeGreaterThan(0);
+  });
+
+  it("allows beyond-viewport capture for explicit fullPage screenshots", async () => {
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method === "Page.enable") {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        return;
+      }
+      if (msg.method === "Page.getLayoutMetrics") {
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: {
+              cssContentSize: { width: 1024, height: 4096 },
+            },
+          }),
+        );
+        return;
+      }
+      if (msg.method === "Page.captureScreenshot") {
+        expect(msg.params?.captureBeyondViewport).toBe(true);
+        expect(msg.params?.clip).toMatchObject({ width: 1024, height: 4096 });
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { data: Buffer.from("png").toString("base64") },
+          }),
+        );
+      }
+    });
+
+    const image = await captureScreenshot({
+      wsUrl: `ws://127.0.0.1:${wsPort}`,
+      fullPage: true,
+    });
+
+    expect(image.byteLength).toBeGreaterThan(0);
   });
 
   it("captures an aria snapshot via CDP", async () => {

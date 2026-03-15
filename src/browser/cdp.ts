@@ -88,7 +88,8 @@ export async function captureScreenshot(opts: {
       format,
       ...(quality !== undefined ? { quality } : {}),
       fromSurface: true,
-      captureBeyondViewport: true,
+      // Keep viewport captures bounded. Allow beyond-viewport only for explicit full-page requests.
+      captureBeyondViewport: Boolean(opts.fullPage),
       ...(clip ? { clip } : {}),
     })) as { data?: string };
 
