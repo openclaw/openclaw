@@ -14,17 +14,19 @@ async function importFreshPluginTestModules() {
   vi.unmock("./hooks.js");
   vi.unmock("./loader.js");
   vi.unmock("jiti");
-  const [loader, hookRunnerGlobal, hooks, sharedRuntimeOptions] = await Promise.all([
+  const [loader, hookRunnerGlobal, hooks, sharedRuntimeOptions, tools] = await Promise.all([
     import("./loader.js"),
     import("./hook-runner-global.js"),
     import("./hooks.js"),
     import("./runtime/shared-runtime-options.js"),
+    import("./tools.js"),
   ]);
   return {
     ...loader,
     ...hookRunnerGlobal,
     ...hooks,
     ...sharedRuntimeOptions,
+    ...tools,
   };
 }
 
@@ -36,6 +38,7 @@ const {
   getGlobalHookRunner,
   loadOpenClawPlugins,
   resetGlobalHookRunner,
+  resolvePluginTools,
   setSharedPluginRuntimeOptions,
 } = await importFreshPluginTestModules();
 
@@ -673,6 +676,79 @@ describe("loadOpenClawPlugins", () => {
       message: "hello",
     });
   });
+
+  it("preserves the gateway hook runner when resolving plugin tools", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "tool-resolution-preserves-hook-runner",
+      filename: "tool-resolution-preserves-hook-runner.cjs",
+      body: `module.exports = {
+        id: "tool-resolution-preserves-hook-runner",
+        register(api) {
+          api.on("agent_end", async () => {
+            await api.runtime.subagent.run({ sessionKey: "tool-resolution-preserved", message: "hello" });
+          });
+          api.registerTool({
+            name: "echo",
+            description: "echo",
+            parameters: { type: "object", properties: {} },
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+        },
+      };`,
+    });
+
+    const subagent = {
+      run: vi.fn(async () => ({ runId: "run-shared" })),
+      enqueue: vi.fn(async () => ({ runId: "run-shared" })),
+      abort: vi.fn(async () => ({ aborted: true })),
+      waitForRun: vi.fn(async () => ({ status: "ok" as const })),
+      getSessionMessages: vi.fn(async () => ({ messages: [] })),
+      getSession: vi.fn(async () => ({ messages: [] })),
+      deleteSession: vi.fn(async () => undefined),
+    };
+
+    loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      runtimeOptions: { subagent },
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["tool-resolution-preserves-hook-runner"],
+        },
+      },
+    });
+    const globalHookRunner = getGlobalHookRunner();
+
+    expect(globalHookRunner).not.toBeNull();
+
+    const tools = resolvePluginTools({
+      context: {
+        config: {
+          plugins: {
+            enabled: true,
+            load: { paths: [plugin.file] },
+            allow: ["tool-resolution-preserves-hook-runner"],
+          },
+        },
+        workspaceDir: plugin.dir,
+      } as never,
+    });
+
+    expect(tools).toHaveLength(1);
+    expect(getGlobalHookRunner()).toBe(globalHookRunner);
+    await expect(
+      globalHookRunner?.runAgentEnd(
+        { messages: [], success: true, durationMs: 1 },
+        { workspaceDir: plugin.dir },
+      ),
+    ).resolves.toBeUndefined();
+    expect(subagent.run).toHaveBeenCalledWith({
+      sessionKey: "tool-resolution-preserved",
+      message: "hello",
+    });
+  });
+
   it("uses shared runtime options when explicit runtime options are absent and inheritance is enabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
