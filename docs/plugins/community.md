@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **MCP Bridge** — Bridge any MCP server into OpenClaw with smart router mode (~98% token savings), 3 transports (stdio/SSE/streamable-http), and a growing catalog of pre-configured servers (12 and counting).
+  npm: `@aiwerk/openclaw-mcp-bridge`
+  repo: `https://github.com/AIWerk/openclaw-mcp-bridge`
+  install: `openclaw plugins install @aiwerk/openclaw-mcp-bridge`
