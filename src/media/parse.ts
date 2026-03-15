@@ -3,8 +3,8 @@
 import { parseFenceSpans } from "../markdown/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
-// Allow optional wrapping backticks and punctuation after the token; capture the core token.
-export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
+// Allow optional wrapping backticks and lenient whitespace around the colon.
+export const MEDIA_TOKEN_RE = /\bMEDIA\s*:\s*`?([^\n]+)`?/gi;
 
 export function normalizeMediaSource(src: string) {
   return src.startsWith("file://") ? src.replace("file://", "") : src;
@@ -127,7 +127,7 @@ export function splitMediaFromOutput(raw: string): {
     }
 
     const trimmedStart = line.trimStart();
-    if (!trimmedStart.startsWith("MEDIA:")) {
+    if (!/^MEDIA\s*:/i.test(trimmedStart)) {
       keptLines.push(line);
       lineOffset += line.length + 1; // +1 for newline
       continue;

@@ -206,6 +206,13 @@ describe("extractToolResultMediaPaths", () => {
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/indented.png"]);
   });
 
+  it("extracts MEDIA line with whitespace around colon", () => {
+    const result = {
+      content: [{ type: "text", text: "  MEDIA :  /tmp/indented.png" }],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/indented.png"]);
+  });
+
   it("extracts valid MEDIA: line while ignoring <media:audio> on another line", () => {
     const result = {
       content: [
