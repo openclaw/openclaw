@@ -7,9 +7,6 @@ concurrency:
   group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 permissions:
   actions: read
   contents: read
@@ -70,7 +67,7 @@ jobs:
             config_file: ""
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: false
 
@@ -79,17 +76,17 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
+          use-sticky-disk: "true"
 
       - name: Setup Python
         if: matrix.needs_python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Setup Java
         if: matrix.needs_java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"

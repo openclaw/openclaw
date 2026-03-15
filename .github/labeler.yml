@@ -6,6 +6,7 @@
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
+          - "src/discord/**"
           - "extensions/discord/**"
           - "docs/channels/discord.md"
 "channel: irc":
@@ -27,6 +28,7 @@
 "channel: imessage":
   - changed-files:
       - any-glob-to-any-file:
+          - "src/imessage/**"
           - "extensions/imessage/**"
           - "docs/channels/imessage.md"
 "channel: line":
@@ -62,16 +64,19 @@
 "channel: signal":
   - changed-files:
       - any-glob-to-any-file:
+          - "src/signal/**"
           - "extensions/signal/**"
           - "docs/channels/signal.md"
 "channel: slack":
   - changed-files:
       - any-glob-to-any-file:
+          - "src/slack/**"
           - "extensions/slack/**"
           - "docs/channels/slack.md"
 "channel: telegram":
   - changed-files:
       - any-glob-to-any-file:
+          - "src/telegram/**"
           - "extensions/telegram/**"
           - "docs/channels/telegram.md"
 "channel: tlon":
@@ -91,6 +96,7 @@
 "channel: whatsapp-web":
   - changed-files:
       - any-glob-to-any-file:
+          - "src/web/**"
           - "extensions/whatsapp/**"
           - "docs/channels/whatsapp.md"
 "channel: zalo":

@@ -17,20 +17,17 @@ concurrency:
   group: sandbox-common-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   sandbox-common-smoke:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: false
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@v4
+        uses: useblacksmith/setup-docker-builder@v1
 
       - name: Build minimal sandbox base (USER sandbox)
         shell: bash

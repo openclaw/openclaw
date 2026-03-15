@@ -7,10 +7,7 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
@@ -22,7 +19,7 @@ jobs:
       docs_changed: ${{ steps.check.outputs.docs_changed }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -38,8 +35,9 @@ jobs:
         id: check
         uses: ./.github/actions/detect-docs-changes
 
-  # Detect which heavy areas are touched so CI can skip unrelated expensive jobs.
-  # Fail-safe: if detection fails, downstream jobs run.
+  # Detect which heavy areas are touched so PRs can skip unrelated expensive jobs.
+  # Push to main keeps broad coverage, but this job still needs to run so
+  # downstream jobs that list it in `needs` are not skipped.
   changed-scope:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_only != 'true'
@@ -52,7 +50,7 @@ jobs:
       run_windows: ${{ steps.scope.outputs.run_windows }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -81,11 +79,11 @@ jobs:
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
     needs: [docs-scope, changed-scope]
-    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: false
 
@@ -100,13 +98,13 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
+          use-sticky-disk: "true"
 
       - name: Build dist
         run: pnpm build
 
       - name: Upload dist artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: dist-build
           path: dist/
@@ -119,7 +117,7 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: false
 
@@ -127,10 +125,10 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
+          use-sticky-disk: "true"
 
       - name: Download dist artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: dist-build
           path: dist/
@@ -140,7 +138,7 @@ jobs:
 
   checks:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     strategy:
       fail-fast: false
@@ -148,20 +146,10 @@ jobs:
         include:
           - runtime: node
             task: test
-            shard_index: 1
-            shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
-          - runtime: node
-            task: test
-            shard_index: 2
-            shard_count: 2
             command: pnpm canvas:a2ui:bundle && pnpm test
           - runtime: node
             task: extensions
             command: pnpm test:extensions
-          - runtime: node
-            task: channels
-            command: pnpm test:channels
           - runtime: node
             task: protocol
             command: pnpm protocol:check
@@ -169,51 +157,44 @@ jobs:
             task: test
             command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
     steps:
-      - name: Skip bun lane on pull requests
-        if: github.event_name == 'pull_request' && matrix.runtime == 'bun'
-        run: echo "Skipping Bun compatibility lane on pull requests."
+      - name: Skip bun lane on push
+        if: github.event_name == 'push' && matrix.runtime == 'bun'
+        run: echo "Skipping bun test lane on push events."
 
       - name: Checkout
-        if: github.event_name != 'pull_request' || matrix.runtime != 'bun'
-        uses: actions/checkout@v6
+        if: github.event_name != 'push' || matrix.runtime != 'bun'
+        uses: actions/checkout@v4
         with:
           submodules: false
 
       - name: Setup Node environment
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+        if: matrix.runtime != 'bun' || github.event_name != 'push'
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "${{ matrix.runtime == 'bun' }}"
-          use-sticky-disk: "false"
+          use-sticky-disk: "true"
 
       - name: Configure Node test resources
-        if: (github.event_name != 'pull_request' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
-        env:
-          SHARD_COUNT: ${{ matrix.shard_count || '' }}
-          SHARD_INDEX: ${{ matrix.shard_index || '' }}
+        if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
         run: |
           # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
           # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
           echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
-          if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
-            echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
-          fi
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+        if: matrix.runtime != 'bun' || github.event_name != 'push'
         run: ${{ matrix.command }}
 
   # Types, lint, and format check.
   check:
     name: "check"
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: false
 
@@ -221,7 +202,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
+          use-sticky-disk: "true"
 
       - name: Check types and lint and oxfmt
         run: pnpm check
@@ -239,7 +220,7 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: false
 
@@ -247,57 +228,23 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
+          use-sticky-disk: "true"
 
       - name: Check docs
         run: pnpm check:docs
 
-  compat-node22:
-    name: "compat-node22"
-    needs: [docs-scope, changed-scope]
-    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Setup Node 22 compatibility environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: "22.x"
-          cache-key-suffix: "node22"
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Configure Node 22 test resources
-        run: |
-          # Keep the compatibility lane aligned with the default Node test lane.
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
-
-      - name: Build under Node 22
-        run: pnpm build
-
-      - name: Run tests under Node 22
-        run: pnpm test
-
-      - name: Verify npm pack under Node 22
-        run: pnpm release:check
-
   skills-python:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_skills_python == 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true' || needs.changed-scope.outputs.run_skills_python == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -316,7 +263,7 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: false
 
@@ -335,7 +282,7 @@ jobs:
 
       - name: Setup Python
         id: setup-python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: "pip"
@@ -345,7 +292,7 @@ jobs:
             .github/workflows/ci.yml
 
       - name: Restore pre-commit cache
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
@@ -381,7 +328,7 @@ jobs:
 
   checks-windows:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_windows == 'true')
     runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 45
     env:
@@ -428,7 +375,7 @@ jobs:
             command: pnpm test
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: false
 
@@ -452,16 +399,16 @@ jobs:
           }
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24.x
+          node-version: 22.x
           check-latest: false
 
       - name: Setup pnpm + cache store
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           pnpm-version: "10.23.0"
-          cache-key-suffix: "node24"
+          cache-key-suffix: "node22"
           # Sticky disk mount currently retries/fails on every shard and adds ~50s
           # before install while still yielding zero pnpm store reuse.
           # Try exact-key actions/cache restores instead to recover store reuse
@@ -514,7 +461,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: false
 
@@ -550,7 +497,7 @@ jobs:
           swiftformat --lint apps/macos/Sources --config .swiftformat
 
       - name: Cache SwiftPM
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
@@ -586,7 +533,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: false
 
@@ -743,7 +690,7 @@ jobs:
 
   android:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_android == 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_android == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     strategy:
       fail-fast: false
@@ -755,45 +702,31 @@ jobs:
             command: ./gradlew --no-daemon :app:assembleDebug
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           submodules: false
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          # Keep sdkmanager on the stable JDK path for Linux CI runners.
+          # setup-android's sdkmanager currently crashes on JDK 21 in CI.
           java-version: 17
 
-      - name: Setup Android SDK cmdline-tools
-        run: |
-          set -euo pipefail
-          ANDROID_SDK_ROOT="$HOME/.android-sdk"
-          CMDLINE_TOOLS_VERSION="12266719"
-          ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
-          URL="https://dl.google.com/android/repository/${ARCHIVE}"
-
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-          curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
-          rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
-          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: false
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.11.1
 
       - name: Install Android SDK packages
         run: |
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
-          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager --install \
             "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0"
