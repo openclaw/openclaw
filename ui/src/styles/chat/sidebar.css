@@ -84,8 +84,8 @@
 
 .sidebar-markdown .markdown-inline-image {
   display: block;
-  max-width: 100%;
-  max-height: 420px;
+  max-width: min(100%, 420px);
+  max-height: 320px;
   width: auto;
   height: auto;
   border: 1px solid var(--border);
