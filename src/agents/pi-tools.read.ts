@@ -14,7 +14,10 @@ import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
-import { wrapHostEditToolWithPostWriteRecovery } from "./pi-tools.host-edit.js";
+import {
+  wrapEditToolWithFuzzyMatchSuggestions,
+  wrapHostEditToolWithPostWriteRecovery,
+} from "./pi-tools.host-edit.js";
 import {
   CLAUDE_PARAM_GROUPS,
   assertRequiredParams,
@@ -618,7 +621,13 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  const withSuggestions = wrapEditToolWithFuzzyMatchSuggestions(base, params.root, {
+    readFile: (absolutePath, signal) =>
+      params.bridge.readFile({ filePath: absolutePath, cwd: params.root, signal }),
+    stat: (absolutePath, signal) =>
+      params.bridge.stat({ filePath: absolutePath, cwd: params.root, signal }),
+  });
+  return wrapToolParamNormalization(withSuggestions, CLAUDE_PARAM_GROUPS.edit);
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
@@ -633,7 +642,8 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
   const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, root);
-  return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
+  const withSuggestions = wrapEditToolWithFuzzyMatchSuggestions(withRecovery, root);
+  return wrapToolParamNormalization(withSuggestions, CLAUDE_PARAM_GROUPS.edit);
 }
 
 export function createOpenClawReadTool(
