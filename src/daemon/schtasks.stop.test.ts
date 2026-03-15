@@ -19,6 +19,14 @@ vi.mock("../infra/gateway-processes.js", () => ({
     findVerifiedGatewayListenerPidsOnPortSync(port),
 }));
 
+const relaunchGatewayScheduledTask = vi.hoisted(() =>
+  vi.fn(() => ({ ok: true as const, method: "schtasks" as const, tried: [] })),
+);
+
+vi.mock("../infra/windows-task-restart.js", () => ({
+  relaunchGatewayScheduledTask: (env: NodeJS.ProcessEnv) => relaunchGatewayScheduledTask(env),
+}));
+
 const { restartScheduledTask, stopScheduledTask } = await import("./schtasks.js");
 const GATEWAY_PORT = 18789;
 const SUCCESS_RESPONSE = { code: 0, stdout: "", stderr: "" } as const;
@@ -151,7 +159,9 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   it("kills lingering verified gateway listeners and waits for port release before restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
-      pushSuccessfulSchtasksResponses(4);
+      // Only /Query and /End are called via execSchtasks; /Run is handled by
+      // the detached relaunchGatewayScheduledTask script.
+      pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
       inspectPortUsage
         .mockResolvedValueOnce(busyPortUsage(5151))
@@ -164,7 +174,10 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
-      expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+      // /Run is now delegated to the detached restart script; the last inline
+      // schtasks call must be /End.
+      expect(schtasksCalls.at(-1)).toEqual(["/End", "/TN", "OpenClaw Gateway"]);
+      expect(relaunchGatewayScheduledTask).toHaveBeenCalledOnce();
     });
   });
 });
