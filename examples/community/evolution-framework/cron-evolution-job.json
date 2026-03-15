@@ -1,0 +1,18 @@
+{
+  "name": "evolution-fast-loop",
+  "enabled": true,
+  "schedule": {
+    "kind": "every",
+    "everyMs": 480000
+  },
+  "sessionTarget": "isolated",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "🌳 Continuous exploration task\n\n⚠️ **Core Requirements**: After exploration, you **MUST** complete these two steps:\n1️⃣ Send results to user via message tool\n2️⃣ Trigger next round via mcp_cron wake\n\n---\n\n## ✅ Execution Steps\n\n### 1️⃣ Check Time\n```bash\nexec(command=\"date '+%Y-%m-%d %H:%M:%S'\")\n```\nIf past **END_TIME** (configure in evolution-config.yaml):\n- Generate summary report\n- Send to user\n- Respond with NO_REPLY\n- ❌ **Do NOT trigger next round**\n\n### 2️⃣ Read Previous Round\n```bash\nexec(command=\"ls -lt ~/.openclaw/workspace/memory/evolution/round-*.md | head -1\")\n```\n- Read the latest round-XX.md\n- Determine next round number (XX+1)\n\n### 3️⃣ Select Theme\nBased on evolution-config.yaml, select a theme **different** from previous round:\n1. Domain Expertise\n2. System Thinking\n3. User Understanding\n4. Free Exploration\n5. Practical Application\n\n### 4️⃣ Deep Exploration\n- Genuine exploration, follow curiosity\n- Connect new and old knowledge\n- Document insights and questions\n- Can use web_fetch/web_search\n\n### 5️⃣ Save Record\nCreate `~/.openclaw/workspace/memory/evolution/round-XX-TIMESTAMP.md`\n\n### 6️⃣ 【KEY 1】Notify User\n\n⚠️ **This step is MANDATORY! Cannot skip!**\n\nMust execute:\n```python\nmessage(\n  action=\"send\",\n  channel=\"telegram\",\n  message=\"🌳 Round X exploration complete\\n\\nTheme: ...\\nKey Findings: ...\\nValue: ...\\n\\nDetailed record: memory/evolution/round-XX-TIMESTAMP.md\"\n)\n```\n\nIf you skip this step, user won't see the exploration results!\n\n### 7️⃣ 【KEY 2】Trigger Next Round\n\n⚠️ **This step is also MANDATORY!**\n\nIf not yet at END_TIME, **immediately execute**:\n\n```python\nmcp_cron(\n  action=\"wake\",\n  text=\"Continue evolution - round N completed\",\n  mode=\"next-heartbeat\"\n)\n```\n\n**Note**: Do NOT use `exec(command=\"openclaw cron run evolution-fast-loop\")` as it will return \"already-running\" error during cron execution.\n\nThen say: \"✅ Next round triggered\"\n\n---\n\n## ⚠️ Final Reminder\n\nEvery round MUST complete two things:\n1. **message tool to send results**\n2. **mcp_cron wake to trigger next round**\n\nIf you forget either:\n- message forgotten → User can't see results\n- wake forgotten → Loop breaks, 8 minutes before recovery (backup cron trigger)\n\n**Backup Safety**: Even if wake fails, the main cron job (every 8 min) will continue the loop.\n\n**So: Complete exploration → message send → mcp_cron wake → This is your task!**\n\nNow begin🚀",
+    "timeoutSeconds": 900
+  },
+  "delivery": {
+    "mode": "announce",
+    "channel": "telegram"
+  }
+}
