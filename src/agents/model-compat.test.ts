@@ -61,21 +61,6 @@ function createOpenAITemplateModel(id: string): Model<Api> {
   } as Model<Api>;
 }
 
-function createOpenAICodexTemplateModel(id: string): Model<Api> {
-  return {
-    id,
-    name: id,
-    provider: "openai-codex",
-    api: "openai-codex-responses",
-    baseUrl: "https://chatgpt.com/backend-api",
-    input: ["text", "image"],
-    reasoning: true,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 272_000,
-    maxTokens: 128_000,
-  } as Model<Api>;
-}
-
 function createRegistry(models: Record<string, Model<Api>>): ModelRegistry {
   return {
     find(provider: string, modelId: string) {
@@ -447,18 +432,6 @@ describe("resolveForwardCompatModel", () => {
     expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-5.4-pro" });
     expect(model?.api).toBe("openai-responses");
     expect(model?.baseUrl).toBe("https://api.openai.com/v1");
-    expect(model?.contextWindow).toBe(1_050_000);
-    expect(model?.maxTokens).toBe(128_000);
-  });
-
-  it("resolves openai-codex gpt-5.4 via codex template fallback", () => {
-    const registry = createRegistry({
-      "openai-codex/gpt-5.2-codex": createOpenAICodexTemplateModel("gpt-5.2-codex"),
-    });
-    const model = resolveForwardCompatModel("openai-codex", "gpt-5.4", registry);
-    expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4" });
-    expect(model?.api).toBe("openai-codex-responses");
-    expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
     expect(model?.contextWindow).toBe(1_050_000);
     expect(model?.maxTokens).toBe(128_000);
   });

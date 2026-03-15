@@ -105,6 +105,9 @@ Important trust note:
 - [Microsoft Teams](/channels/msteams) — `@openclaw/msteams`
 - Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)
 - Gemini CLI OAuth (provider auth) — bundled as `google-gemini-cli-auth` (disabled by default)
+- GitHub Copilot provider runtime — bundled as `github-copilot` (enabled by default)
+- OpenAI Codex provider runtime — bundled as `openai-codex` (enabled by default)
+- OpenRouter provider runtime — bundled as `openrouter` (enabled by default)
 - Qwen OAuth (provider auth) — bundled as `qwen-portal-auth` (disabled by default)
 - Copilot Proxy (provider auth) — local VS Code Copilot Proxy bridge; distinct from built-in `github-copilot` device login (bundled, disabled by default)
 
@@ -120,12 +123,145 @@ Plugins can register:
 - CLI commands
 - Background services
 - Context engines
+- Provider auth flows and model catalogs
+- Provider runtime hooks for dynamic model ids, transport normalization, capability metadata, stream wrapping, cache TTL policy, and runtime auth exchange
 - Optional config validation
 - **Skills** (by listing `skills` directories in the plugin manifest)
 - **Auto-reply commands** (execute without invoking the AI agent)
 
 Plugins run **in‑process** with the Gateway, so treat them as trusted code.
 Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
+
+## Provider runtime hooks
+
+Provider plugins now have two layers:
+
+- config-time hooks: `catalog` / legacy `discovery`
+- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `isCacheTtlEligible`, `prepareRuntimeAuth`
+
+OpenClaw still owns the generic agent loop, failover, transcript handling, and
+tool policy. These hooks are the seam for provider-specific behavior without
+needing a whole custom inference transport.
+
+### Hook order
+
+For model/provider plugins, OpenClaw uses hooks in this rough order:
+
+1. `catalog`
+   Publish provider config into `models.providers` during `models.json`
+   generation.
+2. built-in/discovered model lookup
+   OpenClaw tries the normal registry/catalog path first.
+3. `resolveDynamicModel`
+   Sync fallback for provider-owned model ids that are not in the local
+   registry yet.
+4. `prepareDynamicModel`
+   Async warm-up only on async model resolution paths, then
+   `resolveDynamicModel` runs again.
+5. `normalizeResolvedModel`
+   Final rewrite before the embedded runner uses the resolved model.
+6. `capabilities`
+   Provider-owned transcript/tooling metadata used by shared core logic.
+7. `prepareExtraParams`
+   Provider-owned request-param normalization before generic stream option wrappers.
+8. `wrapStreamFn`
+   Provider-owned stream wrapper after generic wrappers are applied.
+9. `isCacheTtlEligible`
+   Provider-owned prompt-cache policy for proxy/backhaul providers.
+10. `prepareRuntimeAuth`
+    Exchanges a configured credential into the actual runtime token/key just
+    before inference.
+
+### Which hook to use
+
+- `catalog`: publish provider config and model catalogs into `models.providers`
+- `resolveDynamicModel`: handle pass-through or forward-compat model ids that are not in the local registry yet
+- `prepareDynamicModel`: async warm-up before retrying dynamic resolution (for example refresh provider metadata cache)
+- `normalizeResolvedModel`: rewrite a resolved model's transport/base URL/compat before inference
+- `capabilities`: publish provider-family and transcript/tooling quirks without hardcoding provider ids in core
+- `prepareExtraParams`: set provider defaults or normalize provider-specific per-model params before generic stream wrapping
+- `wrapStreamFn`: add provider-specific headers/payload/model compat patches while still using the normal `pi-ai` execution path
+- `isCacheTtlEligible`: decide whether provider/model pairs should use cache TTL metadata
+- `prepareRuntimeAuth`: exchange a configured credential into the actual short-lived runtime token/key used for requests
+
+Rule of thumb:
+
+- provider owns a catalog or base URL defaults: use `catalog`
+- provider accepts arbitrary upstream model ids: use `resolveDynamicModel`
+- provider needs network metadata before resolving unknown ids: add `prepareDynamicModel`
+- provider needs transport rewrites but still uses a core transport: use `normalizeResolvedModel`
+- provider needs transcript/provider-family quirks: use `capabilities`
+- provider needs default request params or per-provider param cleanup: use `prepareExtraParams`
+- provider needs request headers/body/model compat wrappers without a custom transport: use `wrapStreamFn`
+- provider needs proxy-specific cache TTL gating: use `isCacheTtlEligible`
+- provider needs a token exchange or short-lived request credential: use `prepareRuntimeAuth`
+
+If the provider needs a fully custom wire protocol or custom request executor,
+that is a different class of extension. These hooks are for provider behavior
+that still runs on OpenClaw's normal inference loop.
+
+### Example
+
+```ts
+api.registerProvider({
+  id: "example-proxy",
+  label: "Example Proxy",
+  auth: [],
+  catalog: {
+    order: "simple",
+    run: async (ctx) => {
+      const apiKey = ctx.resolveProviderApiKey("example-proxy").apiKey;
+      if (!apiKey) {
+        return null;
+      }
+      return {
+        provider: {
+          baseUrl: "https://proxy.example.com/v1",
+          apiKey,
+          api: "openai-completions",
+          models: [{ id: "auto", name: "Auto" }],
+        },
+      };
+    },
+  },
+  resolveDynamicModel: (ctx) => ({
+    id: ctx.modelId,
+    name: ctx.modelId,
+    provider: "example-proxy",
+    api: "openai-completions",
+    baseUrl: "https://proxy.example.com/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+  }),
+  prepareRuntimeAuth: async (ctx) => {
+    const exchanged = await exchangeToken(ctx.apiKey);
+    return {
+      apiKey: exchanged.token,
+      baseUrl: exchanged.baseUrl,
+      expiresAt: exchanged.expiresAt,
+    };
+  },
+});
+```
+
+### Built-in examples
+
+- OpenRouter uses `catalog` plus `resolveDynamicModel` and
+  `prepareDynamicModel` because the provider is pass-through and may expose new
+  model ids before OpenClaw's static catalog updates.
+- GitHub Copilot uses `catalog`, `resolveDynamicModel`, and
+  `capabilities` plus `prepareRuntimeAuth` because it needs model fallback
+  behavior, Claude transcript quirks, and a GitHub token -> Copilot token exchange.
+- OpenAI Codex uses `catalog`, `resolveDynamicModel`, and
+  `normalizeResolvedModel` plus `prepareExtraParams` because it still runs on
+  core OpenAI transports but owns its transport/base URL normalization and
+  default transport choice.
+- OpenRouter uses `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible`
+  to keep provider-specific request headers, routing metadata, reasoning
+  patches, and prompt-cache policy out of core.
 
 ## Load pipeline
 
@@ -267,6 +403,36 @@ authoring plugins:
   `openclaw/plugin-sdk/thread-ownership`, `openclaw/plugin-sdk/tlon`,
   `openclaw/plugin-sdk/twitch`, `openclaw/plugin-sdk/voice-call`,
   `openclaw/plugin-sdk/zalo`, and `openclaw/plugin-sdk/zalouser`.
+
+## Provider catalogs
+
+Provider plugins can define model catalogs for inference with
+`registerProvider({ catalog: { run(...) { ... } } })`.
+
+`catalog.run(...)` returns the same shape OpenClaw writes into
+`models.providers`:
+
+- `{ provider }` for one provider entry
+- `{ providers }` for multiple provider entries
+
+Use `catalog` when the plugin owns provider-specific model ids, base URL
+defaults, or auth-gated model metadata.
+
+`catalog.order` controls when a plugin's catalog merges relative to OpenClaw's
+built-in implicit providers:
+
+- `simple`: plain API-key or env-driven providers
+- `profile`: providers that appear when auth profiles exist
+- `paired`: providers that synthesize multiple related provider entries
+- `late`: last pass, after other implicit providers
+
+Later providers win on key collision, so plugins can intentionally override a
+built-in provider entry with the same provider id.
+
+Compatibility:
+
+- `discovery` still works as a legacy alias
+- if both `catalog` and `discovery` are registered, OpenClaw uses `catalog`
 
 Compatibility note:
 

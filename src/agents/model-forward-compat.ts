@@ -11,16 +11,6 @@ const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 
-const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
-const OPENAI_CODEX_GPT_54_CONTEXT_TOKENS = 1_050_000;
-const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
-const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
-const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
-const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
-const OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS = 128_000;
-const OPENAI_CODEX_GPT_53_SPARK_MAX_TOKENS = 128_000;
-const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
-
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
@@ -112,79 +102,6 @@ function cloneFirstTemplateModel(params: {
     } as Model<Api>);
   }
   return undefined;
-}
-
-const CODEX_GPT54_ELIGIBLE_PROVIDERS = new Set(["openai-codex"]);
-const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
-
-function resolveOpenAICodexForwardCompatModel(
-  provider: string,
-  modelId: string,
-  modelRegistry: ModelRegistry,
-): Model<Api> | undefined {
-  const normalizedProvider = normalizeProviderId(provider);
-  const trimmedModelId = modelId.trim();
-  const lower = trimmedModelId.toLowerCase();
-
-  let templateIds: readonly string[];
-  let eligibleProviders: Set<string>;
-  let patch: Partial<Model<Api>> | undefined;
-  if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
-    templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
-    eligibleProviders = CODEX_GPT54_ELIGIBLE_PROVIDERS;
-    patch = {
-      contextWindow: OPENAI_CODEX_GPT_54_CONTEXT_TOKENS,
-      maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
-    };
-  } else if (lower === OPENAI_CODEX_GPT_53_SPARK_MODEL_ID) {
-    templateIds = [OPENAI_CODEX_GPT_53_MODEL_ID, ...OPENAI_CODEX_TEMPLATE_MODEL_IDS];
-    eligibleProviders = CODEX_GPT54_ELIGIBLE_PROVIDERS;
-    patch = {
-      api: "openai-codex-responses",
-      provider: normalizedProvider,
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
-      maxTokens: OPENAI_CODEX_GPT_53_SPARK_MAX_TOKENS,
-    };
-  } else if (lower === OPENAI_CODEX_GPT_53_MODEL_ID) {
-    templateIds = OPENAI_CODEX_TEMPLATE_MODEL_IDS;
-    eligibleProviders = CODEX_GPT53_ELIGIBLE_PROVIDERS;
-  } else {
-    return undefined;
-  }
-
-  if (!eligibleProviders.has(normalizedProvider)) {
-    return undefined;
-  }
-
-  for (const templateId of templateIds) {
-    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-      ...patch,
-    } as Model<Api>);
-  }
-
-  return normalizeModelCompat({
-    id: trimmedModelId,
-    name: trimmedModelId,
-    api: "openai-codex-responses",
-    provider: normalizedProvider,
-    baseUrl: "https://chatgpt.com/backend-api",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-    maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-  } as Model<Api>);
 }
 
 function resolveAnthropic46ForwardCompatModel(params: {
@@ -348,7 +265,6 @@ export function resolveForwardCompatModel(
 ): Model<Api> | undefined {
   return (
     resolveOpenAIGpt54ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveOpenAICodexForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
