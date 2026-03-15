@@ -60,6 +60,34 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
+  it("returns null when stored offset was written for a different apiRoot", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      await writeTelegramUpdateOffset({
+        accountId: "default",
+        updateId: 654,
+        apiRoot: "http://127.0.0.1:8081/",
+      });
+
+      expect(
+        await readTelegramUpdateOffset({
+          accountId: "default",
+          apiRoot: "http://127.0.0.1:8082/",
+        }),
+      ).toBeNull();
+      expect(
+        await readTelegramUpdateOffset({
+          accountId: "default",
+        }),
+      ).toBeNull();
+      expect(
+        await readTelegramUpdateOffset({
+          accountId: "default",
+          apiRoot: "http://127.0.0.1:8081",
+        }),
+      ).toBe(654);
+    });
+  });
+
   it("treats legacy offset records without bot identity as stale when token is provided", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
       const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
@@ -79,20 +107,40 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
+  it("treats legacy offset records without apiRoot identity as stale when apiRoot is provided", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
+      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(
+        legacyPath,
+        `${JSON.stringify({ version: 2, lastUpdateId: 777, botId: "333333" }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      expect(
+        await readTelegramUpdateOffset({
+          accountId: "default",
+          apiRoot: "http://127.0.0.1:8081",
+        }),
+      ).toBeNull();
+      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBe(777);
+    });
+  });
+
   it("ignores invalid persisted update IDs from disk", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
       const offsetPath = path.join(stateDir, "telegram", "update-offset-default.json");
       await fs.mkdir(path.dirname(offsetPath), { recursive: true });
       await fs.writeFile(
         offsetPath,
-        `${JSON.stringify({ version: 2, lastUpdateId: -1, botId: "111111" }, null, 2)}\n`,
+        `${JSON.stringify({ version: 3, lastUpdateId: -1, botId: "111111", apiRoot: null }, null, 2)}\n`,
         "utf-8",
       );
       expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
 
       await fs.writeFile(
         offsetPath,
-        `${JSON.stringify({ version: 2, lastUpdateId: Number.POSITIVE_INFINITY, botId: "111111" }, null, 2)}\n`,
+        `${JSON.stringify({ version: 3, lastUpdateId: Number.POSITIVE_INFINITY, botId: "111111", apiRoot: null }, null, 2)}\n`,
         "utf-8",
       );
       expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();

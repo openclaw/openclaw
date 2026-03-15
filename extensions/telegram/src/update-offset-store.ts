@@ -3,13 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../../src/config/paths.js";
 import { writeJsonAtomic } from "../../../src/infra/json-files.js";
+import { resolveTelegramApiRoot } from "./api-root.js";
 
-const STORE_VERSION = 2;
+const STORE_VERSION = 3;
 
 type TelegramUpdateOffsetState = {
   version: number;
   lastUpdateId: number | null;
   botId: string | null;
+  apiRoot: string | null;
+};
+
+type ParsedTelegramUpdateOffsetState = TelegramUpdateOffsetState & {
+  hasApiRootIdentity: boolean;
 };
 
 function isValidUpdateId(value: unknown): value is number {
@@ -45,14 +51,23 @@ function extractBotIdFromToken(token?: string): string | null {
   return rawBotId;
 }
 
-function safeParseState(raw: string): TelegramUpdateOffsetState | null {
+function normalizeApiRootKey(apiRoot?: string | null): string | null {
+  const trimmed = apiRoot?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return resolveTelegramApiRoot(trimmed);
+}
+
+function safeParseState(raw: string): ParsedTelegramUpdateOffsetState | null {
   try {
     const parsed = JSON.parse(raw) as {
       version?: number;
       lastUpdateId?: number | null;
       botId?: string | null;
+      apiRoot?: string | null;
     };
-    if (parsed?.version !== STORE_VERSION && parsed?.version !== 1) {
+    if (parsed?.version !== STORE_VERSION && parsed?.version !== 2 && parsed?.version !== 1) {
       return null;
     }
     if (parsed.lastUpdateId !== null && !isValidUpdateId(parsed.lastUpdateId)) {
@@ -65,10 +80,19 @@ function safeParseState(raw: string): TelegramUpdateOffsetState | null {
     ) {
       return null;
     }
+    if (
+      parsed.version === STORE_VERSION &&
+      parsed.apiRoot !== null &&
+      typeof parsed.apiRoot !== "string"
+    ) {
+      return null;
+    }
     return {
       version: STORE_VERSION,
       lastUpdateId: parsed.lastUpdateId ?? null,
-      botId: parsed.version === STORE_VERSION ? (parsed.botId ?? null) : null,
+      botId: parsed.version >= 2 ? (parsed.botId ?? null) : null,
+      apiRoot: parsed.version === STORE_VERSION ? (parsed.apiRoot ?? null) : null,
+      hasApiRootIdentity: parsed.version === STORE_VERSION,
     };
   } catch {
     return null;
@@ -78,6 +102,7 @@ function safeParseState(raw: string): TelegramUpdateOffsetState | null {
 export async function readTelegramUpdateOffset(params: {
   accountId?: string;
   botToken?: string;
+  apiRoot?: string | null;
   env?: NodeJS.ProcessEnv;
 }): Promise<number | null> {
   const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
@@ -85,10 +110,18 @@ export async function readTelegramUpdateOffset(params: {
     const raw = await fs.readFile(filePath, "utf-8");
     const parsed = safeParseState(raw);
     const expectedBotId = extractBotIdFromToken(params.botToken);
+    const expectedApiRoot = normalizeApiRootKey(params.apiRoot);
     if (expectedBotId && parsed?.botId && parsed.botId !== expectedBotId) {
       return null;
     }
     if (expectedBotId && parsed?.botId === null) {
+      return null;
+    }
+    if (parsed?.hasApiRootIdentity) {
+      if (parsed.apiRoot !== expectedApiRoot) {
+        return null;
+      }
+    } else if (expectedApiRoot !== null) {
       return null;
     }
     return parsed?.lastUpdateId ?? null;
@@ -105,6 +138,7 @@ export async function writeTelegramUpdateOffset(params: {
   accountId?: string;
   updateId: number;
   botToken?: string;
+  apiRoot?: string | null;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   if (!isValidUpdateId(params.updateId)) {
@@ -115,6 +149,7 @@ export async function writeTelegramUpdateOffset(params: {
     version: STORE_VERSION,
     lastUpdateId: params.updateId,
     botId: extractBotIdFromToken(params.botToken),
+    apiRoot: normalizeApiRootKey(params.apiRoot),
   };
   await writeJsonAtomic(filePath, payload, {
     mode: 0o600,
