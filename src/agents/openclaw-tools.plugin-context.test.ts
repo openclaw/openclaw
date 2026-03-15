@@ -7,9 +7,13 @@ const { resolvePluginToolsMock } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../plugins/tools.js", () => ({
-  resolvePluginTools: resolvePluginToolsMock,
-}));
+vi.mock("../plugins/tools.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../plugins/tools.js")>();
+  return {
+    ...mod,
+    resolvePluginTools: resolvePluginToolsMock,
+  };
+});
 
 import { createOpenClawTools } from "./openclaw-tools.js";
 

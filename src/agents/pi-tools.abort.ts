@@ -1,3 +1,4 @@
+import { preservePluginToolMeta } from "../plugins/tools.js";
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
@@ -54,7 +55,7 @@ export function wrapToolWithAbortSignal(
   if (!execute) {
     return tool;
   }
-  return {
+  return preservePluginToolMeta(tool, {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const combined = combineAbortSignals(signal, abortSignal);
@@ -63,5 +64,5 @@ export function wrapToolWithAbortSignal(
       }
       return await execute(toolCallId, params, combined, onUpdate);
     },
-  };
+  });
 }

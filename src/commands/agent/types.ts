@@ -37,6 +37,8 @@ export type AgentCommandOpts = {
   images?: ImageContent[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
+  /** Invoked after embedded-runner tool preflight passes for this request. */
+  onPreflightPassed?: () => void | Promise<void>;
   /** Agent id override (must exist in config). */
   agentId?: string;
   to?: string;

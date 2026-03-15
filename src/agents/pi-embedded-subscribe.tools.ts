@@ -172,11 +172,22 @@ export function isToolResultMediaTrusted(toolName?: string): boolean {
 export function filterToolResultMediaUrls(
   toolName: string | undefined,
   mediaUrls: string[],
+  builtinToolNames?: ReadonlySet<string>,
 ): string[] {
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
   if (isToolResultMediaTrusted(toolName)) {
+    // When a runtime-registered set of built-in tool names is provided, require
+    // an exact raw-name match. This prevents MCP/client tools from bypassing
+    // the local-path filter via aliases (bash -> exec), case variants, or
+    // other normalized-name collisions with trusted built-ins.
+    if (builtinToolNames !== undefined) {
+      const registeredName = toolName?.trim();
+      if (!registeredName || !builtinToolNames.has(registeredName)) {
+        return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+      }
+    }
     return mediaUrls;
   }
   return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));

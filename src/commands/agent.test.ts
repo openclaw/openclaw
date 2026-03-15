@@ -7,6 +7,7 @@ import * as cliRunnerModule from "../agents/cli-runner.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
+import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -412,6 +413,31 @@ describe("agentCommand", () => {
       await agentCommandFromIngress({ message: "hi", to: "+1555", senderIsOwner: false }, runtime);
       const ingressCall = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(ingressCall?.senderIsOwner).toBe(false);
+    });
+  });
+
+  it("passes ingress preflight callbacks through to embedded runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const onPreflightPassed = vi.fn();
+      const clientTools: ClientToolDefinition[] = [
+        {
+          type: "function",
+          function: {
+            name: "web_search",
+            description: "test client tool",
+            parameters: { type: "object", additionalProperties: false, properties: {} },
+          },
+        },
+      ];
+      await agentCommandFromIngress(
+        { message: "hi", to: "+1555", senderIsOwner: false, clientTools, onPreflightPassed },
+        runtime,
+      );
+      const ingressCall = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(ingressCall?.clientTools).toBe(clientTools);
+      expect(ingressCall?.onPreflightPassed).toBe(onPreflightPassed);
     });
   });
 

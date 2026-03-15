@@ -30,9 +30,13 @@ vi.mock("../plugins/config-state.js", () => ({
   isTestDefaultMemorySlotDisabled: disableDefaultMemorySlot,
 }));
 
-vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: noPluginToolMeta,
-}));
+vi.mock("../plugins/tools.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../plugins/tools.js")>();
+  return {
+    ...mod,
+    getPluginToolMeta: noPluginToolMeta,
+  };
+});
 
 vi.mock("../agents/openclaw-tools.js", () => {
   const tools = [

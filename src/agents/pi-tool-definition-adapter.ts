@@ -134,6 +134,53 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
+export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+
+export function findClientToolNameConflicts(params: {
+  tools: ClientToolDefinition[];
+  existingToolNames?: Iterable<string>;
+}): string[] {
+  const existingNormalized = new Set<string>();
+  for (const name of params.existingToolNames ?? []) {
+    const trimmed = String(name).trim();
+    if (trimmed) {
+      existingNormalized.add(normalizeToolName(trimmed));
+    }
+  }
+
+  const conflicts = new Set<string>();
+  const seenClientNames = new Map<string, string>();
+  for (const tool of params.tools) {
+    const rawName = String(tool.function?.name ?? "").trim();
+    if (!rawName) {
+      continue;
+    }
+    const normalizedName = normalizeToolName(rawName);
+    if (existingNormalized.has(normalizedName)) {
+      conflicts.add(rawName);
+    }
+    // Keep the first client-provided spelling for each normalized name so every
+    // later duplicate is reported against a stable original entry, even when
+    // the later name also collides with an existing built-in tool.
+    const priorClientName = seenClientNames.get(normalizedName);
+    if (priorClientName) {
+      conflicts.add(priorClientName);
+      conflicts.add(rawName);
+      continue;
+    }
+    seenClientNames.set(normalizedName, rawName);
+  }
+  return Array.from(conflicts);
+}
+
+export function createClientToolNameConflictError(conflicts: string[]): Error {
+  return new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${conflicts.join(", ")}`);
+}
+
+export function isClientToolNameConflictError(err: unknown): err is Error {
+  return err instanceof Error && err.message.startsWith(CLIENT_TOOL_NAME_CONFLICT_PREFIX);
+}
+
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";

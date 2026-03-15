@@ -4,6 +4,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { TSchema } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
+import { preservePluginToolMeta } from "../../plugins/tools.js";
 import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
@@ -362,12 +363,12 @@ export function sanitizeToolsForGoogle<
     if (!tool.parameters || typeof tool.parameters !== "object") {
       return tool;
     }
-    return {
+    return preservePluginToolMeta(tool, {
       ...tool,
       parameters: cleanToolSchemaForGemini(
         tool.parameters as Record<string, unknown>,
       ) as TSchemaType,
-    };
+    });
   });
 }
 

@@ -61,9 +61,13 @@ vi.mock("../plugins/config-state.js", () => ({
   isTestDefaultMemorySlotDisabled: () => false,
 }));
 
-vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: () => undefined,
-}));
+vi.mock("../plugins/tools.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../plugins/tools.js")>();
+  return {
+    ...mod,
+    getPluginToolMeta: () => undefined,
+  };
+});
 
 // Perf: the real tool factory instantiates many tools per request; for these HTTP
 // routing/policy tests we only need a small set of tool names.

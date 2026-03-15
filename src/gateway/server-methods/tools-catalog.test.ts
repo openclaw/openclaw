@@ -15,13 +15,17 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolean }>();
 
-vi.mock("../../plugins/tools.js", () => ({
-  resolvePluginTools: vi.fn(() => [
-    { name: "voice_call", label: "voice_call", description: "Plugin calling tool" },
-    { name: "matrix_room", label: "matrix_room", description: "Matrix room helper" },
-  ]),
-  getPluginToolMeta: vi.fn((tool: { name: string }) => pluginToolMetaState.get(tool.name)),
-}));
+vi.mock("../../plugins/tools.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../../plugins/tools.js")>();
+  return {
+    ...mod,
+    resolvePluginTools: vi.fn(() => [
+      { name: "voice_call", label: "voice_call", description: "Plugin calling tool" },
+      { name: "matrix_room", label: "matrix_room", description: "Matrix room helper" },
+    ]),
+    getPluginToolMeta: vi.fn((tool: { name: string }) => pluginToolMetaState.get(tool.name)),
+  };
+});
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 
