@@ -11,6 +11,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { globalQueuePositionTracker } from "./position-tracker.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
@@ -159,7 +160,14 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, runFollowup))) {
+        if (
+          !(await drainNextQueueItem(queue.items, async (item) => {
+            await globalQueuePositionTracker.markAsProcessing(item);
+            await globalQueuePositionTracker.updateQueuePositions(queue.items);
+            await runFollowup(item);
+            await globalQueuePositionTracker.removeProcessingIndicator(item);
+          }))
+        ) {
           break;
         }
       }

@@ -2,6 +2,7 @@ import { createDedupeCache } from "../../../infra/dedupe.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle } from "./drain.js";
+import { globalQueuePositionTracker } from "./position-tracker.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
@@ -92,6 +93,7 @@ export function enqueueFollowupRun(
   }
 
   queue.items.push(run);
+  void globalQueuePositionTracker.updateQueuePositions([...queue.items]);
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }

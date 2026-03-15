@@ -1,5 +1,6 @@
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
+import { globalQueuePositionTracker } from "./position-tracker.js";
 import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
 
 export type FollowupQueueState = {
@@ -77,6 +78,8 @@ export function clearFollowupQueue(key: string): number {
     return 0;
   }
   const cleared = queue.items.length + queue.droppedCount;
+  // Clear position reactions only for items in this queue, not globally.
+  void globalQueuePositionTracker.clearQueuePositions(queue.items);
   queue.items.length = 0;
   queue.droppedCount = 0;
   queue.summaryLines = [];
