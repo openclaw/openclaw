@@ -1,0 +1,313 @@
+import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { shouldSuppressBuiltInModel } from "./model-suppression.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
+
+const log = createSubsystemLogger("model-catalog");
+
+export type ModelInputType = "text" | "image" | "document";
+
+export type ModelCatalogEntry = {
+  id: string;
+  name: string;
+  provider: string;
+  contextWindow?: number;
+  reasoning?: boolean;
+  input?: ModelInputType[];
+};
+
+type DiscoveredModel = {
+  id: string;
+  name?: string;
+  provider: string;
+  contextWindow?: number;
+  reasoning?: boolean;
+  input?: ModelInputType[];
+};
+
+type PiSdkModule = typeof import("./pi-model-discovery.js");
+
+let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
+let hasLoggedModelCatalogError = false;
+const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
+let importPiSdk = defaultImportPiSdk;
+
+const CODEX_PROVIDER = "openai-codex";
+const OPENAI_PROVIDER = "openai";
+const OPENAI_GPT54_MODEL_ID = "gpt-5.4";
+const OPENAI_GPT54_PRO_MODEL_ID = "gpt-5.4-pro";
+const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
+const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
+const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
+
+type SyntheticCatalogFallback = {
+  provider: string;
+  id: string;
+  templateIds: readonly string[];
+};
+
+const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
+  {
+    provider: OPENAI_PROVIDER,
+    id: OPENAI_GPT54_MODEL_ID,
+    templateIds: ["gpt-5.2"],
+  },
+  {
+    provider: OPENAI_PROVIDER,
+    id: OPENAI_GPT54_PRO_MODEL_ID,
+    templateIds: ["gpt-5.2-pro", "gpt-5.2"],
+  },
+  {
+    provider: CODEX_PROVIDER,
+    id: OPENAI_CODEX_GPT54_MODEL_ID,
+    templateIds: ["gpt-5.3-codex", "gpt-5.2-codex"],
+  },
+  {
+    provider: CODEX_PROVIDER,
+    id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
+    templateIds: [OPENAI_CODEX_GPT53_MODEL_ID],
+  },
+] as const;
+
+function applySyntheticCatalogFallbacks(models: ModelCatalogEntry[]): void {
+  const findCatalogEntry = (provider: string, id: string) =>
+    models.find(
+      (entry) =>
+        entry.provider.toLowerCase() === provider.toLowerCase() &&
+        entry.id.toLowerCase() === id.toLowerCase(),
+    );
+
+  for (const fallback of SYNTHETIC_CATALOG_FALLBACKS) {
+    if (findCatalogEntry(fallback.provider, fallback.id)) {
+      continue;
+    }
+    const template = fallback.templateIds
+      .map((templateId) => findCatalogEntry(fallback.provider, templateId))
+      .find((entry) => entry !== undefined);
+    if (!template) {
+      continue;
+    }
+    models.push({
+      ...template,
+      id: fallback.id,
+      name: fallback.id,
+    });
+  }
+}
+
+function normalizeConfiguredModelInput(input: unknown): ModelInputType[] | undefined {
+  if (!Array.isArray(input)) {
+    return undefined;
+  }
+  const normalized = input.filter(
+    (item): item is ModelInputType => item === "text" || item === "image" || item === "document",
+  );
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function readConfiguredOptInProviderModels(config: OpenClawConfig): ModelCatalogEntry[] {
+  const providers = config.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return [];
+  }
+
+  const out: ModelCatalogEntry[] = [];
+  for (const [providerRaw, providerValue] of Object.entries(providers)) {
+    const provider = providerRaw.toLowerCase().trim();
+    if (!NON_PI_NATIVE_MODEL_PROVIDERS.has(provider)) {
+      continue;
+    }
+    if (!providerValue || typeof providerValue !== "object") {
+      continue;
+    }
+
+    const configuredModels = (providerValue as { models?: unknown }).models;
+    if (!Array.isArray(configuredModels)) {
+      continue;
+    }
+
+    for (const configuredModel of configuredModels) {
+      if (!configuredModel || typeof configuredModel !== "object") {
+        continue;
+      }
+      const idRaw = (configuredModel as { id?: unknown }).id;
+      if (typeof idRaw !== "string") {
+        continue;
+      }
+      const id = idRaw.trim();
+      if (!id) {
+        continue;
+      }
+      const rawName = (configuredModel as { name?: unknown }).name;
+      const name = (typeof rawName === "string" ? rawName : id).trim() || id;
+      const contextWindowRaw = (configuredModel as { contextWindow?: unknown }).contextWindow;
+      const contextWindow =
+        typeof contextWindowRaw === "number" && contextWindowRaw > 0 ? contextWindowRaw : undefined;
+      const reasoningRaw = (configuredModel as { reasoning?: unknown }).reasoning;
+      const reasoning = typeof reasoningRaw === "boolean" ? reasoningRaw : undefined;
+      const input = normalizeConfiguredModelInput((configuredModel as { input?: unknown }).input);
+      out.push({ id, name, provider, contextWindow, reasoning, input });
+    }
+  }
+
+  return out;
+}
+
+function mergeConfiguredOptInProviderModels(params: {
+  config: OpenClawConfig;
+  models: ModelCatalogEntry[];
+}): void {
+  const configured = readConfiguredOptInProviderModels(params.config);
+  if (configured.length === 0) {
+    return;
+  }
+
+  const seen = new Set(
+    params.models.map(
+      (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
+    ),
+  );
+
+  for (const entry of configured) {
+    const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    params.models.push(entry);
+    seen.add(key);
+  }
+}
+
+export function resetModelCatalogCacheForTest() {
+  modelCatalogPromise = null;
+  hasLoggedModelCatalogError = false;
+  importPiSdk = defaultImportPiSdk;
+}
+
+// Test-only escape hatch: allow mocking the dynamic import to simulate transient failures.
+export function __setModelCatalogImportForTest(loader?: () => Promise<PiSdkModule>) {
+  importPiSdk = loader ?? defaultImportPiSdk;
+}
+
+export async function loadModelCatalog(params?: {
+  config?: OpenClawConfig;
+  useCache?: boolean;
+}): Promise<ModelCatalogEntry[]> {
+  if (params?.useCache === false) {
+    modelCatalogPromise = null;
+  }
+  if (modelCatalogPromise) {
+    return modelCatalogPromise;
+  }
+
+  modelCatalogPromise = (async () => {
+    const models: ModelCatalogEntry[] = [];
+    const sortModels = (entries: ModelCatalogEntry[]) =>
+      entries.sort((a, b) => {
+        const p = a.provider.localeCompare(b.provider);
+        if (p !== 0) {
+          return p;
+        }
+        return a.name.localeCompare(b.name);
+      });
+    try {
+      const cfg = params?.config ?? loadConfig();
+      await ensureOpenClawModelsJson(cfg);
+      // IMPORTANT: keep the dynamic import *inside* the try/catch.
+      // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
+      // we must not poison the cache with a rejected promise (otherwise all channel handlers
+      // will keep failing until restart).
+      const piSdk = await importPiSdk();
+      const agentDir = resolveOpenClawAgentDir();
+      const { join } = await import("node:path");
+      const authStorage = piSdk.discoverAuthStorage(agentDir);
+      const registry = new (piSdk.ModelRegistry as unknown as {
+        new (
+          authStorage: unknown,
+          modelsFile: string,
+        ):
+          | Array<DiscoveredModel>
+          | {
+              getAll: () => Array<DiscoveredModel>;
+            };
+      })(authStorage, join(agentDir, "models.json"));
+      const entries = Array.isArray(registry) ? registry : registry.getAll();
+      for (const entry of entries) {
+        const id = String(entry?.id ?? "").trim();
+        if (!id) {
+          continue;
+        }
+        const provider = String(entry?.provider ?? "").trim();
+        if (!provider) {
+          continue;
+        }
+        if (shouldSuppressBuiltInModel({ provider, id })) {
+          continue;
+        }
+        const name = String(entry?.name ?? id).trim() || id;
+        const contextWindow =
+          typeof entry?.contextWindow === "number" && entry.contextWindow > 0
+            ? entry.contextWindow
+            : undefined;
+        const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
+        const input = Array.isArray(entry?.input) ? entry.input : undefined;
+        models.push({ id, name, provider, contextWindow, reasoning, input });
+      }
+      mergeConfiguredOptInProviderModels({ config: cfg, models });
+      applySyntheticCatalogFallbacks(models);
+
+      if (models.length === 0) {
+        // If we found nothing, don't cache this result so we can try again.
+        modelCatalogPromise = null;
+      }
+
+      return sortModels(models);
+    } catch (error) {
+      if (!hasLoggedModelCatalogError) {
+        hasLoggedModelCatalogError = true;
+        log.warn(`Failed to load model catalog: ${String(error)}`);
+      }
+      // Don't poison the cache on transient dependency/filesystem issues.
+      modelCatalogPromise = null;
+      if (models.length > 0) {
+        return sortModels(models);
+      }
+      return [];
+    }
+  })();
+
+  return modelCatalogPromise;
+}
+
+/**
+ * Check if a model supports image input based on its catalog entry.
+ */
+export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
+  return entry?.input?.includes("image") ?? false;
+}
+
+/**
+ * Check if a model supports native document/PDF input based on its catalog entry.
+ */
+export function modelSupportsDocument(entry: ModelCatalogEntry | undefined): boolean {
+  return entry?.input?.includes("document") ?? false;
+}
+
+/**
+ * Find a model in the catalog by provider and model ID.
+ */
+export function findModelInCatalog(
+  catalog: ModelCatalogEntry[],
+  provider: string,
+  modelId: string,
+): ModelCatalogEntry | undefined {
+  const normalizedProvider = provider.toLowerCase().trim();
+  const normalizedModelId = modelId.toLowerCase().trim();
+  return catalog.find(
+    (entry) =>
+      entry.provider.toLowerCase() === normalizedProvider &&
+      entry.id.toLowerCase() === normalizedModelId,
+  );
+}
