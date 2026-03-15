@@ -68,6 +68,26 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     }
   });
 
+  it("appends extension from MIME type when fileName has none", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "transcribed" });
+
+    const result = await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("aac-bytes"),
+      fileName: "voice-note",
+      mime: "audio/aac",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+    });
+
+    expect(result.text).toBe("transcribed");
+    const form = getRequest().init?.body as FormData;
+    const file = form.get("file");
+    expect(file).not.toBeNull();
+    expect(file).toHaveProperty("name");
+    expect((file as File).name).toBe("voice-note.aac");
+  });
+
   it("throws when the provider response omits text", async () => {
     const { fetchFn } = createRequestCaptureJsonFetch({});
 

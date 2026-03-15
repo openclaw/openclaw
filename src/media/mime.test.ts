@@ -77,6 +77,7 @@ describe("extensionForMime", () => {
     { mime: "image/webp", expected: ".webp" },
     { mime: "image/gif", expected: ".gif" },
     { mime: "image/heic", expected: ".heic" },
+    { mime: "audio/aac", expected: ".aac" },
     { mime: "audio/mpeg", expected: ".mp3" },
     { mime: "audio/ogg", expected: ".ogg" },
     { mime: "audio/x-m4a", expected: ".m4a" },
@@ -102,6 +103,7 @@ describe("isAudioFileName", () => {
   it("matches known audio extensions", () => {
     const cases = [
       { fileName: "voice.mp3", expected: true },
+      { fileName: "voice.aac", expected: true },
       { fileName: "voice.caf", expected: true },
       { fileName: "voice.bin", expected: false },
     ] as const;
