@@ -143,8 +143,10 @@ export function mergeStreamingText(
       return `${previous}${next.slice(overlap)}`;
     }
   }
-  // Fallback for fragmented partial chunks: append as-is to avoid losing tokens.
-  return `${previous}${next}`;
+  // No overlap found — the texts are completely unrelated (e.g. two
+  // independent final replies).  Return `next` instead of blindly
+  // concatenating to avoid duplicating content across cards.
+  return next;
 }
 
 export function resolveStreamingCardSendMode(options?: StreamingStartOptions) {
