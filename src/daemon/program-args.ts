@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 
 type GatewayProgramArgs = {
   programArguments: string[];
@@ -7,16 +8,6 @@ type GatewayProgramArgs = {
 };
 
 type GatewayRuntimePreference = "auto" | "node" | "bun";
-
-function isNodeRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "node" || base === "node.exe";
-}
-
-function isBunRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "bun" || base === "bun.exe";
-}
 
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
@@ -29,6 +20,14 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
   const looksLikeDist = /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(resolvedPath);
   if (looksLikeDist) {
     await fs.access(resolvedPath);
+    // When the running entrypoint is a legacy filename (e.g. entry.js) but the
+    // preferred entrypoint (index.js) exists in the same dist directory, return
+    // the preferred one. This avoids baking a stale entrypoint into the systemd
+    // unit / LaunchAgent after a bundler output rename (#46621).
+    const preferred = await resolvePreferredDistEntrypoint(resolvedPath, normalized);
+    if (preferred) {
+      return preferred;
+    }
     // Prefer the original (possibly symlinked) path over the resolved realpath.
     // This keeps LaunchAgent/systemd paths stable across package version updates,
     // since symlinks like node_modules/openclaw -> .pnpm/openclaw@X.Y.Z/...
@@ -60,6 +59,48 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
   throw new Error(
     `Cannot find built CLI at ${distCandidates.join(" or ")}. Run "pnpm build" first, or use dev mode.`,
   );
+}
+
+/**
+ * The canonical dist entrypoint filenames in order of preference.
+ * When the running process uses a non-preferred name (e.g. entry.js) but the
+ * preferred name (index.js) exists, we return the preferred path so that
+ * service files always reference the current bundler output (#46621).
+ */
+const PREFERRED_DIST_BASENAMES = ["index.js", "index.mjs"];
+
+async function resolvePreferredDistEntrypoint(
+  resolvedPath: string,
+  normalizedPath: string,
+): Promise<string | null> {
+  const resolvedBase = path.basename(resolvedPath);
+  // Already using the preferred entrypoint - nothing to do.
+  if (PREFERRED_DIST_BASENAMES.includes(resolvedBase)) {
+    return null;
+  }
+  const distDir = path.dirname(resolvedPath);
+  for (const preferred of PREFERRED_DIST_BASENAMES) {
+    const candidateResolved = path.join(distDir, preferred);
+    try {
+      await fs.access(candidateResolved);
+    } catch {
+      continue;
+    }
+    // If the normalized (symlinked) path differs, try to return the symlinked
+    // variant so that the service path stays stable across version updates.
+    if (normalizedPath !== resolvedPath) {
+      const normalizedDir = path.dirname(normalizedPath);
+      const candidateNormalized = path.join(normalizedDir, preferred);
+      try {
+        await fs.access(candidateNormalized);
+        return candidateNormalized;
+      } catch {
+        // Fall through to return the resolved variant.
+      }
+    }
+    return candidateResolved;
+  }
+  return null;
 }
 
 async function resolveRealpathSafe(inputPath: string): Promise<string> {
@@ -148,10 +189,10 @@ async function resolveNodePath(): Promise<string> {
 }
 
 async function resolveBinaryPath(binary: string): Promise<string> {
-  const { execSync } = await import("node:child_process");
+  const { execFileSync } = await import("node:child_process");
   const cmd = process.platform === "win32" ? "where" : "which";
   try {
-    const output = execSync(`${cmd} ${binary}`, { encoding: "utf8" }).trim();
+    const output = execFileSync(cmd, [binary], { encoding: "utf8" }).trim();
     const resolved = output.split(/\r?\n/)[0]?.trim();
     if (!resolved) {
       throw new Error("empty");
@@ -162,7 +203,9 @@ async function resolveBinaryPath(binary: string): Promise<string> {
     if (binary === "bun") {
       throw new Error("Bun not found in PATH. Install bun: https://bun.sh");
     }
-    throw new Error("Node not found in PATH. Install Node 22+.");
+    throw new Error(
+      "Node not found in PATH. Install Node 24 (recommended) or Node 22 LTS (22.16+).",
+    );
   }
 }
 

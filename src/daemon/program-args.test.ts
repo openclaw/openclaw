@@ -49,10 +49,10 @@ describe("resolveGatewayProgramArguments", () => {
     // Simulates pnpm global install where node_modules/openclaw is a symlink
     // to .pnpm/openclaw@X.Y.Z/node_modules/openclaw
     const symlinkPath = path.resolve(
-      "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/entry.js",
+      "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js",
     );
     const realpathResolved = path.resolve(
-      "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.1.21-2/node_modules/openclaw/dist/entry.js",
+      "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.1.21-2/node_modules/openclaw/dist/index.js",
     );
     process.argv = ["node", symlinkPath];
     fsMocks.realpath.mockResolvedValue(realpathResolved);
@@ -63,6 +63,57 @@ describe("resolveGatewayProgramArguments", () => {
     // Should use the symlinked path, not the realpath-resolved versioned path
     expect(result.programArguments[1]).toBe(symlinkPath);
     expect(result.programArguments[1]).not.toContain("@2026.1.21-2");
+  });
+
+  it("prefers index.js over legacy entry.js when both exist (#46621)", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined); // Both entry.js and index.js exist
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    expect(result.programArguments[1]).toBe(indexPath);
+  });
+
+  it("keeps entry.js when index.js does not exist", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
+    const indexMjsPath = path.resolve("/opt/openclaw/dist/index.mjs");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === indexPath || target === indexMjsPath) {
+        throw new Error("missing");
+      }
+      return undefined;
+    });
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    expect(result.programArguments[1]).toBe(entryPath);
+  });
+
+  it("prefers symlinked index.js over symlinked entry.js (#46621)", async () => {
+    const symlinkEntryPath = path.resolve(
+      "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/entry.js",
+    );
+    const realpathEntryResolved = path.resolve(
+      "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.3.13/node_modules/openclaw/dist/entry.js",
+    );
+    const symlinkIndexPath = path.resolve(
+      "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js",
+    );
+    process.argv = ["node", symlinkEntryPath];
+    fsMocks.realpath.mockResolvedValue(realpathEntryResolved);
+    fsMocks.access.mockResolvedValue(undefined); // All paths exist
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    // Should prefer index.js over entry.js, and use the symlinked path
+    expect(result.programArguments[1]).toBe(symlinkIndexPath);
+    expect(result.programArguments[1]).not.toContain("@2026.3.13");
   });
 
   it("falls back to node_modules package dist when .bin path is not resolved", async () => {
