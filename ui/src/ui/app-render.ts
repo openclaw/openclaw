@@ -298,7 +298,23 @@ export function renderApp(state: AppViewState) {
       ${renderGatewayUrlConfirmation(state)}
     `;
   }
-
+  const helloVersion =
+    typeof state.hello?.server?.version === "string" ? state.hello.server.version.trim() : "";
+  const updateCurrentVersion =
+    typeof state.updateAvailable?.currentVersion === "string"
+      ? state.updateAvailable.currentVersion.trim()
+      : "";
+  // UI safeguard: after upgrade/restart, hello version can be stale until reconnect.
+  // Prefer update-check's currentVersion when both are present but disagree.
+  const openClawVersion =
+    updateCurrentVersion && helloVersion && updateCurrentVersion !== helloVersion
+      ? updateCurrentVersion
+      : helloVersion || updateCurrentVersion || t("common.na");
+  const availableUpdate =
+    state.updateAvailable &&
+    state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion
+      ? state.updateAvailable
+      : null;
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
@@ -538,7 +554,7 @@ export function renderApp(state: AppViewState) {
                   }
                 </a>
                 ${(() => {
-                  const version = state.hello?.server?.version ?? "";
+                  const version = openClawVersion;
                   return version
                     ? html`
                         <div class="sidebar-version" title=${`v${version}`}>
@@ -564,12 +580,10 @@ export function renderApp(state: AppViewState) {
       </div>
       <main class="content ${isChat ? "content--chat" : ""}">
         ${
-          state.updateAvailable &&
-          state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
-          !isUpdateBannerDismissed(state.updateAvailable)
+          availableUpdate && !isUpdateBannerDismissed(availableUpdate)
             ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${state.updateAvailable.latestVersion}
-              (running v${state.updateAvailable.currentVersion}).
+              <strong>Update available:</strong> v${availableUpdate.latestVersion}
+              (running v${availableUpdate.currentVersion}).
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}
@@ -581,7 +595,7 @@ export function renderApp(state: AppViewState) {
                 title="Dismiss"
                 aria-label="Dismiss update banner"
                 @click=${() => {
-                  dismissUpdateBanner(state.updateAvailable);
+                  dismissUpdateBanner(availableUpdate);
                   state.updateAvailable = null;
                 }}
               >
