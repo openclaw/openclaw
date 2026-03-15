@@ -1,5 +1,6 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { buildMinimaxProvider } from "../../src/agents/models-config.providers.static.js";
+import { fetchMinimaxUsage } from "../../src/infra/provider-usage.fetch.js";
 
 const PROVIDER_ID = "minimax";
 
@@ -30,6 +31,14 @@ const minimaxPlugin = {
           };
         },
       },
+      resolveUsageAuth: async (ctx) => {
+        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+          envDirect: [ctx.env.MINIMAX_CODE_PLAN_KEY, ctx.env.MINIMAX_API_KEY],
+        });
+        return apiKey ? { token: apiKey } : null;
+      },
+      fetchUsageSnapshot: async (ctx) =>
+        await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     });
   },
 };
