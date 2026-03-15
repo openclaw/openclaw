@@ -39,7 +39,9 @@ const PLUGIN_REQUIRED_COMMANDS = new Set([
 const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["backup", "doctor", "completion", "secrets"]);
 const JSON_PARSE_ONLY_COMMANDS = new Set(["config set"]);
 let configGuardModulePromise: Promise<typeof import("./config-guard.js")> | undefined;
-let pluginRegistryModulePromise: Promise<typeof import("../plugin-registry.js")> | undefined;
+let pluginRegistryModulePromise:
+  | Promise<typeof import("../plugin-registry.runtime.js")>
+  | undefined;
 
 function shouldBypassConfigGuard(commandPath: string[]): boolean {
   const [primary, secondary] = commandPath;
@@ -63,7 +65,11 @@ function loadConfigGuardModule() {
 }
 
 function loadPluginRegistryModule() {
-  pluginRegistryModulePromise ??= import("../plugin-registry.js");
+  // Import the runtime boundary, not plugin-registry.ts directly.
+  // plugin-registry.ts is already statically imported from route.ts; importing
+  // it here via dynamic import() would create a second module instance in the
+  // bundled output, causing plugins to register twice (see CLAUDE.md guardrail).
+  pluginRegistryModulePromise ??= import("../plugin-registry.runtime.js");
   return pluginRegistryModulePromise;
 }
 
