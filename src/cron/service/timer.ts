@@ -5,6 +5,7 @@ import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import { execCronScript } from "../exec-script.js";
 import { loadHookEntries, runCronHooks } from "../hooks.js";
 import type { CronHookContext } from "../hooks.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
@@ -645,6 +646,7 @@ export async function onTimer(state: CronServiceState) {
         hookPoint,
         workflow: "cron",
         job: { id: job.id, name: job.name, agentId: job.agentId, schedule: job.schedule },
+        payload: structuredClone(job.payload),
         meta: hookMeta,
         log: state.deps.log,
         basePath: hookBasePath,
@@ -1027,6 +1029,7 @@ async function runStartupCatchupCandidate(
     hookPoint,
     workflow: "cron",
     job: { id: job.id, name: job.name, agentId: job.agentId, schedule: job.schedule },
+    payload: structuredClone(job.payload),
     meta: hookMeta,
     log: state.deps.log,
     basePath: hookBasePath,
@@ -1187,6 +1190,16 @@ export async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
+
+  // Script payloads execute directly — no session or LLM turn needed.
+  // TODO: delivery (announce to channel) for script jobs requires a dedicated
+  // CronServiceDeps function not yet wired. Tracked as a follow-up; for now
+  // delivered/deliveryAttempted are left unset in the returned result.
+  if (job.payload.kind === "script") {
+    const basePath = path.resolve(path.dirname(state.deps.storePath), "..");
+    return execCronScript({ payload: job.payload, basePath, abortSignal });
+  }
+
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {

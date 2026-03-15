@@ -4,7 +4,7 @@ import type { CronConfig, CronHookEntry, CronLifecycleHookPoint } from "../confi
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { resolveUserPath } from "../utils.js";
 import type { Logger } from "./service/state.js";
-import type { CronJob } from "./types.js";
+import type { CronJob, CronPayload } from "./types.js";
 
 const DEFAULT_PRIORITY = 10;
 const HOOK_TIMEOUT_MS = 10_000;
@@ -13,6 +13,8 @@ export type CronHookContext = {
   hookPoint: CronLifecycleHookPoint;
   workflow: string;
   job: Pick<CronJob, "id" | "name" | "agentId" | "schedule">;
+  /** The job's payload for this run. Hook scripts can inspect kind/command/message to make decisions. */
+  payload: CronPayload;
   error?: string;
   status?: string;
   durationMs?: number;
@@ -184,9 +186,11 @@ async function loadHookModule(scriptPath: string, basePath?: string): Promise<un
     const mod = (await import(scriptPath)) as Record<string, unknown>;
     return mod.default ?? mod;
   }
-  // Resolve via resolveUserPath: handles ~ expansion and resolves relative paths
-  // against the provided base (OC home) instead of process.cwd().
-  const resolved = resolveUserPath(scriptPath, process.env, undefined, basePath);
+  // Expand ~ then resolve relative paths against basePath (OC home) instead of process.cwd().
+  const expanded = resolveUserPath(scriptPath, process.env);
+  const resolved = path.isAbsolute(expanded)
+    ? expanded
+    : path.resolve(basePath ?? process.cwd(), expanded);
   const mod = await importFileModule({ modulePath: resolved, cacheBust: true });
   return resolveFunctionModuleExport({ mod, fallbackExportNames: ["default"] });
 }
