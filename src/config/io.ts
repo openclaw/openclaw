@@ -85,6 +85,7 @@ const OPEN_DM_POLICY_ALLOW_FROM_RE =
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const loggedInvalidConfigs = new Set<string>();
+const loggedConfigWarnings = new Set<string>();
 
 type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
 
@@ -589,7 +590,11 @@ export type ConfigIoDeps = {
   logger?: Pick<typeof console, "error" | "warn">;
 };
 
-function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
+function warnOnConfigMiskeys(
+  raw: unknown,
+  logger: Pick<typeof console, "warn">,
+  configPath?: string,
+): void {
   if (!raw || typeof raw !== "object") {
     return;
   }
@@ -598,9 +603,13 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
     return;
   }
   if ("token" in (gateway as Record<string, unknown>)) {
-    logger.warn(
-      'Config uses "gateway.token". This key is ignored; use "gateway.auth.token" instead.',
-    );
+    const key = `miskey:gateway.token:${configPath ?? ""}`;
+    if (!loggedConfigWarnings.has(key)) {
+      loggedConfigWarnings.add(key);
+      logger.warn(
+        'Config uses "gateway.token". This key is ignored; use "gateway.auth.token" instead.',
+      );
+    }
   }
 }
 
@@ -616,7 +625,11 @@ function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
+function warnIfConfigFromFuture(
+  cfg: OpenClawConfig,
+  logger: Pick<typeof console, "warn">,
+  configPath?: string,
+): void {
   const touched = cfg.meta?.lastTouchedVersion;
   if (!touched) {
     return;
@@ -626,9 +639,13 @@ function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console
     return;
   }
   if (cmp < 0) {
-    logger.warn(
-      `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
-    );
+    const key = `future:${touched}:${configPath ?? ""}`;
+    if (!loggedConfigWarnings.has(key)) {
+      loggedConfigWarnings.add(key);
+      logger.warn(
+        `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
+      );
+    }
   }
 }
 
@@ -754,11 +771,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       );
       const resolvedConfig = readResolution.resolvedConfigRaw;
       for (const w of readResolution.envWarnings) {
-        deps.logger.warn(
-          `Config (${configPath}): missing env var "${w.varName}" at ${w.configPath} — feature using this value will be unavailable`,
-        );
+        const key = `env:${w.varName}:${configPath}:${w.configPath}`;
+        if (!loggedConfigWarnings.has(key)) {
+          loggedConfigWarnings.add(key);
+          deps.logger.warn(
+            `Config (${configPath}): missing env var "${w.varName}" at ${w.configPath} — feature using this value will be unavailable`,
+          );
+        }
       }
-      warnOnConfigMiskeys(resolvedConfig, deps.logger);
+      warnOnConfigMiskeys(resolvedConfig, deps.logger, configPath);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
         return {};
       }
@@ -793,9 +814,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
               `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
           )
           .join("\n");
-        deps.logger.warn(`Config warnings:\\n${details}`);
+        const key = `warnings:${configPath}:${details}`;
+        if (!loggedConfigWarnings.has(key)) {
+          loggedConfigWarnings.add(key);
+          deps.logger.warn(`Config warnings:\\n${details}`);
+        }
       }
-      warnIfConfigFromFuture(validated.config, deps.logger);
+      warnIfConfigFromFuture(validated.config, deps.logger, configPath);
       const cfg = applyTalkConfigNormalization(
         applyModelDefaults(
           applyCompactionDefaults(
@@ -998,7 +1023,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      warnIfConfigFromFuture(validated.config, deps.logger);
+      warnIfConfigFromFuture(validated.config, deps.logger, configPath);
       const snapshotConfig = normalizeConfigPaths(
         applyTalkApiKey(
           applyTalkConfigNormalization(
@@ -1125,9 +1150,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
     if (validated.warnings.length > 0) {
       const details = validated.warnings
-        .map((warning) => `- ${warning.path}: ${warning.message}`)
+        .map((warning) => `- ${warning.path || "<root>"}: ${warning.message}`)
         .join("\n");
-      deps.logger.warn(`Config warnings:\n${details}`);
+      const key = `warnings:${details}`;
+      if (!loggedConfigWarnings.has(key)) {
+        loggedConfigWarnings.add(key);
+        deps.logger.warn(`Config warnings:\n${details}`);
+      }
     }
 
     // Restore ${VAR} env var references that were resolved during config loading.
