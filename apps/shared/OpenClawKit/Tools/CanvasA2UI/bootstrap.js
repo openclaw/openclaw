@@ -229,6 +229,69 @@ class OpenClawA2UIHost extends LitElement {
   toast = null;
   #statusListener = null;
 
+  #flushRender() {
+    this.requestUpdate();
+    // WKWebView has been observed to keep the old shadow DOM even after reactive
+    // state changes land. Force a synchronous Lit flush after important canvas
+    // mutations so pushed A2UI surfaces actually paint.
+    if (typeof this.performUpdate === "function") {
+      this.performUpdate();
+    }
+    this.#renderFallbackDom();
+  }
+
+  #literalText(value) {
+    if (!value) {return "";}
+    if (typeof value === "string") {return value;}
+    if (typeof value.literalString === "string") {return value.literalString;}
+    if (typeof value.literalNumber === "number") {return String(value.literalNumber);}
+    if (typeof value.literalBoolean === "boolean") {return value.literalBoolean ? "true" : "false";}
+    return "";
+  }
+
+  #renderFallbackTemplate(node) {
+    if (!node || typeof node !== "object") {return html``;}
+
+    const type = node.type;
+    const props = node.properties ?? {};
+
+    if (type === "Column" || type === "Row") {
+      const children = Array.isArray(props.children) ? props.children : [];
+      return html`<div class="fallback-stack ${type === "Row" ? "row" : "column"}">
+        ${children.map((child) => this.#renderFallbackTemplate(child))}
+      </div>`;
+    }
+
+    if (type === "Text") {
+      const usageHint = props.usageHint ?? "body";
+      const text = this.#literalText(props.text);
+      if (usageHint === "h1") {
+        return html`<h1 class="fallback-h1">${text}</h1>`;
+      }
+      if (usageHint === "h2") {
+        return html`<h2 class="fallback-h2">${text}</h2>`;
+      }
+      return html`<div class="fallback-text">${text}</div>`;
+    }
+
+    if (type === "Button") {
+      const label = this.#literalText(props.text) || this.#literalText(props.label) || "Button";
+      return html`<button class="fallback-button" type="button">${label}</button>`;
+    }
+
+    return html`<pre class="fallback-unknown">[${type ?? "Unknown"}]</pre>`;
+  }
+
+  #renderFallbackDom() {
+    const root = this.renderRoot ?? this.shadowRoot;
+    if (!root) {return;}
+
+    const emptyEl = root.querySelector(".empty");
+    if (emptyEl instanceof HTMLElement) {
+      emptyEl.style.display = this.surfaces.length === 0 ? "block" : "none";
+    }
+  }
+
   static styles = css`
     :host {
       display: block;
@@ -248,7 +311,68 @@ class OpenClawA2UIHost extends LitElement {
       gap: 12px;
       height: 100%;
       overflow: auto;
-      padding-bottom: var(--openclaw-a2ui-scroll-pad-bottom, 0px);
+      padding: 16px;
+      padding-bottom: calc(16px + var(--openclaw-a2ui-scroll-pad-bottom, 0px));
+      box-sizing: border-box;
+    }
+
+    .fallback-surface {
+      display: block;
+      min-width: 0;
+    }
+
+    .fallback-stack {
+      display: flex;
+      gap: 12px;
+      min-width: 0;
+      align-items: stretch;
+    }
+
+    .fallback-stack.column {
+      flex-direction: column;
+    }
+
+    .fallback-stack.row {
+      flex-direction: row;
+      flex-wrap: wrap;
+    }
+
+    .fallback-h1,
+    .fallback-h2,
+    .fallback-text,
+    .fallback-unknown {
+      margin: 0;
+      color: rgba(255, 255, 255, 0.96);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Roboto", sans-serif;
+    }
+
+    .fallback-h1 {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .fallback-h2 {
+      font-size: 22px;
+      font-weight: 650;
+      line-height: 1.25;
+    }
+
+    .fallback-text,
+    .fallback-unknown {
+      font-size: 16px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .fallback-button {
+      appearance: none;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.96);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font: 600 14px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Roboto", sans-serif;
     }
 
     .status {
@@ -347,6 +471,7 @@ class OpenClawA2UIHost extends LitElement {
       globalThis.addEventListener(eventName, this.#statusListener);
     }
     this.#syncSurfaces();
+    this.#flushRender();
   }
 
   disconnectedCallback() {
@@ -366,11 +491,11 @@ class OpenClawA2UIHost extends LitElement {
   #setToast(text, kind = "ok", timeoutMs = 1400) {
     const toast = { text, kind, expiresAt: Date.now() + timeoutMs };
     this.toast = toast;
-    this.requestUpdate();
+    this.#flushRender();
     setTimeout(() => {
       if (this.toast === toast) {
         this.toast = null;
-        this.requestUpdate();
+        this.#flushRender();
       }
     }, timeoutMs + 30);
   }
@@ -387,7 +512,7 @@ class OpenClawA2UIHost extends LitElement {
       this.pendingAction = { ...this.pendingAction, phase: "error", error: msg };
       this.#setToast(`Failed: ${msg}`, "error", 4500);
     }
-    this.requestUpdate();
+    this.#flushRender();
   }
 
   #handleA2UIAction(evt) {
@@ -446,7 +571,7 @@ class OpenClawA2UIHost extends LitElement {
 
     const actionId = this.#makeActionId();
     this.pendingAction = { id: actionId, name, phase: "sending", startedAt: Date.now() };
-    this.requestUpdate();
+    this.#flushRender();
 
     const userAction = {
       id: actionId,
@@ -491,7 +616,7 @@ class OpenClawA2UIHost extends LitElement {
       this.#setToast(`Updated: ${this.pendingAction.name}`, "ok", 1100);
       this.pendingAction = null;
     }
-    this.requestUpdate();
+    this.#flushRender();
     return { ok: true, surfaces: this.surfaces.map(([id]) => id) };
   }
 
@@ -499,7 +624,7 @@ class OpenClawA2UIHost extends LitElement {
     this.#processor.clearSurfaces();
     this.#syncSurfaces();
     this.pendingAction = null;
-    this.requestUpdate();
+    this.#flushRender();
     return { ok: true };
   }
 
@@ -534,11 +659,9 @@ class OpenClawA2UIHost extends LitElement {
       ${repeat(
         this.surfaces,
         ([surfaceId]) => surfaceId,
-        ([surfaceId, surface]) => html`<a2ui-surface
-          .surfaceId=${surfaceId}
-          .surface=${surface}
-          .processor=${this.#processor}
-        ></a2ui-surface>`
+        ([surfaceId, surface]) => html`<div class="fallback-surface" data-surface-id=${surfaceId}>
+          ${this.#renderFallbackTemplate(surface?.componentTree ?? null)}
+        </div>`
       )}
     </section>`;
   }

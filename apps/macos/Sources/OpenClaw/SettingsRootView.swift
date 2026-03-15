@@ -40,7 +40,7 @@ struct SettingsRootView: View {
                     .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
                     .tag(SettingsTab.config)
 
-                InstancesSettings()
+                InstancesSettings(state: self.state)
                     .tabItem { Label("Instances", systemImage: "network") }
                     .tag(SettingsTab.instances)
 
