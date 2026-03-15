@@ -41,6 +41,7 @@ type SessionInfoDefaults = {
 type SessionInfoEntry = SessionInfo & {
   modelOverride?: string;
   providerOverride?: string;
+  totalTokensFresh?: boolean;
 };
 
 export function createSessionActions(context: SessionActionContext) {
@@ -189,8 +190,15 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.outputTokens !== undefined) {
       next.outputTokens = entry.outputTokens;
     }
-    if (entry?.totalTokens !== undefined) {
-      next.totalTokens = entry.totalTokens;
+    // Only update totalTokens if totalTokensFresh is not false.
+    // When totalTokensFresh is false, the totalTokens value may be stale/historical
+    // (e.g., accumulated from previous compaction) and should not be displayed.
+    // Gateway already filters via resolveFreshSessionTotalTokens, but we check again
+    // here for safety and for patches that may include the raw entry.
+    if (entry?.totalTokens !== undefined && entry.totalTokens !== null) {
+      if (entry.totalTokensFresh !== false) {
+        next.totalTokens = entry.totalTokens;
+      }
     }
     if (entry?.contextTokens !== undefined || defaults?.contextTokens !== undefined) {
       next.contextTokens =
