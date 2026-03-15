@@ -12,11 +12,21 @@ const runtime: RuntimeEnv = {
   }) as RuntimeEnv["exit"],
 };
 
-function createPrompter(params: { selectValue?: string; textValue?: string }): {
+function createPrompter(params: {
+  selectValue?: string;
+  selectValues?: string[];
+  textValue?: string;
+  textValues?: string[];
+  confirmValue?: boolean;
+  confirmValues?: boolean[];
+}): {
   prompter: WizardPrompter;
   notes: Array<{ title?: string; message: string }>;
 } {
   const notes: Array<{ title?: string; message: string }> = [];
+  const selectQueue = [...(params.selectValues ?? [])];
+  const textQueue = [...(params.textValues ?? [])];
+  const confirmQueue = [...(params.confirmValues ?? [])];
   const prompter: WizardPrompter = {
     intro: vi.fn(async () => {}),
     outro: vi.fn(async () => {}),
@@ -24,11 +34,11 @@ function createPrompter(params: { selectValue?: string; textValue?: string }): {
       notes.push({ title, message });
     }),
     select: vi.fn(
-      async () => params.selectValue ?? "perplexity",
+      async () => selectQueue.shift() ?? params.selectValue ?? "perplexity",
     ) as unknown as WizardPrompter["select"],
     multiselect: vi.fn(async () => []) as unknown as WizardPrompter["multiselect"],
-    text: vi.fn(async () => params.textValue ?? ""),
-    confirm: vi.fn(async () => true),
+    text: vi.fn(async () => textQueue.shift() ?? params.textValue ?? ""),
+    confirm: vi.fn(async () => confirmQueue.shift() ?? params.confirmValue ?? true),
     progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
   };
   return { prompter, notes };
@@ -73,11 +83,12 @@ async function runQuickstartPerplexitySetup(
 }
 
 describe("setupSearch", () => {
-  it("returns config unchanged when user skips", async () => {
+  it("lets users skip provider setup after enabling web_search", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({ selectValue: "__skip__" });
     const result = await setupSearch(cfg, runtime, prompter);
-    expect(result).toBe(cfg);
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.provider).toBeUndefined();
   });
 
   it("sets provider and key for perplexity", async () => {
@@ -151,7 +162,7 @@ describe("setupSearch", () => {
       });
       const result = await setupSearch(cfg, runtime, prompter);
       expect(result.tools?.web?.search?.provider).toBe("brave");
-      expect(result.tools?.web?.search?.enabled).toBeUndefined();
+      expect(result.tools?.web?.search?.enabled).toBe(true);
       const missingNote = notes.find((n) => n.message.includes("No API key stored"));
       expect(missingNote).toBeDefined();
     } finally {
@@ -171,11 +182,13 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
   });
 
-  it("advanced preserves enabled:false when keeping existing key", async () => {
-    const result = await runBlankPerplexityKeyEntry(
+  it("keeps search disabled when the onboarding toggle is declined", async () => {
+    const cfg = createPerplexityConfig(
       "existing-key", // pragma: allowlist secret
       false,
     );
+    const { prompter } = createPrompter({ confirmValue: false });
+    const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(false);
   });
@@ -190,11 +203,15 @@ describe("setupSearch", () => {
     expect(prompter.text).not.toHaveBeenCalled();
   });
 
-  it("quickstart preserves enabled:false when search was intentionally disabled", async () => {
-    const { result, prompter } = await runQuickstartPerplexitySetup(
+  it("quickstart keeps search disabled when the onboarding toggle is declined", async () => {
+    const cfg = createPerplexityConfig(
       "stored-pplx-key", // pragma: allowlist secret
       false,
     );
+    const { prompter } = createPrompter({ confirmValue: false });
+    const result = await setupSearch(cfg, runtime, prompter, {
+      quickstartDefaults: true,
+    });
     expect(result.tools?.web?.search?.provider).toBe("perplexity");
     expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("stored-pplx-key");
     expect(result.tools?.web?.search?.enabled).toBe(false);
@@ -212,7 +229,7 @@ describe("setupSearch", () => {
       });
       expect(prompter.text).toHaveBeenCalled();
       expect(result.tools?.web?.search?.provider).toBe("grok");
-      expect(result.tools?.web?.search?.enabled).toBeUndefined();
+      expect(result.tools?.web?.search?.enabled).toBe(true);
     } finally {
       if (original === undefined) {
         delete process.env.XAI_API_KEY;
@@ -281,6 +298,59 @@ describe("setupSearch", () => {
     });
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-plain");
+  });
+
+  it("can enable native Codex search without forcing managed provider setup", async () => {
+    const cfg: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+    };
+    const { prompter } = createPrompter({
+      confirmValues: [true, true, false],
+      selectValues: ["cached"],
+    });
+
+    const result = await setupSearch(cfg, runtime, prompter);
+
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.openaiCodex).toEqual({
+      enabled: true,
+      mode: "cached",
+    });
+    expect(result.tools?.web?.search?.provider).toBeUndefined();
+  });
+
+  it("still supports managed provider setup for Codex users", async () => {
+    const cfg: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+    };
+    const { prompter } = createPrompter({
+      confirmValues: [true, true, true],
+      selectValues: ["live", "brave"],
+      textValue: "BSA-test-key",
+    });
+
+    const result = await setupSearch(cfg, runtime, prompter);
+
+    expect(result.tools?.web?.search?.provider).toBe("brave");
+    expect(result.tools?.web?.search?.apiKey).toBe("BSA-test-key");
+    expect(result.tools?.web?.search?.openaiCodex).toEqual({
+      enabled: true,
+      mode: "live",
+    });
   });
 
   it("exports all 5 providers in SEARCH_PROVIDER_OPTIONS", () => {

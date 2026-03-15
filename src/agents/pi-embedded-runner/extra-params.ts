@@ -23,6 +23,7 @@ import {
 } from "./moonshot-stream-wrappers.js";
 import {
   createCodexDefaultTransportWrapper,
+  createCodexNativeWebSearchWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
@@ -335,6 +336,7 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
+  agentDir?: string,
 ): void {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -458,6 +460,11 @@ export function applyExtraParamsToAgent(
     log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
     agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
   }
+
+  agent.streamFn = createCodexNativeWebSearchWrapper(agent.streamFn, {
+    config: cfg,
+    agentDir,
+  });
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI Responses models and auto-enable

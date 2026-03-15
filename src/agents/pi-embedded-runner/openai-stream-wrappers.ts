@@ -1,6 +1,11 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  patchCodexNativeWebSearchPayload,
+  resolveCodexNativeSearchActivation,
+} from "../codex-native-web-search.js";
 import { log } from "./logger.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
@@ -330,6 +335,59 @@ export function createOpenAIServiceTierWrapper(
       if (payloadObj.service_tier === undefined) {
         payloadObj.service_tier = serviceTier;
       }
+    });
+  };
+}
+
+export function createCodexNativeWebSearchWrapper(
+  baseStreamFn: StreamFn | undefined,
+  params: { config?: OpenClawConfig; agentDir?: string },
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const activation = resolveCodexNativeSearchActivation({
+      config: params.config,
+      modelProvider: typeof model.provider === "string" ? model.provider : undefined,
+      modelApi: typeof model.api === "string" ? model.api : undefined,
+      agentDir: params.agentDir,
+    });
+
+    if (activation.state !== "native_active") {
+      if (activation.codexNativeEnabled) {
+        log.debug(
+          `skipping Codex native web search (${activation.inactiveReason ?? "inactive"}) for ${String(
+            model.provider ?? "unknown",
+          )}/${String(model.id ?? "unknown")}`,
+        );
+      }
+      return underlying(model, context, options);
+    }
+
+    log.debug(
+      `activating Codex native web search (${activation.codexMode}) for ${String(
+        model.provider ?? "unknown",
+      )}/${String(model.id ?? "unknown")}`,
+    );
+
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        const result = patchCodexNativeWebSearchPayload({
+          payload,
+          config: params.config,
+        });
+        if (result.status === "payload_not_object") {
+          log.debug(
+            "Skipping Codex native web search injection because provider payload is not an object",
+          );
+        } else if (result.status === "native_tool_already_present") {
+          log.debug("Codex native web search tool already present in provider payload");
+        } else if (result.status === "injected") {
+          log.debug("Injected Codex native web search tool into provider payload");
+        }
+        return originalOnPayload?.(payload, model);
+      },
     });
   };
 }

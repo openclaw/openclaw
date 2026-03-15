@@ -1,3 +1,7 @@
+import {
+  describeCodexNativeWebSearch,
+  isCodexNativeWebSearchRelevant,
+} from "../agents/codex-native-web-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
@@ -184,7 +188,33 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
   };
 }
 
+function applyCodexNativeSearchConfig(
+  config: OpenClawConfig,
+  params: { enabled: boolean; mode?: "cached" | "live" },
+): OpenClawConfig {
+  return {
+    ...config,
+    tools: {
+      ...config.tools,
+      web: {
+        ...config.tools?.web,
+        search: {
+          ...config.tools?.web?.search,
+          enabled: params.enabled ? true : config.tools?.web?.search?.enabled,
+          openaiCodex: {
+            ...config.tools?.web?.search?.openaiCodex,
+            enabled: params.enabled,
+            ...(params.mode ? { mode: params.mode } : {}),
+          },
+        },
+      },
+    },
+  };
+}
+
 export type SetupSearchOptions = {
+  agentId?: string;
+  agentDir?: string;
   quickstartDefaults?: boolean;
   secretInputMode?: SecretInputMode;
 };
@@ -198,16 +228,102 @@ export async function setupSearch(
   await prompter.note(
     [
       "Web search lets your agent look things up online.",
-      "Choose a provider and paste your API key.",
+      "You can configure a managed provider now, and Codex-capable models can also use native Codex web search.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
   );
 
-  const existingProvider = config.tools?.web?.search?.provider;
+  const enableSearch = await prompter.confirm({
+    message: "Enable web_search?",
+    initialValue: config.tools?.web?.search?.enabled !== false,
+  });
+  if (!enableSearch) {
+    return {
+      ...config,
+      tools: {
+        ...config.tools,
+        web: {
+          ...config.tools?.web,
+          search: {
+            ...config.tools?.web?.search,
+            enabled: false,
+          },
+        },
+      },
+    };
+  }
+
+  let nextConfig: OpenClawConfig = {
+    ...config,
+    tools: {
+      ...config.tools,
+      web: {
+        ...config.tools?.web,
+        search: {
+          ...config.tools?.web?.search,
+          enabled: true,
+        },
+      },
+    },
+  };
+  const codexRelevant = isCodexNativeWebSearchRelevant({
+    config: nextConfig,
+    agentId: opts?.agentId,
+    agentDir: opts?.agentDir,
+  });
+  if (codexRelevant) {
+    const currentNativeSummary = describeCodexNativeWebSearch(nextConfig);
+    await prompter.note(
+      [
+        "Codex-capable models can optionally use native Codex web search.",
+        "This does not replace managed web_search for other models.",
+        "If you skip managed provider setup, non-Codex models still rely on provider auto-detect and may have no search available.",
+        ...(currentNativeSummary ? [currentNativeSummary] : ["Recommended mode: cached."]),
+      ].join("\n"),
+      "Codex native search",
+    );
+    const enableCodexNative = await prompter.confirm({
+      message: "Enable native Codex web search for Codex-capable models?",
+      initialValue: config.tools?.web?.search?.openaiCodex?.enabled === true,
+    });
+    if (enableCodexNative) {
+      const codexMode = await prompter.select<"cached" | "live">({
+        message: "Codex native web search mode",
+        options: [
+          {
+            value: "cached",
+            label: "cached (recommended)",
+            hint: "Uses cached web content",
+          },
+          {
+            value: "live",
+            label: "live",
+            hint: "Allows live external web access",
+          },
+        ],
+        initialValue: config.tools?.web?.search?.openaiCodex?.mode ?? "cached",
+      });
+      nextConfig = applyCodexNativeSearchConfig(nextConfig, {
+        enabled: true,
+        mode: codexMode,
+      });
+      const configureManagedProvider = await prompter.confirm({
+        message: "Configure a managed web search provider now?",
+        initialValue: Boolean(config.tools?.web?.search?.provider),
+      });
+      if (!configureManagedProvider) {
+        return nextConfig;
+      }
+    } else {
+      nextConfig = applyCodexNativeSearchConfig(nextConfig, { enabled: false });
+    }
+  }
+
+  const existingProvider = nextConfig.tools?.web?.search?.provider;
 
   const options = SEARCH_PROVIDER_OPTIONS.map((entry) => {
-    const configured = hasExistingKey(config, entry.value) || hasKeyInEnv(entry);
+    const configured = hasExistingKey(nextConfig, entry.value) || hasKeyInEnv(entry);
     const hint = configured ? `${entry.hint} · configured` : entry.hint;
     return { value: entry.value, label: entry.label, hint };
   });
@@ -217,7 +333,7 @@ export async function setupSearch(
       return existingProvider;
     }
     const detected = SEARCH_PROVIDER_OPTIONS.find(
-      (e) => hasExistingKey(config, e.value) || hasKeyInEnv(e),
+      (e) => hasExistingKey(nextConfig, e.value) || hasKeyInEnv(e),
     );
     if (detected) {
       return detected.value;
@@ -240,25 +356,25 @@ export async function setupSearch(
   });
 
   if (choice === "__skip__") {
-    return config;
+    return nextConfig;
   }
 
   const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === choice)!;
-  const existingKey = resolveExistingKey(config, choice);
-  const keyConfigured = hasExistingKey(config, choice);
+  const existingKey = resolveExistingKey(nextConfig, choice);
+  const keyConfigured = hasExistingKey(nextConfig, choice);
   const envAvailable = hasKeyInEnv(entry);
 
   if (opts?.quickstartDefaults && (keyConfigured || envAvailable)) {
     const result = existingKey
-      ? applySearchKey(config, choice, existingKey)
-      : applyProviderOnly(config, choice);
-    return preserveDisabledState(config, result);
+      ? applySearchKey(nextConfig, choice, existingKey)
+      : applyProviderOnly(nextConfig, choice);
+    return preserveDisabledState(nextConfig, result);
   }
 
   const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret
   if (useSecretRefMode) {
     if (keyConfigured) {
-      return preserveDisabledState(config, applyProviderOnly(config, choice));
+      return preserveDisabledState(nextConfig, applyProviderOnly(nextConfig, choice));
     }
     const ref = buildSearchEnvRef(choice);
     await prompter.note(
@@ -270,7 +386,7 @@ export async function setupSearch(
       ].join("\n"),
       "Web search",
     );
-    return applySearchKey(config, choice, ref);
+    return applySearchKey(nextConfig, choice, ref);
   }
 
   const keyInput = await prompter.text({
@@ -285,15 +401,15 @@ export async function setupSearch(
   const key = keyInput?.trim() ?? "";
   if (key) {
     const secretInput = resolveSearchSecretInput(choice, key, opts?.secretInputMode);
-    return applySearchKey(config, choice, secretInput);
+    return applySearchKey(nextConfig, choice, secretInput);
   }
 
   if (existingKey) {
-    return preserveDisabledState(config, applySearchKey(config, choice, existingKey));
+    return preserveDisabledState(nextConfig, applySearchKey(nextConfig, choice, existingKey));
   }
 
   if (keyConfigured || envAvailable) {
-    return preserveDisabledState(config, applyProviderOnly(config, choice));
+    return preserveDisabledState(nextConfig, applyProviderOnly(nextConfig, choice));
   }
 
   await prompter.note(
@@ -306,13 +422,13 @@ export async function setupSearch(
   );
 
   return {
-    ...config,
+    ...nextConfig,
     tools: {
-      ...config.tools,
+      ...nextConfig.tools,
       web: {
-        ...config.tools?.web,
+        ...nextConfig.tools?.web,
         search: {
-          ...config.tools?.web?.search,
+          ...nextConfig.tools?.web?.search,
           provider: choice,
         },
       },

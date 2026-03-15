@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
@@ -99,6 +99,11 @@ import { WizardCancelledError } from "../wizard/prompts.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
 describe("runConfigureWizard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
+  });
+
   it("persists gateway.mode=local when only the run mode is selected", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: false,
@@ -157,5 +162,117 @@ describe("runConfigureWizard", () => {
     await runConfigureWizard({ command: "configure" }, runtime);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("can enable native Codex search without configuring a managed provider", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      config: {
+        auth: {
+          profiles: {
+            "openai-codex:default": {
+              provider: "openai-codex",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      issues: [],
+    });
+    mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+    mocks.clackSelect.mockResolvedValueOnce("local").mockResolvedValueOnce("cached");
+    mocks.clackConfirm
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    mocks.clackText.mockResolvedValue("");
+
+    await runConfigureWizard(
+      { command: "configure", sections: ["web"] },
+      {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    );
+
+    expect(mocks.writeConfigFile).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          web: expect.objectContaining({
+            search: expect.objectContaining({
+              enabled: true,
+              openaiCodex: expect.objectContaining({
+                enabled: true,
+                mode: "cached",
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("persists openaiCodex.enabled=false when the toggle is disabled", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: {
+                enabled: true,
+                mode: "live",
+              },
+            },
+          },
+        },
+      },
+      issues: [],
+    });
+    mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+    mocks.clackSelect.mockResolvedValueOnce("local").mockResolvedValueOnce("brave");
+    mocks.clackConfirm
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    mocks.clackText.mockResolvedValue("");
+
+    await runConfigureWizard(
+      { command: "configure", sections: ["web"] },
+      {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    );
+
+    expect(mocks.writeConfigFile).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          web: expect.objectContaining({
+            search: expect.objectContaining({
+              enabled: true,
+              openaiCodex: expect.objectContaining({
+                enabled: false,
+                mode: "live",
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
   });
 });

@@ -15,6 +15,7 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { listChannelAgentTools } from "./channel-tools.js";
+import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -92,14 +93,32 @@ function applyMessageProviderToolPolicy(
 
 function applyModelProviderToolPolicy(
   tools: AnyAgentTool[],
-  params?: { modelProvider?: string; modelId?: string },
+  params?: {
+    config?: OpenClawConfig;
+    modelProvider?: string;
+    modelApi?: string;
+    modelId?: string;
+    agentDir?: string;
+  },
 ): AnyAgentTool[] {
-  if (!isXaiProvider(params?.modelProvider, params?.modelId)) {
-    return tools;
+  if (isXaiProvider(params?.modelProvider, params?.modelId)) {
+    // xAI/Grok providers expose a native web_search tool; sending OpenClaw's
+    // web_search alongside it causes duplicate-name request failures.
+    return tools.filter((tool) => !TOOL_DENY_FOR_XAI_PROVIDERS.has(tool.name));
   }
-  // xAI/Grok providers expose a native web_search tool; sending OpenClaw's
-  // web_search alongside it causes duplicate-name request failures.
-  return tools.filter((tool) => !TOOL_DENY_FOR_XAI_PROVIDERS.has(tool.name));
+
+  if (
+    shouldSuppressManagedWebSearchTool({
+      config: params?.config,
+      modelProvider: params?.modelProvider,
+      modelApi: params?.modelApi,
+      agentDir: params?.agentDir,
+    })
+  ) {
+    return tools.filter((tool) => tool.name !== "web_search");
+  }
+
+  return tools;
 }
 
 function isApplyPatchAllowedForModel(params: {
@@ -230,6 +249,8 @@ export function createOpenClawCodingTools(options?: {
   modelProvider?: string;
   /** Model id for the current provider (used for model-specific tool gating). */
   modelId?: string;
+  /** Model API for the current provider (used for provider-native tool arbitration). */
+  modelApi?: string;
   /** Model context window in tokens (used to scale read-tool output budget). */
   modelContextWindowTokens?: number;
   /**
@@ -562,8 +583,11 @@ export function createOpenClawCodingTools(options?: {
     options?.messageProvider,
   );
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
+    config: options?.config,
     modelProvider: options?.modelProvider,
+    modelApi: options?.modelApi,
     modelId: options?.modelId,
+    agentDir: options?.agentDir,
   });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;

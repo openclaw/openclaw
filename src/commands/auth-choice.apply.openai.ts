@@ -115,6 +115,15 @@ export async function applyAuthChoiceOpenAI(
         agentModelOverride = OPENAI_CODEX_DEFAULT_MODEL;
         await noteAgentModel(OPENAI_CODEX_DEFAULT_MODEL);
       }
+      await params.prompter.note(
+        [
+          "Codex-capable models can optionally use native Codex web search.",
+          "Enable it with openclaw configure --section web.",
+          "Recommended mode: cached.",
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
     }
     return { config: nextConfig, agentModelOverride };
   }
