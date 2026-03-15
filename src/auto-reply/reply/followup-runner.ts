@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { lookupContextTokens } from "../../agents/context.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -257,11 +257,15 @@ export function createFollowupRunner(params: {
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      const providerUsed = runResult.meta?.agentMeta?.provider ?? fallbackProvider;
       const contextTokensUsed =
-        agentCfgContextTokens ??
-        lookupContextTokens(modelUsed) ??
-        sessionEntry?.contextTokens ??
-        DEFAULT_CONTEXT_TOKENS;
+        resolveContextTokensForModel({
+          cfg: queued.run.config,
+          provider: providerUsed,
+          model: modelUsed,
+          contextTokensOverride: agentCfgContextTokens,
+          fallbackContextTokens: sessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+        }) ?? DEFAULT_CONTEXT_TOKENS;
 
       if (storePath && sessionKey) {
         await persistRunSessionUsage({
@@ -271,7 +275,7 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
           modelUsed,
-          providerUsed: fallbackProvider,
+          providerUsed,
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
           logLabel: "followup",

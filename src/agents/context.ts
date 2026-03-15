@@ -73,6 +73,13 @@ export function applyConfiguredContextWindows(params: {
       if (!modelId || !contextWindow || contextWindow <= 0) {
         continue;
       }
+      // Only write the bare model id. The provider-qualified key space is
+      // reserved for raw discovery entries (e.g. "google-gemini-cli/gemini-3.1-pro-preview")
+      // and must not be polluted by synthetic config writes that could corrupt
+      // slash-containing model IDs (e.g. OpenRouter's "anthropic/claude-opus-4-6").
+      // Callers with provider info use resolveContextTokensForModel which scans
+      // cfg.models.providers directly and never relies on this cache for the
+      // qualified lookup.
       params.cache.set(modelId, contextWindow);
     }
   }

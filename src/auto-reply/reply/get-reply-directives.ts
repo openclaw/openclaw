@@ -1,4 +1,6 @@
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
@@ -17,7 +19,7 @@ import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import { createModelSelectionState } from "./model-selection.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { stripInlineStatus } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
@@ -418,10 +420,14 @@ export async function resolveReplyDirectives(params: {
     resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
   }
 
-  let contextTokens = resolveContextTokens({
-    agentCfg,
-    model,
-  });
+  let contextTokens =
+    resolveContextTokensForModel({
+      cfg,
+      provider,
+      model,
+      contextTokensOverride: agentCfg?.contextTokens,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const initialModelLabel = `${provider}/${model}`;
   const formatModelSwitchEvent = (label: string, alias?: string) =>
