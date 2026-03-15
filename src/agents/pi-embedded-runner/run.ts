@@ -416,7 +416,19 @@ export async function runEmbeddedPiAgent(
 
       const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
       const preferredProfileId = params.authProfileId?.trim();
-      let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
+
+      // Per-agent auth binding: if config specifies a dedicated profile for this
+      // agent+provider combination, use it as the preferred profile. This gives
+      // per-agent bindings priority over session-level overrides while
+      // maintaining full backward compatibility for agents without bindings.
+      const normalizedProvider = normalizeProviderId(provider);
+      const agentAuthBinding = params.config?.agents?.list?.find(
+        (a: { id: string }) => a.id === params.agentId,
+      )?.auth?.[normalizedProvider];
+      const effectivePreferredProfile = agentAuthBinding?.trim() || preferredProfileId;
+
+      let lockedProfileId =
+        params.authProfileIdSource === "user" ? effectivePreferredProfile : undefined;
       if (lockedProfileId) {
         const lockedProfile = authStore.profiles[lockedProfileId];
         if (
@@ -430,7 +442,7 @@ export async function runEmbeddedPiAgent(
         cfg: params.config,
         store: authStore,
         provider,
-        preferredProfile: preferredProfileId,
+        preferredProfile: effectivePreferredProfile,
       });
       if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
         throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);

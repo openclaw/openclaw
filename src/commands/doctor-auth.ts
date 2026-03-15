@@ -256,6 +256,27 @@ export async function noteAuthProfileHealth(params: {
   const store = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
+
+  // Validate per-agent auth bindings reference existing profiles.
+  const agents = params.cfg.agents?.list ?? [];
+  const perAgentWarnings: string[] = [];
+  for (const agent of agents) {
+    if (agent.auth && typeof agent.auth === "object") {
+      for (const [provider, profileId] of Object.entries(agent.auth)) {
+        if (typeof profileId !== "string" || !profileId.trim()) {
+          continue;
+        }
+        if (!store.profiles[profileId]) {
+          perAgentWarnings.push(
+            `- agent "${agent.id}": auth profile "${profileId}" (provider: ${provider}) not found in auth store`,
+          );
+        }
+      }
+    }
+  }
+  if (perAgentWarnings.length > 0) {
+    note(perAgentWarnings.join("\n"), "Per-agent auth binding warnings");
+  }
   const unusable = (() => {
     const now = Date.now();
     const out: string[] = [];

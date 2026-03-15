@@ -204,6 +204,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
   "acp.runtime.installCommand":
     "Optional operator install/setup command shown by `/acp install` and `/acp doctor` when ACP backend wiring is missing.",
+  "agents.list[].auth":
+    'Per-agent auth profile bindings. Maps provider names to specific auth profile IDs (e.g. {"openai": "openai:account2"}) for rate limit isolation and per-agent billing.',
   "agents.list.*.skills":
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
   "agents.list[].skills":
