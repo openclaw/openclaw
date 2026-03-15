@@ -154,11 +154,26 @@ function stripThreadSuffixFromSessionKey(sessionKey: string): string {
   return parent ? parent : sessionKey;
 }
 
+function extractTelegramDirectThreadTarget(sessionKey: string): string | null {
+  const normalized = sessionKey.trim().toLowerCase();
+  const match = /^agent:[^:]+:telegram:direct:([^:]+):thread:[^:]+:(\d+)$/.exec(normalized);
+  if (!match) {
+    return null;
+  }
+  const chatId = match[1]?.trim();
+  const threadId = match[2]?.trim();
+  if (!chatId || !threadId) {
+    return null;
+  }
+  return `${chatId}:topic:${threadId}`;
+}
+
 function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
   const rawSessionKey = agentSessionKey?.trim();
   if (!rawSessionKey) {
     return null;
   }
+  const telegramThreadTarget = extractTelegramDirectThreadTarget(rawSessionKey);
   const parsed = parseAgentSessionKey(stripThreadSuffixFromSessionKey(rawSessionKey));
   if (!parsed || !parsed.rest) {
     return null;
@@ -200,7 +215,8 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
     channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
   }
 
-  const delivery: CronDelivery = { mode: "announce", to: peerId };
+  const resolvedPeerId = channel === "telegram" && telegramThreadTarget ? telegramThreadTarget : peerId;
+  const delivery: CronDelivery = { mode: "announce", to: resolvedPeerId };
   if (channel) {
     delivery.channel = channel;
   }

@@ -343,6 +343,19 @@ describe("cron tool", () => {
     });
   });
 
+  it("converts telegram direct thread session keys into topic-qualified delivery targets", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-direct-thread",
+        agentSessionKey: "agent:velizar:telegram:direct:834275911:thread:834275911:197918",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "834275911:topic:197918",
+    });
+  });
+
   it("infers delivery when delivery is null", async () => {
     expect(
       await executeAddAndReadDelivery({
