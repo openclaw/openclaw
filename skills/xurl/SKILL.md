@@ -12,13 +12,14 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin", "linux"],
               "formula": "xdevplatform/tap/xurl",
               "bins": ["xurl"],
               "label": "Install xurl (brew)",
             },
             {
-              "id": "npm",
-              "kind": "npm",
+              "id": "node",
+              "kind": "node",
               "package": "@xdevplatform/xurl",
               "bins": ["xurl"],
               "label": "Install xurl (npm)",

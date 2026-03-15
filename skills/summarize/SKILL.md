@@ -13,6 +13,7 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin", "linux"],
               "formula": "steipete/tap/summarize",
               "bins": ["summarize"],
               "label": "Install summarize (brew)",

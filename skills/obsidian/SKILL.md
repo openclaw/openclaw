@@ -13,6 +13,7 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin"],
               "formula": "yakitrak/yakitrak/obsidian-cli",
               "bins": ["obsidian-cli"],
               "label": "Install obsidian-cli (brew)",

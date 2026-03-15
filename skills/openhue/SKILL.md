@@ -13,6 +13,7 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin", "linux"],
               "formula": "openhue/cli/openhue-cli",
               "bins": ["openhue"],
               "label": "Install OpenHue CLI (brew)",
