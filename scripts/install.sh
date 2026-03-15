@@ -817,7 +817,7 @@ npm_log_indicates_oom_killed() {
     fi
 
     # Look for explicit OOM/SIGKILL indicators from shell/npm output.
-    grep -Eiq '(^|[[:space:]])Killed($|[[:space:]])|npm (ERR!|error) signal SIGKILL|signal SIGKILL|out of memory|oom' "$log" 2>/dev/null
+    grep -Eiq '(^|[[:space:]])Killed($|[[:space:]])|npm (ERR!|error) signal SIGKILL|signal SIGKILL|out of memory|(^|[^[:alnum:]_])oom([^[:alnum:]_]|$)' "$log" 2>/dev/null
 }
 
 run_npm_global_install() {
