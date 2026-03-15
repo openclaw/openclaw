@@ -223,6 +223,31 @@ function hashToolOutcome(
     }
   }
 
+  // Exec tool results contain volatile fields (durationMs, pid, startedAt,
+  // sessionId) that change on every invocation.  Hash only the stable
+  // fields so that repeated identical commands are correctly detected as
+  // a loop.  See https://github.com/nicepkg/openclaw/issues/34574.
+  //
+  // For "running" results the content text itself embeds volatile metadata
+  // (session id, pid) so we omit it and hash only the status + tail output.
+  // For "completed" results we use details.aggregated rather than content text
+  // because content.text may drop stderr/error (node-host uses short-circuit
+  // OR) or prepend warnings (gateway path), while aggregated always contains
+  // the full combined stdout+stderr+error output.
+  if (toolName === "exec") {
+    if (details.status === "running") {
+      return digestStable({
+        status: "running",
+        tail: details.tail ?? null,
+      });
+    }
+    return digestStable({
+      status: details.status,
+      exitCode: details.exitCode ?? null,
+      aggregated: details.aggregated ?? text,
+    });
+  }
+
   return digestStable({
     details,
     text,
