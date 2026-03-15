@@ -337,12 +337,32 @@ async function resolveGeminiCliEntry(
   };
 }
 
+async function resolveImageModelForCapability(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+  requestedModel?: string;
+  catalog?: Awaited<ReturnType<typeof loadModelCatalog>>;
+}): Promise<string | undefined> {
+  const requested = params.requestedModel?.trim();
+  if (!requested) {
+    return DEFAULT_IMAGE_MODELS[params.providerId];
+  }
+  const catalog = params.catalog ?? (await loadModelCatalog({ config: params.cfg }));
+  const entry = findModelInCatalog(catalog, params.providerId, requested);
+  const hasDeclaredInputMetadata = Array.isArray((entry as { input?: unknown } | undefined)?.input);
+  if (entry && hasDeclaredInputMetadata && !modelSupportsVision(entry)) {
+    return DEFAULT_IMAGE_MODELS[params.providerId] ?? requested;
+  }
+  return requested;
+}
+
 async function resolveKeyEntry(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
+  modelCatalog?: Awaited<ReturnType<typeof loadModelCatalog>>;
 }): Promise<MediaUnderstandingModelConfig | null> {
   const { cfg, agentDir, providerRegistry, capability } = params;
   const checkProvider = async (
@@ -373,7 +393,14 @@ async function resolveKeyEntry(params: {
   if (capability === "image") {
     const activeProvider = params.activeModel?.provider?.trim();
     if (activeProvider) {
-      const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
+      const normalizedActiveProvider = normalizeMediaProviderId(activeProvider);
+      const activeModel = await resolveImageModelForCapability({
+        cfg,
+        providerId: normalizedActiveProvider,
+        requestedModel: params.activeModel?.model,
+        catalog: params.modelCatalog,
+      });
+      const activeEntry = await checkProvider(activeProvider, activeModel);
       if (activeEntry) {
         return activeEntry;
       }
@@ -457,7 +484,12 @@ async function resolveAutoEntries(params: {
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig[]> {
-  const activeEntry = await resolveActiveModelEntry(params);
+  const sharedImageCatalog =
+    params.capability === "image" ? await loadModelCatalog({ config: params.cfg }) : undefined;
+  const activeEntry = await resolveActiveModelEntry({
+    ...params,
+    modelCatalog: sharedImageCatalog,
+  });
   if (activeEntry) {
     return [activeEntry];
   }
@@ -477,7 +509,10 @@ async function resolveAutoEntries(params: {
   if (gemini) {
     return [gemini];
   }
-  const keys = await resolveKeyEntry(params);
+  const keys = await resolveKeyEntry({
+    ...params,
+    modelCatalog: sharedImageCatalog,
+  });
   if (keys) {
     return [keys];
   }
@@ -490,6 +525,7 @@ export async function resolveAutoImageModel(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
   const providerRegistry = buildProviderRegistry();
+  const imageCatalog = await loadModelCatalog({ config: params.cfg });
   const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
     if (!entry || entry.type === "cli") {
       return null;
@@ -510,6 +546,7 @@ export async function resolveAutoImageModel(params: {
     providerRegistry,
     capability: "image",
     activeModel: params.activeModel,
+    modelCatalog: imageCatalog,
   });
   const resolvedActive = toActive(activeEntry);
   if (resolvedActive) {
@@ -521,6 +558,7 @@ export async function resolveAutoImageModel(params: {
     providerRegistry,
     capability: "image",
     activeModel: params.activeModel,
+    modelCatalog: imageCatalog,
   });
   return toActive(keyEntry);
 }
@@ -531,6 +569,7 @@ async function resolveActiveModelEntry(params: {
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
+  modelCatalog?: Awaited<ReturnType<typeof loadModelCatalog>>;
 }): Promise<MediaUnderstandingModelConfig | null> {
   const activeProviderRaw = params.activeModel?.provider?.trim();
   if (!activeProviderRaw) {
@@ -553,6 +592,15 @@ async function resolveActiveModelEntry(params: {
   if (params.capability === "video" && !provider.describeVideo) {
     return null;
   }
+  let resolvedModel = params.activeModel?.model;
+  if (params.capability === "image") {
+    resolvedModel = await resolveImageModelForCapability({
+      cfg: params.cfg,
+      providerId,
+      requestedModel: params.activeModel?.model,
+      catalog: params.modelCatalog,
+    });
+  }
   try {
     await resolveApiKeyForProvider({
       provider: providerId,
@@ -565,7 +613,7 @@ async function resolveActiveModelEntry(params: {
   return {
     type: "provider",
     provider: providerId,
-    model: params.activeModel?.model,
+    model: resolvedModel,
   };
 }
 
