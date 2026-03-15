@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -18,8 +19,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -47,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.ui.mobileCardSurface
 
 private enum class ConnectInputMode {
   SetupCode,
@@ -87,20 +92,28 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     val prompt = pendingTrust!!
     AlertDialog(
       onDismissRequest = { viewModel.declineGatewayTrustPrompt() },
-      title = { Text("Trust this gateway?") },
+      containerColor = mobileCardSurface,
+      title = { Text("Trust this gateway?", style = mobileHeadline, color = mobileText) },
       text = {
         Text(
           "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}",
           style = mobileCallout,
+          color = mobileText,
         )
       },
       confirmButton = {
-        TextButton(onClick = { viewModel.acceptGatewayTrustPrompt() }) {
+        TextButton(
+          onClick = { viewModel.acceptGatewayTrustPrompt() },
+          colors = ButtonDefaults.textButtonColors(contentColor = mobileAccent),
+        ) {
           Text("Trust and continue")
         }
       },
       dismissButton = {
-        TextButton(onClick = { viewModel.declineGatewayTrustPrompt() }) {
+        TextButton(
+          onClick = { viewModel.declineGatewayTrustPrompt() },
+          colors = ButtonDefaults.textButtonColors(contentColor = mobileTextSecondary),
+        ) {
           Text("Cancel")
         }
       },
@@ -128,93 +141,142 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     verticalArrangement = Arrangement.spacedBy(14.dp),
   ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Text("Connection Control", style = mobileCaption1.copy(fontWeight = FontWeight.Bold), color = mobileAccent)
       Text("Gateway Connection", style = mobileTitle1, color = mobileText)
       Text(
-        "One primary action. Open advanced controls only when needed.",
+        if (isConnected) "Your gateway is active and ready." else "Connect to your gateway to get started.",
         style = mobileCallout,
         color = mobileTextSecondary,
       )
     }
 
+    // Status cards in a unified card group
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(14.dp),
-      color = mobileSurface,
+      color = mobileCardSurface,
       border = BorderStroke(1.dp, mobileBorder),
     ) {
-      Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("Active endpoint", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
-        Text(activeEndpoint, style = mobileBody.copy(fontFamily = FontFamily.Monospace), color = mobileText)
+      Column {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = mobileAccentSoft,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Link,
+              contentDescription = null,
+              modifier = Modifier.padding(8.dp).size(18.dp),
+              tint = mobileAccent,
+            )
+          }
+          Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Endpoint", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(activeEndpoint, style = mobileBody.copy(fontFamily = FontFamily.Monospace), color = mobileText)
+          }
+        }
+        HorizontalDivider(color = mobileBorder)
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = if (isConnected) mobileSuccessSoft else mobileSurface,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Cloud,
+              contentDescription = null,
+              modifier = Modifier.padding(8.dp).size(18.dp),
+              tint = if (isConnected) mobileSuccess else mobileTextTertiary,
+            )
+          }
+          Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Status", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(statusText, style = mobileBody, color = if (isConnected) mobileSuccess else mobileText)
+          }
+        }
       }
     }
 
-    Surface(
-      modifier = Modifier.fillMaxWidth(),
-      shape = RoundedCornerShape(14.dp),
-      color = mobileSurface,
-      border = BorderStroke(1.dp, mobileBorder),
-    ) {
-      Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("Gateway state", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
-        Text(statusText, style = mobileBody, color = mobileText)
-      }
-    }
-
-    Button(
-      onClick = {
-        if (isConnected) {
+    if (isConnected) {
+      // Outlined secondary button when connected — don't scream "danger"
+      Button(
+        onClick = {
           viewModel.disconnect()
           validationText = null
-          return@Button
-        }
-        if (statusText.contains("operator offline", ignoreCase = true)) {
+        },
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = mobileCardSurface,
+            contentColor = mobileDanger,
+          ),
+        border = BorderStroke(1.dp, mobileDanger.copy(alpha = 0.4f)),
+      ) {
+        Icon(Icons.Default.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("Disconnect", style = mobileHeadline.copy(fontWeight = FontWeight.SemiBold))
+      }
+    } else {
+      Button(
+        onClick = {
+          if (statusText.contains("operator offline", ignoreCase = true)) {
+            validationText = null
+            viewModel.refreshGatewayConnection()
+            return@Button
+          }
+
+          val config =
+            resolveGatewayConnectConfig(
+              useSetupCode = inputMode == ConnectInputMode.SetupCode,
+              setupCode = setupCode,
+              manualHost = manualHostInput,
+              manualPort = manualPortInput,
+              manualTls = manualTlsInput,
+              fallbackToken = gatewayToken,
+              fallbackPassword = passwordInput,
+            )
+
+          if (config == null) {
+            validationText =
+              if (inputMode == ConnectInputMode.SetupCode) {
+                "Paste a valid setup code to connect."
+              } else {
+                "Enter a valid manual host and port to connect."
+              }
+            return@Button
+          }
+
           validationText = null
-          viewModel.refreshGatewayConnection()
-          return@Button
-        }
-
-        val config =
-          resolveGatewayConnectConfig(
-            useSetupCode = inputMode == ConnectInputMode.SetupCode,
-            setupCode = setupCode,
-            manualHost = manualHostInput,
-            manualPort = manualPortInput,
-            manualTls = manualTlsInput,
-            fallbackToken = gatewayToken,
-            fallbackPassword = passwordInput,
-          )
-
-        if (config == null) {
-          validationText =
-            if (inputMode == ConnectInputMode.SetupCode) {
-              "Paste a valid setup code to connect."
-            } else {
-              "Enter a valid manual host and port to connect."
-            }
-          return@Button
-        }
-
-        validationText = null
-        viewModel.setManualEnabled(true)
-        viewModel.setManualHost(config.host)
-        viewModel.setManualPort(config.port)
-        viewModel.setManualTls(config.tls)
-        if (config.token.isNotBlank()) {
-          viewModel.setGatewayToken(config.token)
-        }
-        viewModel.setGatewayPassword(config.password)
-        viewModel.connectManual()
-      },
-      modifier = Modifier.fillMaxWidth().height(52.dp),
-      shape = RoundedCornerShape(14.dp),
-      colors =
-        ButtonDefaults.buttonColors(
-          containerColor = if (isConnected) mobileDanger else mobileAccent,
-          contentColor = Color.White,
-        ),
-    ) {
-      Text(primaryLabel, style = mobileHeadline.copy(fontWeight = FontWeight.Bold))
+          viewModel.setManualEnabled(true)
+          viewModel.setManualHost(config.host)
+          viewModel.setManualPort(config.port)
+          viewModel.setManualTls(config.tls)
+          viewModel.setGatewayBootstrapToken(config.bootstrapToken)
+          if (config.token.isNotBlank()) {
+            viewModel.setGatewayToken(config.token)
+          } else if (config.bootstrapToken.isNotBlank()) {
+            viewModel.setGatewayToken("")
+          }
+          viewModel.setGatewayPassword(config.password)
+          viewModel.connectManual()
+        },
+        modifier = Modifier.fillMaxWidth().height(52.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = mobileAccent,
+            contentColor = Color.White,
+          ),
+      ) {
+        Text("Connect Gateway", style = mobileHeadline.copy(fontWeight = FontWeight.Bold))
+      }
     }
 
     Surface(
@@ -245,7 +307,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
-        color = Color.White,
+        color = mobileCardSurface,
         border = BorderStroke(1.dp, mobileBorder),
       ) {
         Column(
@@ -427,7 +489,7 @@ private fun MethodChip(label: String, active: Boolean, onClick: () -> Unit) {
         containerColor = if (active) mobileAccent else mobileSurface,
         contentColor = if (active) Color.White else mobileText,
       ),
-    border = BorderStroke(1.dp, if (active) Color(0xFF184DAF) else mobileBorderStrong),
+    border = BorderStroke(1.dp, if (active) mobileAccentBorderStrong else mobileBorderStrong),
   ) {
     Text(label, style = mobileCaption1.copy(fontWeight = FontWeight.Bold))
   }
@@ -456,10 +518,10 @@ private fun CommandBlock(command: String) {
     modifier = Modifier.fillMaxWidth(),
     shape = RoundedCornerShape(12.dp),
     color = mobileCodeBg,
-    border = BorderStroke(1.dp, Color(0xFF2B2E35)),
+    border = BorderStroke(1.dp, mobileCodeBorder),
   ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-      Box(modifier = Modifier.width(3.dp).height(42.dp).background(Color(0xFF3FC97A)))
+      Box(modifier = Modifier.width(3.dp).height(42.dp).background(mobileCodeAccent))
       Text(
         text = command,
         modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),

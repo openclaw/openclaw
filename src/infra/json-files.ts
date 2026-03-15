@@ -39,7 +39,7 @@ export async function writeTextAtomic(
   await fs.mkdir(path.dirname(filePath), mkdirOptions);
   const tmp = `${filePath}.${randomUUID()}.tmp`;
   try {
-    await fs.writeFile(tmp, payload, "utf8");
+    await fs.writeFile(tmp, payload, { encoding: "utf8", mode });
     try {
       await fs.chmod(tmp, mode);
     } catch {

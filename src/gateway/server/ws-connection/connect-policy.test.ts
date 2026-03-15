@@ -169,9 +169,47 @@ describe("ws connect policy", () => {
         isLocalClient: false,
       }).kind,
     ).toBe("allow");
+
+    const bypass = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
+      deviceRaw: null,
+    });
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: bypass,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+
+    // Regression: dangerouslyDisableDeviceAuth bypass must NOT extend to node-role
+    // sessions — the break-glass flag is scoped to operator Control UI only.
+    // A device-less node-role connection must still be rejected even when the flag
+    // is set, to prevent the flag from being abused to admit unauthorized node
+    // registrations.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "node",
+        isControlUi: true,
+        controlUiAuthPolicy: bypass,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("reject-device-required");
   });
 
-  test("pairing bypass requires control-ui bypass + shared auth (or trusted-proxy auth)", () => {
+  test("dangerouslyDisableDeviceAuth skips pairing for operator control-ui only", () => {
     const bypass = resolveControlUiAuthPolicy({
       isControlUi: true,
       controlUiConfig: { dangerouslyDisableDeviceAuth: true },
@@ -189,6 +227,10 @@ describe("ws connect policy", () => {
     // Tailscale identity auth skips pairing regardless of policy/sharedAuthOk
     expect(shouldSkipControlUiPairing(strict, false, false, true)).toBe(true);
     expect(shouldSkipControlUiPairing(bypass, false, false, true)).toBe(true);   
+    expect(shouldSkipControlUiPairing(bypass, "operator", false)).toBe(true);
+    expect(shouldSkipControlUiPairing(bypass, "node", false)).toBe(false);
+    expect(shouldSkipControlUiPairing(strict, "operator", false)).toBe(false);
+    expect(shouldSkipControlUiPairing(strict, "operator", true)).toBe(true);
   });
 
   test("trusted-proxy control-ui bypass only applies to operator + trusted-proxy auth", () => {

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
+const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
@@ -14,6 +15,7 @@ vi.mock("./media.js", () => ({
 vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
+  sendStructuredCardFeishu: sendStructuredCardFeishuMock,
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -29,12 +31,17 @@ vi.mock("./runtime.js", () => ({
 import { feishuOutbound } from "./outbound.js";
 const sendText = feishuOutbound.sendText!;
 
+function resetOutboundMocks() {
+  vi.clearAllMocks();
+  sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
+  sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
+  sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
+  sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
+}
+
 describe("feishuOutbound.sendText local-image auto-convert", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
-    sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
-    sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
+    resetOutboundMocks();
   });
 
   async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
@@ -128,7 +135,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       accountId: "main",
     });
 
-    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "chat_1",
         text: "| a | b |\n| - | - |",
@@ -181,10 +188,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
 
 describe("feishuOutbound.sendText replyToId forwarding", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
-    sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
-    sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
+    resetOutboundMocks();
   });
 
   it("forwards replyToId as replyToMessageId to sendMessageFeishu", async () => {
@@ -206,7 +210,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     );
   });
 
-  it("forwards replyToId to sendMarkdownCardFeishu when renderMode=card", async () => {
+  it("forwards replyToId to sendStructuredCardFeishu when renderMode=card", async () => {
     await sendText({
       cfg: {
         channels: {
@@ -221,7 +225,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
       accountId: "main",
     });
 
-    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_reply_target",
       }),
@@ -249,10 +253,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
 
 describe("feishuOutbound.sendMedia replyToId forwarding", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
-    sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
-    sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
+    resetOutboundMocks();
   });
 
   it("forwards replyToId to sendMediaFeishu", async () => {
@@ -292,10 +293,7 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
 
 describe("feishuOutbound.sendMedia renderMode", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
-    sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
-    sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
+    resetOutboundMocks();
   });
 
   it("uses markdown cards for captions when renderMode=card", async () => {

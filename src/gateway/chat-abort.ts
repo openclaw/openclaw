@@ -6,6 +6,8 @@ export type ChatAbortControllerEntry = {
   sessionKey: string;
   startedAtMs: number;
   expiresAtMs: number;
+  ownerConnId?: string;
+  ownerDeviceId?: string;
 };
 
 export function isChatStopCommandText(text: string): boolean {
