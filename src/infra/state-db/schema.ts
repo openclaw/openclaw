@@ -1076,6 +1076,48 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+
+  // ── v15: Operator1Hub catalog, installed tracking, and collections ─────────
+  {
+    version: 15,
+    description: "Operator1Hub: op1_hub_catalog, op1_hub_installed, op1_hub_collections tables",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_hub_catalog (
+          slug        TEXT PRIMARY KEY,
+          name        TEXT NOT NULL,
+          type        TEXT NOT NULL CHECK (type IN ('skill', 'agent', 'command')),
+          category    TEXT NOT NULL,
+          description TEXT,
+          path        TEXT NOT NULL,
+          readme      TEXT,
+          version     TEXT NOT NULL,
+          tags_json   TEXT NOT NULL DEFAULT '[]',
+          emoji       TEXT,
+          sha256      TEXT,
+          bundled     INTEGER NOT NULL DEFAULT 0,
+          synced_at   INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+
+        CREATE TABLE IF NOT EXISTS op1_hub_installed (
+          slug          TEXT PRIMARY KEY,
+          type          TEXT NOT NULL,
+          version       TEXT NOT NULL,
+          install_path  TEXT NOT NULL,
+          agent_id      TEXT,
+          installed_at  INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+
+        CREATE TABLE IF NOT EXISTS op1_hub_collections (
+          slug        TEXT PRIMARY KEY,
+          name        TEXT NOT NULL,
+          description TEXT,
+          emoji       TEXT,
+          items_json  TEXT NOT NULL DEFAULT '[]'
+        );
+      `);
+    },
+  },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────

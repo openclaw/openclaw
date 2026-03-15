@@ -186,6 +186,17 @@ const BASE_METHODS = [
   "commands.update",
   "commands.delete",
   "commands.invoke",
+  // Operator1Hub
+  "hub.sync",
+  "hub.catalog",
+  "hub.search",
+  "hub.inspect",
+  "hub.install",
+  "hub.remove",
+  "hub.installed",
+  "hub.updates",
+  "hub.collections",
+  "hub.installCollection",
   // Persona library
   "personas.list",
   "personas.get",

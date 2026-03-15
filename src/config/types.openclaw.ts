@@ -14,6 +14,7 @@ import type {
   TalkConfig,
 } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
+import type { HubConfig } from "./types.hub.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type {
   AudioConfig,
@@ -92,6 +93,7 @@ export type OpenClawConfig = {
     };
   };
   secrets?: SecretsConfig;
+  hub?: HubConfig;
   skills?: SkillsConfig;
   plugins?: PluginsConfig;
   models?: ModelsConfig;

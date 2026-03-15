@@ -203,6 +203,13 @@ const TalkSchema = z
     }
   });
 
+const HubSchema = z
+  .object({
+    url: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -808,6 +815,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    hub: HubSchema,
     memory: MemorySchema,
     skills: z
       .object({

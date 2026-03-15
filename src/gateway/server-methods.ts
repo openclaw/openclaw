@@ -18,6 +18,7 @@ import { deviceHandlers } from "./server-methods/devices.js";
 import { doctorHandlers } from "./server-methods/doctor.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { healthHandlers } from "./server-methods/health.js";
+import { hubHandlers } from "./server-methods/hub.js";
 import { logsHandlers } from "./server-methods/logs.js";
 import { marketplaceHandlers } from "./server-methods/marketplace.js";
 import { mcpHandlers } from "./server-methods/mcp.js";
@@ -106,6 +107,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...agentsHandlers,
   ...browserHandlers,
   ...clawhubHandlers,
+  ...hubHandlers,
   ...projectsHandlers,
   ...marketplaceHandlers,
   ...mcpHandlers,
