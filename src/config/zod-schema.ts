@@ -267,6 +267,7 @@ export const OpenClawSchema = z
             logs: z.boolean().optional(),
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
+            resourceAttributes: z.record(z.string(), z.string()).optional(),
           })
           .strict()
           .optional(),

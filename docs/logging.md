@@ -247,7 +247,11 @@ works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
       "metrics": true,
       "logs": true,
       "sampleRate": 0.2,
-      "flushIntervalMs": 60000
+      "flushIntervalMs": 60000,
+      "resourceAttributes": {
+        "service.namespace": "my-namespace",
+        "deployment.environment": "production"
+      }
     }
   }
 }
@@ -261,6 +265,10 @@ Notes:
   counters/histograms (webhooks, queueing, session state, queue depth/wait).
 - Traces/metrics can be toggled with `traces` / `metrics` (default: on). Traces
   include model usage spans plus webhook/message processing spans when enabled.
+- Set `resourceAttributes` to add custom OTEL resource attributes (e.g.
+  `service.namespace`, `deployment.environment`). Required by some backends
+  like Grafana Cloud for connection tests. The dedicated `serviceName` field
+  always takes precedence over a `service.name` key in `resourceAttributes`.
 - Set `headers` when your collector requires auth.
 - Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
