@@ -301,7 +301,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         `[tlon] Using autoDiscoverChannels from settings store: ${effectiveAutoDiscoverChannels}`,
       );
     }
-    if (currentSettings.dmAllowlist?.length) {
+    if (currentSettings.dmAllowlist !== undefined) {
       effectiveDmAllowlist = currentSettings.dmAllowlist;
       runtime.log?.(
         `[tlon] Using dmAllowlist from settings store: ${effectiveDmAllowlist.join(", ")}`,
@@ -322,7 +322,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         `[tlon] Using autoAcceptGroupInvites from settings store: ${effectiveAutoAcceptGroupInvites}`,
       );
     }
-    if (currentSettings.groupInviteAllowlist?.length) {
+    if (currentSettings.groupInviteAllowlist !== undefined) {
       effectiveGroupInviteAllowlist = currentSettings.groupInviteAllowlist;
       runtime.log?.(
         `[tlon] Using groupInviteAllowlist from settings store: ${effectiveGroupInviteAllowlist.join(", ")}`,
@@ -1176,17 +1176,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      // Resolve any cited/quoted messages first
-      const citedContent = await resolveAllCites(content.content);
       const rawText = extractMessageText(content.content);
-      const messageText = citedContent + rawText;
-      if (!messageText.trim()) {
+      if (!rawText.trim()) {
         return;
       }
 
       cacheMessage(nest, {
         author: senderShip,
-        content: messageText,
+        content: rawText,
         timestamp: content.sent || Date.now(),
         id: messageId,
       });
@@ -1200,7 +1197,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       // Check if we should respond:
       // 1. Direct mention always triggers response
       // 2. Thread replies where we've participated - respond if relevant (let agent decide)
-      const mentioned = isBotMentioned(messageText, botShipName, botNickname ?? undefined);
+      const mentioned = isBotMentioned(rawText, botShipName, botNickname ?? undefined);
       const inParticipatedThread =
         isThreadReply && parentId && participatedThreads.has(String(parentId));
 
@@ -1227,10 +1224,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
                 type: "channel",
                 requestingShip: senderShip,
                 channelNest: nest,
-                messagePreview: messageText.substring(0, 100),
+                messagePreview: rawText.substring(0, 100),
                 originalMessage: {
                   messageId: messageId ?? "",
-                  messageText,
+                  messageText: rawText,
                   messageContent: content.content,
                   timestamp: content.sent || Date.now(),
                   parentId: parentId ?? undefined,
@@ -1247,6 +1244,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           }
         }
       }
+
+      // Resolve quoted content only after the sender passed channel authorization.
+      const citedContent = await resolveAllCites(content.content);
+      const messageText = citedContent + rawText;
 
       const parsed = parseChannelNest(nest);
       await processMessage({
@@ -1365,15 +1366,15 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         );
       }
 
-      // Resolve any cited/quoted messages first
-      const citedContent = await resolveAllCites(essay.content);
       const rawText = extractMessageText(essay.content);
-      const messageText = citedContent + rawText;
-      if (!messageText.trim()) {
+      if (!rawText.trim()) {
         return;
       }
+      const citedContent = await resolveAllCites(essay.content);
+      const resolvedMessageText = citedContent + rawText;
 
       // Check if this is the owner sending an approval response
+      const messageText = rawText;
       if (isOwner(senderShip) && isApprovalResponse(messageText)) {
         const handled = await handleApprovalResponse(messageText);
         if (handled) {
@@ -1397,7 +1398,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         await processMessage({
           messageId: messageId ?? "",
           senderShip,
-          messageText,
+          messageText: resolvedMessageText,
           messageContent: essay.content,
           isGroup: false,
           timestamp: essay.sent || Date.now(),
@@ -1430,7 +1431,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       await processMessage({
         messageId: messageId ?? "",
         senderShip,
-        messageText,
+        messageText: resolvedMessageText,
         messageContent: essay.content, // Pass raw content for media extraction
         isGroup: false,
         timestamp: essay.sent || Date.now(),
@@ -1524,8 +1525,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
       // Update DM allowlist
       if (newSettings.dmAllowlist !== undefined) {
-        effectiveDmAllowlist =
-          newSettings.dmAllowlist.length > 0 ? newSettings.dmAllowlist : account.dmAllowlist;
+        effectiveDmAllowlist = newSettings.dmAllowlist;
         runtime.log?.(`[tlon] Settings: dmAllowlist updated to ${effectiveDmAllowlist.join(", ")}`);
       }
 
@@ -1551,10 +1551,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
       // Update group invite allowlist
       if (newSettings.groupInviteAllowlist !== undefined) {
-        effectiveGroupInviteAllowlist =
-          newSettings.groupInviteAllowlist.length > 0
-            ? newSettings.groupInviteAllowlist
-            : account.groupInviteAllowlist;
+        effectiveGroupInviteAllowlist = newSettings.groupInviteAllowlist;
         runtime.log?.(
           `[tlon] Settings: groupInviteAllowlist updated to ${effectiveGroupInviteAllowlist.join(", ")}`,
         );
