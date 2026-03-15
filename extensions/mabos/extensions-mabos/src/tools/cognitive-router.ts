@@ -468,11 +468,27 @@ ACTIONS:
 
 IMPORTANT: For BELIEF_UPDATES, always extract at least one factual observation from the signals. For GOAL_UPDATES, reference the exact G-ID from the active goals and estimate progress percentage. Do not say "none" unless truly nothing applies.`;
 
+  // Load active goal IDs so the LLM can reference them
+  let goalContext = "";
+  try {
+    const goalsRaw = await readMd(join(agentDir, "Goals.md"));
+    const goalLines = goalsRaw
+      .split("\n")
+      .filter((l) => l.startsWith("### G-"))
+      .map((l) => l.replace("### ", "").slice(0, 100))
+      .slice(0, 5);
+    if (goalLines.length > 0) {
+      goalContext = `\n\nActive Goals:\n${goalLines.map((g) => `- ${g}`).join("\n")}`;
+    }
+  } catch {
+    /* no goals */
+  }
+
   const userPrompt = `Classification: uncertainty=${classification.uncertainty}, complexity=${classification.complexity}, stakes=${classification.stakes}, time_pressure=${classification.time_pressure}
 Selected method: ${topMethod} (${(methodScore * 100).toFixed(0)}% suitability)
 
 Signals (${signals.length}):
-${problemSummary}
+${problemSummary}${goalContext}
 
 Apply ${topMethod} reasoning. Determine actions and whether deliberative depth is needed.`;
 
@@ -1128,7 +1144,7 @@ async function executeLlmActions(
   agentDir: string,
   _workspaceDir: string,
   actions: LlmAction[],
-  log: { debug: (...args: any[]) => void },
+  log: { info: (...args: any[]) => void; debug: (...args: any[]) => void },
 ): Promise<number> {
   let applied = 0;
   const now = new Date().toISOString();
@@ -1142,7 +1158,9 @@ async function executeLlmActions(
           if (!beliefs) {
             beliefs = `# Beliefs — ${agentId}\n\nLast updated: ${now}\n\n## Current Beliefs\n`;
           }
-          const content = action.data.content as string;
+          const content = (action.data.content as string).replace(/^["']|["']$/g, ""); // strip quotes
+          // Deduplicate: skip if belief text already exists (case-insensitive)
+          if (beliefs.toLowerCase().includes(content.toLowerCase())) break;
           // Ensure ## Current Beliefs section exists
           if (!beliefs.includes("## Current Beliefs")) {
             // Insert before first ## section or at end
@@ -1164,7 +1182,7 @@ async function executeLlmActions(
           beliefs = beliefs.replace(/Last updated: .*/, `Last updated: ${now}`);
           await writeMd(beliefsPath, beliefs);
           applied++;
-          log.debug(`[llm-action-executor] Belief added: ${content.slice(0, 80)}`);
+          log.info(`[llm-action-executor] Belief added: ${content.slice(0, 80)}`);
           break;
         }
         case "goal_progress": {
@@ -1195,9 +1213,9 @@ async function executeLlmActions(
             goals = goals.replace(/Last evaluated: .*/, `Last evaluated: ${now}`);
             await writeMd(goalsPath, goals);
             applied++;
-            log.debug(`[llm-action-executor] Goal ${goalId}: progress → ${progress}%`);
+            log.info(`[llm-action-executor] Goal ${goalId}: progress → ${progress}%`);
           } else {
-            log.debug(`[llm-action-executor] Goal ${goalId} not found in Goals.md`);
+            log.info(`[llm-action-executor] Goal ${goalId} not found in Goals.md`);
           }
           break;
         }
@@ -1213,7 +1231,7 @@ async function executeLlmActions(
         }
       }
     } catch (err) {
-      log.debug(`[llm-action-executor] Failed to apply ${action.type}: ${err}`);
+      log.info(`[llm-action-executor] Failed to apply ${action.type}: ${err}`);
     }
   }
   return applied;
