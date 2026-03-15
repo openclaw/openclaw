@@ -319,6 +319,15 @@ export type MemorySearchConfig = {
   sources?: Array<"memory" | "sessions">;
   /** Extra paths to include in memory search (directories or .md files). */
   extraPaths?: string[];
+  /** Optional multimodal file indexing for selected extra paths. */
+  multimodal?: {
+    /** Enable image/audio embeddings from extraPaths. */
+    enabled?: boolean;
+    /** Which non-text file types to index. */
+    modalities?: Array<"image" | "audio" | "all">;
+    /** Max bytes allowed per multimodal file before it is skipped. */
+    maxFileBytes?: number;
+  };
   /** Experimental memory search settings. */
   experimental?: {
     /** Enable session transcript indexing (experimental, default: false). */
@@ -393,6 +402,8 @@ export type MemorySearchConfig = {
       deltaBytes?: number;
       /** Minimum appended JSONL lines before session transcripts are reindexed. */
       deltaMessages?: number;
+      /** Force session reindex after compaction-triggered transcript updates (default: true). */
+      postCompactionForce?: boolean;
     };
   };
   /** Query behavior. */

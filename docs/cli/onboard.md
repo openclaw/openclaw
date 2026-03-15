@@ -43,6 +43,18 @@ openclaw onboard --non-interactive \
 
 `--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
 
+Non-interactive Ollama:
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice ollama \
+  --custom-base-url "http://ollama-host:11434" \
+  --custom-model-id "qwen3.5:27b" \
+  --accept-risk
+```
+
+`--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.5:cloud` also work here.
+
 Store provider keys as refs instead of plaintext:
 
 ```bash
@@ -82,6 +94,13 @@ openclaw onboard --non-interactive \
   --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
   --accept-risk
 ```
+
+Non-interactive local gateway health:
+
+- Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before it exits successfully.
+- `--install-daemon` starts the managed gateway install path first. Without it, you must already have a local gateway running, for example `openclaw gateway run`.
+- If you only want config/workspace/bootstrap writes in automation, use `--skip-health`.
+- On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.
 
 Interactive onboarding behavior with reference mode:
 

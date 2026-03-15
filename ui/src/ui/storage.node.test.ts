@@ -128,11 +128,14 @@ describe("loadSettings default gateway URL derivation", () => {
       gatewayUrl: "wss://gateway.example:8443/openclaw",
       sessionKey: "agent",
       lastActiveSessionKey: "agent",
-      theme: "system",
+      theme: "claw",
+      themeMode: "system",
       chatFocusMode: false,
       chatShowThinking: true,
+      chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
+      navWidth: 220,
       navGroupsCollapsed: {},
     });
     expect(sessionStorage.length).toBe(0);
@@ -151,11 +154,14 @@ describe("loadSettings default gateway URL derivation", () => {
       token: "session-token",
       sessionKey: "main",
       lastActiveSessionKey: "main",
-      theme: "system",
+      theme: "claw",
+      themeMode: "system",
       chatFocusMode: false,
       chatShowThinking: true,
+      chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
+      navWidth: 220,
       navGroupsCollapsed: {},
     });
 
@@ -178,11 +184,14 @@ describe("loadSettings default gateway URL derivation", () => {
       token: "gateway-a-token",
       sessionKey: "main",
       lastActiveSessionKey: "main",
-      theme: "system",
+      theme: "claw",
+      themeMode: "system",
       chatFocusMode: false,
       chatShowThinking: true,
+      chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
+      navWidth: 220,
       navGroupsCollapsed: {},
     });
 
@@ -192,11 +201,14 @@ describe("loadSettings default gateway URL derivation", () => {
         gatewayUrl: "wss://other-gateway.example:8443/openclaw",
         sessionKey: "main",
         lastActiveSessionKey: "main",
-        theme: "system",
+        theme: "claw",
+        themeMode: "system",
         chatFocusMode: false,
         chatShowThinking: true,
+        chatShowToolCalls: true,
         splitRatio: 0.6,
         navCollapsed: false,
+        navWidth: 220,
         navGroupsCollapsed: {},
       }),
     );
@@ -220,11 +232,14 @@ describe("loadSettings default gateway URL derivation", () => {
       token: "memory-only-token",
       sessionKey: "main",
       lastActiveSessionKey: "main",
-      theme: "system",
+      theme: "claw",
+      themeMode: "system",
       chatFocusMode: false,
       chatShowThinking: true,
+      chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
+      navWidth: 220,
       navGroupsCollapsed: {},
     });
     expect(loadSettings()).toMatchObject({
@@ -236,11 +251,14 @@ describe("loadSettings default gateway URL derivation", () => {
       gatewayUrl: "wss://gateway.example:8443/openclaw",
       sessionKey: "main",
       lastActiveSessionKey: "main",
-      theme: "system",
+      theme: "claw",
+      themeMode: "system",
       chatFocusMode: false,
       chatShowThinking: true,
+      chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
+      navWidth: 220,
       navGroupsCollapsed: {},
     });
     expect(sessionStorage.length).toBe(1);
@@ -259,11 +277,14 @@ describe("loadSettings default gateway URL derivation", () => {
       token: "stale-token",
       sessionKey: "main",
       lastActiveSessionKey: "main",
-      theme: "system",
+      theme: "claw",
+      themeMode: "system",
       chatFocusMode: false,
       chatShowThinking: true,
+      chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
+      navWidth: 220,
       navGroupsCollapsed: {},
     });
     saveSettings({
@@ -271,15 +292,49 @@ describe("loadSettings default gateway URL derivation", () => {
       token: "",
       sessionKey: "main",
       lastActiveSessionKey: "main",
-      theme: "system",
+      theme: "claw",
+      themeMode: "system",
       chatFocusMode: false,
       chatShowThinking: true,
+      chatShowToolCalls: true,
       splitRatio: 0.6,
       navCollapsed: false,
+      navWidth: 220,
       navGroupsCollapsed: {},
     });
 
     expect(loadSettings().token).toBe("");
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it("persists themeMode and navWidth alongside the selected theme", async () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const { saveSettings } = await import("./storage.ts");
+    saveSettings({
+      gatewayUrl: "wss://gateway.example:8443/openclaw",
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "dash",
+      themeMode: "light",
+      chatFocusMode: false,
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 320,
+      navGroupsCollapsed: {},
+    });
+
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}")).toMatchObject({
+      theme: "dash",
+      themeMode: "light",
+      navWidth: 320,
+    });
   });
 });

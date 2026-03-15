@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyPatch } from "./apply-patch.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
@@ -144,6 +144,25 @@ describe("applyPatch", () => {
       await applyPatch(patch, { cwd: dir });
       const contents = await fs.readFile(target, "utf8");
       expect(contents).toBe("inside\n");
+    });
+  });
+
+  it("resolves delete targets before calling fs.rm", async () => {
+    await withTempDir(async (dir) => {
+      const target = path.join(dir, "delete-me.txt");
+      await fs.writeFile(target, "x\n", "utf8");
+      const rmSpy = vi.spyOn(fs, "rm");
+
+      try {
+        const patch = `*** Begin Patch
+*** Delete File: delete-me.txt
+*** End Patch`;
+
+        await applyPatch(patch, { cwd: dir });
+        expect(rmSpy).toHaveBeenCalledWith(target);
+      } finally {
+        rmSpy.mockRestore();
+      }
     });
   });
 
