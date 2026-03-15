@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
+import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -93,6 +94,7 @@ beforeEach(() => {
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
   resetSystemEventsForTest();
+  resetDiagnosticEventsForTest();
 
   // Default: no provider switch; execute the chosen provider+model.
   runWithModelFallbackMock.mockImplementation(
@@ -107,6 +109,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   resetSystemEventsForTest();
+  resetDiagnosticEventsForTest();
 });
 
 describe("runReplyAgent onAgentRunStart", () => {
@@ -1784,6 +1787,127 @@ describe("runReplyAgent response usage footer", () => {
     const payload = Array.isArray(res) ? res[0] : res;
     expect(String(payload?.text ?? "")).toContain("Usage:");
     expect(String(payload?.text ?? "")).not.toContain("· session ");
+  });
+});
+
+describe("runReplyAgent diagnostics", () => {
+  function createRun() {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingTo: "chat:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session-silent",
+        sessionKey: "agent:main:telegram:dm:123",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {
+          diagnostics: { enabled: true },
+        },
+        skillsSnapshot: {},
+        provider: "openai",
+        model: "gpt-5.2",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionKey: "agent:main:telegram:dm:123",
+      defaultModel: "openai/gpt-5.2",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("emits model.usage even when NO_REPLY is stripped to zero reply payloads", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {
+        agentMeta: {
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: 120,
+            output: 33,
+            cacheRead: 10,
+            cacheWrite: 2,
+            total: 165,
+          },
+          lastCallUsage: {
+            input: 120,
+            output: 33,
+            total: 153,
+          },
+        },
+      },
+    });
+
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+    const stop = onDiagnosticEvent((evt) => {
+      events.push(evt as { type: string; [key: string]: unknown });
+    });
+
+    try {
+      const result = await createRun();
+      expect(result).toBeUndefined();
+    } finally {
+      stop();
+    }
+
+    expect(events.filter((evt) => evt.type === "model.usage")).toEqual([
+      expect.objectContaining({
+        type: "model.usage",
+        sessionKey: "agent:main:telegram:dm:123",
+        sessionId: "session-silent",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: expect.objectContaining({
+          input: 120,
+          output: 33,
+          cacheRead: 10,
+          cacheWrite: 2,
+          total: 165,
+        }),
+        lastCallUsage: expect.objectContaining({
+          input: 120,
+          output: 33,
+          total: 153,
+        }),
+      }),
+    ]);
   });
 });
 
