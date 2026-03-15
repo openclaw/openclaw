@@ -540,12 +540,12 @@ describe("exec notifyOnExit", () => {
       wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
     );
     try {
-      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
 
       await expect
         .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
         .toMatchObject({
-          reason: `exec:${sessionId}:exit`,
+          reason: "exec-event",
           sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
         });
     } finally {
@@ -560,12 +560,12 @@ describe("exec notifyOnExit", () => {
       wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
     );
     try {
-      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
 
       await expect
         .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
         .toEqual({
-          reason: `exec:${sessionId}:exit`,
+          reason: "exec-event",
         });
     } finally {
       dispose();
