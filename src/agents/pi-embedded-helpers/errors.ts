@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { stripExternalContentForDisplay } from "../../security/external-content.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
@@ -766,7 +767,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  const stripped = stripExternalContentForDisplay(stripFinalTagsFromText(text));
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
