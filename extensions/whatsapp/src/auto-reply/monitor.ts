@@ -156,9 +156,10 @@ export async function monitorWebChannel(
     let _lastInboundMsg: WebInboundMsg | null = null;
     let unregisterUnhandled: (() => void) | null = null;
 
-    // Watchdog to detect stuck message processing (e.g., event emitter died).
-    // Tuning overrides are test-oriented; production defaults remain unchanged.
-    const MESSAGE_TIMEOUT_MS = tuning.messageTimeoutMs ?? 30 * 60 * 1000; // 30m default
+    // The WhatsApp inbox can legitimately stay quiet for long stretches, so the
+    // absence of inbound messages is not reliable evidence that the socket died.
+    // Keep the watchdog opt-in via tuning for tests and targeted diagnostics.
+    const MESSAGE_TIMEOUT_MS = tuning.messageTimeoutMs ?? Number.POSITIVE_INFINITY;
     const WATCHDOG_CHECK_MS = tuning.watchdogCheckMs ?? 60 * 1000; // 1m default
 
     const backgroundTasks = new Set<Promise<unknown>>();
@@ -286,11 +287,7 @@ export async function monitorWebChannel(
             : {}),
         };
 
-        if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
-          heartbeatLogger.warn(logData, "⚠️ web gateway heartbeat - no messages in 30+ minutes");
-        } else {
-          heartbeatLogger.info(logData, "web gateway heartbeat");
-        }
+        heartbeatLogger.info(logData, "web gateway heartbeat");
       }, heartbeatSeconds * 1000);
 
       watchdogTimer = setInterval(() => {
