@@ -3,11 +3,12 @@ import { parseModelRef } from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginProviders } from "./providers.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
-  ProviderPluginWizardModelPicker,
   ProviderPluginWizardOnboarding,
 } from "./types.js";
 
@@ -61,25 +62,6 @@ function resolveMethodById(
   return provider.auth.find((method) => method.id.trim().toLowerCase() === normalizedMethodId);
 }
 
-function buildOnboardingOptionForMethod(params: {
-  provider: ProviderPlugin;
-  wizard: ProviderPluginWizardOnboarding;
-  method: ProviderAuthMethod;
-  value: string;
-}): ProviderWizardOption {
-  const normalizedGroupId = params.wizard.groupId?.trim() || params.provider.id;
-  return {
-    value: normalizeChoiceId(params.value),
-    label:
-      params.wizard.choiceLabel?.trim() ||
-      (params.provider.auth.length === 1 ? params.provider.label : params.method.label),
-    hint: params.wizard.choiceHint?.trim() || params.method.hint,
-    groupId: normalizedGroupId,
-    groupLabel: params.wizard.groupLabel?.trim() || params.provider.label,
-    groupHint: params.wizard.groupHint?.trim(),
-  };
-}
-
 export function buildProviderPluginMethodChoice(providerId: string, methodId: string): string {
   return `${PROVIDER_PLUGIN_CHOICE_PREFIX}${providerId.trim()}:${methodId.trim()}`;
 }
@@ -89,54 +71,51 @@ export function resolveProviderWizardOptions(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderWizardOption[] {
-  const providers = resolvePluginProviders(params);
+  // Fast path: read wizard metadata from manifests (JSON only, no jiti compilation).
+  // Plugins that want to appear in the auth choice must declare wizard.onboarding in their
+  // openclaw.plugin.json manifest. This avoids blocking synchronous TypeScript compilation
+  // via jiti on every onboarding auth choice prompt render.
+  const env = params.env ?? process.env;
+  const cfg = params.config ?? {};
+  const normalized = normalizePluginsConfig(cfg.plugins);
+  const manifestRegistry = loadPluginManifestRegistry({
+    config: cfg,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
   const options: ProviderWizardOption[] = [];
-
-  for (const provider of providers) {
-    const wizard = provider.wizard?.onboarding;
-    if (!wizard) {
+  for (const record of manifestRegistry.plugins) {
+    const onboarding = record.wizard?.onboarding;
+    if (!onboarding) {
       continue;
     }
-    const explicitMethod = resolveMethodById(provider, wizard.methodId);
-    if (explicitMethod) {
-      options.push(
-        buildOnboardingOptionForMethod({
-          provider,
-          wizard,
-          method: explicitMethod,
-          value: resolveWizardOnboardingChoiceId(provider, wizard),
-        }),
-      );
+    const enableState = resolveEffectiveEnableState({
+      id: record.id,
+      origin: record.origin,
+      config: normalized,
+      rootConfig: cfg,
+    });
+    if (!enableState.enabled) {
       continue;
     }
-
-    for (const method of provider.auth) {
-      options.push(
-        buildOnboardingOptionForMethod({
-          provider,
-          wizard,
-          method,
-          value: buildProviderPluginMethodChoice(provider.id, method.id),
-        }),
-      );
-    }
+    const choiceId = onboarding.choiceId?.trim();
+    const methodId = onboarding.methodId?.trim();
+    const value = choiceId
+      ? normalizeChoiceId(choiceId)
+      : methodId
+        ? buildProviderPluginMethodChoice(record.id, methodId)
+        : record.id;
+    const groupId = onboarding.groupId?.trim() || record.id;
+    options.push({
+      value,
+      label: onboarding.choiceLabel?.trim() || record.name || record.id,
+      hint: onboarding.choiceHint?.trim(),
+      groupId,
+      groupLabel: onboarding.groupLabel?.trim() || record.name || record.id,
+      groupHint: onboarding.groupHint?.trim(),
+    });
   }
-
   return options;
-}
-
-function resolveModelPickerChoiceValue(
-  provider: ProviderPlugin,
-  modelPicker: ProviderPluginWizardModelPicker,
-): string {
-  const explicitMethodId = modelPicker.methodId?.trim();
-  if (explicitMethodId) {
-    return buildProviderPluginMethodChoice(provider.id, explicitMethodId);
-  }
-  if (provider.auth.length === 1) {
-    return provider.id;
-  }
-  return buildProviderPluginMethodChoice(provider.id, provider.auth[0]?.id ?? "default");
 }
 
 export function resolveProviderModelPickerEntries(params: {
@@ -144,21 +123,38 @@ export function resolveProviderModelPickerEntries(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderModelPickerEntry[] {
-  const providers = resolvePluginProviders(params);
+  // Fast path: read model-picker metadata from manifests (JSON only, no jiti compilation).
+  const env = params.env ?? process.env;
+  const cfg = params.config ?? {};
+  const normalized = normalizePluginsConfig(cfg.plugins);
+  const manifestRegistry = loadPluginManifestRegistry({
+    config: cfg,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
   const entries: ProviderModelPickerEntry[] = [];
-
-  for (const provider of providers) {
-    const modelPicker = provider.wizard?.modelPicker;
+  for (const record of manifestRegistry.plugins) {
+    const modelPicker = record.wizard?.modelPicker;
     if (!modelPicker) {
       continue;
     }
+    const enableState = resolveEffectiveEnableState({
+      id: record.id,
+      origin: record.origin,
+      config: normalized,
+      rootConfig: cfg,
+    });
+    if (!enableState.enabled) {
+      continue;
+    }
+    const methodId = modelPicker.methodId?.trim();
+    const value = methodId ? buildProviderPluginMethodChoice(record.id, methodId) : record.id;
     entries.push({
-      value: resolveModelPickerChoiceValue(provider, modelPicker),
-      label: modelPicker.label?.trim() || `${provider.label} (custom)`,
+      value,
+      label: modelPicker.label?.trim() || `${record.name || record.id} (custom)`,
       hint: modelPicker.hint?.trim(),
     });
   }
-
   return entries;
 }
 

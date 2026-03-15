@@ -1,6 +1,22 @@
 {
   "id": "ollama",
   "providers": ["ollama"],
+  "wizard": {
+    "onboarding": {
+      "choiceId": "ollama",
+      "choiceLabel": "Ollama",
+      "choiceHint": "Cloud and local open models",
+      "groupId": "ollama",
+      "groupLabel": "Ollama",
+      "groupHint": "Cloud and local open models",
+      "methodId": "local"
+    },
+    "modelPicker": {
+      "label": "Ollama (custom)",
+      "hint": "Detect models from a local or remote Ollama instance",
+      "methodId": "local"
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

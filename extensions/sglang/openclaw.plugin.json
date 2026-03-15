@@ -1,6 +1,22 @@
 {
   "id": "sglang",
   "providers": ["sglang"],
+  "wizard": {
+    "onboarding": {
+      "choiceId": "sglang",
+      "choiceLabel": "SGLang",
+      "choiceHint": "Fast self-hosted OpenAI-compatible server",
+      "groupId": "sglang",
+      "groupLabel": "SGLang",
+      "groupHint": "Fast self-hosted server",
+      "methodId": "custom"
+    },
+    "modelPicker": {
+      "label": "SGLang (custom)",
+      "hint": "Enter SGLang URL + API key + model",
+      "methodId": "custom"
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
