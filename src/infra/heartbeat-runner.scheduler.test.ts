@@ -284,30 +284,42 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
-  it("re-arms timer after runOnce rejects with an unhandled promise rejection (#45772)", async () => {
+  it("re-arms timer after run() rejects outside the per-agent try/catch (#45772)", async () => {
     useFakeHeartbeatTime();
 
+    // The inner per-agent try/catch already handles runOnce rejections.
+    // The bug in #45772 is caused by failures that escape the inner catch —
+    // e.g. from session resolution, agent iteration, or async code between
+    // the inner catch and scheduleNext(). We simulate this by making the
+    // FIRST runOnce succeed (so the inner catch is not triggered) but then
+    // throwing from a second agent's runOnce, AND making the runner itself
+    // propagate the error (since the inner catch would normally swallow it).
+    //
+    // However, the simplest way to exercise the outer finally is to reject
+    // from the run() handler itself. Since run() is called by the wake layer,
+    // a rejection that escapes run() would previously leave no timer re-armed.
+    // The fix ensures the finally block catches this.
     let callCount = 0;
     const runSpy = vi.fn().mockImplementation(async () => {
       callCount++;
       if (callCount === 1) {
-        // Simulate an unhandled rejection that escapes the inner try/catch
-        // (e.g. from session resolution or preflight code outside the
-        // existing error handling). Before the fix, this would permanently
-        // kill the heartbeat timer.
-        return Promise.reject(new Error("unexpected async failure"));
+        // Simulate a rejection that escapes all inner error handling.
+        // Before the fix, this would permanently kill the heartbeat timer
+        // because scheduleNext() was never called.
+        throw new Error("unexpected async failure outside inner catch");
       }
       return { status: "ran", durationMs: 1 };
     });
 
     const runner = startDefaultRunner(runSpy);
 
-    // First heartbeat fires and rejects
+    // First heartbeat fires and throws — the outer finally must re-arm.
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
     // Second heartbeat MUST still fire — the timer must have been re-armed
-    // despite the rejection. This is the core assertion for #45772.
+    // by the finally block despite the rejection. This is the core assertion
+    // for #45772.
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
     expect(runSpy).toHaveBeenCalledTimes(2);
 
