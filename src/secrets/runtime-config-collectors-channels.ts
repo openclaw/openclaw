@@ -839,6 +839,17 @@ function collectFeishuAssignments(params: {
       feishu.verificationToken = value;
     },
   });
+  if (isRecord(feishu.tts)) {
+    collectTtsApiKeyAssignments({
+      tts: feishu.tts,
+      pathPrefix: "channels.feishu.tts",
+      defaults: params.defaults,
+      context: params.context,
+      active: isBaseFieldActiveForChannelSurface(surface, "tts") && isEnabledFlag(feishu),
+      inactiveReason:
+        "no enabled Feishu surface inherits this top-level TTS config or Feishu is disabled.",
+    });
+  }
   if (!surface.hasExplicitAccounts) {
     return;
   }
@@ -878,6 +889,16 @@ function collectFeishuAssignments(params: {
         account.verificationToken = value;
       },
     });
+    if (hasOwnProperty(account, "tts") && isRecord(account.tts)) {
+      collectTtsApiKeyAssignments({
+        tts: account.tts,
+        pathPrefix: `channels.feishu.accounts.${accountId}.tts`,
+        defaults: params.defaults,
+        context: params.context,
+        active: enabled && isEnabledFlag(account),
+        inactiveReason: "Feishu account is disabled.",
+      });
+    }
   }
 }
 
