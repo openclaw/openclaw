@@ -1,6 +1,11 @@
 import { getChannelDock } from "../../channels/dock.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId as normalizePluginChannelId,
+} from "../../channels/plugins/index.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeGroupActivation } from "../group-activation.js";
@@ -28,6 +33,25 @@ function extractGroupId(raw: string | undefined | null): string | undefined {
   return trimmed;
 }
 
+function resolveDockChannelId(raw?: string | null): ChannelId | null {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  try {
+    if (getChannelDock(normalized as ChannelId)) {
+      return normalized as ChannelId;
+    }
+  } catch {
+    // Plugin registry may not be initialized in shared/test contexts.
+  }
+  try {
+    return normalizePluginChannelId(raw) ?? (normalized as ChannelId);
+  } catch {
+    return normalized as ChannelId;
+  }
+}
+
 export function resolveGroupRequireMention(params: {
   cfg: OpenClawConfig;
   ctx: TemplateContext;
@@ -35,24 +59,34 @@ export function resolveGroupRequireMention(params: {
 }): boolean {
   const { cfg, ctx, groupResolution } = params;
   const rawChannel = groupResolution?.channel ?? ctx.Provider?.trim();
-  const channel = normalizeChannelId(rawChannel);
+  const channel = resolveDockChannelId(rawChannel);
   if (!channel) {
     return true;
   }
   const groupId = groupResolution?.id ?? extractGroupId(ctx.From);
   const groupChannel = ctx.GroupChannel?.trim() ?? ctx.GroupSubject?.trim();
   const groupSpace = ctx.GroupSpace?.trim();
-  const requireMention = getChannelDock(channel)?.groups?.resolveRequireMention?.({
-    cfg,
-    groupId,
-    groupChannel,
-    groupSpace,
-    accountId: ctx.AccountId,
-  });
+  let requireMention: boolean | undefined;
+  try {
+    requireMention = getChannelDock(channel)?.groups?.resolveRequireMention?.({
+      cfg,
+      groupId,
+      groupChannel,
+      groupSpace,
+      accountId: ctx.AccountId,
+    });
+  } catch {
+    requireMention = undefined;
+  }
   if (typeof requireMention === "boolean") {
     return requireMention;
   }
-  return true;
+  return resolveChannelGroupRequireMention({
+    cfg,
+    channel,
+    groupId,
+    accountId: ctx.AccountId,
+  });
 }
 
 export function defaultGroupActivation(requireMention: boolean): "always" | "mention" {
@@ -70,7 +104,7 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   if (isInternalMessageChannel(providerKey)) {
     return "WebChat";
   }
-  const providerId = normalizeChannelId(rawProvider?.trim());
+  const providerId = resolveDockChannelId(rawProvider?.trim());
   if (providerId) {
     return getChannelPlugin(providerId)?.meta.label ?? providerId;
   }
@@ -87,7 +121,6 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
 export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): string {
   const subject = params.sessionCtx.GroupSubject?.trim();
   const members = params.sessionCtx.GroupMembers?.trim();
-  const providerId = normalizeChannelId(params.sessionCtx.Provider?.trim());
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
 
   const lines: string[] = [];
@@ -102,11 +135,6 @@ export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): 
   lines.push(
     "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group — just reply normally.",
   );
-  if (providerId === "whatsapp") {
-    lines.push(
-      "When tagging in WhatsApp, use phone number format @<digits> from Participants data (e.g. @919953301972), NOT @Name or @nickname.",
-    );
-  }
   return lines.join(" ");
 }
 
@@ -120,7 +148,7 @@ export function buildGroupIntro(params: {
   const activation =
     normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
   const rawProvider = params.sessionCtx.Provider?.trim();
-  const providerId = normalizeChannelId(rawProvider);
+  const providerId = resolveDockChannelId(rawProvider);
   const activationLine =
     activation === "always"
       ? "Activation: always-on (you receive every group message)."

@@ -2,7 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/llm-task";
+import {
+  formatThinkingLevels,
+  formatXHighModelHint,
+  normalizeThinkLevel,
+  resolvePreferredOpenClawTmpDir,
+  supportsXHighThinking,
+} from "openclaw/plugin-sdk/llm-task";
 // NOTE: This extension is intended to be bundled with OpenClaw.
 // When running from source (tests/dev), OpenClaw internals live under src/.
 // When running from a built install, internals live under dist/ (no src/ tree).
@@ -86,6 +92,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         Type.String({ description: "Provider override (e.g. openai-codex, anthropic)." }),
       ),
       model: Type.Optional(Type.String({ description: "Model id override." })),
+      thinking: Type.Optional(Type.String({ description: "Thinking level override." })),
       authProfileId: Type.Optional(Type.String({ description: "Auth profile override." })),
       temperature: Type.Optional(Type.Number({ description: "Best-effort temperature override." })),
       maxTokens: Type.Optional(Type.Number({ description: "Best-effort maxTokens override." })),
@@ -142,6 +149,18 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         throw new Error(
           `Model not allowed by llm-task plugin config: ${modelKey}. Allowed models: ${allowed.join(", ")}`,
         );
+      }
+
+      const thinkingRaw =
+        typeof params.thinking === "string" && params.thinking.trim() ? params.thinking : undefined;
+      const thinkLevel = thinkingRaw ? normalizeThinkLevel(thinkingRaw) : undefined;
+      if (thinkingRaw && !thinkLevel) {
+        throw new Error(
+          `Invalid thinking level "${thinkingRaw}". Use one of: ${formatThinkingLevels(provider, model)}.`,
+        );
+      }
+      if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+        throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
       }
 
       const timeoutMs =
@@ -204,6 +223,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           model,
           authProfileId,
           authProfileIdSource: authProfileId ? "user" : "auto",
+          thinkLevel,
           streamParams,
           disableTools: true,
         });

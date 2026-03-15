@@ -38,7 +38,6 @@ export type MockSock = {
   sendMessage: AnyMockFn;
   readMessages: AnyMockFn;
   updateMediaMessage: AnyMockFn;
-  groupMetadata: AnyMockFn;
   logger: Record<string, unknown>;
   signalRepository: {
     lidMapping: {
@@ -61,7 +60,6 @@ function createMockSock(): MockSock {
     sendMessage: createResolvedMock(),
     readMessages: createResolvedMock(),
     updateMediaMessage: vi.fn(),
-    groupMetadata: vi.fn().mockResolvedValue({ subject: undefined, participants: [] }),
     logger: {},
     signalRepository: {
       lidMapping: {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import { resolveStateDir } from "../config/paths.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import {
@@ -77,6 +78,53 @@ describe("telegram thread bindings", () => {
     ).rejects.toMatchObject({
       code: "BINDING_CAPABILITY_UNSUPPORTED",
     });
+  });
+
+  it("shares binding state across distinct module instances", async () => {
+    const bindingsA = await importFreshModule<typeof import("./thread-bindings.js")>(
+      import.meta.url,
+      "./thread-bindings.js?scope=shared-a",
+    );
+    const bindingsB = await importFreshModule<typeof import("./thread-bindings.js")>(
+      import.meta.url,
+      "./thread-bindings.js?scope=shared-b",
+    );
+
+    bindingsA.__testing.resetTelegramThreadBindingsForTests();
+
+    try {
+      const managerA = bindingsA.createTelegramThreadBindingManager({
+        accountId: "shared-runtime",
+        persist: false,
+        enableSweeper: false,
+      });
+      const managerB = bindingsB.createTelegramThreadBindingManager({
+        accountId: "shared-runtime",
+        persist: false,
+        enableSweeper: false,
+      });
+
+      expect(managerB).toBe(managerA);
+
+      await getSessionBindingService().bind({
+        targetSessionKey: "agent:main:subagent:child-shared",
+        targetKind: "subagent",
+        conversation: {
+          channel: "telegram",
+          accountId: "shared-runtime",
+          conversationId: "-100200300:topic:44",
+        },
+        placement: "current",
+      });
+
+      expect(
+        bindingsB
+          .getTelegramThreadBindingManager("shared-runtime")
+          ?.getByConversationId("-100200300:topic:44")?.targetSessionKey,
+      ).toBe("agent:main:subagent:child-shared");
+    } finally {
+      bindingsA.__testing.resetTelegramThreadBindingsForTests();
+    }
   });
 
   it("updates lifecycle windows by session key", async () => {

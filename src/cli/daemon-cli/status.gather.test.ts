@@ -18,7 +18,12 @@ const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null)
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
 const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
-const serviceReadCommand = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({
+const serviceReadCommand = vi.fn<
+  (env?: NodeJS.ProcessEnv) => Promise<{
+    programArguments: string[];
+    environment?: Record<string, string>;
+  }>
+>(async (_env?: NodeJS.ProcessEnv) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
   environment: {
     OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
@@ -190,6 +195,37 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc?.url).toBe("wss://override.example:18790");
   });
 
+  it("reuses command environment when reading runtime status", async () => {
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_GATEWAY_PORT: "19001",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+      } as Record<string, string>,
+    });
+    serviceReadRuntime.mockImplementationOnce(async (env?: NodeJS.ProcessEnv) => ({
+      status: env?.OPENCLAW_GATEWAY_PORT === "19001" ? "running" : "unknown",
+      detail: env?.OPENCLAW_GATEWAY_PORT ?? "missing-port",
+    }));
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(serviceReadRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        OPENCLAW_GATEWAY_PORT: "19001",
+      }),
+    );
+    expect(status.service.runtime).toMatchObject({
+      status: "running",
+      detail: "19001",
+    });
+  });
+
   it("resolves daemon gateway auth password SecretRef values before probing", async () => {
     daemonLoadedConfig = {
       gateway: {
@@ -205,7 +241,7 @@ describe("gatherDaemonStatus", () => {
         },
       },
     };
-    process.env.DAEMON_GATEWAY_PASSWORD = "daemon-secretref-password";
+    process.env.DAEMON_GATEWAY_PASSWORD = "daemon-secretref-password"; // pragma: allowlist secret
 
     await gatherDaemonStatus({
       rpc: {},
@@ -215,7 +251,7 @@ describe("gatherDaemonStatus", () => {
 
     expect(callGatewayStatusProbe).toHaveBeenCalledWith(
       expect.objectContaining({
-        password: "daemon-secretref-password",
+        password: "daemon-secretref-password", // pragma: allowlist secret
       }),
     );
   });
@@ -279,6 +315,38 @@ describe("gatherDaemonStatus", () => {
       expect.objectContaining({
         token: "daemon-token",
         password: undefined,
+      }),
+    );
+  });
+
+  it("keeps remote probe auth strict when remote token is missing", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          password: "remote-password", // pragma: allowlist secret
+        },
+        auth: {
+          mode: "token",
+          token: "local-token",
+          password: "local-password", // pragma: allowlist secret
+        },
+      },
+    };
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-password"; // pragma: allowlist secret
+
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: undefined,
+        password: "env-password", // pragma: allowlist secret
       }),
     );
   });

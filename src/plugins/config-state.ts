@@ -25,8 +25,11 @@ export type NormalizedPluginsConfig = {
 
 export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "device-pair",
+  "ollama",
   "phone-control",
+  "sglang",
   "talk-voice",
+  "vllm",
 ]);
 
 const normalizeList = (value: unknown): string[] => {
@@ -197,18 +200,22 @@ export function resolveEnableState(
   if (config.deny.includes(id)) {
     return { enabled: false, reason: "blocked by denylist" };
   }
-  if (config.allow.length > 0 && !config.allow.includes(id)) {
-    return { enabled: false, reason: "not in allowlist" };
+  const entry = config.entries[id];
+  if (entry?.enabled === false) {
+    return { enabled: false, reason: "disabled in config" };
+  }
+  const explicitlyAllowed = config.allow.includes(id);
+  if (origin === "workspace" && !explicitlyAllowed && entry?.enabled !== true) {
+    return { enabled: false, reason: "workspace plugin (disabled by default)" };
   }
   if (config.slots.memory === id) {
     return { enabled: true };
   }
-  const entry = config.entries[id];
+  if (config.allow.length > 0 && !explicitlyAllowed) {
+    return { enabled: false, reason: "not in allowlist" };
+  }
   if (entry?.enabled === true) {
     return { enabled: true };
-  }
-  if (entry?.enabled === false) {
-    return { enabled: false, reason: "disabled in config" };
   }
   if (origin === "bundled" && BUNDLED_ENABLED_BY_DEFAULT.has(id)) {
     return { enabled: true };

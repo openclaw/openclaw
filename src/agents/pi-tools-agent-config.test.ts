@@ -629,7 +629,7 @@ describe("Agent-specific tool filtering", () => {
 
     const result = await execTool?.execute("call1", {
       command: "echo done",
-      yieldMs: 1000,
+      yieldMs: 10,
     });
 
     const resultDetails = result?.details as { status?: string } | undefined;

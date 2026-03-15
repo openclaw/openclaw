@@ -535,12 +535,6 @@ describe("agents.files.list", () => {
 });
 
 describe("agents.files.get/set symlink safety", () => {
-  const normalizePath = (value: string) => value.replaceAll("\\", "/");
-  const matchesPath = (actual: string, expected: string) => {
-    const normalized = normalizePath(actual);
-    return normalized === expected || normalized.endsWith(expected);
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadConfigReturn = {};
@@ -551,17 +545,17 @@ describe("agents.files.get/set symlink safety", () => {
     const workspace = "/workspace/test-agent";
     const candidate = path.resolve(workspace, "AGENTS.md");
     mocks.fsRealpath.mockImplementation(async (p: string) => {
-      if (matchesPath(p, workspace)) {
+      if (p === workspace) {
         return workspace;
       }
-      if (matchesPath(p, candidate)) {
+      if (p === candidate) {
         return "/outside/secret.txt";
       }
       return p;
     });
     mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
-      const p = normalizePath(typeof args[0] === "string" ? args[0] : "");
-      if (matchesPath(p, candidate)) {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === candidate) {
         return makeSymlinkStat();
       }
       throw createEnoentError();
@@ -589,27 +583,27 @@ describe("agents.files.get/set symlink safety", () => {
     const targetStat = makeFileStat({ size: 7, mtimeMs: 1700, dev: 9, ino: 42 });
 
     mocks.fsRealpath.mockImplementation(async (p: string) => {
-      if (matchesPath(p, workspace)) {
+      if (p === workspace) {
         return workspace;
       }
-      if (matchesPath(p, candidate)) {
+      if (p === candidate) {
         return target;
       }
       return p;
     });
     mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
-      const p = normalizePath(typeof args[0] === "string" ? args[0] : "");
-      if (matchesPath(p, candidate)) {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === candidate) {
         return makeSymlinkStat({ dev: 9, ino: 41 });
       }
-      if (matchesPath(p, target)) {
+      if (p === target) {
         return targetStat;
       }
       throw createEnoentError();
     });
     mocks.fsStat.mockImplementation(async (...args: unknown[]) => {
-      const p = normalizePath(typeof args[0] === "string" ? args[0] : "");
-      if (matchesPath(p, target)) {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === target) {
         return targetStat;
       }
       throw createEnoentError();

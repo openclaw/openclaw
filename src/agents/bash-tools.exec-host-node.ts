@@ -17,13 +17,12 @@ import {
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
+import * as execHostShared from "./bash-tools.exec-host-shared.js";
 import {
-  createDefaultExecApprovalRequestContext,
-  resolveBaseExecApprovalDecision,
-  resolveApprovalDecisionOrUndefined,
-  resolveExecHostApprovalContext,
-} from "./bash-tools.exec-host-shared.js";
-import { createApprovalSlug, emitExecSystemEvent } from "./bash-tools.exec-runtime.js";
+  DEFAULT_NOTIFY_TAIL_CHARS,
+  createApprovalSlug,
+  normalizeNotifyOutput,
+} from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
@@ -54,7 +53,7 @@ export type ExecuteNodeHostCommandParams = {
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
-  const { hostSecurity, hostAsk, askFallback } = resolveExecHostApprovalContext({
+  const { hostSecurity, hostAsk, askFallback } = execHostShared.resolveExecHostApprovalContext({
     agentId: params.agentId,
     security: params.security,
     ask: params.ask,
@@ -113,7 +112,7 @@ export async function executeNodeHostCommand(
     throw new Error("invalid system.run.prepare response");
   }
   const runArgv = prepared.plan.argv;
-  const runRawCommand = prepared.plan.rawCommand ?? prepared.cmdText;
+  const runRawCommand = prepared.plan.commandText;
   const runCwd = prepared.plan.cwd ?? params.workdir;
   const runAgentId = prepared.plan.agentId ?? params.agentId;
   const runSessionKey = prepared.plan.sessionKey ?? params.sessionKey;
@@ -187,6 +186,7 @@ export async function executeNodeHostCommand(
     approvedByAsk: boolean,
     approvalDecision: "allow-once" | "allow-always" | null,
     runId?: string,
+    suppressNotifyOnExit?: boolean,
   ) =>
     ({
       nodeId,
@@ -202,70 +202,83 @@ export async function executeNodeHostCommand(
         approved: approvedByAsk,
         approvalDecision: approvalDecision ?? undefined,
         runId: runId ?? undefined,
+        suppressNotifyOnExit: suppressNotifyOnExit === true ? true : undefined,
       },
       idempotencyKey: crypto.randomUUID(),
     }) satisfies Record<string, unknown>;
 
   if (requiresAsk) {
-    const {
-      approvalId,
-      approvalSlug,
-      contextKey,
-      noticeSeconds,
-      warningText,
-      expiresAtMs: defaultExpiresAtMs,
-      preResolvedDecision: defaultPreResolvedDecision,
-    } = createDefaultExecApprovalRequestContext({
+    const requestArgs = execHostShared.buildDefaultExecApprovalRequestArgs({
       warnings: params.warnings,
       approvalRunningNoticeMs: params.approvalRunningNoticeMs,
       createApprovalSlug,
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceAccountId: params.turnSourceAccountId,
     });
-    let expiresAtMs = defaultExpiresAtMs;
-    let preResolvedDecision = defaultPreResolvedDecision;
-
-    // Register first so the returned approval ID is actionable immediately.
-    const registration = await registerExecApprovalRequestForHostOrThrow({
+    const registerNodeApproval = async (approvalId: string) =>
+      await registerExecApprovalRequestForHostOrThrow({
+        approvalId,
+        systemRunPlan: prepared.plan,
+        env: nodeEnv,
+        workdir: runCwd,
+        host: "node",
+        nodeId,
+        security: hostSecurity,
+        ask: hostAsk,
+        ...buildExecApprovalRequesterContext({
+          agentId: runAgentId,
+          sessionKey: runSessionKey,
+        }),
+        ...buildExecApprovalTurnSourceContext(params),
+      });
+    const {
       approvalId,
-      command: prepared.cmdText,
-      commandArgv: prepared.plan.argv,
-      systemRunPlan: prepared.plan,
-      env: nodeEnv,
-      workdir: runCwd,
-      host: "node",
-      nodeId,
-      security: hostSecurity,
-      ask: hostAsk,
-      ...buildExecApprovalRequesterContext({
-        agentId: runAgentId,
-        sessionKey: runSessionKey,
-      }),
-      ...buildExecApprovalTurnSourceContext(params),
+      approvalSlug,
+      warningText,
+      expiresAtMs,
+      preResolvedDecision,
+      initiatingSurface,
+      sentApproverDms,
+      unavailableReason,
+    } = await execHostShared.createAndRegisterDefaultExecApprovalRequest({
+      ...requestArgs,
+      register: registerNodeApproval,
     });
-    expiresAtMs = registration.expiresAtMs;
-    preResolvedDecision = registration.finalDecision;
+    const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
+      approvalId,
+      sessionKey: params.notifySessionKey,
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceTo: params.turnSourceTo,
+      turnSourceAccountId: params.turnSourceAccountId,
+      turnSourceThreadId: params.turnSourceThreadId,
+    });
 
     void (async () => {
-      const decision = await resolveApprovalDecisionOrUndefined({
+      const decision = await execHostShared.resolveApprovalDecisionOrUndefined({
         approvalId,
         preResolvedDecision,
         onFailure: () =>
-          emitExecSystemEvent(
+          void execHostShared.sendExecApprovalFollowupResult(
+            followupTarget,
             `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
-            { sessionKey: params.notifySessionKey, contextKey },
           ),
       });
       if (decision === undefined) {
         return;
       }
 
-      const baseDecision = resolveBaseExecApprovalDecision({
+      const {
+        baseDecision,
+        approvedByAsk: initialApprovedByAsk,
+        deniedReason: initialDeniedReason,
+      } = execHostShared.createExecApprovalDecisionState({
         decision,
         askFallback,
         obfuscationDetected: obfuscation.detected,
       });
-      let approvedByAsk = baseDecision.approvedByAsk;
+      let approvedByAsk = initialApprovedByAsk;
       let approvalDecision: "allow-once" | "allow-always" | null = null;
-      let deniedReason = baseDecision.deniedReason;
+      let deniedReason = initialDeniedReason;
 
       if (baseDecision.timedOut && askFallback === "full" && approvedByAsk) {
         approvalDecision = "allow-once";
@@ -278,67 +291,65 @@ export async function executeNodeHostCommand(
       }
 
       if (deniedReason) {
-        emitExecSystemEvent(
+        await execHostShared.sendExecApprovalFollowupResult(
+          followupTarget,
           `Exec denied (node=${nodeId} id=${approvalId}, ${deniedReason}): ${params.command}`,
-          {
-            sessionKey: params.notifySessionKey,
-            contextKey,
-          },
         );
         return;
       }
 
-      let runningTimer: NodeJS.Timeout | null = null;
-      if (params.approvalRunningNoticeMs > 0) {
-        runningTimer = setTimeout(() => {
-          emitExecSystemEvent(
-            `Exec running (node=${nodeId} id=${approvalId}, >${noticeSeconds}s): ${params.command}`,
-            { sessionKey: params.notifySessionKey, contextKey },
-          );
-        }, params.approvalRunningNoticeMs);
-      }
-
       try {
-        await callGatewayTool(
+        const raw = await callGatewayTool<{
+          payload?: {
+            stdout?: string;
+            stderr?: string;
+            error?: string | null;
+            exitCode?: number | null;
+            timedOut?: boolean;
+          };
+        }>(
           "node.invoke",
           { timeoutMs: invokeTimeoutMs },
-          buildInvokeParams(approvedByAsk, approvalDecision, approvalId),
+          buildInvokeParams(approvedByAsk, approvalDecision, approvalId, true),
         );
+        const payload =
+          raw?.payload && typeof raw.payload === "object"
+            ? (raw.payload as {
+                stdout?: string;
+                stderr?: string;
+                error?: string | null;
+                exitCode?: number | null;
+                timedOut?: boolean;
+              })
+            : {};
+        const combined = [payload.stdout, payload.stderr, payload.error].filter(Boolean).join("\n");
+        const output = normalizeNotifyOutput(combined.slice(-DEFAULT_NOTIFY_TAIL_CHARS));
+        const exitLabel = payload.timedOut ? "timeout" : `code ${payload.exitCode ?? "?"}`;
+        const summary = output
+          ? `Exec finished (node=${nodeId} id=${approvalId}, ${exitLabel})\n${output}`
+          : `Exec finished (node=${nodeId} id=${approvalId}, ${exitLabel})`;
+        await execHostShared.sendExecApprovalFollowupResult(followupTarget, summary);
       } catch {
-        emitExecSystemEvent(
+        await execHostShared.sendExecApprovalFollowupResult(
+          followupTarget,
           `Exec denied (node=${nodeId} id=${approvalId}, invoke-failed): ${params.command}`,
-          {
-            sessionKey: params.notifySessionKey,
-            contextKey,
-          },
         );
-      } finally {
-        if (runningTimer) {
-          clearTimeout(runningTimer);
-        }
       }
     })();
 
-    return {
-      content: [
-        {
-          type: "text",
-          text:
-            `${warningText}Approval required (id ${approvalSlug}). ` +
-            "Approve to run; updates will arrive after completion.",
-        },
-      ],
-      details: {
-        status: "approval-pending",
-        approvalId,
-        approvalSlug,
-        expiresAtMs,
-        host: "node",
-        command: params.command,
-        cwd: params.workdir,
-        nodeId,
-      },
-    };
+    return execHostShared.buildExecApprovalPendingToolResult({
+      host: "node",
+      command: params.command,
+      cwd: params.workdir,
+      warningText,
+      approvalId,
+      approvalSlug,
+      expiresAtMs,
+      initiatingSurface,
+      sentApproverDms,
+      unavailableReason,
+      nodeId,
+    });
   }
 
   const startedAt = Date.now();

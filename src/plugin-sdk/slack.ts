@@ -8,6 +8,7 @@ export {
   resolveSlackAccount,
   resolveSlackReplyToMode,
 } from "../slack/accounts.js";
+export { isSlackInteractiveRepliesEnabled } from "../slack/interactive-replies.js";
 export { inspectSlackAccount } from "../slack/account-inspect.js";
 export {
   projectCredentialSnapshotFields,
@@ -24,6 +25,7 @@ export {
 } from "../channels/plugins/normalize/slack.js";
 export { extractSlackToolSend, listSlackMessageActions } from "../slack/message-actions.js";
 export { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
+export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 
 export {
   resolveDefaultGroupPolicy,

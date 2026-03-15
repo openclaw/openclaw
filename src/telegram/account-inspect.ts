@@ -1,9 +1,14 @@
-import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
-import { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
+import {
+  coerceSecretRef,
+  hasConfiguredSecretInput,
+  normalizeSecretInputString,
+} from "../config/types.secrets.js";
 import type { TelegramAccountConfig } from "../config/types.telegram.js";
+import { tryReadSecretFileSync } from "../infra/secret-file.js";
 import { resolveAccountWithDefaultFallback } from "../plugin-sdk/account-resolution.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import {
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
@@ -32,35 +37,68 @@ function inspectTokenFile(pathValue: unknown): {
   if (!tokenFile) {
     return null;
   }
-  if (!fs.existsSync(tokenFile)) {
-    return {
-      token: "",
-      tokenSource: "tokenFile",
-      tokenStatus: "configured_unavailable",
-    };
-  }
-  try {
-    const token = fs.readFileSync(tokenFile, "utf-8").trim();
-    return {
-      token,
-      tokenSource: "tokenFile",
-      tokenStatus: token ? "available" : "configured_unavailable",
-    };
-  } catch {
-    return {
-      token: "",
-      tokenSource: "tokenFile",
-      tokenStatus: "configured_unavailable",
-    };
-  }
+  const token = tryReadSecretFileSync(tokenFile, "Telegram bot token", {
+    rejectSymlink: true,
+  });
+  return {
+    token: token ?? "",
+    tokenSource: "tokenFile",
+    tokenStatus: token ? "available" : "configured_unavailable",
+  };
 }
 
-function inspectTokenValue(value: unknown): {
+function canResolveEnvSecretRefInReadOnlyPath(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  id: string;
+}): boolean {
+  const providerConfig = params.cfg.secrets?.providers?.[params.provider];
+  if (!providerConfig) {
+    return params.provider === resolveDefaultSecretProviderAlias(params.cfg, "env");
+  }
+  if (providerConfig.source !== "env") {
+    return false;
+  }
+  const allowlist = providerConfig.allowlist;
+  return !allowlist || allowlist.includes(params.id);
+}
+
+function inspectTokenValue(params: { cfg: OpenClawConfig; value: unknown }): {
   token: string;
-  tokenSource: "config" | "none";
+  tokenSource: "config" | "env" | "none";
   tokenStatus: TelegramCredentialStatus;
 } | null {
-  const token = normalizeSecretInputString(value);
+  // Try to resolve env-based SecretRefs from process.env for read-only inspection
+  const ref = coerceSecretRef(params.value, params.cfg.secrets?.defaults);
+  if (ref?.source === "env") {
+    if (
+      !canResolveEnvSecretRefInReadOnlyPath({
+        cfg: params.cfg,
+        provider: ref.provider,
+        id: ref.id,
+      })
+    ) {
+      return {
+        token: "",
+        tokenSource: "env",
+        tokenStatus: "configured_unavailable",
+      };
+    }
+    const envValue = process.env[ref.id];
+    if (envValue && envValue.trim()) {
+      return {
+        token: envValue.trim(),
+        tokenSource: "env",
+        tokenStatus: "available",
+      };
+    }
+    return {
+      token: "",
+      tokenSource: "env",
+      tokenStatus: "configured_unavailable",
+    };
+  }
+  const token = normalizeSecretInputString(params.value);
   if (token) {
     return {
       token,
@@ -68,7 +106,7 @@ function inspectTokenValue(value: unknown): {
       tokenStatus: "available",
     };
   }
-  if (hasConfiguredSecretInput(value)) {
+  if (hasConfiguredSecretInput(params.value, params.cfg.secrets?.defaults)) {
     return {
       token: "",
       tokenSource: "config",
@@ -102,7 +140,7 @@ function inspectTelegramAccountPrimary(params: {
     };
   }
 
-  const accountToken = inspectTokenValue(accountConfig?.botToken);
+  const accountToken = inspectTokenValue({ cfg: params.cfg, value: accountConfig?.botToken });
   if (accountToken) {
     return {
       accountId,
@@ -130,7 +168,10 @@ function inspectTelegramAccountPrimary(params: {
     };
   }
 
-  const channelToken = inspectTokenValue(params.cfg.channels?.telegram?.botToken);
+  const channelToken = inspectTokenValue({
+    cfg: params.cfg,
+    value: params.cfg.channels?.telegram?.botToken,
+  });
   if (channelToken) {
     return {
       accountId,

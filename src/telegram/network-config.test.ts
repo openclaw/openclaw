@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import {
   resetTelegramNetworkConfigStateForTests,
   resolveTelegramAutoSelectFamilyDecision,
@@ -18,62 +19,57 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
     resetTelegramNetworkConfigStateForTests();
   });
 
-  it("prefers env enable over env disable", () => {
-    const decision = resolveTelegramAutoSelectFamilyDecision({
+  it.each([
+    {
+      name: "prefers env enable over env disable",
       env: {
         OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY: "1",
         OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY: "1",
       },
-      nodeMajor: 22,
-    });
-    expect(decision).toEqual({
-      value: true,
-      source: "env:OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY",
-    });
-  });
-
-  it("uses env disable when set", () => {
-    const decision = resolveTelegramAutoSelectFamilyDecision({
+      expected: {
+        value: true,
+        source: "env:OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY",
+      },
+    },
+    {
+      name: "uses env disable when set",
       env: { OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY: "1" },
-      nodeMajor: 22,
-    });
-    expect(decision).toEqual({
-      value: false,
-      source: "env:OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY",
-    });
-  });
-
-  it("prefers env enable over config", () => {
-    const decision = resolveTelegramAutoSelectFamilyDecision({
+      expected: {
+        value: false,
+        source: "env:OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY",
+      },
+    },
+    {
+      name: "prefers env enable over config",
       env: { OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY: "1" },
       network: { autoSelectFamily: false },
-      nodeMajor: 22,
-    });
-    expect(decision).toEqual({
-      value: true,
-      source: "env:OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY",
-    });
-  });
-
-  it("prefers env disable over config", () => {
-    const decision = resolveTelegramAutoSelectFamilyDecision({
+      expected: {
+        value: true,
+        source: "env:OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY",
+      },
+    },
+    {
+      name: "prefers env disable over config",
       env: { OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY: "1" },
       network: { autoSelectFamily: true },
-      nodeMajor: 22,
-    });
-    expect(decision).toEqual({
-      value: false,
-      source: "env:OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY",
-    });
-  });
-
-  it("uses config override when provided", () => {
-    const decision = resolveTelegramAutoSelectFamilyDecision({
+      expected: {
+        value: false,
+        source: "env:OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY",
+      },
+    },
+    {
+      name: "uses config override when provided",
       env: {},
       network: { autoSelectFamily: true },
+      expected: { value: true, source: "config" },
+    },
+  ])("$name", ({ env, network, expected }) => {
+    const decision = resolveTelegramAutoSelectFamilyDecision({
+      env,
+      network,
       nodeMajor: 22,
     });
-    expect(decision).toEqual({ value: true, source: "config" });
+    expect(decision).toEqual(expected);
   });
 
   it("defaults to enable on Node 22", () => {
@@ -87,41 +83,44 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
   });
 
   describe("WSL2 detection", () => {
-    it("disables autoSelectFamily on WSL2", () => {
-      vi.mocked(isWSL2Sync).mockReturnValue(true);
-      const decision = resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 });
-      expect(decision).toEqual({ value: false, source: "default-wsl2" });
-    });
-
-    it("respects config override on WSL2", () => {
-      vi.mocked(isWSL2Sync).mockReturnValue(true);
-      const decision = resolveTelegramAutoSelectFamilyDecision({
+    it.each([
+      {
+        name: "disables autoSelectFamily on WSL2",
+        env: {},
+        expected: { value: false, source: "default-wsl2" },
+      },
+      {
+        name: "respects config override on WSL2",
         env: {},
         network: { autoSelectFamily: true },
-        nodeMajor: 22,
-      });
-      expect(decision).toEqual({ value: true, source: "config" });
-    });
-
-    it("respects env override on WSL2", () => {
-      vi.mocked(isWSL2Sync).mockReturnValue(true);
-      const decision = resolveTelegramAutoSelectFamilyDecision({
+        expected: { value: true, source: "config" },
+      },
+      {
+        name: "respects env override on WSL2",
         env: { OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY: "1" },
+        expected: {
+          value: true,
+          source: "env:OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY",
+        },
+      },
+      {
+        name: "uses Node 22 default when not on WSL2",
+        wsl2: false,
+        env: {},
+        expected: { value: true, source: "default-node22" },
+      },
+    ])("$name", ({ env, network, expected, wsl2 = true }) => {
+      vi.mocked(isWSL2Sync).mockReturnValue(wsl2);
+      const decision = resolveTelegramAutoSelectFamilyDecision({
+        env,
+        network,
         nodeMajor: 22,
       });
-      expect(decision).toEqual({
-        value: true,
-        source: "env:OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY",
-      });
-    });
-
-    it("uses Node 22 default when not on WSL2", () => {
-      vi.mocked(isWSL2Sync).mockReturnValue(false);
-      const decision = resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 });
-      expect(decision).toEqual({ value: true, source: "default-node22" });
+      expect(decision).toEqual(expected);
     });
 
     it("memoizes WSL2 detection across repeated defaults", () => {
+      vi.mocked(isWSL2Sync).mockReturnValue(true);
       vi.mocked(isWSL2Sync).mockClear();
       vi.mocked(isWSL2Sync).mockReturnValue(false);
       resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 });
@@ -132,23 +131,66 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
 });
 
 describe("resolveTelegramDnsResultOrderDecision", () => {
-  it("uses env override when provided", () => {
-    const decision = resolveTelegramDnsResultOrderDecision({
+  it.each([
+    {
+      name: "uses env override when provided",
       env: { OPENCLAW_TELEGRAM_DNS_RESULT_ORDER: "verbatim" },
       nodeMajor: 22,
-    });
-    expect(decision).toEqual({
-      value: "verbatim",
-      source: "env:OPENCLAW_TELEGRAM_DNS_RESULT_ORDER",
-    });
-  });
-
-  it("uses config override when provided", () => {
-    const decision = resolveTelegramDnsResultOrderDecision({
+      expected: {
+        value: "verbatim",
+        source: "env:OPENCLAW_TELEGRAM_DNS_RESULT_ORDER",
+      },
+    },
+    {
+      name: "normalizes trimmed env values",
+      env: { OPENCLAW_TELEGRAM_DNS_RESULT_ORDER: "  IPV4FIRST  " },
+      nodeMajor: 20,
+      expected: {
+        value: "ipv4first",
+        source: "env:OPENCLAW_TELEGRAM_DNS_RESULT_ORDER",
+      },
+    },
+    {
+      name: "uses config override when provided",
       network: { dnsResultOrder: "ipv4first" },
       nodeMajor: 20,
+      expected: { value: "ipv4first", source: "config" },
+    },
+    {
+      name: "normalizes trimmed config values",
+      network: { dnsResultOrder: "  Verbatim  " } as TelegramNetworkConfig & {
+        dnsResultOrder: string;
+      },
+      nodeMajor: 20,
+      expected: { value: "verbatim", source: "config" },
+    },
+    {
+      name: "ignores invalid env values and falls back to config",
+      env: { OPENCLAW_TELEGRAM_DNS_RESULT_ORDER: "bogus" },
+      network: { dnsResultOrder: "ipv4first" },
+      nodeMajor: 20,
+      expected: { value: "ipv4first", source: "config" },
+    },
+    {
+      name: "ignores invalid env and config values before applying Node 22 default",
+      env: { OPENCLAW_TELEGRAM_DNS_RESULT_ORDER: "bogus" },
+      network: { dnsResultOrder: "invalid" } as TelegramNetworkConfig & { dnsResultOrder: string },
+      nodeMajor: 22,
+      expected: { value: "ipv4first", source: "default-node22" },
+    },
+  ] satisfies Array<{
+    name: string;
+    env?: NodeJS.ProcessEnv;
+    network?: TelegramNetworkConfig | (TelegramNetworkConfig & { dnsResultOrder: string });
+    nodeMajor: number;
+    expected: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
+  }>)("$name", ({ env, network, nodeMajor, expected }) => {
+    const decision = resolveTelegramDnsResultOrderDecision({
+      env,
+      network,
+      nodeMajor,
     });
-    expect(decision).toEqual({ value: "ipv4first", source: "config" });
+    expect(decision).toEqual(expected);
   });
 
   it("defaults to ipv4first on Node 22", () => {
