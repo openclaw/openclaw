@@ -35,7 +35,11 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
+import {
+  scheduleGatewaySigusr1Restart,
+  setGatewaySigusr1RestartPolicy,
+  setPreRestartDeferralCheck,
+} from "../infra/restart.js";
 import {
   primeRemoteSkillsCache,
   refreshRemoteBinsForConnectedNodes,
@@ -82,6 +86,7 @@ import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
+import { resolveMemoryThresholds, startMemoryMonitor } from "./server-memory-monitor.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
@@ -142,6 +147,7 @@ const logHealth = log.child("health");
 const logCron = log.child("cron");
 const logReload = log.child("reload");
 const logHooks = log.child("hooks");
+const logMemory = log.child("memory");
 const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
 const logSecrets = log.child("secrets");
@@ -705,6 +711,15 @@ export async function startGatewayServer(
   let healthInterval = noopInterval();
   let dedupeCleanup = noopInterval();
   let mediaCleanup: ReturnType<typeof setInterval> | null = null;
+  const { warnMB, criticalMB } = resolveMemoryThresholds(cfgAtStart);
+  const memoryMonitor = startMemoryMonitor({
+    log: logMemory,
+    warnMB,
+    criticalMB,
+    onCritical: () => {
+      scheduleGatewaySigusr1Restart({ delayMs: 2000, reason: "memory pressure" });
+    },
+  });
   if (!minimalTestGateway) {
     ({ tickInterval, healthInterval, dedupeCleanup, mediaCleanup } = startGatewayMaintenanceTimers({
       broadcast,
@@ -1052,6 +1067,7 @@ export async function startGatewayServer(
     healthInterval,
     dedupeCleanup,
     mediaCleanup,
+    memoryMonitorInterval: memoryMonitor.interval,
     agentUnsub,
     heartbeatUnsub,
     chatRunState,

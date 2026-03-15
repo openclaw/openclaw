@@ -833,6 +833,13 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        memory: z
+          .object({
+            warnMB: z.number().int().positive().optional(),
+            criticalMB: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((gateway, ctx) => {

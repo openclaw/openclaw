@@ -383,6 +383,13 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type GatewayMemoryConfig = {
+  /** RSS warning threshold in MB (default: 75% of system memory or 1536MB). */
+  warnMB?: number;
+  /** RSS critical threshold in MB; triggers graceful restart (default: 85% of system memory or 2048MB). */
+  criticalMB?: number;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -412,6 +419,8 @@ export type GatewayConfig = {
   http?: GatewayHttpConfig;
   push?: GatewayPushConfig;
   nodes?: GatewayNodesConfig;
+  /** Memory monitoring thresholds for the gateway process. */
+  memory?: GatewayMemoryConfig;
   /**
    * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection
    * arrives from one of these IPs, the Gateway trusts `x-forwarded-for`

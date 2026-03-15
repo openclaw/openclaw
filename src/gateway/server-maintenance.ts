@@ -3,6 +3,7 @@ import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
+  ABORTED_RUN_TTL_MS,
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
   HEALTH_REFRESH_INTERVAL_MS,
@@ -121,7 +122,6 @@ export function startGatewayMaintenanceTimers(params: {
       );
     }
 
-    const ABORTED_RUN_TTL_MS = 60 * 60_000;
     for (const [runId, abortedAt] of params.chatRunState.abortedRuns) {
       if (now - abortedAt <= ABORTED_RUN_TTL_MS) {
         continue;
