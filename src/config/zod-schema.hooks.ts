@@ -118,6 +118,29 @@ export const InternalHooksSchema = z
   .strict()
   .optional();
 
+const HooksGmailGcpSchema = z
+  .object({
+    projectId: z.string().optional(),
+    serviceAccountKey: z.string().optional(),
+    serviceAccountKeyFile: z.string().optional(),
+    autoSetup: z.boolean().optional(),
+    pushEndpoint: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
+const HooksGmailGogSchema = z
+  .object({
+    refreshToken: z.string().optional(),
+    credentialsFile: z.string().optional(),
+    clientId: z.string().optional(),
+    clientSecret: z.string().optional(),
+    services: z.array(z.string()).optional(),
+    scopes: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
 export const HooksGmailSchema = z
   .object({
     account: z.string().optional(),
@@ -130,6 +153,8 @@ export const HooksGmailSchema = z
     maxBytes: z.number().int().positive().optional(),
     renewEveryMinutes: z.number().int().positive().optional(),
     allowUnsafeExternalContent: z.boolean().optional(),
+    gcp: HooksGmailGcpSchema,
+    gog: HooksGmailGogSchema,
     serve: z
       .object({
         bind: z.string().optional(),
@@ -143,9 +168,28 @@ export const HooksGmailSchema = z
         mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
         path: z.string().optional(),
         target: z.string().optional(),
+        authKey: z.string().optional(),
       })
       .strict()
       .optional(),
+    pollIntervalSeconds: z.number().int().min(0).optional(),
+    channel: z
+      .union([
+        z.literal("last"),
+        z.literal("whatsapp"),
+        z.literal("telegram"),
+        z.literal("discord"),
+        z.literal("googlechat"),
+        z.literal("slack"),
+        z.literal("signal"),
+        z.literal("imessage"),
+        z.literal("msteams"),
+      ])
+      .optional(),
+    to: z.string().optional(),
+    deliver: z.boolean().optional(),
+    action: z.union([z.literal("agent"), z.literal("wake")]).optional(),
+    messageTemplate: z.string().optional(),
     model: z.string().optional(),
     thinking: z
       .union([
