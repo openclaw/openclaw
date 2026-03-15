@@ -30,6 +30,7 @@ import {
   formatTokensCompact,
   shortenText,
 } from "./status.format.js";
+import { formatLastHeartbeatDetail } from "./status.last-heartbeat.js";
 import { scanStatus } from "./status.scan.js";
 import {
   formatUpdateAvailableHint,
