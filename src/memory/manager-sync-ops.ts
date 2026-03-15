@@ -4,13 +4,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
-import { resolveAgentDir } from "../agents/agent-scope.js";
 import { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { type OpenClawConfig } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import {
-  createEmbeddingProvider,
+  activateEmbeddingManagerFallbackProvider,
+  resolveEmbeddingManagerBatchConfig,
+} from "../extension-host/embedding-manager-runtime.js";
+import {
   type EmbeddingProvider,
+  type EmbeddingProviderId,
   type GeminiEmbeddingClient,
   type MistralEmbeddingClient,
   type OllamaEmbeddingClient,
@@ -20,11 +23,6 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
-import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
-import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
-import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
-import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
-import { DEFAULT_VOYAGE_EMBEDDING_MODEL } from "./embeddings-voyage.js";
 import { isFileMissingError } from "./fs-utils.js";
 import {
   buildFileEntry,
@@ -1071,74 +1069,50 @@ export abstract class MemoryManagerSyncOps {
     pollIntervalMs: number;
     timeoutMs: number;
   } {
-    const batch = this.settings.remote?.batch;
-    const enabled = Boolean(
-      batch?.enabled &&
-      this.provider &&
-      ((this.openAi && this.provider.id === "openai") ||
-        (this.gemini && this.provider.id === "gemini") ||
-        (this.voyage && this.provider.id === "voyage")),
-    );
-    return {
-      enabled,
-      wait: batch?.wait ?? true,
-      concurrency: Math.max(1, batch?.concurrency ?? 2),
-      pollIntervalMs: batch?.pollIntervalMs ?? 2000,
-      timeoutMs: (batch?.timeoutMinutes ?? 60) * 60 * 1000,
-    };
+    return resolveEmbeddingManagerBatchConfig({
+      settings: this.settings,
+      state: {
+        provider: this.provider,
+        openAi: this.openAi,
+        gemini: this.gemini,
+        voyage: this.voyage,
+      },
+    });
   }
 
   private async activateFallbackProvider(reason: string): Promise<boolean> {
-    const fallback = this.settings.fallback;
-    if (!fallback || fallback === "none" || !this.provider || fallback === this.provider.id) {
-      return false;
-    }
-    if (this.fallbackFrom) {
-      return false;
-    }
-    const fallbackFrom = this.provider.id as
-      | "openai"
-      | "gemini"
-      | "local"
-      | "voyage"
-      | "mistral"
-      | "ollama";
-
-    const fallbackModel =
-      fallback === "gemini"
-        ? DEFAULT_GEMINI_EMBEDDING_MODEL
-        : fallback === "openai"
-          ? DEFAULT_OPENAI_EMBEDDING_MODEL
-          : fallback === "voyage"
-            ? DEFAULT_VOYAGE_EMBEDDING_MODEL
-            : fallback === "mistral"
-              ? DEFAULT_MISTRAL_EMBEDDING_MODEL
-              : fallback === "ollama"
-                ? DEFAULT_OLLAMA_EMBEDDING_MODEL
-                : this.settings.model;
-
-    const fallbackResult = await createEmbeddingProvider({
-      config: this.cfg,
-      agentDir: resolveAgentDir(this.cfg, this.agentId),
-      provider: fallback,
-      remote: this.settings.remote,
-      model: fallbackModel,
-      outputDimensionality: this.settings.outputDimensionality,
-      fallback: "none",
-      local: this.settings.local,
+    const activation = await activateEmbeddingManagerFallbackProvider({
+      cfg: this.cfg,
+      agentId: this.agentId,
+      settings: this.settings,
+      state: {
+        provider: this.provider,
+        fallbackFrom: this.fallbackFrom as EmbeddingProviderId | undefined,
+        openAi: this.openAi,
+        gemini: this.gemini,
+        voyage: this.voyage,
+        mistral: this.mistral,
+        ollama: this.ollama,
+      },
+      reason,
     });
+    if (!activation) {
+      return false;
+    }
 
-    this.fallbackFrom = fallbackFrom;
-    this.fallbackReason = reason;
-    this.provider = fallbackResult.provider;
-    this.openAi = fallbackResult.openAi;
-    this.gemini = fallbackResult.gemini;
-    this.voyage = fallbackResult.voyage;
-    this.mistral = fallbackResult.mistral;
-    this.ollama = fallbackResult.ollama;
+    this.fallbackFrom = activation.fallbackFrom;
+    this.fallbackReason = activation.fallbackReason;
+    this.provider = activation.provider;
+    this.openAi = activation.openAi;
+    this.gemini = activation.gemini;
+    this.voyage = activation.voyage;
+    this.mistral = activation.mistral;
+    this.ollama = activation.ollama;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
-    log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });
+    log.warn(`memory embeddings: switched to fallback provider (${this.provider?.id ?? "none"})`, {
+      reason,
+    });
     return true;
   }
 
