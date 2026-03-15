@@ -655,12 +655,12 @@ See the full channel index: [Channels](/channels).
 
 ### Group chat mention gating
 
-Group messages default to **require mention** (metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
+Group messages default to **require mention** (metadata mention or safe regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
 
 **Mention types:**
 
 - **Metadata mentions**: Native platform @-mentions. Ignored in WhatsApp self-chat mode.
-- **Text patterns**: Regex patterns in `agents.list[].groupChat.mentionPatterns`. Always checked.
+- **Text patterns**: Safe regex patterns in `agents.list[].groupChat.mentionPatterns`. Invalid patterns and unsafe nested repetition are ignored.
 - Mention gating is enforced only when detection is possible (native mentions or at least one pattern).
 
 ```json5
@@ -2371,6 +2371,7 @@ See [Plugins](/tools/plugin).
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` when unset (trusted-network model).
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: false` for strict public-only browser navigation.
+- In strict mode, remote CDP profile endpoints (`profiles.*.cdpUrl`) are subject to the same private-network blocking during reachability/discovery checks.
 - `ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 - In strict mode, use `ssrfPolicy.hostnameAllowlist` and `ssrfPolicy.allowedHostnames` for explicit exceptions.
 - Remote profiles are attach-only (start/stop/reset disabled).
