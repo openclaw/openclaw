@@ -172,12 +172,15 @@ Important trust note:
 - Hugging Face provider catalog — bundled as `huggingface` (enabled by default)
 - Kilo Gateway provider runtime — bundled as `kilocode` (enabled by default)
 - Kimi Coding provider catalog — bundled as `kimi-coding` (enabled by default)
-- MiniMax provider catalog — bundled as `minimax` (enabled by default)
+- MiniMax provider catalog + usage — bundled as `minimax` (enabled by default)
 - MiniMax OAuth (provider auth + catalog) — bundled as `minimax-portal-auth` (enabled by default)
+- Mistral provider capabilities — bundled as `mistral` (enabled by default)
 - Model Studio provider catalog — bundled as `modelstudio` (enabled by default)
 - Moonshot provider runtime — bundled as `moonshot` (enabled by default)
 - NVIDIA provider catalog — bundled as `nvidia` (enabled by default)
 - OpenAI Codex provider runtime — bundled as `openai-codex` (enabled by default)
+- OpenCode Go provider capabilities — bundled as `opencode-go` (enabled by default)
+- OpenCode Zen provider capabilities — bundled as `opencode` (enabled by default)
 - OpenRouter provider runtime — bundled as `openrouter` (enabled by default)
 - Qianfan provider catalog — bundled as `qianfan` (enabled by default)
 - Qwen OAuth (provider auth + catalog) — bundled as `qwen-portal-auth` (enabled by default)
@@ -186,7 +189,8 @@ Important trust note:
 - Venice provider catalog — bundled as `venice` (enabled by default)
 - Vercel AI Gateway provider catalog — bundled as `vercel-ai-gateway` (enabled by default)
 - Volcengine provider catalog — bundled as `volcengine` (enabled by default)
-- Xiaomi provider catalog — bundled as `xiaomi` (enabled by default)
+- Xiaomi provider catalog + usage — bundled as `xiaomi` (enabled by default)
+- Z.AI provider runtime — bundled as `zai` (enabled by default)
 - Copilot Proxy (provider auth) — local VS Code Copilot Proxy bridge; distinct from built-in `github-copilot` device login (bundled, disabled by default)
 
 Native OpenClaw plugins are **TypeScript modules** loaded at runtime via jiti.
@@ -202,7 +206,7 @@ Native OpenClaw plugins can register:
 - Background services
 - Context engines
 - Provider auth flows and model catalogs
-- Provider runtime hooks for dynamic model ids, transport normalization, capability metadata, stream wrapping, cache TTL policy, and runtime auth exchange
+- Provider runtime hooks for dynamic model ids, transport normalization, capability metadata, stream wrapping, cache TTL policy, runtime auth exchange, and usage/billing auth + snapshot resolution
 - Optional config validation
 - **Skills** (by listing `skills` directories in the plugin manifest)
 - **Auto-reply commands** (execute without invoking the AI agent)
@@ -215,7 +219,7 @@ Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
 Provider plugins now have two layers:
 
 - config-time hooks: `catalog` / legacy `discovery`
-- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `isCacheTtlEligible`, `prepareRuntimeAuth`
+- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `isCacheTtlEligible`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
 
 OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the seam for provider-specific behavior without
@@ -249,6 +253,12 @@ For model/provider plugins, OpenClaw uses hooks in this rough order:
 10. `prepareRuntimeAuth`
     Exchanges a configured credential into the actual runtime token/key just
     before inference.
+11. `resolveUsageAuth`
+    Resolves usage/billing credentials for `/usage` and related status
+    surfaces.
+12. `fetchUsageSnapshot`
+    Fetches and normalizes provider-specific usage/quota snapshots after auth
+    is resolved.
 
 ### Which hook to use
 
@@ -261,6 +271,8 @@ For model/provider plugins, OpenClaw uses hooks in this rough order:
 - `wrapStreamFn`: add provider-specific headers/payload/model compat patches while still using the normal `pi-ai` execution path
 - `isCacheTtlEligible`: decide whether provider/model pairs should use cache TTL metadata
 - `prepareRuntimeAuth`: exchange a configured credential into the actual short-lived runtime token/key used for requests
+- `resolveUsageAuth`: resolve provider-owned credentials for usage/billing endpoints without hardcoding token parsing in core
+- `fetchUsageSnapshot`: own provider-specific usage endpoint fetch/parsing while core keeps summary fan-out and formatting
 
 Rule of thumb:
 
@@ -273,12 +285,14 @@ Rule of thumb:
 - provider needs request headers/body/model compat wrappers without a custom transport: use `wrapStreamFn`
 - provider needs proxy-specific cache TTL gating: use `isCacheTtlEligible`
 - provider needs a token exchange or short-lived request credential: use `prepareRuntimeAuth`
+- provider needs custom usage/quota token parsing or a different usage credential: use `resolveUsageAuth`
+- provider needs a provider-specific usage endpoint or payload parser: use `fetchUsageSnapshot`
 
 If the provider needs a fully custom wire protocol or custom request executor,
 that is a different class of extension. These hooks are for provider behavior
 that still runs on OpenClaw's normal inference loop.
 
-### Example
+### Provider Example
 
 ```ts
 api.registerProvider({
@@ -322,6 +336,13 @@ api.registerProvider({
       expiresAt: exchanged.expiresAt,
     };
   },
+  resolveUsageAuth: async (ctx) => {
+    const auth = await ctx.resolveOAuthToken();
+    return auth ? { token: auth.token } : null;
+  },
+  fetchUsageSnapshot: async (ctx) => {
+    return await fetchExampleProxyUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
+  },
 });
 ```
 
@@ -331,12 +352,17 @@ api.registerProvider({
   `prepareDynamicModel` because the provider is pass-through and may expose new
   model ids before OpenClaw's static catalog updates.
 - GitHub Copilot uses `catalog`, `resolveDynamicModel`, and
-  `capabilities` plus `prepareRuntimeAuth` because it needs model fallback
-  behavior, Claude transcript quirks, and a GitHub token -> Copilot token exchange.
+  `capabilities` plus `prepareRuntimeAuth` and `fetchUsageSnapshot` because it
+  needs model fallback behavior, Claude transcript quirks, a GitHub token ->
+  Copilot token exchange, and a provider-owned usage endpoint.
 - OpenAI Codex uses `catalog`, `resolveDynamicModel`, and
-  `normalizeResolvedModel` plus `prepareExtraParams` because it still runs on
-  core OpenAI transports but owns its transport/base URL normalization and
-  default transport choice.
+  `normalizeResolvedModel` plus `prepareExtraParams`, `resolveUsageAuth`, and
+  `fetchUsageSnapshot` because it still runs on core OpenAI transports but owns
+  its transport/base URL normalization, default transport choice, and ChatGPT
+  usage endpoint integration.
+- Gemini CLI OAuth uses `resolveDynamicModel`, `resolveUsageAuth`, and
+  `fetchUsageSnapshot` because it owns Gemini 3.1 forward-compat fallback plus
+  the token parsing and quota endpoint wiring needed by `/usage`.
 - OpenRouter uses `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible`
   to keep provider-specific request headers, routing metadata, reasoning
   patches, and prompt-cache policy out of core.
@@ -346,10 +372,19 @@ api.registerProvider({
   `isCacheTtlEligible` because it needs provider-owned request headers,
   reasoning payload normalization, Gemini transcript hints, and Anthropic
   cache-TTL gating.
+- Z.AI uses `resolveDynamicModel`, `prepareExtraParams`, `wrapStreamFn`,
+  `isCacheTtlEligible`, `resolveUsageAuth`, and `fetchUsageSnapshot` because it
+  owns GLM-5 fallback, `tool_stream` defaults, and both usage auth + quota
+  fetching.
+- Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
+  transcript/tooling quirks out of core.
 - Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
-  `huggingface`, `kimi-coding`, `minimax`, `minimax-portal`, `modelstudio`,
-  `nvidia`, `qianfan`, `qwen-portal`, `synthetic`, `together`, `venice`,
-  `vercel-ai-gateway`, `volcengine`, and `xiaomi` use `catalog` only.
+  `huggingface`, `kimi-coding`, `minimax-portal`, `modelstudio`, `nvidia`,
+  `qianfan`, `qwen-portal`, `synthetic`, `together`, `venice`,
+  `vercel-ai-gateway`, and `volcengine` use `catalog` only.
+- MiniMax and Xiaomi use `catalog` plus usage hooks because their `/usage`
+  behavior is plugin-owned even though inference still runs through the shared
+  transports.
 
 ## Load pipeline
 
