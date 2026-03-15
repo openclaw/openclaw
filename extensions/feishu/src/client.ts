@@ -37,26 +37,52 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
 }
 
 /**
+ * Extended HTTP request options that includes axios-specific configurations.
+ * Lark SDK's HttpRequestOptions doesn't expose maxRedirects, but the underlying
+ * axios instance supports it. We use this extended type to pass through
+ * redirect-related options.
+ */
+interface ExtendedHttpRequestOptions<D> extends Lark.HttpRequestOptions<D> {
+  /** Maximum number of redirects to follow. Set to 0 to disable automatic redirects. */
+  maxRedirects?: number;
+}
+
+/**
  * Create an HTTP instance that delegates to the Lark SDK's default instance
  * but injects a default request timeout to prevent indefinite hangs
  * (e.g. when the Feishu API is slow, causing per-chat queue deadlocks).
+ *
+ * Also increases maxRedirects to handle Feishu CDN's redirect behavior.
+ * The default axios limit is 21, but Feishu CDN can sometimes create
+ * redirect chains that exhaust this limit before the CDN resolves.
  */
 function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
   const base: Lark.HttpInstance = Lark.defaultHttpInstance as unknown as Lark.HttpInstance;
 
-  function injectTimeout<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
-    return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;
+  /**
+   * Inject default timeout and maxRedirects into request options.
+   * The Lark SDK's type definitions don't include maxRedirects,
+   * but the underlying axios instance supports it.
+   */
+  function injectDefaults<D>(opts?: Lark.HttpRequestOptions<D>): ExtendedHttpRequestOptions<D> {
+    return {
+      timeout: defaultTimeoutMs,
+      // Set a higher maxRedirects limit to handle Feishu CDN's redirect behavior.
+      // Setting this to a higher value gives more runway before failure.
+      maxRedirects: 50,
+      ...opts,
+    } as ExtendedHttpRequestOptions<D>;
   }
 
   return {
-    request: (opts) => base.request(injectTimeout(opts)),
-    get: (url, opts) => base.get(url, injectTimeout(opts)),
-    post: (url, data, opts) => base.post(url, data, injectTimeout(opts)),
-    put: (url, data, opts) => base.put(url, data, injectTimeout(opts)),
-    patch: (url, data, opts) => base.patch(url, data, injectTimeout(opts)),
-    delete: (url, opts) => base.delete(url, injectTimeout(opts)),
-    head: (url, opts) => base.head(url, injectTimeout(opts)),
-    options: (url, opts) => base.options(url, injectTimeout(opts)),
+    request: (opts) => base.request(injectDefaults(opts)),
+    get: (url, opts) => base.get(url, injectDefaults(opts)),
+    post: (url, data, opts) => base.post(url, data, injectDefaults(opts)),
+    put: (url, data, opts) => base.put(url, data, injectDefaults(opts)),
+    patch: (url, data, opts) => base.patch(url, data, injectDefaults(opts)),
+    delete: (url, opts) => base.delete(url, injectDefaults(opts)),
+    head: (url, opts) => base.head(url, injectDefaults(opts)),
+    options: (url, opts) => base.options(url, injectDefaults(opts)),
   };
 }
 

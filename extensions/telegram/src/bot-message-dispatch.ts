@@ -815,21 +815,26 @@ export const dispatchTelegramMessage = async ({
 
   const hasFinalResponse = queuedFinal || sentFallback;
 
-  if (statusReactionController && !hasFinalResponse) {
-    void statusReactionController.setError().catch((err) => {
-      logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
-    });
+  // Match Discord's statusReactions behavior: only show error emoji when
+  // dispatchError is true (dispatch threw an exception), not when there's
+  // simply no final response. This prevents showing error emoji when exec
+  // commands succeed but the model returns an empty reply.
+  // See: https://github.com/openclaw/openclaw/issues/45906
+  if (statusReactionController) {
+    if (dispatchError) {
+      void statusReactionController.setError().catch((err) => {
+        logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
+      });
+    } else {
+      void statusReactionController.setDone().catch((err) => {
+        logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
+      });
+    }
   }
 
   if (!hasFinalResponse) {
     clearGroupHistory();
     return;
-  }
-
-  if (statusReactionController) {
-    void statusReactionController.setDone().catch((err) => {
-      logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
-    });
   } else {
     removeAckReactionAfterReply({
       removeAfterReply: removeAckAfterReply,

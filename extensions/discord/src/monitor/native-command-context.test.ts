@@ -38,6 +38,9 @@ describe("buildDiscordNativeCommandContext", () => {
     expect(ctx.UntrustedContext).toBeUndefined();
     expect(ctx.GroupSystemPrompt).toBeUndefined();
     expect(ctx.Timestamp).toBe(123);
+    expect(ctx.RootMessageId).toBeUndefined();
+    expect(ctx.MessageThreadId).toBeUndefined();
+    expect(ctx.ThreadParentId).toBeUndefined();
   });
 
   it("builds guild slash command context with owner allowlist and channel metadata", () => {
@@ -84,6 +87,7 @@ describe("buildDiscordNativeCommandContext", () => {
     expect(ctx.GroupSubject).toBe("Ops");
     expect(ctx.GroupSystemPrompt).toBe("Use the runbook.");
     expect(ctx.OwnerAllowFrom).toEqual(["user-1"]);
+    expect(ctx.RootMessageId).toBe("chan-1");
     expect(ctx.MessageThreadId).toBe("chan-1");
     expect(ctx.ThreadParentId).toBe("parent-1");
     expect(ctx.OriginatingTo).toBe("channel:chan-1");
@@ -91,5 +95,67 @@ describe("buildDiscordNativeCommandContext", () => {
       expect.stringContaining("Discord channel topic:\nProduction alerts only"),
     ]);
     expect(ctx.Timestamp).toBe(456);
+  });
+
+  it("sets RootMessageId to thread channel id for thread channels", () => {
+    const ctx = buildDiscordNativeCommandContext({
+      prompt: "/reset",
+      commandArgs: {},
+      sessionKey: "agent:codex:discord:slash:user-1",
+      commandTargetSessionKey: "agent:codex:discord:channel:thread-123",
+      accountId: "default",
+      interactionId: "interaction-2",
+      channelId: "thread-123",
+      threadParentId: "parent-channel-456",
+      commandAuthorized: true,
+      isDirectMessage: false,
+      isGroupDm: false,
+      isGuild: true,
+      isThreadChannel: true,
+      user: {
+        id: "user-1",
+        username: "tester",
+      },
+      sender: {
+        id: "user-1",
+        name: "tester",
+        tag: "tester#0001",
+      },
+    });
+
+    // In Discord, thread ID is the same as the root message ID (first message in thread)
+    expect(ctx.RootMessageId).toBe("thread-123");
+    expect(ctx.MessageThreadId).toBe("thread-123");
+    expect(ctx.ThreadParentId).toBe("parent-channel-456");
+  });
+
+  it("does not set RootMessageId for non-thread channels", () => {
+    const ctx = buildDiscordNativeCommandContext({
+      prompt: "/status",
+      commandArgs: {},
+      sessionKey: "agent:codex:discord:slash:user-1",
+      commandTargetSessionKey: "agent:codex:discord:channel:regular-channel",
+      accountId: "default",
+      interactionId: "interaction-3",
+      channelId: "regular-channel",
+      commandAuthorized: true,
+      isDirectMessage: false,
+      isGroupDm: false,
+      isGuild: true,
+      isThreadChannel: false,
+      user: {
+        id: "user-1",
+        username: "tester",
+      },
+      sender: {
+        id: "user-1",
+        name: "tester",
+        tag: "tester#0001",
+      },
+    });
+
+    expect(ctx.RootMessageId).toBeUndefined();
+    expect(ctx.MessageThreadId).toBeUndefined();
+    expect(ctx.ThreadParentId).toBeUndefined();
   });
 });

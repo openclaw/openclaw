@@ -48,6 +48,10 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
     channelTopic: params.channelTopic,
   });
 
+  // Discord thread ID is the root message ID (first message in the thread).
+  // This is used by other systems (e.g., Feishu) for thread reconstruction.
+  const rootMessageId = params.isThreadChannel ? params.channelId : undefined;
+
   return finalizeInboundContext({
     Body: params.prompt,
     BodyForAgent: params.prompt,
@@ -77,7 +81,9 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
     Surface: "discord" as const,
     WasMentioned: true,
     MessageSid: params.interactionId,
-    MessageThreadId: params.isThreadChannel ? params.channelId : undefined,
+    RootMessageId: rootMessageId,
+    MessageThreadId: rootMessageId,
+    ThreadParentId: params.isThreadChannel ? params.threadParentId : undefined,
     Timestamp: params.timestampMs ?? Date.now(),
     CommandAuthorized: params.commandAuthorized,
     CommandSource: "native" as const,
@@ -88,6 +94,5 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
     OriginatingTo: params.isDirectMessage
       ? `user:${params.user.id}`
       : `channel:${params.channelId}`,
-    ThreadParentId: params.isThreadChannel ? params.threadParentId : undefined,
   });
 }

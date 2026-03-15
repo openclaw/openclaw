@@ -149,6 +149,28 @@ describe("createFeishuClient HTTP timeout", () => {
     );
   });
 
+  it("injects higher maxRedirects to handle Feishu CDN redirect loops", async () => {
+    createFeishuClient({
+      appId: "app_maxredirects",
+      appSecret: "secret_maxredirects",
+      accountId: "maxredirects-test",
+    }); // pragma: allowlist secret
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
+    };
+    const httpInstance = lastCall.httpInstance;
+
+    await httpInstance.get("https://example.com/api");
+
+    // Should include maxRedirects option to handle Feishu CDN's self-redirect behavior
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ maxRedirects: 50 }),
+    );
+  });
+
   it("allows explicit timeout override per-request", async () => {
     createFeishuClient({ appId: "app_3", appSecret: "secret_3", accountId: "timeout-override" }); // pragma: allowlist secret
 
