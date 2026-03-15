@@ -210,3 +210,48 @@ describe("loadGatewayPlugins", () => {
     expect(dispatched?.marker).toBe("after-mutation");
   });
 });
+
+describe("getFallbackGatewayContext", () => {
+  beforeEach(() => {
+    loadOpenClawPlugins.mockReset();
+    handleGatewayRequest.mockReset();
+    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+      switch (opts.req.method) {
+        case "agent":
+          opts.respond(true, { runId: "run-1" });
+          return;
+        case "agent.wait":
+          opts.respond(true, { status: "ok" });
+          return;
+        case "sessions.get":
+          opts.respond(true, { messages: [] });
+          return;
+        case "sessions.delete":
+          opts.respond(true, {});
+          return;
+        default:
+          opts.respond(true, {});
+      }
+    });
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  test("returns undefined when no context set", async () => {
+    const { getFallbackGatewayContext, setFallbackGatewayContext } =
+      await importServerPluginsModule();
+    setFallbackGatewayContext(undefined as unknown as GatewayRequestContext);
+    expect(getFallbackGatewayContext()).toBeUndefined();
+  });
+
+  test("returns context after set", async () => {
+    const { getFallbackGatewayContext, setFallbackGatewayContext } =
+      await importServerPluginsModule();
+    setFallbackGatewayContext(undefined as unknown as GatewayRequestContext);
+    const testContext = { label: "test" } as unknown as GatewayRequestContext;
+    setFallbackGatewayContext(testContext);
+    expect(getFallbackGatewayContext()).toBe(testContext);
+  });
+});

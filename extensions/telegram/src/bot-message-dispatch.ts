@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Bot } from "grammy";
 import { resolveAgentDir } from "../../../src/agents/agent-scope.js";
 import {
@@ -25,9 +26,13 @@ import type {
   ReplyToMode,
   TelegramAccountConfig,
 } from "../../../src/config/types.js";
+import { stripEnvelopeFromMessage } from "../../../src/gateway/chat-sanitize.js";
+import { getFallbackGatewayContext } from "../../../src/gateway/server-plugins.js";
+import { loadSessionEntry, readSessionMessages } from "../../../src/gateway/session-utils.js";
 import { danger, logVerbose } from "../../../src/globals.js";
 import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
+import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../../src/utils/directive-tags.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -531,6 +536,24 @@ export const dispatchTelegramMessage = async ({
   });
 
   let dispatchError: unknown;
+  let preDispatchAssistantCount = 0;
+  if (ctxPayload.SessionKey) {
+    try {
+      const { storePath, entry } = loadSessionEntry(ctxPayload.SessionKey);
+      const sessionId = entry?.sessionId;
+      if (sessionId) {
+        const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
+        preDispatchAssistantCount = messages.filter(
+          (m: unknown) =>
+            typeof m === "object" &&
+            m !== null &&
+            (m as Record<string, unknown>)?.role === "assistant",
+        ).length;
+      }
+    } catch {
+      preDispatchAssistantCount = 0;
+    }
+  }
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -824,6 +847,52 @@ export const dispatchTelegramMessage = async ({
   if (!hasFinalResponse) {
     clearGroupHistory();
     return;
+  }
+
+  if (queuedFinal) {
+    const ctx = getFallbackGatewayContext();
+    if (ctx && ctxPayload.SessionKey) {
+      try {
+        const runId = randomUUID();
+        const sessionKey = ctxPayload.SessionKey;
+        const seq = (ctx.agentRunSeq.get(runId) ?? 0) + 1;
+        ctx.agentRunSeq.set(runId, seq);
+
+        const { storePath, entry } = loadSessionEntry(sessionKey);
+        const sessionId = entry?.sessionId;
+        let message: Record<string, unknown> | undefined;
+        if (sessionId) {
+          const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
+          const assistantMessages = messages.filter(
+            (m: unknown) =>
+              typeof m === "object" &&
+              m !== null &&
+              (m as Record<string, unknown>)?.role === "assistant",
+          );
+          const newAssistantMessages = assistantMessages.slice(preDispatchAssistantCount);
+          message = newAssistantMessages.pop() as Record<string, unknown> | undefined;
+        }
+
+        const sanitizedMessage = message
+          ? stripInlineDirectiveTagsFromMessageForDisplay(
+              stripEnvelopeFromMessage(message) as Record<string, unknown>,
+            )
+          : undefined;
+
+        const payload = {
+          runId,
+          sessionKey,
+          seq,
+          state: "final" as const,
+          message: sanitizedMessage,
+        };
+        ctx.broadcast("chat", payload);
+        ctx.nodeSendToSession(sessionKey, "chat", payload);
+        ctx.agentRunSeq.delete(runId);
+      } catch (err) {
+        runtime.error?.(`telegram broadcast failed: ${String(err)}`);
+      }
+    }
   }
 
   if (statusReactionController) {

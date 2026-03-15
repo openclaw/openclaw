@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { ChannelType, type RequestClient } from "@buape/carbon";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../../../src/agents/identity.js";
 import { EmbeddedBlockChunker } from "../../../../src/agents/pi-embedded-block-chunker.js";
@@ -28,6 +29,9 @@ import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous
 import { resolveDiscordPreviewStreamMode } from "../../../../src/config/discord-preview-streaming.js";
 import { resolveMarkdownTableMode } from "../../../../src/config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../../src/config/sessions.js";
+import { stripEnvelopeFromMessage } from "../../../../src/gateway/chat-sanitize.js";
+import { getFallbackGatewayContext } from "../../../../src/gateway/server-plugins.js";
+import { loadSessionEntry, readSessionMessages } from "../../../../src/gateway/session-utils.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
 import { convertMarkdownTables } from "../../../../src/markdown/tables.js";
 import { getAgentScopedMediaLocalRoots } from "../../../../src/media/local-roots.js";
@@ -35,6 +39,7 @@ import { buildAgentSessionKey } from "../../../../src/routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../../src/routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../../../src/shared/text/reasoning-tags.js";
 import { truncateUtf16Safe } from "../../../../src/utils.js";
+import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../../../src/utils/directive-tags.js";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
@@ -721,6 +726,24 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let dispatchResult: Awaited<ReturnType<typeof dispatchInboundMessage>> | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
+  let preDispatchAssistantCount = 0;
+  if (ctxPayload.SessionKey) {
+    try {
+      const { storePath, entry } = loadSessionEntry(ctxPayload.SessionKey);
+      const sessionId = entry?.sessionId;
+      if (sessionId) {
+        const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
+        preDispatchAssistantCount = messages.filter(
+          (m: unknown) =>
+            typeof m === "object" &&
+            m !== null &&
+            (m as Record<string, unknown>)?.role === "assistant",
+        ).length;
+      }
+    } catch {
+      preDispatchAssistantCount = 0;
+    }
+  }
   try {
     if (isProcessAborted(abortSignal)) {
       dispatchAborted = true;
@@ -850,6 +873,51 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     }
     return;
   }
+
+  const gatewayCtx = getFallbackGatewayContext();
+  if (gatewayCtx && ctxPayload.SessionKey) {
+    try {
+      const runId = randomUUID();
+      const sessionKey = ctxPayload.SessionKey;
+      const seq = (gatewayCtx.agentRunSeq.get(runId) ?? 0) + 1;
+      gatewayCtx.agentRunSeq.set(runId, seq);
+
+      const { storePath, entry } = loadSessionEntry(sessionKey);
+      const sessionId = entry?.sessionId;
+      let message: Record<string, unknown> | undefined;
+      if (sessionId) {
+        const messages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
+        const assistantMessages = messages.filter(
+          (m: unknown) =>
+            typeof m === "object" &&
+            m !== null &&
+            (m as Record<string, unknown>)?.role === "assistant",
+        );
+        const newAssistantMessages = assistantMessages.slice(preDispatchAssistantCount);
+        message = newAssistantMessages.pop() as Record<string, unknown> | undefined;
+      }
+
+      const sanitizedMessage = message
+        ? stripInlineDirectiveTagsFromMessageForDisplay(
+            stripEnvelopeFromMessage(message) as Record<string, unknown>,
+          )
+        : undefined;
+
+      const payload = {
+        runId,
+        sessionKey,
+        seq,
+        state: "final" as const,
+        message: sanitizedMessage,
+      };
+      gatewayCtx.broadcast("chat", payload);
+      gatewayCtx.nodeSendToSession(sessionKey, "chat", payload);
+      gatewayCtx.agentRunSeq.delete(runId);
+    } catch (err) {
+      logVerbose(`discord broadcast failed: ${String(err)}`);
+    }
+  }
+
   if (shouldLogVerbose()) {
     const finalCount = dispatchResult.counts.final;
     logVerbose(
