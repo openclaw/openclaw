@@ -98,6 +98,8 @@ async function convertAudioBufferToCaf(
   const outputPath = path.join(tempDir, `openclaw-bb-voice-${id}.caf`);
   try {
     await fs.writeFile(inputPath, inputBuffer, { mode: 0o600 });
+    // Pre-create output file with restricted permissions so ffmpeg inherits them
+    await fs.writeFile(outputPath, "", { mode: 0o600 });
     await new Promise<void>((resolve, reject) => {
       execFile(
         "ffmpeg",
