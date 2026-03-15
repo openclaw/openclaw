@@ -298,10 +298,12 @@ export async function detectAndLoadPromptImages(params: {
   loadedCount: number;
   skippedCount: number;
 }> {
-  // If model doesn't support images, return empty results
+  // If model doesn't support images, skip auto-detection from prompt text
+  // but still pass through explicitly-provided images (e.g. webchat attachments)
+  // so they reach the model — the user intentionally sent them.
   if (!modelSupportsImages(params.model)) {
     return {
-      images: [],
+      images: params.existingImages ?? [],
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
