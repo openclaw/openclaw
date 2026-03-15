@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderPlugin } from "../../src/plugins/types.js";
+import {
+  createProviderUsageFetch,
+  makeResponse,
+} from "../../src/test-utils/provider-usage-fetch.js";
 import openAICodexPlugin from "./index.js";
 
 function registerProvider(): ProviderPlugin {
@@ -60,6 +64,38 @@ describe("openai-codex plugin", () => {
     ).toEqual({
       temperature: 0.2,
       transport: "auto",
+    });
+  });
+
+  it("owns usage snapshot fetching", async () => {
+    const provider = registerProvider();
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      if (url.includes("chatgpt.com/backend-api/wham/usage")) {
+        return makeResponse(200, {
+          rate_limit: {
+            primary_window: { used_percent: 12, limit_window_seconds: 10800, reset_at: 1_705_000 },
+          },
+          plan_type: "Plus",
+        });
+      }
+      return makeResponse(404, "not found");
+    });
+
+    await expect(
+      provider.fetchUsageSnapshot?.({
+        config: {} as never,
+        env: {} as NodeJS.ProcessEnv,
+        provider: "openai-codex",
+        token: "codex-token",
+        accountId: "acc-1",
+        timeoutMs: 5_000,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).resolves.toEqual({
+      provider: "openai-codex",
+      displayName: "Codex",
+      windows: [{ label: "3h", usedPercent: 12, resetAt: 1_705_000_000 }],
+      plan: "Plus",
     });
   });
 });

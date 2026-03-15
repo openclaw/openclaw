@@ -10,6 +10,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../src/agents/defaults.js";
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import { normalizeProviderId } from "../../src/agents/model-selection.js";
 import { buildOpenAICodexProvider } from "../../src/agents/models-config.providers.static.js";
+import { fetchCodexUsage } from "../../src/infra/provider-usage.fetch.js";
 
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
@@ -182,6 +183,9 @@ const openAICodexPlugin = {
         }
         return normalizeCodexTransport(ctx.model);
       },
+      resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
+      fetchUsageSnapshot: async (ctx) =>
+        await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn),
     });
   },
 };

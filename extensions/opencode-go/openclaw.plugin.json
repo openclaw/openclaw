@@ -1,0 +1,9 @@
+{
+  "id": "opencode-go",
+  "providers": ["opencode-go"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

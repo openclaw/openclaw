@@ -34,6 +34,8 @@ type InlineProviderConfig = {
   headers?: unknown;
 };
 
+const PLUGIN_FIRST_DYNAMIC_PROVIDERS = new Set(["google-gemini-cli", "zai"]);
+
 function sanitizeModelHeaders(
   headers: unknown,
   opts?: { stripSecretRefMarkers?: boolean },
@@ -228,6 +230,34 @@ function resolveExplicitModelWithRegistry(params: {
         model: inlineMatch as Model<Api>,
       }),
     };
+  }
+
+  if (PLUGIN_FIRST_DYNAMIC_PROVIDERS.has(normalizeProviderId(provider))) {
+    // Give migrated provider plugins first shot at ids that still keep a core
+    // forward-compat fallback for disabled-plugin/test compatibility.
+    const pluginDynamicModel = runProviderDynamicModel({
+      provider,
+      config: cfg,
+      context: {
+        config: cfg,
+        agentDir,
+        provider,
+        modelId,
+        modelRegistry,
+        providerConfig,
+      },
+    });
+    if (pluginDynamicModel) {
+      return {
+        kind: "resolved",
+        model: normalizeResolvedModel({
+          provider,
+          cfg,
+          agentDir,
+          model: pluginDynamicModel,
+        }),
+      };
+    }
   }
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.

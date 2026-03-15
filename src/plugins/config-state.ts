@@ -33,11 +33,14 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "kimi-coding",
   "minimax",
   "minimax-portal-auth",
+  "mistral",
   "modelstudio",
   "moonshot",
   "nvidia",
   "ollama",
   "openai-codex",
+  "opencode",
+  "opencode-go",
   "openrouter",
   "phone-control",
   "qianfan",
@@ -51,6 +54,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "vllm",
   "volcengine",
   "xiaomi",
+  "zai",
 ]);
 
 const normalizeList = (value: unknown): string[] => {

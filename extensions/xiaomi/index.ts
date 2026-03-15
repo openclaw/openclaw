@@ -1,5 +1,6 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { buildXiaomiProvider } from "../../src/agents/models-config.providers.static.js";
+import { PROVIDER_LABELS } from "../../src/infra/provider-usage.shared.js";
 
 const PROVIDER_ID = "xiaomi";
 
@@ -30,6 +31,17 @@ const xiaomiPlugin = {
           };
         },
       },
+      resolveUsageAuth: async (ctx) => {
+        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+          envDirect: [ctx.env.XIAOMI_API_KEY],
+        });
+        return apiKey ? { token: apiKey } : null;
+      },
+      fetchUsageSnapshot: async () => ({
+        provider: "xiaomi",
+        displayName: PROVIDER_LABELS.xiaomi,
+        windows: [],
+      }),
     });
   },
 };
