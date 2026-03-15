@@ -5,6 +5,7 @@ import {
   isRetryableReconnectError,
   reconnectDelayMs,
 } from './background-utils.js'
+import { clearDebuggerAppearanceOverrides } from './background-appearance.js'
 
 const DEFAULT_PORT = 18792
 
@@ -510,6 +511,10 @@ function getTabByTargetId(targetId) {
 async function attachTab(tabId, opts = {}) {
   const debuggee = { tabId }
   await chrome.debugger.attach(debuggee, '1.3')
+  await clearDebuggerAppearanceOverrides(
+    (session, method, params) => chrome.debugger.sendCommand(session, method, params),
+    debuggee,
+  )
   await chrome.debugger.sendCommand(debuggee, 'Page.enable').catch(() => {})
 
   const info = /** @type {any} */ (await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo'))

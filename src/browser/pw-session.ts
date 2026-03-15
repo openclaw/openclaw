@@ -20,6 +20,7 @@ import {
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
+import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
@@ -106,6 +107,7 @@ const pageStates = new WeakMap<Page, PageState>();
 const contextStates = new WeakMap<BrowserContext, ContextState>();
 const observedContexts = new WeakSet<BrowserContext>();
 const observedPages = new WeakSet<Page>();
+const neutralizedExtensionRelayPages = new WeakSet<Page>();
 
 // Best-effort cache to make role refs stable even if Playwright returns a different Page object
 // for the same CDP target across requests.
@@ -115,12 +117,42 @@ const MAX_ROLE_REFS_CACHE = 50;
 const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
+const EXTENSION_RELAY_PAGE_NEUTRALIZE_TIMEOUT_MS = 1_000;
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
+const connectGenerationByCdpUrl = new Map<string, number>();
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
+}
+
+function getConnectGeneration(normalized: string): number {
+  return connectGenerationByCdpUrl.get(normalized) ?? 0;
+}
+
+function bumpConnectGeneration(normalized: string): number {
+  const next = getConnectGeneration(normalized) + 1;
+  connectGenerationByCdpUrl.set(normalized, next);
+  return next;
+}
+
+function hasConnectGenerationChanged(normalized: string, generation: number): boolean {
+  return getConnectGeneration(normalized) !== generation;
+}
+
+async function withTimeout<T>(work: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+  });
+  try {
+    return await Promise.race([work, timeoutPromise]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 function findNetworkRequestById(state: PageState, id: string): BrowserNetworkRequest | undefined {
@@ -329,6 +361,44 @@ function observeBrowser(browser: Browser) {
   }
 }
 
+function hasKnownExtensionRelayAuthHint(cdpUrl: string): boolean {
+  return Object.keys(getChromeExtensionRelayAuthHeaders(cdpUrl)).length > 0;
+}
+
+async function neutralizeExtensionRelayPageMedia(page: Page, timeoutMs?: number): Promise<void> {
+  if (neutralizedExtensionRelayPages.has(page)) {
+    return;
+  }
+  try {
+    const work = page.emulateMedia({ colorScheme: null });
+    if (typeof timeoutMs === "number" && timeoutMs > 0) {
+      await withTimeout(work, timeoutMs, "Extension relay neutralization timed out");
+    } else {
+      await work;
+    }
+    neutralizedExtensionRelayPages.add(page);
+  } catch {
+    // Best-effort only. If the page is mid-navigation or the target is gone,
+    // the next request can retry.
+  }
+}
+
+async function maybeNeutralizeExtensionRelayPages(params: {
+  cdpUrl: string;
+  pages: Page[];
+  timeoutMs?: number;
+}): Promise<void> {
+  const isExtensionRelay =
+    hasKnownExtensionRelayAuthHint(params.cdpUrl) ||
+    (await isExtensionRelayCdpEndpoint(params.cdpUrl).catch(() => false));
+  if (!isExtensionRelay) {
+    return;
+  }
+  await Promise.allSettled(
+    params.pages.map((page) => neutralizeExtensionRelayPageMedia(page, params.timeoutMs)),
+  );
+}
+
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   const cached = cachedByCdpUrl.get(normalized);
@@ -339,10 +409,14 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   if (connecting) {
     return await connecting;
   }
+  const generation = getConnectGeneration(normalized);
 
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (hasConnectGenerationChanged(normalized, generation)) {
+        throw new Error("CDP browser connection closed during setup");
+      }
       try {
         const timeout = 5000 + attempt * 2000;
         const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
@@ -352,19 +426,48 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         const browser = await withNoProxyForCdpUrl(endpoint, () =>
           chromium.connectOverCDP(endpoint, { timeout, headers }),
         );
+        if (hasConnectGenerationChanged(normalized, generation)) {
+          void browser.close().catch(() => {});
+          throw new Error("CDP browser connection closed during setup");
+        }
+        let disconnectedBeforeCache = false;
         const onDisconnected = () => {
+          disconnectedBeforeCache = true;
           const current = cachedByCdpUrl.get(normalized);
           if (current?.browser === browser) {
             cachedByCdpUrl.delete(normalized);
           }
         };
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
-        cachedByCdpUrl.set(normalized, connected);
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);
+        // Keep callers on connectingByCdpUrl until initial relay neutralization finishes so
+        // they do not observe a partially initialized cached browser connection.
+        await maybeNeutralizeExtensionRelayPages({
+          cdpUrl: normalized,
+          pages: await getAllPages(browser),
+          timeoutMs: EXTENSION_RELAY_PAGE_NEUTRALIZE_TIMEOUT_MS,
+        });
+        if (disconnectedBeforeCache) {
+          if (typeof browser.off === "function") {
+            browser.off("disconnected", onDisconnected);
+          }
+          throw new Error("CDP browser disconnected during initial setup");
+        }
+        if (hasConnectGenerationChanged(normalized, generation)) {
+          if (typeof browser.off === "function") {
+            browser.off("disconnected", onDisconnected);
+          }
+          void browser.close().catch(() => {});
+          throw new Error("CDP browser connection closed during setup");
+        }
+        cachedByCdpUrl.set(normalized, connected);
         return connected;
       } catch (err) {
         lastErr = err;
+        if (hasConnectGenerationChanged(normalized, generation)) {
+          break;
+        }
         // Don't retry rate-limit errors; retrying worsens the 429.
         const errMsg = err instanceof Error ? err.message : String(err);
         if (errMsg.includes("rate limit")) {
@@ -518,6 +621,7 @@ export async function getPageForTargetId(opts: {
   }
   const first = pages[0];
   if (!opts.targetId) {
+    await maybeNeutralizeExtensionRelayPages({ cdpUrl: opts.cdpUrl, pages: [first] });
     return first;
   }
   const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
@@ -526,10 +630,12 @@ export async function getPageForTargetId(opts: {
     // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
     // only exposes a single Page, use it as a best-effort fallback.
     if (pages.length === 1) {
+      await maybeNeutralizeExtensionRelayPages({ cdpUrl: opts.cdpUrl, pages: [first] });
       return first;
     }
     throw new BrowserTabNotFoundError();
   }
+  await maybeNeutralizeExtensionRelayPages({ cdpUrl: opts.cdpUrl, pages: [found] });
   return found;
 }
 
@@ -576,6 +682,7 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
   const normalized = opts?.cdpUrl ? normalizeCdpUrl(opts.cdpUrl) : null;
 
   if (normalized) {
+    bumpConnectGeneration(normalized);
     const cur = cachedByCdpUrl.get(normalized);
     cachedByCdpUrl.delete(normalized);
     connectingByCdpUrl.delete(normalized);
@@ -589,6 +696,14 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
     return;
   }
 
+  const generationsToBump = new Set([
+    ...cachedByCdpUrl.keys(),
+    ...connectingByCdpUrl.keys(),
+    ...connectGenerationByCdpUrl.keys(),
+  ]);
+  for (const key of generationsToBump) {
+    bumpConnectGeneration(key);
+  }
   const connections = Array.from(cachedByCdpUrl.values());
   cachedByCdpUrl.clear();
   connectingByCdpUrl.clear();
