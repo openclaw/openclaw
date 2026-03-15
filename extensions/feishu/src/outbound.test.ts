@@ -35,7 +35,7 @@ function resetOutboundMocks() {
   vi.clearAllMocks();
   sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
   sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
-  sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "structured_card_msg" });
+  sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
 }
 
@@ -135,7 +135,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       accountId: "main",
     });
 
-    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "chat_1",
         text: "| a | b |\n| - | - |",
@@ -210,7 +210,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     );
   });
 
-  it("forwards replyToId to sendMarkdownCardFeishu when renderMode=card", async () => {
+  it("forwards replyToId to sendStructuredCardFeishu when renderMode=card", async () => {
     await sendText({
       cfg: {
         channels: {
@@ -225,7 +225,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
       accountId: "main",
     });
 
-    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_reply_target",
       }),
