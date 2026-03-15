@@ -212,8 +212,23 @@ describe("exec host env validation", () => {
     const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
     expect(text).toContain("ok");
 
+    // When tools.exec.host is NOT configured, explicit host="gateway" should succeed
+    // (It will return approval-pending, not throw an error)
+    const result2 = await tool.execute("call2", {
+      command: "echo ok",
+      host: "gateway",
+    });
+    // Should get approval-pending status instead of throwing an error
+    const details = result2.details as { status: string };
+    expect(details.status).toBe("approval-pending");
+  });
+
+  it("rejects mismatched host when tools.exec.host is explicitly configured", async () => {
+    const tool = createExecTool({ host: "sandbox", security: "full", ask: "off" });
+
+    // When tools.exec.host is explicitly set to "sandbox", requesting host="gateway" should fail
     const err = await tool
-      .execute("call2", {
+      .execute("call1", {
         command: "echo ok",
         host: "gateway",
       })
