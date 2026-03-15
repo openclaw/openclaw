@@ -407,7 +407,12 @@ export default function register(api: OpenClawPluginApi) {
 
       const payload: SetupPayload = {
         url: urlResult.url,
-        bootstrapToken: (await issueDeviceBootstrapToken()).token,
+        bootstrapToken: (
+          await issueDeviceBootstrapToken({
+            role: "node",
+            scopes: [],
+          })
+        ).token,
       };
 
       if (action === "qr") {

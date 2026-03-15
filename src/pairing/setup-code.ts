@@ -400,6 +400,8 @@ export async function resolvePairingSetupFromConfig(
       bootstrapToken: (
         await issueDeviceBootstrapToken({
           baseDir: options.pairingBaseDir,
+          role: "node",
+          scopes: [],
         })
       ).token,
     },

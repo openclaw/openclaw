@@ -43,6 +43,22 @@ describe("device bootstrap tokens", () => {
     });
   });
 
+  it("persists an intended role and scopes when requested", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      role: "node",
+      scopes: [],
+    });
+
+    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
+    const parsed = JSON.parse(raw) as Record<string, { roles?: string[]; scopes?: string[] }>;
+    expect(parsed[issued.token]).toMatchObject({
+      roles: ["node"],
+      scopes: [],
+    });
+  });
+
   it("verifies valid bootstrap tokens once and deletes them after success", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
@@ -196,6 +212,46 @@ describe("device bootstrap tokens", () => {
         deviceId: "device-123",
         publicKey: "public-key-123",
         role: "operator.admin",
+        scopes: ["operator.admin"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+  });
+
+  it("rejects a role that does not match the issued pairing profile", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      role: "node",
+      scopes: [],
+    });
+
+    await expect(
+      verifyDeviceBootstrapToken({
+        token: issued.token,
+        deviceId: "device-123",
+        publicKey: "public-key-123",
+        role: "operator",
+        scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+  });
+
+  it("rejects scopes that do not match the issued pairing profile", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      role: "node",
+      scopes: [],
+    });
+
+    await expect(
+      verifyDeviceBootstrapToken({
+        token: issued.token,
+        deviceId: "device-123",
+        publicKey: "public-key-123",
+        role: "node",
         scopes: ["operator.admin"],
         baseDir,
       }),

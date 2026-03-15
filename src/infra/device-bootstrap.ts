@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { resolvePairingPaths } from "./pairing-files.js";
 import {
   createAsyncLock,
@@ -63,16 +64,24 @@ async function persistState(state: DeviceBootstrapStateFile, baseDir?: string): 
 export async function issueDeviceBootstrapToken(
   params: {
     baseDir?: string;
+    role?: string;
+    scopes?: readonly string[];
   } = {},
 ): Promise<{ token: string; expiresAtMs: number }> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const token = generatePairingToken();
     const issuedAtMs = Date.now();
+    const role = params.role?.trim();
+    const scopes = normalizeDeviceAuthScopes(
+      Array.isArray(params.scopes) ? [...params.scopes] : undefined,
+    );
     state[token] = {
       token,
       ts: issuedAtMs,
       issuedAtMs,
+      ...(role ? { roles: [normalizeDeviceAuthRole(role)] } : {}),
+      ...(scopes.length > 0 || Array.isArray(params.scopes) ? { scopes } : {}),
     };
     await persistState(state, params.baseDir);
     return { token, expiresAtMs: issuedAtMs + DEVICE_BOOTSTRAP_TOKEN_TTL_MS };
@@ -102,9 +111,25 @@ export async function verifyDeviceBootstrapToken(params: {
 
     const deviceId = params.deviceId.trim();
     const publicKey = params.publicKey.trim();
-    const role = params.role.trim();
+    const role = normalizeDeviceAuthRole(params.role);
+    const requestedScopes = normalizeDeviceAuthScopes([...params.scopes]);
     if (!deviceId || !publicKey || !role) {
       return { ok: false, reason: "bootstrap_token_invalid" };
+    }
+    const allowedRoles = Array.isArray(entry.roles)
+      ? entry.roles.map((value) => normalizeDeviceAuthRole(String(value))).filter(Boolean)
+      : [];
+    if (allowedRoles.length > 0 && !allowedRoles.includes(role)) {
+      return { ok: false, reason: "bootstrap_token_invalid" };
+    }
+    if (Array.isArray(entry.scopes)) {
+      const allowedScopes = normalizeDeviceAuthScopes(entry.scopes);
+      if (
+        allowedScopes.length !== requestedScopes.length ||
+        allowedScopes.some((value, index) => value !== requestedScopes[index])
+      ) {
+        return { ok: false, reason: "bootstrap_token_invalid" };
+      }
     }
 
     // Bootstrap setup codes are single-use. Consume the record before returning
