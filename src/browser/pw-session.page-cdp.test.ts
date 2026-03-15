@@ -91,4 +91,57 @@ describe("pw-session page-scoped CDP client", () => {
 
     expect(cdpHelperMocks.fetchJson).toHaveBeenCalledTimes(1);
   });
+
+  it("does not cache transient detection failures as non-relay", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-13T00:00:00Z"));
+    cdpHelperMocks.fetchJson
+      .mockRejectedValueOnce(new Error("timeout"))
+      .mockResolvedValueOnce({ Browser: "OpenClaw/extension-relay" });
+
+    try {
+      await expect(isExtensionRelayCdpEndpoint("http://127.0.0.1:29992")).resolves.toBe(false);
+      await expect(isExtensionRelayCdpEndpoint("http://127.0.0.1:29992")).resolves.toBe(false);
+      expect(cdpHelperMocks.fetchJson).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(4_999);
+      await expect(isExtensionRelayCdpEndpoint("http://127.0.0.1:29992")).resolves.toBe(false);
+      expect(cdpHelperMocks.fetchJson).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(2);
+
+      await expect(isExtensionRelayCdpEndpoint("http://127.0.0.1:29992")).resolves.toBe(true);
+      expect(cdpHelperMocks.fetchJson).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("backs off repeated detection failures to avoid repeated probe stalls", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-13T00:00:00Z"));
+    cdpHelperMocks.fetchJson
+      .mockRejectedValueOnce(new Error("timeout"))
+      .mockRejectedValueOnce(new Error("timeout"))
+      .mockResolvedValueOnce({ Browser: "OpenClaw/extension-relay" });
+
+    try {
+      await expect(isExtensionRelayCdpEndpoint("http://127.0.0.1:39992")).resolves.toBe(false);
+      expect(cdpHelperMocks.fetchJson).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(5_001);
+      await expect(isExtensionRelayCdpEndpoint("http://127.0.0.1:39992")).resolves.toBe(false);
+      expect(cdpHelperMocks.fetchJson).toHaveBeenCalledTimes(2);
+
+      vi.advanceTimersByTime(5_001);
+      await expect(isExtensionRelayCdpEndpoint("http://127.0.0.1:39992")).resolves.toBe(false);
+      expect(cdpHelperMocks.fetchJson).toHaveBeenCalledTimes(2);
+
+      vi.advanceTimersByTime(5_000);
+      await expect(isExtensionRelayCdpEndpoint("http://127.0.0.1:39992")).resolves.toBe(true);
+      expect(cdpHelperMocks.fetchJson).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
