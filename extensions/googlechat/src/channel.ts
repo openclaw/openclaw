@@ -360,7 +360,16 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread = (threadId ?? replyToId ?? undefined) as string | undefined;
+      let thread = (threadId ?? replyToId ?? undefined) as string | undefined;
+
+      if (thread) {
+        if (thread.includes("/messages/")) {
+          thread = undefined;
+        } else if (!thread.includes("/")) {
+          thread = `${space}/threads/${thread}`;
+        }
+      }
+
       const result = await sendGoogleChatMessage({
         account,
         space,
@@ -391,7 +400,16 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread = (threadId ?? replyToId ?? undefined) as string | undefined;
+      let thread = (threadId ?? replyToId ?? undefined) as string | undefined;
+
+      if (thread) {
+        if (thread.includes("/messages/")) {
+          thread = undefined;
+        } else if (!thread.includes("/")) {
+          thread = `${space}/threads/${thread}`;
+        }
+      }
+
       const runtime = getGoogleChatRuntime();
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg: cfg,
