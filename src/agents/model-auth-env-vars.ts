@@ -33,6 +33,7 @@ export const PROVIDER_ENV_API_KEY_CANDIDATES: Record<string, string[]> = {
   mistral: ["MISTRAL_API_KEY"],
   together: ["TOGETHER_API_KEY"],
   qianfan: ["QIANFAN_API_KEY"],
+  ernie: ["ERNIE_API_KEY"],
   modelstudio: ["MODELSTUDIO_API_KEY"],
   ollama: ["OLLAMA_API_KEY"],
   sglang: ["SGLANG_API_KEY"],

@@ -6,9 +6,11 @@ import {
 import {
   buildKilocodeProvider,
   buildKimiCodingProvider,
+  buildErnieProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
+  ERNIE_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
 import {
@@ -70,6 +72,8 @@ import {
   MISTRAL_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
+  ERNIE_BASE_URL,
+  ERNIE_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_ID,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_BASE_URL,
@@ -590,6 +594,42 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+export function applyErnieProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[ERNIE_DEFAULT_MODEL_REF] = {
+    ...models[ERNIE_DEFAULT_MODEL_REF],
+    alias: models[ERNIE_DEFAULT_MODEL_REF]?.alias ?? "ERNIE",
+  };
+  const defaultProvider = buildErnieProvider();
+  const existingProvider = cfg.models?.providers?.ernie as
+    | {
+        baseUrl?: unknown;
+        api?: unknown;
+      }
+    | undefined;
+  const existingBaseUrl =
+    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+  const resolvedBaseUrl = existingBaseUrl || ERNIE_BASE_URL;
+  const resolvedApi =
+    typeof existingProvider?.api === "string"
+      ? (existingProvider.api as ModelApi)
+      : "openai-completions";
+
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "ernie",
+    api: resolvedApi,
+    baseUrl: resolvedBaseUrl,
+    defaultModels: defaultProvider.models ?? [],
+    defaultModelId: ERNIE_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyErnieConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyErnieProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, ERNIE_DEFAULT_MODEL_REF);
 }
 
 // Alibaba Cloud Model Studio Coding Plan

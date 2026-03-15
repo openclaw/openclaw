@@ -478,13 +478,43 @@ export function buildQianfanProvider(): ProviderConfig {
         maxTokens: QIANFAN_DEFAULT_MAX_TOKENS,
       },
       {
-        id: "ernie-5.0-thinking-preview",
-        name: "ERNIE-5.0-Thinking-Preview",
+        id: ERNIE_DEFAULT_MODEL_ID,
+        name: "ERNIE 5.0 Thinking Preview",
         reasoning: true,
         input: ["text", "image"],
         cost: QIANFAN_DEFAULT_COST,
-        contextWindow: 119000,
-        maxTokens: 64000,
+        contextWindow: ERNIE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ERNIE_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+// ERNIE provider - uses Qianfan API endpoint, focused on ERNIE models
+export const ERNIE_BASE_URL = QIANFAN_BASE_URL;
+export const ERNIE_DEFAULT_MODEL_ID = "ernie-5.0-thinking-preview";
+const ERNIE_DEFAULT_CONTEXT_WINDOW = 128000;
+const ERNIE_DEFAULT_MAX_TOKENS = 65536;
+const ERNIE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+export function buildErnieProvider(): ProviderConfig {
+  return {
+    baseUrl: ERNIE_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: ERNIE_DEFAULT_MODEL_ID,
+        name: "ERNIE 5.0 Thinking Preview",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: ERNIE_DEFAULT_COST,
+        contextWindow: ERNIE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ERNIE_DEFAULT_MAX_TOKENS,
       },
     ],
   };

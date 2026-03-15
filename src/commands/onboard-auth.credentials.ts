@@ -495,6 +495,18 @@ export function setQianfanApiKey(
   });
 }
 
+export function setErnieApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "ernie:default",
+    credential: buildApiKeyCredential("ernie", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export function setModelStudioApiKey(
   key: SecretInput,
   agentDir?: string,

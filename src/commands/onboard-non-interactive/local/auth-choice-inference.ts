@@ -31,6 +31,7 @@ type AuthChoiceFlagOptions = Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "ernieApiKey"
   | "modelstudioApiKeyCn"
   | "modelstudioApiKey"
   | "volcengineApiKey"

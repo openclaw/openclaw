@@ -24,6 +24,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "ernieApiKey"
   | "modelstudioApiKeyCn"
   | "modelstudioApiKey"
   | "volcengineApiKey"
@@ -193,6 +194,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--qianfan-api-key",
     cliOption: "--qianfan-api-key <key>",
     description: "QIANFAN API key",
+  },
+  {
+    optionKey: "ernieApiKey",
+    authChoice: "ernie-api-key",
+    cliFlag: "--ernie-api-key",
+    cliOption: "--ernie-api-key <key>",
+    description: "ERNIE API key",
   },
   {
     optionKey: "modelstudioApiKeyCn",

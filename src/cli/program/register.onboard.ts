@@ -159,6 +159,7 @@ export function registerOnboardCommand(program: Command) {
           geminiApiKey: opts.geminiApiKey as string | undefined,
           zaiApiKey: opts.zaiApiKey as string | undefined,
           xiaomiApiKey: opts.xiaomiApiKey as string | undefined,
+          ernieApiKey: opts.ernieApiKey as string | undefined,
           qianfanApiKey: opts.qianfanApiKey as string | undefined,
           modelstudioApiKeyCn: opts.modelstudioApiKeyCn as string | undefined,
           modelstudioApiKey: opts.modelstudioApiKey as string | undefined,

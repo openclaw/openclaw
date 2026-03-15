@@ -17,6 +17,7 @@ import {
   applyOpencodeGoConfig,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
+  applyErnieConfig,
   applyQianfanConfig,
   applySyntheticConfig,
   applyTogetherConfig,
@@ -37,6 +38,7 @@ import {
   setOpencodeGoApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setErnieApiKey,
   setQianfanApiKey,
   setSyntheticApiKey,
   setTogetherApiKey,
@@ -215,6 +217,23 @@ function buildSimpleApiKeyAuthChoices(params: { opts: OnboardOptions }): SimpleA
           applyAuthProfileConfig(cfg, {
             profileId: "qianfan:default",
             provider: "qianfan",
+            mode: "api_key",
+          }),
+        ),
+    },
+    {
+      authChoices: ["ernie-api-key"],
+      provider: "ernie",
+      flagValue: params.opts.ernieApiKey,
+      flagName: "--ernie-api-key",
+      envVar: "ERNIE_API_KEY",
+      profileId: "ernie:default",
+      setCredential: withStorage(setErnieApiKey),
+      applyConfig: (cfg) =>
+        applyErnieConfig(
+          applyAuthProfileConfig(cfg, {
+            profileId: "ernie:default",
+            provider: "ernie",
             mode: "api_key",
           }),
         ),
