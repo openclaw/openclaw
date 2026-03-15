@@ -79,4 +79,11 @@ describe("timeout-policy", () => {
     );
     expect(timeout).toBeUndefined();
   });
+
+  it("falls back to default timeout when timeoutSeconds is NaN", () => {
+    const timeout = resolveCronJobTimeoutMs(
+      makeJob({ kind: "script", command: "echo hi", timeoutSeconds: NaN }),
+    );
+    expect(timeout).toBe(DEFAULT_JOB_TIMEOUT_MS);
+  });
 });
