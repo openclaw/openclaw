@@ -334,6 +334,50 @@ export function createOpenAIServiceTierWrapper(
   };
 }
 
+/**
+ * Normalize assistant messages that have tool_calls but null content.
+ *
+ * Some OpenAI-compatible providers (e.g. DeepSeek) return assistant messages
+ * with `content: ""` and `tool_calls`. pi-ai's `convertMessages` filters out
+ * empty text blocks and defaults content to `null`, which these providers then
+ * reject ("Messages token length must be in (0, 1048576], but got 0").
+ *
+ * This wrapper ensures assistant messages with tool_calls always have a string
+ * content (`""`) instead of `null`.
+ */
+export function createAssistantNullContentFixWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        const messages = (payload as Record<string, unknown>)?.messages;
+        if (Array.isArray(messages)) {
+          for (const msg of messages as Array<{
+            role?: string;
+            content?: unknown;
+            tool_calls?: unknown[];
+          }>) {
+            if (
+              msg.role === "assistant" &&
+              msg.content == null &&
+              Array.isArray(msg.tool_calls) &&
+              msg.tool_calls.length > 0
+            ) {
+              msg.content = "";
+            }
+          }
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
 export function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>

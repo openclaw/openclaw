@@ -22,6 +22,7 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createAssistantNullContentFixWrapper,
   createCodexDefaultTransportWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
@@ -463,6 +464,10 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
   agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+
+  // Normalize assistant messages with tool_calls but null content to empty string.
+  // Some OpenAI-compatible providers (e.g. DeepSeek) reject null content.
+  agent.streamFn = createAssistantNullContentFixWrapper(agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [resolvedExtraParams, override],
