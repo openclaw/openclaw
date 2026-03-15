@@ -21,6 +21,7 @@ import {
 } from "./frontmatter.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
+import { detectSkillPatterns } from "../../security/external-content.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
@@ -512,6 +513,18 @@ function loadSkillEntries(
     let frontmatter: ParsedSkillFrontmatter = {};
     try {
       const raw = fs.readFileSync(skill.filePath, "utf-8");
+      // SECURITY: Scan skill content for attack patterns (download-execute chains,
+      // credential harvesting, exfiltration). Skills are injected into the agent
+      // system prompt, so malicious instructions here would be treated as authoritative.
+      const skillAttackPatterns = detectSkillPatterns(raw);
+      if (skillAttackPatterns.length > 0) {
+        skillsLogger.warn("skill-specific attack patterns detected in skill file", {
+          path: skill.filePath,
+          name: skill.name,
+          count: skillAttackPatterns.length,
+          patterns: skillAttackPatterns.map((p) => p.slice(0, 80)),
+        });
+      }
       frontmatter = parseFrontmatter(raw);
     } catch {
       // ignore malformed skills

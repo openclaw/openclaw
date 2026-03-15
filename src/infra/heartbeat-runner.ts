@@ -18,6 +18,7 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import { detectSuspiciousPatterns } from "../security/external-content.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
@@ -539,6 +540,15 @@ async function resolveHeartbeatPreflight(params: {
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
   try {
     const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
+    // SECURITY: HEARTBEAT.md is a workspace file that could be written by tools,
+    // hooks, or external content. Scan for injection patterns before using it.
+    const suspiciousInHeartbeat = detectSuspiciousPatterns(heartbeatFileContent);
+    if (suspiciousInHeartbeat.length > 0) {
+      log.warn("suspicious patterns detected in HEARTBEAT.md", {
+        count: suspiciousInHeartbeat.length,
+        patterns: suspiciousInHeartbeat.map((p) => p.slice(0, 80)),
+      });
+    }
     if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent)) {
       return {
         ...basePreflight,
