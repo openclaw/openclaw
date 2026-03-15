@@ -7,8 +7,10 @@ import {
   formatGatewayPidList,
   signalVerifiedGatewayPidSync,
 } from "../../infra/gateway-processes.js";
+import { inspectPortUsage } from "../../infra/ports.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
+import { sleep } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   runServiceRestart,
@@ -105,6 +107,18 @@ async function restartGatewayWithoutServiceManager(port: number) {
     result: "restarted" as const,
     message: `Gateway restart signal sent to unmanaged process on port ${port}: ${pids[0]}.`,
   };
+}
+
+async function waitForPortFree(port: number, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const usage = await inspectPortUsage(port).catch(() => null);
+    if (usage?.status === "free") {
+      return true;
+    }
+    await sleep(250);
+  }
+  return false;
 }
 
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
@@ -213,6 +227,16 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         }
 
         await terminateStaleGatewayPids(health.staleGatewayPids);
+
+        const portFree = await waitForPortFree(restartPort, 5_000);
+        if (!portFree) {
+          const portStillBusyMsg = `Gateway port ${restartPort} is still busy after stopping stale process(es).`;
+          warnings.push(portStillBusyMsg);
+          if (!json) {
+            defaultRuntime.log(theme.warn(portStillBusyMsg));
+          }
+        }
+
         const retryRestart = await service.restart({ env: process.env, stdout });
         if (retryRestart.outcome === "scheduled") {
           return retryRestart;
