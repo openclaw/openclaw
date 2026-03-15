@@ -20,6 +20,20 @@ function isOpenAINativeEndpoint(baseUrl: string): boolean {
   }
 }
 
+/**
+ * Returns true for Azure OpenAI endpoints (`*.openai.azure.com`).
+ * Azure supports `stream_options: { include_usage: true }` but does NOT
+ * accept the `developer` message role.
+ */
+function isAzureOpenAIEndpoint(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host.endsWith(".openai.azure.com");
+  } catch {
+    return false;
+  }
+}
+
 function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
   return model.api === "anthropic-messages";
 }
@@ -60,9 +74,24 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
   // leave compat unchanged and let default native behavior apply.
-  const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
-  if (!needsForce) {
+  if (!baseUrl || isOpenAINativeEndpoint(baseUrl)) {
     return model;
+  }
+
+  // Azure OpenAI rejects the `developer` role but fully supports
+  // stream_options.include_usage, so only force supportsDeveloperRole off
+  // and leave supportsUsageInStreaming at its default (true).
+  if (isAzureOpenAIEndpoint(baseUrl)) {
+    const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
+    if (forcedDeveloperRole) {
+      return model;
+    }
+    return {
+      ...model,
+      compat: compat
+        ? { ...compat, supportsDeveloperRole: false }
+        : { supportsDeveloperRole: false },
+    } as typeof model;
   }
 
   // Respect explicit user overrides: if the user has set a compat flag to
