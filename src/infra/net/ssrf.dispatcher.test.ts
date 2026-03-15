@@ -120,9 +120,29 @@ describe("createPinnedDispatcher", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://127.0.0.1:7890",
+      requestTls: { lookup },
       proxyTls: {
         autoSelectFamily: false,
       },
+    });
+  });
+
+  it("passes pinned lookup via requestTls when proxyTls is absent", () => {
+    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
+    const pinned: PinnedHostname = {
+      hostname: "api.telegram.org",
+      addresses: ["149.154.167.220"],
+      lookup,
+    };
+
+    createPinnedDispatcher(pinned, {
+      mode: "explicit-proxy",
+      proxyUrl: "http://127.0.0.1:7890",
+    });
+
+    expect(proxyAgentCtor).toHaveBeenCalledWith({
+      uri: "http://127.0.0.1:7890",
+      requestTls: { lookup },
     });
   });
 });

@@ -370,11 +370,16 @@ export function createPinnedDispatcher(
   }
 
   const proxyUrl = policy.proxyUrl.trim();
+  // Always pass the pinned lookup via requestTls so DNS resolution for the
+  // origin server goes through the SSRF-safe pinned lookup, not the default
+  // resolver.  Without this, ProxyAgent bypasses DNS pinning (#46685).
+  const requestTls = withPinnedLookup(pinned.lookup);
   if (!policy.proxyTls) {
-    return new ProxyAgent(proxyUrl);
+    return new ProxyAgent({ uri: proxyUrl, requestTls });
   }
   return new ProxyAgent({
     uri: proxyUrl,
+    requestTls,
     proxyTls: { ...policy.proxyTls },
   });
 }
