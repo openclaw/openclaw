@@ -501,6 +501,9 @@ export async function loadSessionCostSummary(params: {
   const latencyValues: number[] = [];
   let lastUserTimestamp: number | undefined;
   const MAX_LATENCY_MS = 12 * 60 * 60 * 1000;
+  // Track the most recent assistant message's usage to use its cache fields
+  // for accurate context-size reporting (not accumulated across multiple calls).
+  let lastAssistantUsage: NormalizedUsage | undefined;
 
   await scanTranscriptFile({
     filePath: sessionFile,
@@ -551,6 +554,12 @@ export async function loadSessionCostSummary(params: {
             dailyLatencies.push(latencyMs);
             dailyLatencyMap.set(dayKey, dailyLatencies);
           }
+        }
+        // Track the most recent assistant message's usage for context-size calculation.
+        // This ensures we use the actual context size (from the last API call) rather than
+        // accumulated cache tokens across multiple tool-call round-trips.
+        if (entry.usage) {
+          lastAssistantUsage = entry.usage;
         }
       }
 
@@ -715,6 +724,22 @@ export async function loadSessionCostSummary(params: {
       })
     : undefined;
 
+  // Correct the cache fields using the most recent assistant message's usage.
+  // The accumulated cacheRead/cacheWrite inflate context size because each tool-call
+  // round-trip reports cacheRead ≈ current_context_size, and summing N calls gives
+  // N × context_size. Use lastAssistantUsage's cache fields for accurate context reporting.
+  // See: https://github.com/openclaw/openclaw/issues/47281
+  if (lastAssistantUsage) {
+    totals.cacheRead = lastAssistantUsage.cacheRead ?? 0;
+    totals.cacheWrite = lastAssistantUsage.cacheWrite ?? 0;
+    // Recalculate totalTokens to use correct cache values
+    const lastPromptTokens =
+      (lastAssistantUsage.input ?? 0) +
+      (lastAssistantUsage.cacheRead ?? 0) +
+      (lastAssistantUsage.cacheWrite ?? 0);
+    totals.totalTokens = lastPromptTokens + (totals.output ?? 0);
+  }
+
   return {
     sessionId: params.sessionId,
     sessionFile,
@@ -759,8 +784,13 @@ export async function loadSessionUsageTimeSeries(params: {
   const points: SessionUsageTimePoint[] = [];
   let cumulativeTokens = 0;
   let cumulativeCost = 0;
+  // Track the most recent assistant message's cache usage to correct accumulated values.
+  // See: https://github.com/openclaw/openclaw/issues/47281
+  let lastAssistantCacheRead = 0;
+  let lastAssistantCacheWrite = 0;
+  let lastAssistantInput = 0;
 
-  await scanUsageFile({
+  await scanTranscriptFile({
     filePath: sessionFile,
     config: params.config,
     onEntry: (entry) => {
@@ -769,10 +799,22 @@ export async function loadSessionUsageTimeSeries(params: {
         return;
       }
 
-      const input = entry.usage.input ?? 0;
+      // For assistant messages, track cache fields for context-size reporting
+      if (entry.role === "assistant" && entry.usage) {
+        lastAssistantCacheRead = entry.usage.cacheRead ?? 0;
+        lastAssistantCacheWrite = entry.usage.cacheWrite ?? 0;
+        lastAssistantInput = entry.usage.input ?? 0;
+      }
+
+      // Skip tool/error messages in the time series
+      if (!entry.usage) {
+        return;
+      }
+
+      const input = lastAssistantInput;
       const output = entry.usage.output ?? 0;
-      const cacheRead = entry.usage.cacheRead ?? 0;
-      const cacheWrite = entry.usage.cacheWrite ?? 0;
+      const cacheRead = lastAssistantCacheRead;
+      const cacheWrite = lastAssistantCacheWrite;
       const totalTokens = entry.usage.total ?? input + output + cacheRead + cacheWrite;
       const cost = entry.costTotal ?? 0;
 
@@ -819,11 +861,12 @@ export async function loadSessionUsageTimeSeries(params: {
       for (const point of bucket) {
         bucketInput += point.input;
         bucketOutput += point.output;
-        bucketCacheRead += point.cacheRead;
-        bucketCacheWrite += point.cacheWrite;
         bucketTotalTokens += point.totalTokens;
         bucketCost += point.cost;
       }
+      // For cache fields, use the last point's values to represent current context
+      bucketCacheRead = bucketLast.cacheRead;
+      bucketCacheWrite = bucketLast.cacheWrite;
 
       downsampledCumulativeTokens += bucketTotalTokens;
       downsampledCumulativeCost += bucketCost;
