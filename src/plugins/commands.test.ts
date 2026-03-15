@@ -139,26 +139,31 @@ describe("registerPluginCommand", () => {
   });
 
   it("does not expose binding APIs to plugin commands on unsupported channels", async () => {
+    const handler = async (ctx: {
+      requestConversationBinding: (params: { summary: string }) => Promise<unknown>;
+      getCurrentConversationBinding: () => Promise<unknown>;
+      detachConversationBinding: () => Promise<unknown>;
+    }) => {
+      const requested = await ctx.requestConversationBinding({
+        summary: "Bind this conversation.",
+      });
+      const current = await ctx.getCurrentConversationBinding();
+      const detached = await ctx.detachConversationBinding();
+      return {
+        text: JSON.stringify({
+          requested,
+          current,
+          detached,
+        }),
+      };
+    };
     registerPluginCommand(
       "demo-plugin",
       {
         name: "bindcheck",
         description: "Demo command",
         acceptsArgs: false,
-        handler: async (ctx) => {
-          const requested = await ctx.requestConversationBinding({
-            summary: "Bind this conversation.",
-          });
-          const current = await ctx.getCurrentConversationBinding();
-          const detached = await ctx.detachConversationBinding();
-          return {
-            text: JSON.stringify({
-              requested,
-              current,
-              detached,
-            }),
-          };
-        },
+        handler,
       },
       { pluginRoot: "/plugins/demo-plugin" },
     );
@@ -168,20 +173,7 @@ describe("registerPluginCommand", () => {
         name: "bindcheck",
         description: "Demo command",
         acceptsArgs: false,
-        handler: async (ctx) => {
-          const requested = await ctx.requestConversationBinding({
-            summary: "Bind this conversation.",
-          });
-          const current = await ctx.getCurrentConversationBinding();
-          const detached = await ctx.detachConversationBinding();
-          return {
-            text: JSON.stringify({
-              requested,
-              current,
-              detached,
-            }),
-          };
-        },
+        handler,
         pluginId: "demo-plugin",
         pluginRoot: "/plugins/demo-plugin",
       },

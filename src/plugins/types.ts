@@ -279,6 +279,7 @@ export type PluginCommandContext = {
 
 export type PluginConversationBindingRequestParams = {
   summary?: string;
+  detachHint?: string;
 };
 
 export type PluginConversationBinding = {
@@ -293,6 +294,7 @@ export type PluginConversationBinding = {
   threadId?: string | number;
   boundAt: number;
   summary?: string;
+  detachHint?: string;
 };
 
 export type PluginConversationBindingRequestResult =

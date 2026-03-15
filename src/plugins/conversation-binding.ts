@@ -61,6 +61,7 @@ type PendingPluginBindingRequest = {
   requestedAt: number;
   requestedBySenderId?: string;
   summary?: string;
+  detachHint?: string;
 };
 
 type PluginBindingApprovalAction = {
@@ -80,6 +81,7 @@ type PluginBindingMetadata = {
   pluginName?: string;
   pluginRoot: string;
   summary?: string;
+  detachHint?: string;
 };
 
 type PluginBindingResolveResult =
@@ -99,8 +101,23 @@ type PluginBindingResolveResult =
 
 const pendingRequests = new Map<string, PendingPluginBindingRequest>();
 
+type PluginBindingGlobalState = {
+  fallbackNoticeBindingIds: Set<string>;
+};
+
+const pluginBindingGlobalStateKey = Symbol.for("openclaw.plugins.binding.global-state");
+
 let approvalsCache: PluginBindingApprovalsFile | null = null;
 let approvalsLoaded = false;
+
+function getPluginBindingGlobalState(): PluginBindingGlobalState {
+  const globalStore = globalThis as typeof globalThis & {
+    [pluginBindingGlobalStateKey]?: PluginBindingGlobalState;
+  };
+  return (globalStore[pluginBindingGlobalStateKey] ??= {
+    fallbackNoticeBindingIds: new Set<string>(),
+  });
+}
 
 class PluginBindingApprovalButton extends Button {
   customId: string;
@@ -369,6 +386,7 @@ function buildBindingMetadata(params: {
   pluginName?: string;
   pluginRoot: string;
   summary?: string;
+  detachHint?: string;
 }): PluginBindingMetadata {
   return {
     pluginBindingOwner: PLUGIN_BINDING_OWNER,
@@ -376,6 +394,7 @@ function buildBindingMetadata(params: {
     pluginName: params.pluginName,
     pluginRoot: params.pluginRoot,
     summary: params.summary?.trim() || undefined,
+    detachHint: params.detachHint?.trim() || undefined,
   };
 }
 
@@ -428,6 +447,7 @@ export function toPluginConversationBinding(
     parentConversationId: record.conversation.parentConversationId,
     boundAt: record.boundAt,
     summary: metadata.summary,
+    detachHint: metadata.detachHint,
   };
 }
 
@@ -435,6 +455,7 @@ async function bindConversationNow(params: {
   identity: PluginBindingIdentity;
   conversation: PluginBindingConversation;
   summary?: string;
+  detachHint?: string;
 }): Promise<PluginConversationBinding> {
   const ref = toConversationRef(params.conversation);
   const targetSessionKey = buildPluginBindingSessionKey({
@@ -453,6 +474,7 @@ async function bindConversationNow(params: {
       pluginName: params.identity.pluginName,
       pluginRoot: params.identity.pluginRoot,
       summary: params.summary,
+      detachHint: params.detachHint,
     }),
   });
   const binding = toPluginConversationBinding(record);
@@ -480,6 +502,46 @@ function buildApprovalMessage(request: PendingPluginBindingRequest): string {
   }
   lines.push("Choose whether to allow this plugin to bind the current conversation.");
   return lines.join("\n");
+}
+
+function resolvePluginBindingDisplayName(binding: {
+  pluginId: string;
+  pluginName?: string;
+}): string {
+  return binding.pluginName?.trim() || binding.pluginId;
+}
+
+function buildDetachHintSuffix(detachHint?: string): string {
+  const trimmed = detachHint?.trim();
+  return trimmed ? ` To detach this conversation, use ${trimmed}.` : "";
+}
+
+export function buildPluginBindingUnavailableText(binding: PluginConversationBinding): string {
+  return `The bound plugin ${resolvePluginBindingDisplayName(binding)} is not currently loaded. Routing this message to OpenClaw instead.${buildDetachHintSuffix(binding.detachHint)}`;
+}
+
+export function buildPluginBindingDeclinedText(binding: PluginConversationBinding): string {
+  return `The bound plugin ${resolvePluginBindingDisplayName(binding)} did not handle this message. This conversation is still bound to that plugin.${buildDetachHintSuffix(binding.detachHint)}`;
+}
+
+export function buildPluginBindingErrorText(binding: PluginConversationBinding): string {
+  return `The bound plugin ${resolvePluginBindingDisplayName(binding)} hit an error handling this message. This conversation is still bound to that plugin.${buildDetachHintSuffix(binding.detachHint)}`;
+}
+
+export function hasShownPluginBindingFallbackNotice(bindingId: string): boolean {
+  const normalized = bindingId.trim();
+  if (!normalized) {
+    return false;
+  }
+  return getPluginBindingGlobalState().fallbackNoticeBindingIds.has(normalized);
+}
+
+export function markPluginBindingFallbackNoticeShown(bindingId: string): void {
+  const normalized = bindingId.trim();
+  if (!normalized) {
+    return;
+  }
+  getPluginBindingGlobalState().fallbackNoticeBindingIds.add(normalized);
 }
 
 function buildPendingReply(request: PendingPluginBindingRequest): ReplyPayload {
@@ -594,6 +656,7 @@ export async function requestPluginConversationBinding(params: {
       },
       conversation,
       summary: params.binding?.summary,
+      detachHint: params.binding?.detachHint,
     });
     log.info(
       `plugin binding auto-refresh plugin=${params.pluginId} root=${params.pluginRoot} channel=${ref.channel} account=${ref.accountId} conversation=${ref.conversationId}`,
@@ -616,6 +679,7 @@ export async function requestPluginConversationBinding(params: {
       },
       conversation,
       summary: params.binding?.summary,
+      detachHint: params.binding?.detachHint,
     });
     log.info(
       `plugin binding auto-approved plugin=${params.pluginId} root=${params.pluginRoot} channel=${ref.channel} account=${ref.accountId} conversation=${ref.conversationId}`,
@@ -632,6 +696,7 @@ export async function requestPluginConversationBinding(params: {
     requestedAt: Date.now(),
     requestedBySenderId: params.requestedBySenderId?.trim() || undefined,
     summary: params.binding?.summary?.trim() || undefined,
+    detachHint: params.binding?.detachHint?.trim() || undefined,
   };
   pendingRequests.set(request.id, request);
   log.info(
@@ -723,6 +788,7 @@ export async function resolvePluginConversationBindingApproval(params: {
     },
     conversation: request.conversation,
     summary: request.summary,
+    detachHint: request.detachHint,
   });
   log.info(
     `plugin binding approved plugin=${request.pluginId} root=${request.pluginRoot} decision=${params.decision} channel=${request.conversation.channel} account=${request.conversation.accountId} conversation=${request.conversation.conversationId}`,
@@ -754,5 +820,6 @@ export const __testing = {
     pendingRequests.clear();
     approvalsCache = null;
     approvalsLoaded = false;
+    getPluginBindingGlobalState().fallbackNoticeBindingIds.clear();
   },
 };

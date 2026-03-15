@@ -97,4 +97,79 @@ describe("inbound_claim hook runner", () => {
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).not.toHaveBeenCalled();
   });
+
+  it("reports missing_plugin when the bound plugin is not loaded", async () => {
+    const registry = createMockPluginRegistry([]);
+    registry.plugins = [];
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runInboundClaimForPluginOutcome(
+      "missing-plugin",
+      {
+        content: "who are you",
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1",
+        isGroup: true,
+      },
+      {
+        channelId: "discord",
+        accountId: "default",
+        conversationId: "channel:1",
+      },
+    );
+
+    expect(result).toEqual({ status: "missing_plugin" });
+  });
+
+  it("reports no_handler when the plugin is loaded but has no targeted hooks", async () => {
+    const registry = createMockPluginRegistry([]);
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runInboundClaimForPluginOutcome(
+      "test-plugin",
+      {
+        content: "who are you",
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1",
+        isGroup: true,
+      },
+      {
+        channelId: "discord",
+        accountId: "default",
+        conversationId: "channel:1",
+      },
+    );
+
+    expect(result).toEqual({ status: "no_handler" });
+  });
+
+  it("reports error when a targeted handler throws and none claim the event", async () => {
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const failing = vi.fn().mockRejectedValue(new Error("boom"));
+    const registry = createMockPluginRegistry([{ hookName: "inbound_claim", handler: failing }]);
+    const runner = createHookRunner(registry, { logger });
+
+    const result = await runner.runInboundClaimForPluginOutcome(
+      "test-plugin",
+      {
+        content: "who are you",
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1",
+        isGroup: true,
+      },
+      {
+        channelId: "discord",
+        accountId: "default",
+        conversationId: "channel:1",
+      },
+    );
+
+    expect(result).toEqual({ status: "error", error: "boom" });
+  });
 });

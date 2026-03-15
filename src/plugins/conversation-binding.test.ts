@@ -294,6 +294,54 @@ describe("plugin conversation binding approvals", () => {
     expect(samePluginNewPath.status).toBe("pending");
   });
 
+  it("persists detachHint on approved plugin bindings", async () => {
+    const request = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:detach-hint",
+      },
+      binding: {
+        summary: "Bind this conversation to Codex thread 999.",
+        detachHint: "/codex_detach",
+      },
+    });
+
+    expect(["pending", "bound"]).toContain(request.status);
+
+    if (request.status === "pending") {
+      const approved = await resolvePluginConversationBindingApproval({
+        approvalId: request.approvalId,
+        decision: "allow-once",
+        senderId: "user-1",
+      });
+
+      expect(approved.status).toBe("approved");
+      if (approved.status !== "approved") {
+        throw new Error("expected approved bind request");
+      }
+
+      expect(approved.binding.detachHint).toBe("/codex_detach");
+    } else {
+      expect(request.binding.detachHint).toBe("/codex_detach");
+    }
+
+    const currentBinding = await getCurrentPluginConversationBinding({
+      pluginRoot: "/plugins/codex-a",
+      conversation: {
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:detach-hint",
+      },
+    });
+
+    expect(currentBinding?.detachHint).toBe("/codex_detach");
+  });
+
   it("returns and detaches only bindings owned by the requesting plugin root", async () => {
     const request = await requestPluginConversationBinding({
       pluginId: "codex",

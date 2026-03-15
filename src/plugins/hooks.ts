@@ -114,6 +114,25 @@ export type HookRunnerOptions = {
   catchErrors?: boolean;
 };
 
+export type PluginTargetedInboundClaimOutcome =
+  | {
+      status: "handled";
+      result: PluginHookInboundClaimResult;
+    }
+  | {
+      status: "missing_plugin";
+    }
+  | {
+      status: "no_handler";
+    }
+  | {
+      status: "declined";
+    }
+  | {
+      status: "error";
+      error: string;
+    };
+
 /**
  * Get hooks for a specific hook name, sorted by priority (higher first).
  */
@@ -208,6 +227,12 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       return;
     }
     throw new Error(msg, { cause: params.error });
+  };
+
+  const sanitizeHookError = (error: unknown): string => {
+    const raw = error instanceof Error ? error.message : String(error);
+    const firstLine = raw.split("\n")[0]?.trim();
+    return firstLine || "unknown error";
   };
 
   /**
@@ -340,6 +365,58 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     }
 
     return undefined;
+  }
+
+  async function runClaimingHookForPluginOutcome<
+    K extends PluginHookName,
+    TResult extends { handled: boolean },
+  >(
+    hookName: K,
+    pluginId: string,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<
+    | { status: "handled"; result: TResult }
+    | { status: "missing_plugin" }
+    | { status: "no_handler" }
+    | { status: "declined" }
+    | { status: "error"; error: string }
+  > {
+    const pluginLoaded = registry.plugins.some(
+      (plugin) => plugin.id === pluginId && plugin.status === "loaded",
+    );
+    if (!pluginLoaded) {
+      return { status: "missing_plugin" };
+    }
+
+    const hooks = getHooksForNameAndPlugin(registry, hookName, pluginId);
+    if (hooks.length === 0) {
+      return { status: "no_handler" };
+    }
+
+    logger?.debug?.(
+      `[hooks] running ${hookName} for ${pluginId} (${hooks.length} handlers, targeted outcome)`,
+    );
+
+    let firstError: string | null = null;
+    for (const hook of hooks) {
+      try {
+        const handlerResult = await (
+          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>
+        )(event, ctx);
+        if (handlerResult?.handled) {
+          return { status: "handled", result: handlerResult };
+        }
+      } catch (err) {
+        firstError ??= sanitizeHookError(err);
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+    }
+
+    if (firstError) {
+      return { status: "error", error: firstError };
+    }
+    return { status: "declined" };
   }
 
   // =========================================================================
@@ -484,6 +561,19 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookInboundClaimContext,
   ): Promise<PluginHookInboundClaimResult | undefined> {
     return runClaimingHookForPlugin<"inbound_claim", PluginHookInboundClaimResult>(
+      "inbound_claim",
+      pluginId,
+      event,
+      ctx,
+    );
+  }
+
+  async function runInboundClaimForPluginOutcome(
+    pluginId: string,
+    event: PluginHookInboundClaimEvent,
+    ctx: PluginHookInboundClaimContext,
+  ): Promise<PluginTargetedInboundClaimOutcome> {
+    return runClaimingHookForPluginOutcome<"inbound_claim", PluginHookInboundClaimResult>(
       "inbound_claim",
       pluginId,
       event,
@@ -843,6 +933,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Message hooks
     runInboundClaim,
     runInboundClaimForPlugin,
+    runInboundClaimForPluginOutcome,
     runMessageReceived,
     runMessageSending,
     runMessageSent,

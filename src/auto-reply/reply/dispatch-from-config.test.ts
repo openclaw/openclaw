@@ -23,10 +23,17 @@ const diagnosticMocks = vi.hoisted(() => ({
   logSessionStateChange: vi.fn(),
 }));
 const hookMocks = vi.hoisted(() => ({
+  registry: {
+    plugins: [] as Array<{
+      id: string;
+      status: "loaded" | "disabled" | "error";
+    }>,
+  },
   runner: {
     hasHooks: vi.fn(() => false),
     runInboundClaim: vi.fn(async () => undefined),
     runInboundClaimForPlugin: vi.fn(async () => undefined),
+    runInboundClaimForPluginOutcome: vi.fn(async () => ({ status: "no_handler" as const })),
     runMessageReceived: vi.fn(async () => {}),
   },
 }));
@@ -136,6 +143,7 @@ vi.mock("../../config/sessions.js", async (importOriginal) => {
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
+  getGlobalPluginRegistry: () => hookMocks.registry,
 }));
 vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
@@ -181,6 +189,7 @@ vi.mock("../../tts/tts.js", () => ({
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
 const { resetInboundDedupe } = await import("./inbound-dedupe.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
+const { __testing: pluginBindingTesting } = await import("../../plugins/conversation-binding.js");
 
 const noAbortResult = { handled: false, aborted: false } as const;
 const emptyConfig = {} as OpenClawConfig;
@@ -254,7 +263,12 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.runInboundClaim.mockResolvedValue(undefined);
     hookMocks.runner.runInboundClaimForPlugin.mockClear();
     hookMocks.runner.runInboundClaimForPlugin.mockResolvedValue(undefined);
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "no_handler",
+    });
     hookMocks.runner.runMessageReceived.mockClear();
+    hookMocks.registry.plugins = [];
     internalHookMocks.createInternalHookEvent.mockClear();
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockClear();
@@ -268,6 +282,7 @@ describe("dispatchReplyFromConfig", () => {
     sessionBindingMocks.resolveByConversation.mockReset();
     sessionBindingMocks.resolveByConversation.mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
+    pluginBindingTesting.reset();
     sessionStoreMocks.currentEntry = undefined;
     sessionStoreMocks.loadSessionStore.mockClear();
     sessionStoreMocks.resolveStorePath.mockClear();
@@ -2033,6 +2048,11 @@ describe("dispatchReplyFromConfig", () => {
       ((hookName?: string) =>
         hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
     );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
     sessionBindingMocks.resolveByConversation.mockReturnValue({
       bindingId: "binding-1",
       targetSessionKey: "plugin-binding:codex:abc123",
@@ -2075,7 +2095,7 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-1");
-    expect(hookMocks.runner.runInboundClaimForPlugin).toHaveBeenCalledWith(
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",
       expect.objectContaining({
         channel: "discord",
@@ -2099,6 +2119,11 @@ describe("dispatchReplyFromConfig", () => {
       ((hookName?: string) =>
         hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
     );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
     sessionBindingMocks.resolveByConversation.mockReturnValue({
       bindingId: "binding-dm-1",
       targetSessionKey: "plugin-binding:codex:dm123",
@@ -2142,7 +2167,7 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-dm-1");
-    expect(hookMocks.runner.runInboundClaimForPlugin).toHaveBeenCalledWith(
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",
       expect.objectContaining({
         channel: "discord",
@@ -2158,6 +2183,268 @@ describe("dispatchReplyFromConfig", () => {
     );
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("falls back to OpenClaw once per startup when a bound plugin is missing", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "missing_plugin",
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-missing-1",
+      targetSessionKey: "plugin-binding:codex:missing123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:missing-plugin",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex App Server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+        detachHint: "/codex_detach",
+      },
+    } satisfies SessionBindingRecord);
+
+    const replyResolver = vi.fn(async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload);
+
+    const firstDispatcher = createDispatcher();
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel:missing-plugin",
+        To: "discord:channel:missing-plugin",
+        AccountId: "default",
+        MessageSid: "msg-missing-plugin-1",
+        SessionKey: "agent:main:discord:channel:missing-plugin",
+        CommandBody: "hello",
+        RawBody: "hello",
+        Body: "hello",
+      }),
+      cfg: emptyConfig,
+      dispatcher: firstDispatcher,
+      replyResolver,
+    });
+
+    const firstNotice = (firstDispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as ReplyPayload | undefined;
+    expect(firstNotice?.text).toContain("Routing this message to OpenClaw instead.");
+    expect(firstNotice?.text).toContain("/codex_detach");
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+
+    replyResolver.mockClear();
+    hookMocks.runner.runInboundClaim.mockClear();
+
+    const secondDispatcher = createDispatcher();
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel:missing-plugin",
+        To: "discord:channel:missing-plugin",
+        AccountId: "default",
+        MessageSid: "msg-missing-plugin-2",
+        SessionKey: "agent:main:discord:channel:missing-plugin",
+        CommandBody: "still there?",
+        RawBody: "still there?",
+        Body: "still there?",
+      }),
+      cfg: emptyConfig,
+      dispatcher: secondDispatcher,
+      replyResolver,
+    });
+
+    expect(secondDispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+  });
+
+  it("falls back to OpenClaw when the bound plugin is loaded but has no inbound_claim handler", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "no_handler",
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-no-handler-1",
+      targetSessionKey: "plugin-binding:codex:nohandler123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:no-handler",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex App Server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      },
+    } satisfies SessionBindingRecord);
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel:no-handler",
+        To: "discord:channel:no-handler",
+        AccountId: "default",
+        MessageSid: "msg-no-handler-1",
+        SessionKey: "agent:main:discord:channel:no-handler",
+        CommandBody: "hello",
+        RawBody: "hello",
+        Body: "hello",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    const notice = (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+      | ReplyPayload
+      | undefined;
+    expect(notice?.text).toContain("Routing this message to OpenClaw instead.");
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+  });
+
+  it("notifies the user when a bound plugin declines the turn and keeps the binding attached", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "declined",
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-declined-1",
+      targetSessionKey: "plugin-binding:codex:declined123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:declined",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex App Server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+        detachHint: "/codex_detach",
+      },
+    } satisfies SessionBindingRecord);
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel:declined",
+        To: "discord:channel:declined",
+        AccountId: "default",
+        MessageSid: "msg-declined-1",
+        SessionKey: "agent:main:discord:channel:declined",
+        CommandBody: "hello",
+        RawBody: "hello",
+        Body: "hello",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    const finalNotice = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as ReplyPayload | undefined;
+    expect(finalNotice?.text).toContain("did not handle this message");
+    expect(finalNotice?.text).toContain("/codex_detach");
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+  });
+
+  it("notifies the user when a bound plugin errors and keeps raw details out of the reply", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "error",
+      error: "boom",
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-error-1",
+      targetSessionKey: "plugin-binding:codex:error123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:error",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex App Server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      },
+    } satisfies SessionBindingRecord);
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel:error",
+        To: "discord:channel:error",
+        AccountId: "default",
+        MessageSid: "msg-error-1",
+        SessionKey: "agent:main:discord:channel:error",
+        CommandBody: "hello",
+        RawBody: "hello",
+        Body: "hello",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    const finalNotice = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as ReplyPayload | undefined;
+    expect(finalNotice?.text).toContain("hit an error handling this message");
+    expect(finalNotice?.text).not.toContain("boom");
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
   });
 
   it("marks diagnostics skipped for duplicate inbound messages", async () => {
