@@ -1,24 +1,40 @@
 import { join, parse } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("../../src/infra/wsl.js", () => ({
-  isWSL2Sync: () => false,
+const mockHasProxyEnvConfigured = vi.hoisted(() =>
+  vi.fn(() => {
+    return false;
+  }),
+);
+const mockFetchWithSsrFGuard = vi.hoisted(() =>
+  vi.fn(
+    async (params: {
+      url: string;
+      init?: RequestInit;
+      mode?: string;
+      fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    }) => {
+      const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+      const response = await fetchImpl(params.url, params.init);
+      return {
+        response,
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
+  ),
+);
+
+vi.mock("../../src/infra/net/proxy-env.js", () => ({
+  hasProxyEnvConfigured: mockHasProxyEnvConfigured,
 }));
 
 vi.mock("../../src/infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: async (params: {
-    url: string;
-    init?: RequestInit;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  }) => {
-    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
-    const response = await fetchImpl(params.url, params.init);
-    return {
-      response,
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  },
+  fetchWithSsrFGuard: mockFetchWithSsrFGuard,
+}));
+
+vi.mock("../../src/infra/wsl.js", () => ({
+  isWSL2Sync: () => false,
 }));
 
 // Mock fs module before importing the module under test
