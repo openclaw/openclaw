@@ -1,5 +1,5 @@
 import type { TtsProvider } from "../config/types.tts.js";
-import type { ResolvedTtsConfig } from "../tts/tts.js";
+import type { ResolvedTtsConfig } from "./tts-config.js";
 
 export type ExtensionHostTtsRuntimeProvider = {
   id: TtsProvider;

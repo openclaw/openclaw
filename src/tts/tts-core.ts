@@ -12,15 +12,14 @@ import {
 import { createConfiguredOllamaStreamFn } from "../agents/ollama-stream.js";
 import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type {
-  ResolvedTtsConfig,
-  ResolvedTtsModelOverrides,
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-} from "./tts.js";
+import {
+  DEFAULT_OPENAI_BASE_URL,
+  type ResolvedTtsConfig,
+  type ResolvedTtsModelOverrides,
+} from "../extension-host/tts-config.js";
+import type { TtsDirectiveOverrides, TtsDirectiveParseResult } from "./tts.js";
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
-export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
 export function isValidVoiceId(voiceId: string): boolean {

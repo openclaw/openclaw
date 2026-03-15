@@ -3,7 +3,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { parseTtsDirectives, summarizeText } from "../tts/tts-core.js";
-import type { ResolvedTtsConfig, TtsDirectiveOverrides } from "../tts/tts.js";
+import type { TtsDirectiveOverrides } from "../tts/tts.js";
+import type { ResolvedTtsConfig } from "./tts-config.js";
 import {
   getExtensionHostTtsMaxLength,
   isExtensionHostTtsSummarizationEnabled,

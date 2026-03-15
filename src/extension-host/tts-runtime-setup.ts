@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { TtsProvider } from "../config/types.tts.js";
-import type { ResolvedTtsConfig } from "../tts/tts.js";
+import type { ResolvedTtsConfig } from "./tts-config.js";
 import {
   resolveExtensionHostTtsApiKey,
   resolveExtensionHostTtsProviderOrder,

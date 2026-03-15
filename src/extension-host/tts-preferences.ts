@@ -9,8 +9,8 @@ import {
 } from "node:fs";
 import path from "node:path";
 import type { TtsAutoMode, TtsProvider } from "../config/types.tts.js";
-import type { ResolvedTtsConfig } from "../tts/tts.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import type { ResolvedTtsConfig } from "./tts-config.js";
 
 export const DEFAULT_EXTENSION_HOST_TTS_MAX_LENGTH = 1500;
 export const DEFAULT_EXTENSION_HOST_TTS_SUMMARIZE = true;

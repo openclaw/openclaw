@@ -11,12 +11,8 @@ import {
   openaiTTS,
   scheduleCleanup,
 } from "../tts/tts-core.js";
-import type {
-  ResolvedTtsConfig,
-  TtsDirectiveOverrides,
-  TtsResult,
-  TtsTelephonyResult,
-} from "../tts/tts.js";
+import type { TtsDirectiveOverrides, TtsResult, TtsTelephonyResult } from "../tts/tts.js";
+import type { ResolvedTtsConfig } from "./tts-config.js";
 import {
   resolveExtensionHostTtsApiKey,
   supportsExtensionHostTtsTelephony,

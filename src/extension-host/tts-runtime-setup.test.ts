@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import type { ResolvedTtsConfig } from "../tts/tts.js";
+import type { ResolvedTtsConfig } from "./tts-config.js";
 import {
   resolveExtensionHostTtsProvider,
   resolveExtensionHostTtsRequestSetup,
