@@ -87,11 +87,19 @@ function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
 }
 
-function isJsonOutputMode(commandPath: string[], argv: string[]): boolean {
+/** Commands whose stdout carries structured protocol data (ndjson, JSON)
+ *  and must not be polluted by doctor warnings or other diagnostics. */
+const STDOUT_RESERVED_COMMANDS = new Set(["acp"]);
+
+function shouldSuppressDoctorStdout(commandPath: string[], argv: string[]): boolean {
+  const primary = commandPath[0] ?? "";
+  if (STDOUT_RESERVED_COMMANDS.has(primary)) {
+    return true;
+  }
   if (!hasFlag(argv, "--json")) {
     return false;
   }
-  const key = `${commandPath[0] ?? ""} ${commandPath[1] ?? ""}`.trim();
+  const key = `${primary} ${commandPath[1] ?? ""}`.trim();
   if (JSON_PARSE_ONLY_COMMANDS.has(key)) {
     return false;
   }
@@ -126,7 +134,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (shouldBypassConfigGuard(commandPath)) {
       return;
     }
-    const suppressDoctorStdout = isJsonOutputMode(commandPath, argv);
+    const suppressDoctorStdout = shouldSuppressDoctorStdout(commandPath, argv);
     const { ensureConfigReady } = await loadConfigGuardModule();
     await ensureConfigReady({
       runtime: defaultRuntime,
