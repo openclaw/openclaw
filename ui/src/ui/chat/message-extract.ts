@@ -36,7 +36,10 @@ function stripDisplayPatterns(text: string, message: unknown): string {
         // skip invalid regex
       }
     }
-    return result.trimStart();
+    // Still run hardcoded fallback after pattern-driven strip: if the
+    // plugin-provided regex was malformed or missed a variant format,
+    // the safety net catches it.
+    return stripRelevantMemoriesTags(result.trimStart());
   }
 
   // Hardcoded fallback: strip <relevant-memories> tags even when messageMeta
