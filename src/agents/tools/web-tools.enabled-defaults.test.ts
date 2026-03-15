@@ -222,6 +222,7 @@ describe("web_search country and language parameters", () => {
       search_lang: string;
       ui_lang: string;
       freshness: string;
+      goggles: string;
     }>,
   ) {
     const mockFetch = installMockFetch({ web: { results: [] } });
@@ -236,6 +237,7 @@ describe("web_search country and language parameters", () => {
     { key: "country", value: "DE" },
     { key: "ui_lang", value: "de-DE" },
     { key: "freshness", value: "pw" },
+    { key: "goggles", value: "$site=example.com" },
   ])("passes $key parameter to Brave API", async ({ key, value }) => {
     const url = await runBraveSearchAndGetUrl({ [key]: value });
     expect(url.searchParams.get(key)).toBe(value);
@@ -878,6 +880,7 @@ describe("web_search external content wrapping", () => {
       query: "llm-context test",
       country: "DE",
       search_lang: "de",
+      goggles: "$site=arxiv.org",
     });
 
     const requestUrl = new URL(mockFetch.mock.calls[0]?.[0] as string);
@@ -885,6 +888,7 @@ describe("web_search external content wrapping", () => {
     expect(requestUrl.searchParams.get("q")).toBe("llm-context test");
     expect(requestUrl.searchParams.get("country")).toBe("DE");
     expect(requestUrl.searchParams.get("search_lang")).toBe("de");
+    expect(requestUrl.searchParams.get("goggles")).toBe("$site=arxiv.org");
 
     const details = result?.details as {
       mode?: string;

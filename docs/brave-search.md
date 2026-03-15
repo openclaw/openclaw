@@ -35,16 +35,17 @@ OpenClaw supports Brave Search API as a `web_search` provider.
 
 ## Tool parameters
 
-| Parameter     | Description                                                         |
-| ------------- | ------------------------------------------------------------------- |
-| `query`       | Search query (required)                                             |
-| `count`       | Number of results to return (1-10, default: 5)                      |
-| `country`     | 2-letter ISO country code (e.g., "US", "DE")                        |
-| `language`    | ISO 639-1 language code for search results (e.g., "en", "de", "fr") |
-| `ui_lang`     | ISO language code for UI elements                                   |
-| `freshness`   | Time filter: `day` (24h), `week`, `month`, or `year`                |
-| `date_after`  | Only results published after this date (YYYY-MM-DD)                 |
-| `date_before` | Only results published before this date (YYYY-MM-DD)                |
+| Parameter     | Description                                                                                                |
+| ------------- | ---------------------------------------------------------------------------------------------------------- |
+| `query`       | Search query (required)                                                                                    |
+| `count`       | Number of results to return (1-10, default: 5)                                                             |
+| `country`     | 2-letter ISO country code (e.g., "US", "DE")                                                               |
+| `language`    | ISO 639-1 language code for search results (e.g., "en", "de", "fr")                                        |
+| `ui_lang`     | ISO language code for UI elements                                                                          |
+| `freshness`   | Time filter: `day` (24h), `week`, `month`, or `year`                                                       |
+| `date_after`  | Only results published after this date (YYYY-MM-DD)                                                        |
+| `date_before` | Only results published before this date (YYYY-MM-DD)                                                       |
+| `goggles`     | [Brave Goggle](https://search.brave.com/help/goggles) URL or inline rules for custom filtering and ranking |
 
 **Examples:**
 
@@ -68,6 +69,25 @@ await web_search({
   date_after: "2024-01-01",
   date_before: "2024-06-30",
 });
+
+// Restrict to trusted sources with inline Goggle rules
+await web_search({
+  query: "transformer architecture",
+  goggles: "$discard\n$site=arxiv.org\n$site=*.edu\n$site=huggingface.co",
+});
+
+// Boost docs over blog posts
+await web_search({
+  query: "react server components",
+  goggles: "/docs/*$boost=5\n/blog/*$downrank=5",
+});
+
+// Use the Tech Blogs community Goggle to boost developer blog content
+await web_search({
+  query: "javascript frameworks",
+  goggles:
+    "https://raw.githubusercontent.com/brave/goggles-quickstart/main/goggles/tech_blogs.goggle",
+});
 ```
 
 ## Notes
@@ -75,6 +95,7 @@ await web_search({
 - OpenClaw uses the Brave **Search** plan. If you have a legacy subscription (e.g. the original Free plan with 2,000 queries/month), it remains valid but does not include newer features like LLM Context or higher rate limits.
 - Each Brave plan includes **\$5/month in free credit** (renewing). The Search plan costs \$5 per 1,000 requests, so the credit covers 1,000 queries/month. Set your usage limit in the Brave dashboard to avoid unexpected charges. See the [Brave API portal](https://brave.com/search/api/) for current plans.
 - The Search plan includes the LLM Context endpoint and AI inference rights. Storing results to train or tune models requires a plan with explicit storage rights. See the Brave [Terms of Service](https://api-dashboard.search.brave.com/terms-of-service).
+- Brave [Goggles](https://search.brave.com/help/goggles) let you filter, boost, or downrank results using community-authored rules — restrict to trusted sources, suppress SEO spam, or surface niche content. Goggles work in both `web` and `llm-context` modes. Pass inline rules directly via `goggles` (no registration needed) or a hosted Goggle URL (must be registered at [search.brave.com/goggles/create](https://search.brave.com/goggles/create)). See the [Goggles quickstart](https://github.com/brave/goggles-quickstart) for the full DSL syntax.
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`).
 
 See [Web tools](/tools/web) for the full web_search configuration.

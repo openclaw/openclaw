@@ -237,6 +237,12 @@ function createWebSearchSchema(params: {
             "Locale code for UI elements in language-region format (e.g., 'en-US', 'de-DE', 'fr-FR', 'tr-TR'). Must include region subtag.",
         }),
       ),
+      goggles: Type.Optional(
+        Type.String({
+          description:
+            "Brave Goggles — index-level result filtering and ranking. Inline rules (\\n-separated) or hosted URL. Syntax: [url_pattern]$[options] — site=DOMAIN|*.TLD, inurl=PATH, boost=N, downrank=N, discard; URL wildcards go before $. Examples: '$discard\\n$site=arxiv.org\\n$site=*.edu' (trusted sources only); '/docs/*$boost=5\\n/blog/*$downrank=5' (prioritize docs over blog posts); '$boost=5,site=github.com,inurl=/blob/' (boost source code).",
+        }),
+      ),
     });
   }
 
@@ -1528,7 +1534,7 @@ async function runBraveLlmContextSearch(params: {
   timeoutSeconds: number;
   country?: string;
   search_lang?: string;
-  freshness?: string;
+  goggles?: string;
 }): Promise<{
   results: Array<{
     url: string;
@@ -1546,8 +1552,8 @@ async function runBraveLlmContextSearch(params: {
   if (params.search_lang) {
     url.searchParams.set("search_lang", params.search_lang);
   }
-  if (params.freshness) {
-    url.searchParams.set("freshness", params.freshness);
+  if (params.goggles) {
+    url.searchParams.set("goggles", params.goggles);
   }
 
   return withTrustedWebSearchEndpoint(
@@ -1603,6 +1609,7 @@ async function runWebSearch(params: {
   kimiBaseUrl?: string;
   kimiModel?: string;
   braveMode?: "web" | "llm-context";
+  goggles?: string;
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
   const providerSpecificKey =
@@ -1615,11 +1622,12 @@ async function runWebSearch(params: {
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
             : "";
-  const cacheKey = normalizeCacheKey(
-    params.provider === "brave" && effectiveBraveMode === "llm-context"
-      ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
-      : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
-  );
+  const cacheKey =
+    normalizeCacheKey(
+      params.provider === "brave" && effectiveBraveMode === "llm-context"
+        ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}`
+        : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
+    ) + (params.goggles ? `:${params.goggles}` : "");
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
     return { ...cached.value, cached: true };
@@ -1780,7 +1788,7 @@ async function runWebSearch(params: {
       timeoutSeconds: params.timeoutSeconds,
       country: params.country,
       search_lang: params.search_lang,
-      freshness: params.freshness,
+      goggles: params.goggles,
     });
 
     const mapped = llmResults.map((entry) => ({
@@ -1832,6 +1840,9 @@ async function runWebSearch(params: {
     );
   } else if (params.dateBefore) {
     url.searchParams.set("freshness", `1970-01-01to${params.dateBefore}`);
+  }
+  if (params.goggles) {
+    url.searchParams.set("goggles", params.goggles);
   }
 
   const mapped = await withTrustedWebSearchEndpoint(
@@ -2030,6 +2041,17 @@ export function createWebSearchTool(options?: {
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
+      const goggles = readStringParam(params, "goggles");
+      // Defense-in-depth: goggles is not in the schema for non-Brave providers, so
+      // schema validation strips it before reaching here. This guard catches any
+      // caller that bypasses schema validation (e.g. raw programmatic invocation).
+      if (goggles && provider !== "brave") {
+        return jsonResult({
+          error: "unsupported_goggles",
+          message: `goggles is not supported by the ${provider} provider. Goggles are only available with Brave Search.`,
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const rawFreshness = readStringParam(params, "freshness");
       if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({
@@ -2186,6 +2208,7 @@ export function createWebSearchTool(options?: {
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         braveMode,
+        goggles,
       });
       return jsonResult(result);
     },
@@ -2219,4 +2242,5 @@ export const __testing = {
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
   mapBraveLlmContextResults,
+  createWebSearchSchema,
 } as const;
