@@ -115,6 +115,7 @@ describe("getReplyFromConfig reset-hook fallback", () => {
       sessionId: "session-1",
       isNewSession: true,
       resetTriggered: true,
+      scheduledResetTriggered: false,
       systemSent: false,
       abortedLastRun: false,
       storePath: "/tmp/sessions.json",
@@ -145,6 +146,69 @@ describe("getReplyFromConfig reset-hook fallback", () => {
   it("does not emit fallback hooks when resetHookTriggered is already set", async () => {
     mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
     mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(true));
+
+    await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+
+    expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
+  });
+
+  it("emits reset hooks with action=new on scheduled/daily reset (scheduledResetTriggered=true)", async () => {
+    // Simulate daily reset: session became stale, not triggered by /new or /reset command.
+    mocks.initSessionState.mockResolvedValue({
+      sessionCtx: buildNativeResetContext(),
+      sessionEntry: {},
+      previousSessionEntry: { sessionId: "old-session" },
+      sessionStore: {},
+      sessionKey: "agent:main:telegram:direct:123",
+      sessionId: "session-2",
+      isNewSession: true,
+      resetTriggered: false,
+      scheduledResetTriggered: true,
+      systemSent: false,
+      abortedLastRun: false,
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-sender",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "hello",
+      bodyStripped: undefined,
+    });
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(false));
+
+    await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+
+    expect(mocks.emitResetCommandHooks).toHaveBeenCalledTimes(1);
+    expect(mocks.emitResetCommandHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "new",
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    );
+  });
+
+  it("does not emit hooks when neither resetTriggered nor scheduledResetTriggered", async () => {
+    mocks.initSessionState.mockResolvedValue({
+      sessionCtx: buildNativeResetContext(),
+      sessionEntry: {},
+      previousSessionEntry: undefined,
+      sessionStore: {},
+      sessionKey: "agent:main:telegram:direct:123",
+      sessionId: "session-3",
+      isNewSession: false,
+      resetTriggered: false,
+      scheduledResetTriggered: false,
+      systemSent: true,
+      abortedLastRun: false,
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-sender",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "hello",
+      bodyStripped: undefined,
+    });
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(false));
 
     await getReplyFromConfig(buildNativeResetContext(), undefined, {});
 

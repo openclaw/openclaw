@@ -12,6 +12,7 @@ import {
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
+import { stripLeadingInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
@@ -72,10 +73,16 @@ async function getRecentSessionContent(
               continue;
             }
             // Extract text content
-            const text = Array.isArray(msg.content)
+            const rawText = Array.isArray(msg.content)
               ? // oxlint-disable-next-line typescript/no-explicit-any
                 msg.content.find((c: any) => c.type === "text")?.text
               : msg.content;
+            // Strip channel-injected metadata (Feishu sender/conversation blocks etc.)
+            // so only the actual user message is stored in memory.
+            const text =
+              role === "user" && typeof rawText === "string"
+                ? stripLeadingInboundMetadata(rawText)
+                : rawText;
             if (text && !text.startsWith("/")) {
               allMessages.push(`${role}: ${text}`);
             }

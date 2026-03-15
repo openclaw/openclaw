@@ -61,6 +61,8 @@ export type SessionInitResult = {
   sessionId: string;
   isNewSession: boolean;
   resetTriggered: boolean;
+  /** True when the session was reset due to a daily/scheduled staleness check (not a manual /new or /reset). */
+  scheduledResetTriggered: boolean;
   systemSent: boolean;
   abortedLastRun: boolean;
   storePath: string;
@@ -338,6 +340,9 @@ export async function initSessionState(params: {
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
   // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
   const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
+  // Track whether this is a scheduled/daily reset (stale session, not a manual /new or /reset).
+  // Used downstream to trigger session-memory hook flush (#43524).
+  const scheduledResetTriggered = !resetTriggered && !freshEntry && !!entry;
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,
     previousSessionId: previousSessionEntry?.sessionId,
@@ -608,6 +613,7 @@ export async function initSessionState(params: {
     sessionId: sessionId ?? crypto.randomUUID(),
     isNewSession,
     resetTriggered,
+    scheduledResetTriggered,
     systemSent,
     abortedLastRun,
     storePath,
