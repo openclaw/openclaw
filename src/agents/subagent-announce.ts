@@ -485,7 +485,7 @@ async function buildCompactAnnounceStatsLine(params: {
 
 type DeliveryContextSource = Parameters<typeof deliveryContextFromSession>[0];
 
-function resolveAnnounceOrigin(
+export function resolveAnnounceOrigin(
   entry?: DeliveryContextSource,
   requesterOrigin?: DeliveryContext,
 ): DeliveryContext | undefined {
@@ -508,16 +508,23 @@ function resolveAnnounceOrigin(
   // requesterOrigin (captured at spawn time) reflects the channel the user is
   // actually on and must take priority over the session entry, which may carry
   // stale lastChannel / lastTo values from a previous channel interaction.
-  const entryForMerge =
+  // Preserve the entry's threadId when the requester doesn't explicitly override it,
+  // since absence of threadId in requesterOrigin does not mean "don't thread".
+  // However, if the same channel has a different 'to' destination, do not reuse
+  // the entry's threadId, as it belongs to a different conversation.
+  const sameChannelDifferentTo =
+    normalizedRequester?.channel &&
+    normalizedEntry?.channel &&
+    normalizedRequester.channel === normalizedEntry.channel &&
     normalizedRequester?.to &&
-    normalizedRequester.threadId == null &&
-    normalizedEntry?.threadId != null
-      ? (() => {
-          const { threadId: _ignore, ...rest } = normalizedEntry;
-          return rest;
-        })()
-      : normalizedEntry;
-  return mergeDeliveryContext(normalizedRequester, entryForMerge);
+    normalizedEntry?.to &&
+    normalizedRequester.to !== normalizedEntry.to;
+  if (sameChannelDifferentTo) {
+    // Remove threadId from entry to prevent cross-conversation reuse.
+    const entryWithoutThreadId = { ...normalizedEntry, threadId: undefined };
+    return mergeDeliveryContext(normalizedRequester, entryWithoutThreadId);
+  }
+  return mergeDeliveryContext(normalizedRequester, normalizedEntry);
 }
 
 async function resolveSubagentCompletionOrigin(params: {
