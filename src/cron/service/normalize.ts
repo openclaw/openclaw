@@ -49,14 +49,16 @@ export function normalizeOptionalSessionKey(raw: unknown) {
 
 export function inferLegacyName(job: {
   schedule?: { kind?: unknown; everyMs?: unknown; expr?: unknown };
-  payload?: { kind?: unknown; text?: unknown; message?: unknown };
+  payload?: { kind?: unknown; text?: unknown; message?: unknown; command?: unknown };
 }) {
   const text =
     job?.payload?.kind === "systemEvent" && typeof job.payload.text === "string"
       ? job.payload.text
-      : job?.payload?.kind === "agentTurn" && typeof job.payload.message === "string"
-        ? job.payload.message
-        : "";
+      : job?.payload?.kind === "exec" && typeof job.payload.command === "string"
+        ? job.payload.command
+        : job?.payload?.kind === "agentTurn" && typeof job.payload.message === "string"
+          ? job.payload.message
+          : "";
   const firstLine =
     text
       .split("\n")
@@ -82,6 +84,9 @@ export function inferLegacyName(job: {
 export function normalizePayloadToSystemText(payload: CronPayload) {
   if (payload.kind === "systemEvent") {
     return payload.text.trim();
+  }
+  if (payload.kind === "exec") {
+    return payload.command.trim();
   }
   return payload.message.trim();
 }

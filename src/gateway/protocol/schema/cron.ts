@@ -21,6 +21,18 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
   );
 }
 
+function cronExecPayloadSchema(params?: { command?: TSchema }) {
+  return Type.Object(
+    {
+      kind: Type.Literal("exec"),
+      command: params?.command ?? NonEmptyString,
+      shell: Type.Optional(Type.Boolean()),
+      timeout: Type.Optional(Type.Integer({ minimum: 0 })),
+    },
+    { additionalProperties: false },
+  );
+}
+
 const CronSessionTargetSchema = Type.Union([
   Type.Literal("main"),
   Type.Literal("isolated"),
@@ -138,6 +150,7 @@ export const CronPayloadSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
+  cronExecPayloadSchema(),
   cronAgentTurnPayloadSchema({ message: NonEmptyString }),
 ]);
 
@@ -149,6 +162,7 @@ export const CronPayloadPatchSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
+  cronExecPayloadSchema({ command: Type.Optional(NonEmptyString) }),
   cronAgentTurnPayloadSchema({ message: Type.Optional(NonEmptyString) }),
 ]);
 

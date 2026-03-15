@@ -130,4 +130,40 @@ describe("normalizeStoredCronJobs", () => {
     expect(jobs[0]?.payload).toMatchObject({ kind: "agentTurn", message: "ping" });
     expect(jobs[1]?.payload).toMatchObject({ kind: "systemEvent", text: "pong" });
   });
+
+  it("preserves exec payload kinds and migrates legacy top-level command fields", () => {
+    const jobs = [
+      {
+        id: "normalized-exec",
+        name: "exec",
+        enabled: true,
+        wakeMode: "now",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: " exec ", command: "echo ok", timeout: 15 },
+        sessionTarget: "isolated",
+        state: {},
+      },
+      {
+        id: "legacy-exec",
+        enabled: true,
+        wakeMode: "now",
+        schedule: { kind: "every", everyMs: 60_000 },
+        command: "echo legacy",
+        timeout: 25,
+        shell: true,
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyPayloadKind).toBe(1);
+    expect(jobs[0]?.payload).toMatchObject({ kind: "exec", command: "echo ok", timeout: 15 });
+    expect(jobs[1]?.payload).toMatchObject({
+      kind: "exec",
+      command: "echo legacy",
+      timeout: 25,
+      shell: true,
+    });
+  });
 });

@@ -70,6 +70,24 @@ describe("applyJobPatch", () => {
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
   });
 
+  it('rejects exec payloads outside sessionTarget="isolated"', () => {
+    const job = createIsolatedAgentTurnJob("job-exec-invalid", { mode: "none" });
+
+    expect(() =>
+      applyJobPatch(job, {
+        sessionTarget: "main",
+        payload: { kind: "exec", command: "echo bad" },
+      }),
+    ).toThrow('exec cron jobs require sessionTarget="isolated"');
+
+    expect(() =>
+      applyJobPatch(job, {
+        sessionTarget: "session:ops",
+        payload: { kind: "exec", command: "echo bad" },
+      }),
+    ).toThrow('exec cron jobs require sessionTarget="isolated"');
+  });
+
   it("maps legacy payload delivery updates onto delivery", () => {
     const job = createIsolatedAgentTurnJob("job-2", {
       mode: "announce",

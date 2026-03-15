@@ -219,6 +219,27 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.deleteAfterRun).toBe(true);
   });
 
+  it('defaults exec payloads to sessionTarget="isolated"', () => {
+    const normalized = normalizeCronJobCreate({
+      name: "exec default",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      wakeMode: "now",
+      payload: {
+        kind: "exec",
+        command: "  echo hi  ",
+        timeout: 42.9,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(normalized.payload).toEqual({
+      kind: "exec",
+      command: "echo hi",
+      timeout: 42,
+    });
+  });
+
   it("normalizes delivery mode and channel", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "delivery",
