@@ -64,6 +64,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
+  protected readonly userId: string | undefined;
   protected provider: EmbeddingProvider | null;
   private readonly requestedProvider:
     | "openai"
@@ -135,15 +136,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   static async get(params: {
     cfg: OpenClawConfig;
     agentId: string;
+    userId?: string;
     purpose?: "default" | "status";
   }): Promise<MemoryIndexManager | null> {
-    const { cfg, agentId } = params;
+    const { cfg, agentId, userId } = params;
     const settings = resolveMemorySearchConfig(cfg, agentId);
     if (!settings) {
       return null;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}`;
+    // Include userId in cache key when isolation is enabled and userId is provided
+    const isolationKey = settings.isolation.enabled && userId ? `:${userId}` : "";
+    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}${isolationKey}`;
     const existing = INDEX_CACHE.get(key);
     if (existing) {
       return existing;
@@ -175,6 +179,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         settings,
         providerResult,
         purpose: params.purpose,
+        userId: settings.isolation.enabled ? userId : undefined,
       });
       INDEX_CACHE.set(key, manager);
       return manager;
@@ -197,6 +202,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     settings: ResolvedMemorySearchConfig;
     providerResult: EmbeddingProviderResult;
     purpose?: "default" | "status";
+    userId?: string;
   }) {
     super();
     this.cacheKey = params.cacheKey;
@@ -204,6 +210,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
     this.settings = params.settings;
+    this.userId = params.userId;
     this.provider = params.providerResult.provider;
     this.requestedProvider = params.providerResult.requestedProvider;
     this.fallbackFrom = params.providerResult.fallbackFrom;
@@ -603,7 +610,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const relPath = path.relative(this.workspaceDir, absPath).replace(/\\/g, "/");
     const inWorkspace =
       relPath.length > 0 && !relPath.startsWith("..") && !path.isAbsolute(relPath);
-    const allowedWorkspace = inWorkspace && isMemoryPath(relPath);
+    const allowedWorkspace = inWorkspace && isMemoryPath(relPath, this.userId);
     let allowedAdditional = false;
     if (!allowedWorkspace && this.settings.extraPaths.length > 0) {
       const additionalPaths = normalizeExtraMemoryPaths(

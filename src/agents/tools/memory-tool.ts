@@ -5,10 +5,95 @@ import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import type { MemorySearchResult } from "../../memory/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { extractUserIdFromSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+
+/**
+ * Valid platform names for memory isolation.
+ * These are channel/provider identifiers that appear in session keys.
+ */
+const VALID_PLATFORMS = new Set([
+  "discord",
+  "telegram",
+  "whatsapp",
+  "signal",
+  "slack",
+  "msteams",
+  "webchat",
+  "line",
+  "kakaotalk",
+  "zalo",
+  "matrix",
+  "mattermost",
+  "irc",
+  "feishu",
+  "googlechat",
+  "nextcloud-talk",
+  "nostr",
+  "synology-chat",
+  "tlon",
+  "twitch",
+  "imessage",
+]);
+
+/**
+ * Extract platform name from session key.
+ * Returns the first token in the rest portion if it's a valid platform name.
+ */
+function extractPlatformFromSessionKey(sessionKey: string | undefined | null): string | null {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed?.rest) {
+    return null;
+  }
+  const tokens = parsed.rest.split(":").filter(Boolean);
+  const firstToken = tokens[0];
+  if (!firstToken) {
+    return null;
+  }
+  // Check if first token is a valid platform (with or without -dev suffix)
+  const baseName = firstToken.replace(/-dev$/, "");
+  if (VALID_PLATFORMS.has(baseName)) {
+    return firstToken;
+  }
+  return null;
+}
+
+/**
+ * Add platform prefix to sender ID for memory isolation.
+ * Format: platform:senderId (e.g., "discord:409240289384071168")
+ * Returns undefined if senderId is empty.
+ * Returns senderId as-is if already prefixed with a valid platform.
+ */
+function addPlatformPrefixToSenderId(params: {
+  senderId: string | undefined | null;
+  sessionKey: string | undefined | null;
+}): string | undefined {
+  const { senderId, sessionKey } = params;
+  if (!senderId) {
+    return undefined;
+  }
+  // Check if already prefixed
+  const prefixMatch = senderId.match(/^([a-z0-9-]+):(.+)$/i);
+  if (prefixMatch) {
+    const [, prefix, id] = prefixMatch;
+    const baseName = prefix.replace(/-dev$/, "");
+    if (VALID_PLATFORMS.has(baseName.toLowerCase())) {
+      // Already has valid platform prefix
+      return senderId;
+    }
+    // Prefix exists but not a valid platform - continue to add prefix
+    return id ? `${prefix.toLowerCase()}:${id}` : senderId;
+  }
+  // Extract platform from session key
+  const platform = extractPlatformFromSessionKey(sessionKey);
+  if (platform) {
+    return `${platform}:${senderId}`;
+  }
+  return senderId;
+}
 
 const MemorySearchSchema = Type.Object({
   query: Type.String(),
@@ -22,7 +107,11 @@ const MemoryGetSchema = Type.Object({
   lines: Type.Optional(Type.Number()),
 });
 
-function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
+function resolveMemoryToolContext(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+  senderId?: string;
+}) {
   const cfg = options.config;
   if (!cfg) {
     return null;
@@ -34,10 +123,23 @@ function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessi
   if (!resolveMemorySearchConfig(cfg, agentId)) {
     return null;
   }
-  return { cfg, agentId };
+  // Extract userId for memory isolation (direct message sessions)
+  // Fall back to senderId from inbound context for channel/group sessions
+  const sessionUserId = extractUserIdFromSessionKey(options.agentSessionKey);
+  const rawUserId = sessionUserId ?? options.senderId;
+  // Add platform prefix for user isolation across platforms
+  const userId = addPlatformPrefixToSenderId({
+    senderId: rawUserId,
+    sessionKey: options.agentSessionKey,
+  });
+  return { cfg, agentId, userId };
 }
 
-async function getMemoryManagerContext(params: { cfg: OpenClawConfig; agentId: string }): Promise<
+async function getMemoryManagerContext(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  userId?: string;
+}): Promise<
   | {
       manager: NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
     }
@@ -48,6 +150,7 @@ async function getMemoryManagerContext(params: { cfg: OpenClawConfig; agentId: s
   const { manager, error } = await getMemorySearchManager({
     cfg: params.cfg,
     agentId: params.agentId,
+    userId: params.userId,
   });
   return manager ? { manager } : { error };
 }
@@ -56,14 +159,23 @@ function createMemoryTool(params: {
   options: {
     config?: OpenClawConfig;
     agentSessionKey?: string;
+    senderId?: string;
   };
   label: string;
   name: string;
   description: string;
   parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
-  execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
+  execute: (ctx: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    userId?: string;
+  }) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
-  const ctx = resolveMemoryToolContext(params.options);
+  const ctx = resolveMemoryToolContext({
+    config: params.options.config,
+    agentSessionKey: params.options.agentSessionKey,
+    senderId: params.options.senderId,
+  });
   if (!ctx) {
     return null;
   }
@@ -79,6 +191,7 @@ function createMemoryTool(params: {
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
+  senderId?: string;
 }): AnyAgentTool | null {
   return createMemoryTool({
     options,
@@ -88,12 +201,12 @@ export function createMemorySearchTool(options: {
       "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
     parameters: MemorySearchSchema,
     execute:
-      ({ cfg, agentId }) =>
+      ({ cfg, agentId, userId }) =>
       async (_toolCallId, params) => {
         const query = readStringParam(params, "query", { required: true });
         const maxResults = readNumberParam(params, "maxResults");
         const minScore = readNumberParam(params, "minScore");
-        const memory = await getMemoryManagerContext({ cfg, agentId });
+        const memory = await getMemoryManagerContext({ cfg, agentId, userId });
         if ("error" in memory) {
           return jsonResult(buildMemorySearchUnavailableResult(memory.error));
         }
@@ -135,6 +248,7 @@ export function createMemorySearchTool(options: {
 export function createMemoryGetTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
+  senderId?: string;
 }): AnyAgentTool | null {
   return createMemoryTool({
     options,
@@ -144,12 +258,12 @@ export function createMemoryGetTool(options: {
       "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines; use after memory_search to pull only the needed lines and keep context small.",
     parameters: MemoryGetSchema,
     execute:
-      ({ cfg, agentId }) =>
+      ({ cfg, agentId, userId }) =>
       async (_toolCallId, params) => {
         const relPath = readStringParam(params, "path", { required: true });
         const from = readNumberParam(params, "from", { integer: true });
         const lines = readNumberParam(params, "lines", { integer: true });
-        const memory = await getMemoryManagerContext({ cfg, agentId });
+        const memory = await getMemoryManagerContext({ cfg, agentId, userId });
         if ("error" in memory) {
           return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
         }

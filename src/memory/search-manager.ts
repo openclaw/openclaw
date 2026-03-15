@@ -25,6 +25,7 @@ export type MemorySearchManagerResult = {
 export async function getMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  userId?: string;
   purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
@@ -43,6 +44,7 @@ export async function getMemorySearchManager(params: {
       const primary = await QmdMemoryManager.create({
         cfg: params.cfg,
         agentId: params.agentId,
+        userId: params.userId,
         resolved,
         mode: statusOnly ? "status" : "full",
       });

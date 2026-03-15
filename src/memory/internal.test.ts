@@ -6,6 +6,7 @@ import {
   buildMultimodalChunkForIndexing,
   buildFileEntry,
   chunkMarkdown,
+  isMemoryPath,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   remapChunkLines,
@@ -38,6 +39,49 @@ describe("normalizeExtraMemoryPaths", () => {
       "",
     ]);
     expect(result).toEqual([path.resolve(workspaceDir, "notes"), absPath]);
+  });
+});
+
+describe("isMemoryPath", () => {
+  describe("without userId (isolation disabled)", () => {
+    it("allows root MEMORY.md", () => {
+      expect(isMemoryPath("MEMORY.md")).toBe(true);
+      expect(isMemoryPath("memory.md")).toBe(true);
+    });
+
+    it("allows all memory/ subdirectories", () => {
+      expect(isMemoryPath("memory/2024-01-01.md")).toBe(true);
+      expect(isMemoryPath("memory/user123/2024-01-01.md")).toBe(true);
+      expect(isMemoryPath("memory/any/subdir/file.md")).toBe(true);
+    });
+  });
+
+  describe("with userId (isolation enabled)", () => {
+    it("allows root MEMORY.md", () => {
+      expect(isMemoryPath("MEMORY.md", "user1")).toBe(true);
+      expect(isMemoryPath("memory.md", "user1")).toBe(true);
+    });
+
+    it("allows user's own memory directory", () => {
+      expect(isMemoryPath("memory/user1/2024-01-01.md", "user1")).toBe(true);
+      expect(isMemoryPath("memory/user1/subdir/notes.md", "user1")).toBe(true);
+    });
+
+    it("allows shared memory files at root level", () => {
+      expect(isMemoryPath("memory/2024-01-01.md", "user1")).toBe(true);
+      expect(isMemoryPath("memory/shared-notes.md", "user1")).toBe(true);
+    });
+
+    it("blocks other users' memory directories", () => {
+      expect(isMemoryPath("memory/user2/2024-01-01.md", "user1")).toBe(false);
+      expect(isMemoryPath("memory/other-user/file.md", "user1")).toBe(false);
+    });
+
+    it("blocks subdirectories under shared memory", () => {
+      // When isolation is enabled, subdirectories under memory/ that are not the user's own
+      // are considered potential user directories and are blocked
+      expect(isMemoryPath("memory/subdir/file.md", "user1")).toBe(false);
+    });
   });
 });
 
@@ -154,6 +198,84 @@ describe("listMemoryFiles", () => {
     expect(files.some((file) => file.endsWith("diagram.png"))).toBe(true);
     expect(files.some((file) => file.endsWith("note.wav"))).toBe(true);
     expect(files.some((file) => file.endsWith("ignore.bin"))).toBe(false);
+  });
+
+  describe("with userId (isolation enabled)", () => {
+    const getTmpDir = setupTempDirLifecycle("memory-isolation-");
+
+    it("includes user-specific memory files from memory/{userId}/", async () => {
+      const tmpDir = getTmpDir();
+      const userDir = path.join(tmpDir, "memory", "user1");
+      await fs.mkdir(userDir, { recursive: true });
+      await fs.writeFile(path.join(userDir, "2024-01-01.md"), "# User 1 note");
+      await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default");
+
+      const files = await listMemoryFiles(tmpDir, [], undefined, "user1");
+      expect(files.some((f) => f.endsWith("MEMORY.md"))).toBe(true);
+      expect(files.some((f) => f.endsWith("user1/2024-01-01.md"))).toBe(true);
+    });
+
+    it("includes shared memory files at root level", async () => {
+      const tmpDir = getTmpDir();
+      const memoryDir = path.join(tmpDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      await fs.writeFile(path.join(memoryDir, "shared.md"), "# Shared");
+      await fs.writeFile(path.join(memoryDir, "2024-01-01.md"), "# Date note");
+      await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default");
+
+      const files = await listMemoryFiles(tmpDir, [], undefined, "user1");
+      expect(files.some((f) => f.endsWith("MEMORY.md"))).toBe(true);
+      expect(files.some((f) => f.endsWith("shared.md"))).toBe(true);
+      expect(files.some((f) => f.endsWith("2024-01-01.md"))).toBe(true);
+    });
+
+    it("excludes other users' memory directories", async () => {
+      const tmpDir = getTmpDir();
+      const user1Dir = path.join(tmpDir, "memory", "user1");
+      const user2Dir = path.join(tmpDir, "memory", "user2");
+      await fs.mkdir(user1Dir, { recursive: true });
+      await fs.mkdir(user2Dir, { recursive: true });
+      await fs.writeFile(path.join(user1Dir, "note.md"), "# User 1");
+      await fs.writeFile(path.join(user2Dir, "note.md"), "# User 2");
+      await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default");
+
+      const filesUser1 = await listMemoryFiles(tmpDir, [], undefined, "user1");
+      expect(filesUser1.some((f) => f.endsWith("user1/note.md"))).toBe(true);
+      expect(filesUser1.some((f) => f.endsWith("user2/note.md"))).toBe(false);
+
+      const filesUser2 = await listMemoryFiles(tmpDir, [], undefined, "user2");
+      expect(filesUser2.some((f) => f.endsWith("user2/note.md"))).toBe(true);
+      expect(filesUser2.some((f) => f.endsWith("user1/note.md"))).toBe(false);
+    });
+
+    it("includes both user-specific and shared files together", async () => {
+      const tmpDir = getTmpDir();
+      const userDir = path.join(tmpDir, "memory", "user1");
+      const memoryDir = path.join(tmpDir, "memory");
+      await fs.mkdir(userDir, { recursive: true });
+      await fs.writeFile(path.join(userDir, "private.md"), "# Private");
+      await fs.writeFile(path.join(memoryDir, "shared.md"), "# Shared");
+      await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default");
+
+      const files = await listMemoryFiles(tmpDir, [], undefined, "user1");
+      expect(files.some((f) => f.endsWith("MEMORY.md"))).toBe(true);
+      expect(files.some((f) => f.endsWith("private.md"))).toBe(true);
+      expect(files.some((f) => f.endsWith("shared.md"))).toBe(true);
+    });
+
+    it("handles missing user directory gracefully", async () => {
+      const tmpDir = getTmpDir();
+      const memoryDir = path.join(tmpDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      await fs.writeFile(path.join(memoryDir, "shared.md"), "# Shared");
+      await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default");
+
+      // User "nonexistent" has no directory
+      const files = await listMemoryFiles(tmpDir, [], undefined, "nonexistent");
+      expect(files.some((f) => f.endsWith("MEMORY.md"))).toBe(true);
+      expect(files.some((f) => f.endsWith("shared.md"))).toBe(true);
+      // Should not error, just skip user-specific files
+    });
   });
 });
 

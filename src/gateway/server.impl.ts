@@ -6,7 +6,6 @@ import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
 import {
@@ -303,18 +302,9 @@ export async function startGatewayServer(
             .join("\n")}`,
         );
       }
+      // Re-read config after migration
+      configSnapshot = await readConfigFileSnapshot();
     }
-  }
-
-  configSnapshot = await readConfigFileSnapshot();
-  if (configSnapshot.exists && !configSnapshot.valid) {
-    const issues =
-      configSnapshot.issues.length > 0
-        ? formatConfigIssueLines(configSnapshot.issues, "", { normalizeRoot: true }).join("\n")
-        : "Unknown validation issue.";
-    throw new Error(
-      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
-    );
   }
 
   const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
@@ -398,6 +388,8 @@ export async function startGatewayServer(
     });
 
   // Fail fast before startup if required refs are unresolved.
+  // Note: Config rollback is handled in the CLI layer (gateway-cli/run.ts) before loadConfig().
+  // This validation in startGatewayServer serves as a safety net for direct callers (e.g., tests).
   let cfgAtStart: OpenClawConfig;
   {
     const freshSnapshot = await readConfigFileSnapshot();

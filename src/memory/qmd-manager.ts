@@ -124,6 +124,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   static async create(params: {
     cfg: OpenClawConfig;
     agentId: string;
+    userId?: string;
     resolved: ResolvedMemoryBackendConfig;
     mode?: QmdManagerMode;
   }): Promise<QmdMemoryManager | null> {
