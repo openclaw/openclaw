@@ -16,7 +16,7 @@ import {
   type UserSelectMenuInteraction,
 } from "@buape/carbon";
 import type { APIStringSelectComponent } from "discord-api-types/v10";
-import { ButtonStyle, ChannelType } from "discord-api-types/v10";
+import { ButtonStyle, ChannelType, ComponentType } from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "../../../../src/agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
 import {
@@ -701,6 +701,29 @@ function mapSelectValues(entry: DiscordComponentEntry, values: string[]): string
   return values;
 }
 
+/**
+ * Read a RadioGroup's selected value directly from the raw interaction payload.
+ * Carbon's FieldsHandler reads `.values` (array) for non-TextInput components,
+ * but Discord's RadioGroup submission uses `.value` (singular string | null).
+ * This bypasses Carbon to read the correct field.
+ */
+function resolveRadioGroupValueFromRaw(
+  interaction: ModalInteraction,
+  fieldId: string,
+): string | null {
+  for (const component of interaction.rawData.data.components ?? []) {
+    if (component.type === ComponentType.Label) {
+      const sub = (
+        component as { component?: { type: number; custom_id?: string; value?: string | null } }
+      ).component;
+      if (sub?.custom_id === fieldId && sub.type === ComponentType.RadioGroup) {
+        return sub.value ?? null;
+      }
+    }
+  }
+  return null;
+}
+
 function resolveModalFieldValues(
   field: DiscordModalEntry["fields"][number],
   interaction: ModalInteraction,
@@ -717,9 +740,15 @@ function resolveModalFieldValues(
         const value = required ? fields.getText(field.id, true) : fields.getText(field.id);
         return value ? [value] : [];
       }
-      case "select":
-      case "checkbox":
       case "radio": {
+        const value = resolveRadioGroupValueFromRaw(interaction, field.id);
+        if (required && !value) {
+          throw new Error(`Missing required field: ${field.id}`);
+        }
+        return value ? mapOptionLabels(optionLabels, [value]) : [];
+      }
+      case "select":
+      case "checkbox": {
         const values = required
           ? fields.getStringSelect(field.id, true)
           : (fields.getStringSelect(field.id) ?? []);
