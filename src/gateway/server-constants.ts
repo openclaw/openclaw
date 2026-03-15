@@ -21,8 +21,9 @@ export const __setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
     maxChatHistoryMessagesBytes = value;
   }
 };
-// Restore 10s timeout: 3s (from #44089) was too aggressive for CLI on slow systems
-// (e.g. device identity load + signature, disk I/O). Fixes #47103.
+// Allow sufficient time for CLI to load device identity, sign the connect payload,
+// and complete the handshake on slow systems (cold start, disk I/O). Too short causes
+// premature close with "gateway closed (1000 normal closure)" before connect completes.
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const getHandshakeTimeoutMs = () => {
   if (process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS) {
