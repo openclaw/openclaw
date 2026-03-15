@@ -177,9 +177,10 @@ export async function publishProfileEvent(
 
   // Publish to each relay in parallel with timeout
   const publishPromises = relays.map(async (relay) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("timeout")), RELAY_PUBLISH_TIMEOUT_MS);
+        timer = setTimeout(() => reject(new Error("timeout")), RELAY_PUBLISH_TIMEOUT_MS);
       });
 
       // oxlint-disable-next-line typescript/no-floating-promises
@@ -189,6 +190,8 @@ export async function publishProfileEvent(
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       failures.push({ relay, error: errorMessage });
+    } finally {
+      clearTimeout(timer);
     }
   });
 

@@ -111,9 +111,13 @@ export async function importProfileFromRelays(
     const events: Array<{ event: Event; relay: string }> = [];
 
     // Create timeout promise
+    let overallTimer: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<void>((resolve) => {
-      setTimeout(resolve, timeoutMs);
+      overallTimer = setTimeout(resolve, timeoutMs);
     });
+
+    // Track per-relay cleanup timers so they can be cleared early
+    const subTimers: ReturnType<typeof setTimeout>[] = [];
 
     // Create subscription promise
     const subscriptionPromise = new Promise<void>((resolve) => {
@@ -151,14 +155,22 @@ export async function importProfileFromRelays(
         );
 
         // Clean up subscription after timeout
-        setTimeout(() => {
+        const subTimer = setTimeout(() => {
           sub.close();
         }, timeoutMs);
+        subTimers.push(subTimer);
       }
     });
 
     // Wait for either all relays to respond or timeout
-    await Promise.race([subscriptionPromise, timeoutPromise]);
+    try {
+      await Promise.race([subscriptionPromise, timeoutPromise]);
+    } finally {
+      clearTimeout(overallTimer);
+      for (const t of subTimers) {
+        clearTimeout(t);
+      }
+    }
 
     // No events found
     if (events.length === 0) {
