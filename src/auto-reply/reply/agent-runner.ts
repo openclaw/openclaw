@@ -677,7 +677,7 @@ export async function runReplyAgent(params: {
 
       // Inject post-compaction workspace context for the next agent turn
       if (sessionKey) {
-        const workspaceDir = process.cwd();
+        const workspaceDir = followupRun.run.workspaceDir;
         readPostCompactionContext(workspaceDir, cfg)
           .then((contextContent) => {
             if (contextContent) {
@@ -700,6 +700,26 @@ export async function runReplyAgent(params: {
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
+
+    // Post-compaction read audit (Layer 3)
+    if (sessionKey && pendingPostCompactionAudits.get(sessionKey)) {
+      pendingPostCompactionAudits.delete(sessionKey); // Delete FIRST — one-shot only
+      try {
+        const sessionFile = activeSessionEntry?.sessionFile;
+        if (sessionFile) {
+          const messages = readSessionMessages(sessionFile);
+          const readPaths = extractReadPaths(messages);
+          const workspaceDir = followupRun.run.workspaceDir;
+          const audit = auditPostCompactionReads(readPaths, workspaceDir);
+          if (!audit.passed) {
+            enqueueSystemEvent(formatAuditWarning(audit.missingPatterns), { sessionKey });
+          }
+        }
+      } catch {
+        // Silent failure — audit is best-effort
+      }
+    }
+
 
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
