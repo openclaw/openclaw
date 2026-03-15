@@ -79,7 +79,7 @@ function getPairingStoreMocks() {
   };
 }
 
-const sock: MockSock = createMockSock();
+let sock: MockSock = createMockSock();
 
 vi.mock("../media/store.js", () => ({
   saveMediaBuffer: vi.fn().mockResolvedValue({
@@ -134,6 +134,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    sock = createMockSock();
     mockLoadConfig.mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
     readAllowFromStoreMock.mockResolvedValue([]);
     upsertPairingRequestMock.mockResolvedValue({
