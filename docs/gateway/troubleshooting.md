@@ -2,7 +2,7 @@
 summary: "Deep troubleshooting runbook for gateway, channels, automation, nodes, and browser"
 read_when:
   - The troubleshooting hub pointed you here for deeper diagnosis
-  - You need stable symptom based runbook sections with exact commands
+  - You need stable symptom-based runbook sections with exact commands
 title: "Troubleshooting"
 ---
 
@@ -88,7 +88,7 @@ Related:
 - [/channels/pairing](/channels/pairing)
 - [/channels/groups](/channels/groups)
 
-## Dashboard control ui connectivity
+## Dashboard Control UI connectivity
 
 When dashboard/control UI will not connect, validate URL, auth mode, and secure context assumptions.
 
@@ -181,7 +181,7 @@ Related:
 
 ## Channel connected messages not flowing
 
-If channel state is connected but message flow is dead, focus on policy, permissions, and channel specific delivery rules.
+If channel state is connected but message flow is dead, focus on policy, permissions, and channel-specific delivery rules.
 
 ```bash
 openclaw channels status --probe

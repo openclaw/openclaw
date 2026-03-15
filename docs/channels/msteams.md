@@ -19,7 +19,7 @@ Microsoft Teams ships as a plugin and is not bundled with the core install.
 
 **Breaking change (2026.1.15):** MS Teams moved out of core. If you use it, you must install the plugin.
 
-Explainable: keeps core installs lighter and lets MS Teams dependencies update independently.
+Why: keeps core installs lighter and lets MS Teams dependencies update independently.
 
 Install via CLI (npm registry):
 
