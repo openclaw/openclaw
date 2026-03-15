@@ -10,6 +10,7 @@ import {
   createNostrProfileHttpHandler,
   getNostrProfileRateLimitStateSizeForTest,
   isNostrProfileRateLimitedForTest,
+  parseAccountIdFromPath,
   type NostrProfileHttpContext,
 } from "./nostr-profile-http.js";
 
@@ -518,6 +519,32 @@ describe("nostr-profile-http", () => {
       expect(res._getStatusCode()).toBe(404);
       const data = JSON.parse(res._getData());
       expect(data.error).toContain("not found");
+    });
+  });
+
+  describe("parseAccountIdFromPath", () => {
+    it("extracts a valid account id", () => {
+      expect(parseAccountIdFromPath("/api/channels/nostr/default/profile")).toBe("default");
+    });
+
+    it("accepts alphanumeric ids with dashes and underscores", () => {
+      expect(parseAccountIdFromPath("/api/channels/nostr/my-bot_1/profile")).toBe("my-bot_1");
+    });
+
+    it("returns null for non-matching paths", () => {
+      expect(parseAccountIdFromPath("/api/channels/telegram/default/profile")).toBeNull();
+    });
+
+    it("rejects path traversal sequences", () => {
+      expect(parseAccountIdFromPath("/api/channels/nostr/../admin/profile")).toBeNull();
+    });
+
+    it("rejects percent-encoded characters", () => {
+      expect(parseAccountIdFromPath("/api/channels/nostr/%2e%2e/profile")).toBeNull();
+    });
+
+    it("rejects account ids with special characters", () => {
+      expect(parseAccountIdFromPath("/api/channels/nostr/acc<script>/profile")).toBeNull();
     });
   });
 });
