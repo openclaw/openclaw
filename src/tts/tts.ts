@@ -10,6 +10,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
+import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -633,7 +634,7 @@ export async function textToSpeech(params: {
   const userProvider = getTtsProvider(config, params.prefsPath ?? resolveTtsPrefsPath(config));
   const overrideProvider = params.overrides?.provider;
   const primaryProvider = overrideProvider ?? userProvider;
-  const normalizedPrimary = primaryProvider?.toLowerCase();
+  const normalizedPrimary = primaryProvider ? normalizeProviderId(primaryProvider) : undefined;
 
   const builtinSet = new Set<string>(TTS_PROVIDERS.map((p) => p.toLowerCase()));
   const customPlugins: string[] = [];
@@ -869,7 +870,7 @@ export async function textToSpeechTelephony(params: {
   const { config } = setup;
   const pluginTtsRegistry = await buildPluginTtsRegistry();
   const userProvider = getTtsProvider(config, params.prefsPath ?? resolveTtsPrefsPath(config));
-  const normalizedUser = userProvider?.toLowerCase();
+  const normalizedUser = userProvider ? normalizeProviderId(userProvider) : undefined;
 
   const builtinSetTelephony = new Set<string>(TTS_PROVIDERS.map((p) => p.toLowerCase()));
   const customPluginsTelephony: string[] = [];

@@ -344,10 +344,6 @@ export async function createEmbeddingProvider(
 
   const pluginProviders = getPluginEmbeddingProviders(options);
   const normalizedRequested = normalizeProviderId(requestedProvider);
-  const pluginProvider = pluginProviders[normalizedRequested];
-  if (pluginProvider) {
-    return { provider: pluginProvider, requestedProvider };
-  }
 
   const createProvider = async (id: string) => {
     if (id === "local") {
@@ -379,6 +375,39 @@ export async function createEmbeddingProvider(
       `Unknown embedding provider "${id}". Check your configuration or ensure the plugin that provides this ID is loaded.`,
     );
   };
+
+  const pluginProvider = pluginProviders[normalizedRequested];
+  if (pluginProvider) {
+    // Wrap plugin provider in error handler to support fallback
+    try {
+      // Test the plugin by calling embedQuery with a dummy value
+      await pluginProvider.embedQuery("test");
+      return { provider: pluginProvider, requestedProvider };
+    } catch (pluginErr) {
+      // Plugin failed - will fall through to fallback logic below
+      const reason = formatErrorMessage(pluginErr);
+      if (fallback) {
+        try {
+          const fallbackResult = await createProvider(fallback);
+          return {
+            ...fallbackResult,
+            requestedProvider,
+            fallbackFrom: requestedProvider,
+            fallbackReason: reason,
+          };
+        } catch {
+          // Fallback also failed - throw the original plugin error
+          const wrapped = new Error(reason) as Error & { cause?: unknown };
+          wrapped.cause = pluginErr;
+          throw wrapped;
+        }
+      }
+      // No fallback - throw the original error
+      const wrapped = new Error(reason) as Error & { cause?: unknown };
+      wrapped.cause = pluginErr;
+      throw wrapped;
+    }
+  }
 
   const formatPrimaryError = (err: unknown, provider: string) =>
     provider === "local" ? formatLocalSetupError(err) : formatErrorMessage(err);
