@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- chrome-cleanup.plist — OpenClaw Chrome Process Cleanup (macOS launchd)
+     Install: cp chrome-cleanup.plist ~/Library/LaunchAgents/com.openclaw.chrome-cleanup.plist
+              launchctl load ~/Library/LaunchAgents/com.openclaw.chrome-cleanup.plist
+     Uninstall: launchctl unload ~/Library/LaunchAgents/com.openclaw.chrome-cleanup.plist
+                rm ~/Library/LaunchAgents/com.openclaw.chrome-cleanup.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.openclaw.chrome-cleanup</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Script installed to ~/.openclaw/browser/chrome-cleanup.sh by install.sh -->
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec "$HOME/.openclaw/browser/chrome-cleanup.sh" daemon</string>
+    </array>
+
+    <!-- Restart if it crashes -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Throttle restarts to avoid tight crash loops -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Redirect stdout/stderr to private log directory (not world-readable /tmp).
+         install.sh replaces HOME_PLACEHOLDER with the actual home directory. -->
+    <key>StandardOutPath</key>
+    <string>HOME_PLACEHOLDER/.openclaw/logs/chrome-cleanup.launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>HOME_PLACEHOLDER/.openclaw/logs/chrome-cleanup.launchd.err.log</string>
+
+    <!-- Run as the current user (LaunchAgent, not LaunchDaemon) -->
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
