@@ -1024,6 +1024,32 @@ describe("resolveModel", () => {
     });
   });
 
+  it("moves api-version header to query param for Azure OpenAI URLs", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-gpt53-chat": {
+            baseUrl: "https://my-resource.openai.azure.com/openai/deployments/gpt-5.3-chat",
+            api: "openai-completions",
+            headers: {
+              "api-version": "2024-12-01-preview",
+              "api-key": "test-key",
+            },
+            models: [makeModel("gpt-5.3-chat")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("azure-gpt53-chat", "gpt-5.3-chat", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.baseUrl).toContain("api-version=2024-12-01-preview");
+    const headers = (result.model as unknown as { headers?: Record<string, string> }).headers;
+    expect(headers?.["api-version"]).toBeUndefined();
+    expect(headers?.["api-key"]).toBe("test-key");
+  });
+
   it("does not override when no provider config exists", () => {
     mockDiscoveredModel({
       provider: "anthropic",
