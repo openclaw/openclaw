@@ -387,6 +387,10 @@ function buildTelegramThreadReplyParams(params: {
 
   if (params.replyToMessageId != null) {
     const replyToMessageId = Math.trunc(params.replyToMessageId);
+    if (!Number.isFinite(replyToMessageId) || replyToMessageId <= 0) {
+      // Non-numeric or invalid reply id (e.g. from cross-surface routing); skip reply threading.
+      return threadParams;
+    }
     if (params.quoteText?.trim()) {
       threadParams.reply_parameters = {
         message_id: replyToMessageId,
