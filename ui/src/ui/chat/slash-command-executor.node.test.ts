@@ -323,6 +323,28 @@ describe("executeSlashCommand /model subcommands", () => {
       expect.objectContaining({ model: "info" }),
     );
   });
+
+  it("sets a real model name via sessions.patch (regression)", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return { ok: true };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "gpt-4.1",
+    );
+
+    expect(result.content).toContain("gpt-4.1");
+    expect(request).toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({ model: "gpt-4.1" }),
+    );
+  });
 });
 
 describe("executeSlashCommand directives", () => {
