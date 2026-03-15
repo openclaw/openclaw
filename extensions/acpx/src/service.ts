@@ -41,8 +41,13 @@ export function createAcpxRuntimeService(
   return {
     id: "acpx-runtime",
     async start(ctx: OpenClawPluginServiceContext): Promise<void> {
+      // Prefer the resolved config from the runtime snapshot (SecretRefs already
+      // resolved) over the raw registration-time config.
+      const rawConfig =
+        (ctx.config.plugins?.entries as Record<string, { config?: unknown }> | undefined)?.acpx
+          ?.config ?? params.pluginConfig;
       const pluginConfig = resolveAcpxPluginConfig({
-        rawConfig: params.pluginConfig,
+        rawConfig,
         workspaceDir: ctx.workspaceDir,
       });
       const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;

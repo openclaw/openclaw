@@ -2384,4 +2384,78 @@ describe("secrets runtime snapshot", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves SecretRefs in plugin MCP server env vars", async () => {
+    const config = asConfig({
+      plugins: {
+        entries: {
+          acpx: {
+            config: {
+              mcpServers: {
+                github: {
+                  command: "npx",
+                  args: ["-y", "@modelcontextprotocol/server-github"],
+                  env: {
+                    GITHUB_TOKEN: {
+                      source: "env",
+                      provider: "default",
+                      id: "GH_TOKEN_SECRET",
+                    },
+                    PLAIN_VAR: "keep-as-is",
+                  },
+                },
+                slack: {
+                  command: "npx",
+                  env: {
+                    SLACK_TOKEN: {
+                      source: "env",
+                      provider: "default",
+                      id: "SLACK_TOKEN_SECRET",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {
+        GH_TOKEN_SECRET: "ghp-resolved-token",
+        SLACK_TOKEN_SECRET: "xoxb-resolved-slack",
+      },
+      agentDirs: [],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const entries = snapshot.config.plugins?.entries as Record<
+      string,
+      { config?: Record<string, unknown> }
+    >;
+    const mcpServers = entries?.acpx?.config?.mcpServers as Record<
+      string,
+      { env?: Record<string, unknown> }
+    >;
+    expect(mcpServers?.github?.env?.GITHUB_TOKEN).toBe("ghp-resolved-token");
+    expect(mcpServers?.github?.env?.PLAIN_VAR).toBe("keep-as-is");
+    expect(mcpServers?.slack?.env?.SLACK_TOKEN).toBe("xoxb-resolved-slack");
+
+    // Source config should retain the original SecretRef objects
+    const sourceEntries = snapshot.sourceConfig.plugins?.entries as Record<
+      string,
+      { config?: Record<string, unknown> }
+    >;
+    const sourceMcpServers = sourceEntries?.acpx?.config?.mcpServers as Record<
+      string,
+      { env?: Record<string, unknown> }
+    >;
+    expect(sourceMcpServers?.github?.env?.GITHUB_TOKEN).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GH_TOKEN_SECRET",
+    });
+  });
 });
