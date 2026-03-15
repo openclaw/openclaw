@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import * as tar from "tar";
 import type { RuntimeEnv } from "../runtime.js";
@@ -9,6 +10,7 @@ type BackupManifestAsset = {
   kind: string;
   sourcePath: string;
   archivePath: string;
+  sha256?: string;
 };
 
 type BackupManifest = {
@@ -49,6 +51,8 @@ export type BackupVerifyResult = {
   runtimeVersion: string;
   assetCount: number;
   entryCount: number;
+  schemaVersion: number;
+  checksumsVerified: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -105,7 +109,7 @@ function parseManifest(raw: string): BackupManifest {
   if (!isRecord(parsed)) {
     throw new Error("Backup manifest must be an object.");
   }
-  if (parsed.schemaVersion !== 1) {
+  if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2) {
     throw new Error(`Unsupported backup manifest schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   if (typeof parsed.archiveRoot !== "string" || !parsed.archiveRoot.trim()) {
@@ -136,11 +140,12 @@ function parseManifest(raw: string): BackupManifest {
       kind: asset.kind,
       sourcePath: asset.sourcePath,
       archivePath: asset.archivePath,
+      sha256: typeof asset.sha256 === "string" && asset.sha256.trim() ? asset.sha256 : undefined,
     });
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: parsed.schemaVersion,
     archiveRoot: parsed.archiveRoot,
     createdAt: parsed.createdAt,
     runtimeVersion:
@@ -170,13 +175,21 @@ function parseManifest(raw: string): BackupManifest {
   };
 }
 
-async function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
+type ArchiveEntry = {
+  path: string;
+  isDirectory: boolean;
+};
+
+async function listArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> {
+  const entries: ArchiveEntry[] = [];
   await tar.t({
     file: archivePath,
     gzip: true,
     onentry: (entry) => {
-      entries.push(entry.path);
+      entries.push({
+        path: entry.path,
+        isDirectory: entry.type === "Directory",
+      });
     },
   });
   return entries;
@@ -252,15 +265,158 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
   }
 }
 
+async function hashMultipleEntries(params: {
+  archivePath: string;
+  entryPaths: Set<string>;
+}): Promise<Map<string, string>> {
+  const results = new Map<string, string>();
+  const pending: Promise<void>[] = [];
+  await tar.t({
+    file: params.archivePath,
+    gzip: true,
+    onentry: (entry) => {
+      if (!params.entryPaths.has(entry.path)) {
+        entry.resume();
+        return;
+      }
+      pending.push(
+        new Promise<void>((resolve, reject) => {
+          const hash = createHash("sha256");
+          entry.on("data", (chunk: Buffer | string) => {
+            hash.update(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          });
+          entry.on("error", reject);
+          entry.on("end", () => {
+            results.set(entry.path, hash.digest("hex"));
+            resolve();
+          });
+        }),
+      );
+    },
+  });
+  await Promise.all(pending);
+  return results;
+}
+
+async function verifyAssetChecksums(params: {
+  archivePath: string;
+  manifest: BackupManifest;
+  archiveEntries: ArchiveEntry[];
+}): Promise<void> {
+  // Map normalized paths to raw paths, excluding directory entries
+  const normalizedToRaw = new Map<string, string>();
+  for (const entry of params.archiveEntries) {
+    if (entry.isDirectory) {
+      continue;
+    }
+    const normalized = normalizeArchivePath(entry.path, "Archive entry");
+    normalizedToRaw.set(normalized, entry.path);
+  }
+
+  // Pre-compute which entries each asset needs and collect all raw paths
+  type AssetCheck = {
+    asset: BackupManifestAsset;
+    assetArchivePath: string;
+    entries: string[];
+  };
+  const checks: AssetCheck[] = [];
+  const allNeededRawPaths = new Set<string>();
+
+  for (const asset of params.manifest.assets) {
+    if (!asset.sha256) {
+      if (params.manifest.schemaVersion >= 2) {
+        throw new Error(
+          `Schema v2 asset is missing required checksum: ${asset.kind} (${asset.sourcePath})`,
+        );
+      }
+      continue;
+    }
+
+    const assetArchivePath = normalizeArchivePath(asset.archivePath, "Asset archive path");
+    const assetEntries = [...normalizedToRaw.keys()]
+      .filter((entry) => entry === assetArchivePath || isArchivePathWithin(entry, assetArchivePath))
+      .toSorted();
+
+    if (assetEntries.length === 0) {
+      throw new Error(
+        `Checksum verification failed: no entries found for asset ${asset.kind} (${asset.sourcePath})`,
+      );
+    }
+
+    checks.push({ asset, assetArchivePath, entries: assetEntries });
+    for (const entry of assetEntries) {
+      allNeededRawPaths.add(normalizedToRaw.get(entry)!);
+    }
+  }
+
+  // Single-pass streaming hash of all needed entries (no content buffering)
+  const entryHashes = await hashMultipleEntries({
+    archivePath: params.archivePath,
+    entryPaths: allNeededRawPaths,
+  });
+
+  // Verify checksums using streamed hashes
+  for (const { asset, assetArchivePath, entries } of checks) {
+    if (entries.length === 1 && entries[0] === assetArchivePath) {
+      const rawPath = normalizedToRaw.get(entries[0])!;
+      const computed = entryHashes.get(rawPath);
+      if (!computed) {
+        throw new Error(`Failed to hash entry for asset ${asset.kind} (${asset.sourcePath})`);
+      }
+      if (computed !== asset.sha256) {
+        throw new Error(
+          `Checksum mismatch for asset ${asset.kind} (${asset.sourcePath}): expected ${asset.sha256}, got ${computed}`,
+        );
+      }
+    } else {
+      const fileHashes: Array<{ relativePath: string; sha256: string }> = [];
+      for (const entryPath of entries) {
+        const relativePath = path.posix.relative(assetArchivePath, entryPath);
+        if (!relativePath) {
+          continue;
+        }
+        const rawPath = normalizedToRaw.get(entryPath)!;
+        const sha256 = entryHashes.get(rawPath);
+        if (!sha256) {
+          throw new Error(`Failed to hash entry for asset ${asset.kind} (${asset.sourcePath})`);
+        }
+        fileHashes.push({ relativePath, sha256 });
+      }
+
+      fileHashes.sort((a, b) =>
+        a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0,
+      );
+      const hash = createHash("sha256");
+      for (const entry of fileHashes) {
+        hash.update(`${entry.relativePath}\0${entry.sha256}\n`);
+      }
+      const computed = hash.digest("hex");
+      if (computed !== asset.sha256) {
+        throw new Error(
+          `Checksum mismatch for asset ${asset.kind} (${asset.sourcePath}): expected ${asset.sha256}, got ${computed}`,
+        );
+      }
+    }
+  }
+}
+
 function formatResult(result: BackupVerifyResult): string {
-  return [
+  const lines = [
     `Backup archive OK: ${result.archivePath}`,
     `Archive root: ${result.archiveRoot}`,
     `Created at: ${result.createdAt}`,
     `Runtime version: ${result.runtimeVersion}`,
     `Assets verified: ${result.assetCount}`,
     `Archive entries scanned: ${result.entryCount}`,
-  ].join("\n");
+  ];
+  if (result.checksumsVerified) {
+    lines.push("Content checksums: verified");
+  } else if (result.schemaVersion < 2) {
+    lines.push("Content checksums: not present (schema v1 archive)");
+  } else {
+    lines.push("Content checksums: not present");
+  }
+  return lines.join("\n");
 }
 
 function findDuplicateNormalizedEntryPath(
@@ -281,14 +437,14 @@ export async function backupVerifyCommand(
   opts: BackupVerifyOptions,
 ): Promise<BackupVerifyResult> {
   const archivePath = resolveUserPath(opts.archive);
-  const rawEntries = await listArchiveEntries(archivePath);
-  if (rawEntries.length === 0) {
+  const archiveEntries = await listArchiveEntries(archivePath);
+  if (archiveEntries.length === 0) {
     throw new Error("Backup archive is empty.");
   }
 
-  const entries = rawEntries.map((entry) => ({
-    raw: entry,
-    normalized: normalizeArchivePath(entry, "Archive entry"),
+  const entries = archiveEntries.map((entry) => ({
+    raw: entry.path,
+    normalized: normalizeArchivePath(entry.path, "Archive entry"),
   }));
   const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
 
@@ -309,6 +465,16 @@ export async function backupVerifyCommand(
   const manifest = parseManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
 
+  const hasChecksums = manifest.schemaVersion >= 2 && manifest.assets.some((asset) => asset.sha256);
+
+  if (hasChecksums) {
+    await verifyAssetChecksums({
+      archivePath,
+      manifest,
+      archiveEntries,
+    });
+  }
+
   const result: BackupVerifyResult = {
     ok: true,
     archivePath,
@@ -316,7 +482,9 @@ export async function backupVerifyCommand(
     createdAt: manifest.createdAt,
     runtimeVersion: manifest.runtimeVersion,
     assetCount: manifest.assets.length,
-    entryCount: rawEntries.length,
+    entryCount: archiveEntries.length,
+    schemaVersion: manifest.schemaVersion,
+    checksumsVerified: hasChecksums,
   };
 
   runtime.log(opts.json ? JSON.stringify(result, null, 2) : formatResult(result));
