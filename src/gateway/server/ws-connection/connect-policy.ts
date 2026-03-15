@@ -12,6 +12,7 @@ export type ControlUiAuthPolicy = {
 
 export function resolveControlUiAuthPolicy(params: {
   isControlUi: boolean;
+  isWebchat?: boolean;
   controlUiConfig:
     | {
         allowInsecureAuth?: boolean;
@@ -20,10 +21,11 @@ export function resolveControlUiAuthPolicy(params: {
     | undefined;
   deviceRaw: ConnectParams["device"] | null | undefined;
 }): ControlUiAuthPolicy {
+  const isBrowserClient = params.isControlUi || params.isWebchat === true;
   const allowInsecureAuthConfigured =
     params.isControlUi && params.controlUiConfig?.allowInsecureAuth === true;
   const dangerouslyDisableDeviceAuth =
-    params.isControlUi && params.controlUiConfig?.dangerouslyDisableDeviceAuth === true;
+    isBrowserClient && params.controlUiConfig?.dangerouslyDisableDeviceAuth === true;
   return {
     isControlUi: params.isControlUi,
     allowInsecureAuthConfigured,
