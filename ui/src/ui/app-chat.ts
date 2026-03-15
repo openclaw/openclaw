@@ -13,6 +13,7 @@ import { normalizeBasePath } from "./navigation.ts";
 import type { ModelCatalogEntry } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
+import { resetChatTransientUi } from "./views/chat.ts";
 
 export type ChatHost = {
   client: GatewayBrowserClient | null;
@@ -217,6 +218,7 @@ export async function handleSendChat(
         host.chatMessage = "";
         host.chatAttachments = [];
       }
+      resetChatTransientUi();
       enqueueChatMessage(host, message, undefined, isChatResetCommand(message), {
         args: parsed.args,
         name: parsed.command.name,
@@ -228,6 +230,7 @@ export async function handleSendChat(
       host.chatMessage = "";
       host.chatAttachments = [];
     }
+    resetChatTransientUi();
     await dispatchSlashCommand(host, parsed.command.name, parsed.args, {
       previousDraft: prevDraft,
       restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
@@ -240,6 +243,7 @@ export async function handleSendChat(
     host.chatMessage = "";
     host.chatAttachments = [];
   }
+  resetChatTransientUi();
 
   if (isChatBusy(host)) {
     enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);

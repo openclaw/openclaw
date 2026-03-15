@@ -532,6 +532,37 @@
   background: color-mix(in srgb, var(--danger) 85%, #fff);
 }
 
+.context-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  max-width: min(100%, 520px);
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--ctx-color, var(--warning)) 35%, var(--border));
+  background: var(--ctx-bg, color-mix(in srgb, var(--warning) 10%, var(--panel)));
+  color: var(--ctx-color, var(--warning));
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.context-notice__icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  stroke: currentColor;
+}
+
+.context-notice__detail {
+  margin-left: auto;
+  opacity: 0.8;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
 .slash-menu {
   position: absolute;
   bottom: 100%;
