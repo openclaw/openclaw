@@ -25,6 +25,19 @@ function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
   return resolved;
 }
 
+export function sortChannelPlugins(channels: ChannelPlugin[]): ChannelPlugin[] {
+  return dedupeChannels(channels).toSorted((a, b) => {
+    const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
+    const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
+    const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
+    const orderB = b.meta.order ?? (indexB === -1 ? 999 : indexB);
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
+    return a.id.localeCompare(b.id);
+  });
+}
+
 type CachedChannelPlugins = {
   registryVersion: number;
   sorted: ChannelPlugin[];
@@ -47,16 +60,7 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
     return cached;
   }
 
-  const sorted = dedupeChannels(registry.channels.map((entry) => entry.plugin)).toSorted((a, b) => {
-    const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
-    const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
-    const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
-    const orderB = b.meta.order ?? (indexB === -1 ? 999 : indexB);
-    if (orderA !== orderB) {
-      return orderA - orderB;
-    }
-    return a.id.localeCompare(b.id);
-  });
+  const sorted = sortChannelPlugins(registry.channels.map((entry) => entry.plugin));
   const byId = new Map<string, ChannelPlugin>();
   for (const plugin of sorted) {
     byId.set(plugin.id, plugin);

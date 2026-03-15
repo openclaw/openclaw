@@ -19,25 +19,30 @@ async function importFreshPluginTestModules() {
   vi.unmock("./hook-runner-global.js");
   vi.unmock("./hooks.js");
   vi.unmock("./loader.js");
+  vi.unmock("./commands.js");
   vi.unmock("jiti");
-  const [loader, hookRunnerGlobal, hooks] = await Promise.all([
+  const [loader, hookRunnerGlobal, hooks, commands] = await Promise.all([
     import("./loader.js"),
     import("./hook-runner-global.js"),
     import("./hooks.js"),
+    import("./commands.js"),
   ]);
   return {
     ...loader,
     ...hookRunnerGlobal,
     ...hooks,
+    ...commands,
   };
 }
 
 const {
   __testing,
   clearPluginLoaderCache,
+  clearPluginCommands,
   createHookRunner,
   getGlobalHookRunner,
   loadOpenClawPlugins,
+  matchPluginCommand,
   resetGlobalHookRunner,
 } = await importFreshPluginTestModules();
 
@@ -292,6 +297,7 @@ function createPluginSdkAliasFixture(params?: {
 
 afterEach(() => {
   clearPluginLoaderCache();
+  clearPluginCommands();
   setActivePluginRegistry(createEmptyPluginRegistry());
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -537,6 +543,67 @@ describe("loadOpenClawPlugins", () => {
     const handled = await handler({ url: "/hook" } as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(routeHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps read-only loads out of the global plugin command registry", () => {
+    useNoBundledPlugins();
+    const gatewayPlugin = writePlugin({
+      id: "gateway-command",
+      filename: "gateway-command.cjs",
+      body: `module.exports = {
+        id: "gateway-command",
+        register(api) {
+          api.registerCommand({
+            name: "gatewaycmd",
+            description: "Gateway command",
+            handler: async () => ({ text: "ok" }),
+          });
+        },
+      };`,
+    });
+    const inspectionPlugin = writePlugin({
+      id: "inspection-command",
+      filename: "inspection-command.cjs",
+      body: `module.exports = {
+        id: "inspection-command",
+        register(api) {
+          api.registerCommand({
+            name: "inspectcmd",
+            description: "Inspection command",
+            handler: async () => ({ text: "ok" }),
+          });
+        },
+      };`,
+    });
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: gatewayPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [gatewayPlugin.file] },
+          allow: ["gateway-command"],
+        },
+      },
+    });
+    expect(matchPluginCommand("/gatewaycmd")).not.toBeNull();
+
+    const inspectionRegistry = loadOpenClawPlugins({
+      workspaceDir: inspectionPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [inspectionPlugin.file] },
+          allow: ["inspection-command"],
+        },
+      },
+      activate: false,
+      cache: false,
+    });
+
+    expect(inspectionRegistry.commands).toHaveLength(1);
+    expect(inspectionRegistry.diagnostics).toEqual([]);
+    expect(matchPluginCommand("/gatewaycmd")).not.toBeNull();
+    expect(matchPluginCommand("/inspectcmd")).toBeNull();
   });
 
   it("does not reuse cached bundled plugin registries across env changes", () => {

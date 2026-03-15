@@ -552,8 +552,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
   }
 
-  // Clear previously registered plugin commands before reloading
-  clearPluginCommands();
+  // Clear previously registered plugin commands before reloading the live runtime registry.
+  if (shouldActivate) {
+    clearPluginCommands();
+  }
 
   // Lazily initialize the runtime so startup paths that discover/skip plugins do
   // not eagerly load every channel runtime dependency.
@@ -592,6 +594,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     logger,
     runtime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
+    registerGlobalCommands: shouldActivate,
   });
 
   const discovery = discoverOpenClawPlugins({
