@@ -1398,8 +1398,8 @@
 .cron-job-payload,
 .cron-job-agent,
 .cron-job-state {
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .cron-job .list-title {
@@ -1674,8 +1674,8 @@
 
 .session-key-cell .session-link,
 .session-key-display-name {
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .session-key-display-name {
@@ -2377,8 +2377,8 @@
 
 /* Chat text */
 .chat-text {
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
   color: var(--chat-text);
   line-height: 1.5;
 }
@@ -3057,8 +3057,8 @@
 
 .agent-kv > div {
   min-width: 0;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .agent-kv-sub {
