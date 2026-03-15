@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Carapace** — Cedar authorization for everything your agent does. Gates MCP tool calls, shell commands (by binary name), and outbound API requests (by domain) via Cedarling WASM (Cedar 4.4.2). Local GUI with visual policy builder, risk-based categorization, and human oversight.
+  npm: `@clawdreyhepburn/carapace`
+  repo: `https://github.com/clawdreyhepburn/carapace`
+  install: `openclaw plugins install @clawdreyhepburn/carapace`
