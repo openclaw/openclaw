@@ -1261,4 +1261,33 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
       }
     }
   });
+
+  it("routes DM messages to user:<userId> instead of channel:<dmChannelId>", async () => {
+    // Regression test for issue #47500: DM messages were routed to
+    // channel:<dmChannelId> instead of user:<userId>, preventing bot replies.
+    const dmParams = {
+      client: { rest: { post: async () => ({ id: "thread" }) } } as unknown as Client,
+      message: {
+        id: "dm-msg-1",
+        channelId: "dm-channel-999",
+      } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
+      messageChannelId: "dm-channel-999",
+      isGuildMessage: false,
+      isDirectMessage: true,
+      directUserId: "user-123",
+      channelConfig: null,
+      threadChannel: null,
+      baseText: "hello from dm",
+      combinedBody: "hello from dm",
+      replyToMode: "all" as const,
+      agentId: "agent",
+      channel: "discord" as const,
+    };
+    const plan = await resolveDiscordAutoThreadReplyPlan(dmParams);
+    // Must route to user:userId, not channel:dmChannelId
+    expect(plan.deliverTarget).toBe("user:user-123");
+    expect(plan.replyTarget).toBe("user:user-123");
+    // DM messages never create auto-threads
+    expect(plan.autoThreadContext).toBeNull();
+  });
 });

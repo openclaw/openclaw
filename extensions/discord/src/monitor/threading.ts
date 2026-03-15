@@ -318,6 +318,8 @@ type MaybeCreateDiscordAutoThreadParams = {
   message: DiscordMessageEvent["message"];
   messageChannelId?: string;
   isGuildMessage: boolean;
+  isDirectMessage?: boolean;
+  directUserId?: string | null;
   channelConfig?: DiscordChannelConfigResolved | null;
   threadChannel?: DiscordThreadChannel | null;
   channelType?: ChannelType;
@@ -335,7 +337,13 @@ export async function resolveDiscordAutoThreadReplyPlan(
   const messageChannelId = resolveTrimmedDiscordMessageChannelId(params);
   // Prefer the resolved thread channel ID when available so replies stay in-thread.
   const targetChannelId = params.threadChannel?.id ?? (messageChannelId || "unknown");
-  const originalReplyTarget = `channel:${targetChannelId}`;
+  // DM messages must be routed to user:<userId> so the Discord API creates/opens
+  // the correct DM channel. Using channel:<dmChannelId> fails for DMs because
+  // reply delivery expects a guild/thread channel ID, not a DM channel ID.
+  const originalReplyTarget =
+    params.isDirectMessage && params.directUserId
+      ? `user:${params.directUserId}`
+      : `channel:${targetChannelId}`;
   const createdThreadId = await maybeCreateDiscordAutoThread({
     client: params.client,
     message: params.message,
