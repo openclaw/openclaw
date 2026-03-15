@@ -157,6 +157,7 @@ export function stripPluginOnlyAllowlist(
   policy: ToolPolicyLike | undefined,
   groups: PluginToolGroups,
   coreTools: Set<string>,
+  isStaticCoreId?: (id: string) => boolean,
 ): AllowlistResolution {
   if (!policy?.allow || policy.allow.length === 0) {
     return { policy, unknownAllowlist: [], strippedAllowlist: false };
@@ -177,7 +178,13 @@ export function stripPluginOnlyAllowlist(
     const isPluginEntry =
       entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
     const expanded = expandToolGroups([entry]);
-    const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
+    // Check against currently-loaded core tools and also static catalog to avoid false
+    // "unknown" warnings for optional core tools not loaded at runtime
+    // (e.g., memory_search/memory_get when the memory plugin is disabled).
+    const isCoreEntry =
+      expanded.some((tool) => coreTools.has(tool)) ||
+      (isStaticCoreId !== undefined &&
+        (isStaticCoreId(entry) || expanded.some((tool) => isStaticCoreId!(tool))));
     if (isCoreEntry) {
       hasCoreEntry = true;
     }

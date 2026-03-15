@@ -89,7 +89,12 @@ export function applyToolPolicyPipeline(params: {
 
     let policy: ToolPolicyLike | undefined = step.policy;
     if (step.stripPluginOnlyAllowlist) {
-      const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
+      const resolved = stripPluginOnlyAllowlist(
+        policy,
+        pluginGroups,
+        coreToolNames,
+        isKnownCoreToolId,
+      );
       if (resolved.unknownAllowlist.length > 0) {
         const entries = resolved.unknownAllowlist.join(", ");
         const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
