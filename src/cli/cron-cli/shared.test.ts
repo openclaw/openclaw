@@ -152,12 +152,61 @@ describe("printCronList", () => {
     expect(dataLine).toContain("opus");
   });
 
-  it("shows exact label for cron schedules with stagger disabled", () => {
+  it("shows (no tz) label for cron schedules without timezone", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "no-tz-job",
+      name: "No TZ",
+      schedule: { kind: "cron", expr: "30 2 * * *", staggerMs: 0 },
+      sessionTarget: "main",
+      state: {},
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    printCronList([job], runtime);
+    expect(logs.some((line) => line.includes("(no tz)"))).toBe(true);
+    expect(logs.some((line) => line.includes("(exact)"))).toBe(false);
+  });
+
+  it("shows (exact) label for cron schedules with explicit timezone", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "with-tz-job",
+      name: "With TZ",
+      schedule: { kind: "cron", expr: "30 2 * * *", tz: "UTC", staggerMs: 0 },
+      sessionTarget: "main",
+      state: {},
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    printCronList([job], runtime);
+    expect(logs.some((line) => line.includes("(exact)"))).toBe(true);
+    expect(logs.some((line) => line.includes("(no tz)"))).toBe(false);
+  });
+
+  it("shows stagger label without (no tz) for staggered cron schedules", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "stagger-no-tz-job",
+      name: "Stagger No TZ",
+      schedule: { kind: "cron", expr: "0 * * * *" },
+      sessionTarget: "main",
+      state: {},
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    printCronList([job], runtime);
+    // Staggered jobs show stagger label; (no tz) is only for exact schedules
+    expect(logs.some((line) => line.includes("stagger"))).toBe(true);
+    expect(logs.some((line) => line.includes("(no tz)"))).toBe(false);
+  });
+
+  it("shows exact label for cron schedules with stagger disabled and timezone set", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
       id: "exact-job",
       name: "Exact",
-      schedule: { kind: "cron", expr: "0 7 * * *", staggerMs: 0 },
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC", staggerMs: 0 },
       sessionTarget: "main",
       state: {},
       payload: { kind: "systemEvent", text: "tick" },
