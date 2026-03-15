@@ -214,6 +214,7 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+const TOOL_XML_RE = /<tool_call>[\s\S]*?<\/tool_call>|<tool_result>[\s\S]*?<\/tool_result>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -447,6 +448,27 @@ function stripFinalTagsFromText(text: string): string {
     return text;
   }
   return text.replace(FINAL_TAG_RE, "");
+}
+
+/**
+ * Strip raw <tool_call> / <tool_result> XML that can leak into user-facing text
+ * when models (especially via OpenRouter) emit tool-use as plain text XML
+ * instead of structured content blocks. Respects code fences to avoid
+ * stripping legitimate XML the user may have written. (#45856)
+ */
+function stripToolXmlFromText(text: string): string {
+  if (!text || !text.includes("tool_")) {
+    return text;
+  }
+  const CODE_FENCE_RE = /(```[\s\S]*?```|`[^`\n]*`)/g;
+  const parts = text.split(CODE_FENCE_RE);
+  return parts
+    .map((part, i) => {
+      // Odd indices are captured code fences — leave them untouched
+      if (i % 2 === 1) return part;
+      return part.replace(TOOL_XML_RE, "");
+    })
+    .join("");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -766,7 +788,8 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  let stripped = stripFinalTagsFromText(text);
+  stripped = stripToolXmlFromText(stripped);
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
