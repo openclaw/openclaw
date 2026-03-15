@@ -1,7 +1,8 @@
 name: Setup Node environment
 description: >
   Initialize submodules with retry, install Node 24 by default, pnpm, optionally Bun,
-  and optionally run pnpm install. Requires actions/checkout to run first.
+  and optionally run pnpm install. Restores cached workspace dependencies when available.
+  Requires actions/checkout to run first.
 inputs:
   node-version:
     description: Node.js version to install.
@@ -23,18 +24,64 @@ inputs:
     description: Request Blacksmith sticky-disk pnpm caching on trusted runs; pull_request runs fall back to actions/cache.
     required: false
     default: "false"
+  use-restore-keys:
+    description: Whether pnpm store restore should use fallback restore keys.
+    required: false
+    default: "true"
+  use-actions-cache:
+    description: Whether pnpm store restore/save should use actions/cache.
+    required: false
+    default: "true"
   install-deps:
     description: Whether to run pnpm install after environment setup.
     required: false
     default: "true"
+  lookup-only:
+    description: If true, only checks whether the workspace dependency cache exists before deciding whether install work is needed.
+    required: false
+    default: "false"
   frozen-lockfile:
     description: Whether to use --frozen-lockfile for install.
     required: false
     default: "true"
+  prefer-offline:
+    description: Whether to pass --prefer-offline to pnpm install.
+    required: false
+    default: "false"
+  side-effects-cache:
+    description: Whether to enable pnpm side-effects cache during install.
+    required: false
+    default: "false"
+outputs:
+  workspace-deps-cache-hit:
+    description: Whether the workspace dependency cache was restored by exact key.
+    value: ${{ steps.workspace-deps-cache.outputs.cache-hit }}
 runs:
   using: composite
   steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+        check-latest: false
+        package-manager-cache: false
+
+    - name: Restore workspace dependency cache
+      if: inputs.install-deps == 'true' || inputs.lookup-only == 'true'
+      id: workspace-deps-cache
+      uses: actions/cache@v5
+      with:
+        path: |
+          node_modules
+          ui/node_modules
+          packages/*/node_modules
+          extensions/*/node_modules
+          !node_modules/.cache
+        key: workspace-deps-${{ inputs.node-version }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'ui/package.json', 'packages/*/package.json', 'extensions/*/package.json') }}
+        lookup-only: ${{ inputs.lookup-only }}
+
     - name: Checkout submodules (retry)
+      if: inputs.lookup-only != 'true' || steps.workspace-deps-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -48,18 +95,15 @@ runs:
         done
         exit 1
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: ${{ inputs.node-version }}
-        check-latest: false
-
     - name: Setup pnpm + cache store
+      if: inputs.lookup-only != 'true' || steps.workspace-deps-cache.outputs.cache-hit != 'true'
       uses: ./.github/actions/setup-pnpm-store-cache
       with:
         pnpm-version: ${{ inputs.pnpm-version }}
         cache-key-suffix: ${{ inputs.cache-key-suffix }}
         use-sticky-disk: ${{ inputs.use-sticky-disk }}
+        use-restore-keys: ${{ inputs.use-restore-keys }}
+        use-actions-cache: ${{ inputs.use-actions-cache }}
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
@@ -68,6 +112,7 @@ runs:
         bun-version: "1.3.9"
 
     - name: Runtime versions
+      if: inputs.lookup-only != 'true' || steps.workspace-deps-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         node -v
@@ -76,16 +121,18 @@ runs:
         if command -v bun &>/dev/null; then bun -v; fi
 
     - name: Capture node path
-      if: inputs.install-deps == 'true'
+      if: inputs.install-deps == 'true' && steps.workspace-deps-cache.outputs.cache-hit != 'true'
       shell: bash
       run: echo "NODE_BIN=$(dirname "$(node -p "process.execPath")")" >> "$GITHUB_ENV"
 
     - name: Install dependencies
-      if: inputs.install-deps == 'true'
+      if: inputs.install-deps == 'true' && steps.workspace-deps-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         CI: "true"
         FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
+        PREFER_OFFLINE: ${{ inputs.prefer-offline }}
+        SIDE_EFFECTS_CACHE: ${{ inputs.side-effects-cache }}
       run: |
         set -euo pipefail
         export PATH="$NODE_BIN:$PATH"
@@ -100,6 +147,22 @@ runs:
             exit 2
             ;;
         esac
+        case "$PREFER_OFFLINE" in
+          true) PREFER_OFFLINE_FLAG="--prefer-offline" ;;
+          false) PREFER_OFFLINE_FLAG="" ;;
+          *)
+            echo "::error::Invalid prefer-offline input: '$PREFER_OFFLINE' (expected true or false)"
+            exit 2
+            ;;
+        esac
+        case "$SIDE_EFFECTS_CACHE" in
+          true) SIDE_EFFECTS_CACHE_FLAG="--config.side-effects-cache=true" ;;
+          false) SIDE_EFFECTS_CACHE_FLAG="" ;;
+          *)
+            echo "::error::Invalid side-effects-cache input: '$SIDE_EFFECTS_CACHE' (expected true or false)"
+            exit 2
+            ;;
+        esac
 
         install_args=(
           install
@@ -109,5 +172,11 @@ runs:
         )
         if [ -n "$LOCKFILE_FLAG" ]; then
           install_args+=("$LOCKFILE_FLAG")
+        fi
+        if [ -n "$PREFER_OFFLINE_FLAG" ]; then
+          install_args+=("$PREFER_OFFLINE_FLAG")
+        fi
+        if [ -n "$SIDE_EFFECTS_CACHE_FLAG" ]; then
+          install_args+=("$SIDE_EFFECTS_CACHE_FLAG")
         fi
         pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
