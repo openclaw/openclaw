@@ -767,10 +767,33 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
       });
 
-  // Prefer the last runtime model recorded on the session entry.
-  // This is the actual model used by the latest run and must win over defaults.
+  // First check explicit per-session override (set at spawn/model-patch time).
+  // This takes highest priority as it's the most recent user intent.
+  const storedModelOverride = entry?.modelOverride?.trim();
+  const explicitProviderOverride = entry?.providerOverride?.trim();
   let provider = resolved.provider;
   let model = resolved.model;
+  if (storedModelOverride) {
+    // If provider override is explicitly set, preserve it to avoid incorrectly
+    // splitting wrapper provider model names (e.g. "openrouter/anthropic/claude-haiku-4.5").
+    if (explicitProviderOverride) {
+      return { provider: explicitProviderOverride, model: storedModelOverride };
+    }
+    const overrideProvider = provider || DEFAULT_PROVIDER;
+    const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
+    if (parsedOverride) {
+      provider = parsedOverride.provider;
+      model = parsedOverride.model;
+    } else {
+      provider = overrideProvider;
+      model = storedModelOverride;
+    }
+    return { provider, model };
+  }
+
+  // Fall back to runtime model (last model used by the session).
+  // Prefer the last runtime model recorded on the session entry.
+  // This is the actual model used by the latest run and must win over defaults.
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
   if (runtimeModel) {
@@ -793,20 +816,7 @@ export function resolveSessionModelRef(
     return { provider, model };
   }
 
-  // Fall back to explicit per-session override (set at spawn/model-patch time),
-  // then finally to configured defaults.
-  const storedModelOverride = entry?.modelOverride?.trim();
-  if (storedModelOverride) {
-    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
-    const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
-    if (parsedOverride) {
-      provider = parsedOverride.provider;
-      model = parsedOverride.model;
-    } else {
-      provider = overrideProvider;
-      model = storedModelOverride;
-    }
-  }
+  // Finally fall back to configured defaults.
   return { provider, model };
 }
 
@@ -817,6 +827,13 @@ export function resolveSessionModelIdentityRef(
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
   agentId?: string,
 ): { provider?: string; model: string } {
+  // Honour model override first (mirrors resolveSessionModelRef priority).
+  const storedModelOverride = entry?.modelOverride?.trim();
+  if (storedModelOverride) {
+    const resolved = resolveSessionModelRef(cfg, entry, agentId);
+    return { provider: resolved.provider, model: resolved.model };
+  }
+
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
   if (runtimeModel) {
