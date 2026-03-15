@@ -126,7 +126,6 @@ async function downloadAndSaveTelegramFile(params: {
   telegramFileName?: string;
 }) {
   const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
-  const useCallerOwnedFetch = params.transport.fetch === params.transport.sourceFetch;
   const fetched = await fetchRemoteMedia({
     url,
     fetchImpl: params.transport.sourceFetch,
@@ -137,7 +136,7 @@ async function downloadAndSaveTelegramFile(params: {
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
-    pinDns: useCallerOwnedFetch ? false : undefined,
+    pinDns: undefined,
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
   return saveMediaBuffer(

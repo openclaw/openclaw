@@ -1186,7 +1186,8 @@ export const registerTelegramHandlers = ({
       !msg.sender_chat &&
       !skipDocumentBatch
     ) {
-      const docBatchKey = `doc:${chatId}:${docSenderId}:${resolvedThreadId ?? "f"}:${dmThreadId ?? "d"}`;
+      const replyTarget = msg.reply_to_message?.message_id ?? "none";
+      const docBatchKey = `doc:${chatId}:${docSenderId}:${resolvedThreadId ?? "f"}:${dmThreadId ?? "d"}:${replyTarget}`;
       const existing = documentBatchBuffer.get(docBatchKey);
       if (existing) {
         existing.messages.push({ msg, ctx });
