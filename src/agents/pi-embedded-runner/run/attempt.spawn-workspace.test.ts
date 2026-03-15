@@ -249,6 +249,96 @@ function createSubscriptionMock() {
   };
 }
 
+function resetEmbeddedAttemptHarness(
+  params: {
+    includeSpawnSubagent?: boolean;
+    subscribeImpl?: () => ReturnType<typeof createSubscriptionMock>;
+    sessionMessages?: AgentMessage[];
+  } = {},
+) {
+  if (params.includeSpawnSubagent) {
+    hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:child",
+      runId: "run-child",
+    });
+  }
+  hoisted.createAgentSessionMock.mockReset();
+  hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
+  hoisted.resolveSandboxContextMock.mockReset();
+  hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
+    release: async () => {},
+  });
+  hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
+  hoisted.sessionManager.branch.mockReset();
+  hoisted.sessionManager.resetLeaf.mockReset();
+  hoisted.sessionManager.buildSessionContext
+    .mockReset()
+    .mockReturnValue({ messages: params.sessionMessages ?? [] });
+  hoisted.sessionManager.appendCustomEntry.mockReset();
+  if (params.subscribeImpl) {
+    hoisted.subscribeEmbeddedPiSessionMock.mockReset().mockImplementation(params.subscribeImpl);
+  }
+}
+
+async function cleanupTempPaths(tempPaths: string[]) {
+  while (tempPaths.length > 0) {
+    const target = tempPaths.pop();
+    if (target) {
+      await fs.rm(target, { recursive: true, force: true });
+    }
+  }
+}
+
+function createDefaultEmbeddedSession(params?: {
+  prompt?: (session: MutableSession) => Promise<void>;
+}): MutableSession {
+  const session: MutableSession = {
+    sessionId: "embedded-session",
+    messages: [],
+    isCompacting: false,
+    isStreaming: false,
+    agent: {
+      replaceMessages: (messages: unknown[]) => {
+        session.messages = [...messages];
+      },
+    },
+    prompt: async () => {
+      if (params?.prompt) {
+        await params.prompt(session);
+        return;
+      }
+      session.messages = [
+        ...session.messages,
+        { role: "assistant", content: "done", timestamp: 2 },
+      ];
+    },
+    abort: async () => {},
+    dispose: () => {},
+    steer: async () => {},
+  };
+
+  return session;
+}
+
+function createContextEngineBootstrapAndAssemble() {
+  return {
+    bootstrap: vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true })),
+    assemble: vi.fn(async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
+      messages,
+      estimatedTokens: 1,
+    })),
+  };
+}
+
+function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessionKey: string) {
+  expect(mock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionKey,
+    }),
+  );
+}
+
 const testModel = {
   api: "openai-completions",
   provider: "openai",
@@ -269,32 +359,14 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
   const tempPaths: string[] = [];
 
   beforeEach(() => {
-    hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
-      status: "accepted",
-      childSessionKey: "agent:main:subagent:child",
-      runId: "run-child",
+    resetEmbeddedAttemptHarness({
+      includeSpawnSubagent: true,
+      subscribeImpl: createSubscriptionMock,
     });
-    hoisted.createAgentSessionMock.mockReset();
-    hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
-    hoisted.resolveSandboxContextMock.mockReset();
-    hoisted.subscribeEmbeddedPiSessionMock.mockReset().mockImplementation(createSubscriptionMock);
-    hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
-      release: async () => {},
-    });
-    hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
-    hoisted.sessionManager.branch.mockReset();
-    hoisted.sessionManager.resetLeaf.mockReset();
-    hoisted.sessionManager.buildSessionContext.mockReset().mockReturnValue({ messages: [] });
-    hoisted.sessionManager.appendCustomEntry.mockReset();
   });
 
   afterEach(async () => {
-    while (tempPaths.length > 0) {
-      const target = tempPaths.pop();
-      if (target) {
-        await fs.rm(target, { recursive: true, force: true });
-      }
-    }
+    await cleanupTempPaths(tempPaths);
   });
 
   it("passes the real workspace to sessions_spawn when workspaceAccess is ro", async () => {
@@ -318,16 +390,7 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
 
     hoisted.createAgentSessionMock.mockImplementation(
       async (params: { customTools: ToolDefinition[] }) => {
-        const session: MutableSession = {
-          sessionId: "embedded-session",
-          messages: [],
-          isCompacting: false,
-          isStreaming: false,
-          agent: {
-            replaceMessages: (messages: unknown[]) => {
-              session.messages = [...messages];
-            },
-          },
+        const session = createDefaultEmbeddedSession({
           prompt: async () => {
             const spawnTool = params.customTools.find((tool) => tool.name === "sessions_spawn");
             expect(spawnTool).toBeDefined();
@@ -342,10 +405,7 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
               {} as unknown as ExtensionContext,
             );
           },
-          abort: async () => {},
-          dispose: () => {},
-          steer: async () => {},
-        };
+        });
 
         return { session };
       },
@@ -394,26 +454,11 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
   const tempPaths: string[] = [];
 
   beforeEach(() => {
-    hoisted.createAgentSessionMock.mockReset();
-    hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
-    hoisted.resolveSandboxContextMock.mockReset();
-    hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
-      release: async () => {},
-    });
-    hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
-    hoisted.sessionManager.branch.mockReset();
-    hoisted.sessionManager.resetLeaf.mockReset();
-    hoisted.sessionManager.buildSessionContext.mockReset().mockReturnValue({ messages: [] });
-    hoisted.sessionManager.appendCustomEntry.mockReset();
+    resetEmbeddedAttemptHarness();
   });
 
   afterEach(async () => {
-    while (tempPaths.length > 0) {
-      const target = tempPaths.pop();
-      if (target) {
-        await fs.rm(target, { recursive: true, force: true });
-      }
-    }
+    await cleanupTempPaths(tempPaths);
   });
 
   async function runAttemptWithCacheTtl(compactionCount: number) {
@@ -428,30 +473,9 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
       getCompactionCount: () => compactionCount,
     }));
 
-    hoisted.createAgentSessionMock.mockImplementation(async () => {
-      const session: MutableSession = {
-        sessionId: "embedded-session",
-        messages: [],
-        isCompacting: false,
-        isStreaming: false,
-        agent: {
-          replaceMessages: (messages: unknown[]) => {
-            session.messages = [...messages];
-          },
-        },
-        prompt: async () => {
-          session.messages = [
-            ...session.messages,
-            { role: "assistant", content: "done", timestamp: 2 },
-          ];
-        },
-        abort: async () => {},
-        dispose: () => {},
-        steer: async () => {},
-      };
-
-      return { session };
-    });
+    hoisted.createAgentSessionMock.mockImplementation(async () => ({
+      session: createDefaultEmbeddedSession(),
+    }));
 
     return await runEmbeddedAttempt({
       sessionId: "embedded-session",
@@ -591,30 +615,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       .mockReset()
       .mockReturnValue({ messages: seedMessages });
 
-    hoisted.createAgentSessionMock.mockImplementation(async () => {
-      const session: MutableSession = {
-        sessionId: "embedded-session",
-        messages: [],
-        isCompacting: false,
-        isStreaming: false,
-        agent: {
-          replaceMessages: (messages: unknown[]) => {
-            session.messages = [...messages];
-          },
-        },
-        prompt: async () => {
-          session.messages = [
-            ...session.messages,
-            { role: "assistant", content: "done", timestamp: 2 },
-          ];
-        },
-        abort: async () => {},
-        dispose: () => {},
-        steer: async () => {},
-      };
-
-      return { session };
-    });
+    hoisted.createAgentSessionMock.mockImplementation(async () => ({
+      session: createDefaultEmbeddedSession(),
+    }));
 
     return await runEmbeddedAttempt({
       sessionId: "embedded-session",
@@ -659,13 +662,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   }
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
-    const bootstrap = vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true }));
-    const assemble = vi.fn(
-      async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
-        messages,
-        estimatedTokens: 1,
-      }),
-    );
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async (_params: { sessionKey?: string }) => {});
 
     const result = await runAttemptWithContextEngine({
@@ -675,31 +672,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(result.promptError).toBeNull();
-    expect(bootstrap).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-      }),
-    );
-    expect(assemble).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-      }),
-    );
-    expect(afterTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-      }),
-    );
+    expectCalledWithSessionKey(bootstrap, sessionKey);
+    expectCalledWithSessionKey(assemble, sessionKey);
+    expectCalledWithSessionKey(afterTurn, sessionKey);
   });
 
   it("forwards sessionKey to ingestBatch when afterTurn is absent", async () => {
-    const bootstrap = vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true }));
-    const assemble = vi.fn(
-      async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
-        messages,
-        estimatedTokens: 1,
-      }),
-    );
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const ingestBatch = vi.fn(
       async (_params: { sessionKey?: string; messages: AgentMessage[] }) => ({ ingestedCount: 1 }),
     );
@@ -711,21 +690,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(result.promptError).toBeNull();
-    expect(ingestBatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-      }),
-    );
+    expectCalledWithSessionKey(ingestBatch, sessionKey);
   });
 
   it("forwards sessionKey to per-message ingest when ingestBatch is absent", async () => {
-    const bootstrap = vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true }));
-    const assemble = vi.fn(
-      async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
-        messages,
-        estimatedTokens: 1,
-      }),
-    );
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const ingest = vi.fn(async (_params: { sessionKey?: string; message: AgentMessage }) => ({
       ingested: true,
     }));

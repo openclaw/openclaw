@@ -153,6 +153,57 @@ function applyTlonSetupConfig(params: {
   };
 }
 
+type ResolvedTlonAccount = ReturnType<typeof resolveTlonAccount>;
+type ConfiguredTlonAccount = ResolvedTlonAccount & {
+  ship: string;
+  url: string;
+  code: string;
+};
+
+function resolveOutboundContext(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  to: string;
+}) {
+  const account = resolveTlonAccount(params.cfg, params.accountId ?? undefined);
+  if (!account.configured || !account.ship || !account.url || !account.code) {
+    throw new Error("Tlon account not configured");
+  }
+
+  const parsed = parseTlonTarget(params.to);
+  if (!parsed) {
+    throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
+  }
+
+  return { account: account as ConfiguredTlonAccount, parsed };
+}
+
+function resolveReplyId(replyToId?: string | null, threadId?: string | number | null) {
+  return (replyToId ?? threadId) ? String(replyToId ?? threadId) : undefined;
+}
+
+async function withHttpPokeAccountApi<T>(
+  account: ConfiguredTlonAccount,
+  run: (api: Awaited<ReturnType<typeof createHttpPokeApi>>) => Promise<T>,
+) {
+  const api = await createHttpPokeApi({
+    url: account.url,
+    ship: account.ship,
+    code: account.code,
+    allowPrivateNetwork: account.allowPrivateNetwork ?? undefined,
+  });
+
+  try {
+    return await run(api);
+  } finally {
+    try {
+      await api.delete();
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+}
+
 const tlonOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 10000,
@@ -170,25 +221,8 @@ const tlonOutbound: ChannelOutboundAdapter = {
     return { ok: true, to: parsed.nest };
   },
   sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
-    const account = resolveTlonAccount(cfg, accountId ?? undefined);
-    if (!account.configured || !account.ship || !account.url || !account.code) {
-      throw new Error("Tlon account not configured");
-    }
-
-    const parsed = parseTlonTarget(to);
-    if (!parsed) {
-      throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
-    }
-
-    // Use HTTP-only poke (no EventSource) to avoid conflicts with monitor's SSE connection
-    const api = await createHttpPokeApi({
-      url: account.url,
-      ship: account.ship,
-      code: account.code,
-      allowPrivateNetwork: account.allowPrivateNetwork ?? undefined,
-    });
-
-    try {
+    const { account, parsed } = resolveOutboundContext({ cfg, accountId, to });
+    return withHttpPokeAccountApi(account, async (api) => {
       const fromShip = normalizeShip(account.ship);
       if (parsed.kind === "dm") {
         return await sendDm({
@@ -198,52 +232,29 @@ const tlonOutbound: ChannelOutboundAdapter = {
           text,
         });
       }
-      const replyId = (replyToId ?? threadId) ? String(replyToId ?? threadId) : undefined;
       return await sendGroupMessage({
         api,
         fromShip,
         hostShip: parsed.hostShip,
         channelName: parsed.channelName,
         text,
-        replyToId: replyId,
+        replyToId: resolveReplyId(replyToId, threadId),
       });
-    } finally {
-      try {
-        await api.delete();
-      } catch {
-        // ignore cleanup errors
-      }
-    }
+    });
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId, threadId }) => {
-    const account = resolveTlonAccount(cfg, accountId ?? undefined);
-    if (!account.configured || !account.ship || !account.url || !account.code) {
-      throw new Error("Tlon account not configured");
-    }
-
-    const parsed = parseTlonTarget(to);
-    if (!parsed) {
-      throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
-    }
+    const { account, parsed } = resolveOutboundContext({ cfg, accountId, to });
 
     // Configure the API client for uploads
     configureClient({
       shipUrl: account.url,
       shipName: account.ship.replace(/^~/, ""),
       verbose: false,
-      getCode: async () => account.code!,
+      getCode: async () => account.code,
     });
 
     const uploadedUrl = mediaUrl ? await uploadImageFromUrl(mediaUrl) : undefined;
-
-    const api = await createHttpPokeApi({
-      url: account.url,
-      ship: account.ship,
-      code: account.code,
-      allowPrivateNetwork: account.allowPrivateNetwork ?? undefined,
-    });
-
-    try {
+    return withHttpPokeAccountApi(account, async (api) => {
       const fromShip = normalizeShip(account.ship);
       const story = buildMediaStory(text, uploadedUrl);
 
@@ -255,22 +266,15 @@ const tlonOutbound: ChannelOutboundAdapter = {
           story,
         });
       }
-      const replyId = (replyToId ?? threadId) ? String(replyToId ?? threadId) : undefined;
       return await sendGroupMessageWithStory({
         api,
         fromShip,
         hostShip: parsed.hostShip,
         channelName: parsed.channelName,
         story,
-        replyToId: replyId,
+        replyToId: resolveReplyId(replyToId, threadId),
       });
-    } finally {
-      try {
-        await api.delete();
-      } catch {
-        // ignore cleanup errors
-      }
-    }
+    });
   },
 };
 

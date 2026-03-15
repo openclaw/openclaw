@@ -209,6 +209,15 @@ describe("config view", () => {
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });
 
+  it("renders the top search icon inside the search input row", () => {
+    const container = document.createElement("div");
+    render(renderConfig(baseProps()), container);
+
+    const icon = container.querySelector<SVGElement>(".config-search__icon");
+    expect(icon).not.toBeNull();
+    expect(icon?.closest(".config-search__input-row")).not.toBeNull();
+  });
+
   it("renders top tabs for root and available sections", () => {
     const container = document.createElement("div");
     render(
