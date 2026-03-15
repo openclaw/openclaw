@@ -1,5 +1,13 @@
 import type { UIMessage } from "ai";
-import { resolveAgentWorkspacePrefix } from "@/lib/workspace";
+import {
+	resolveActiveAgentId,
+	resolveAgentWorkspacePrefix,
+	resolveOpenClawStateDir,
+	resolveWorkspaceDirForName,
+	resolveWorkspaceRoot,
+	getActiveWorkspaceName,
+	ensureManagedWorkspaceRouting,
+} from "@/lib/workspace";
 import {
 	startRun,
 	startSubscribeRun,
@@ -14,7 +22,6 @@ import {
 import { trackServer } from "@/lib/telemetry";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveOpenClawStateDir } from "@/lib/workspace";
 import { getSessionMeta } from "@/app/api/web-sessions/shared";
 
 export const runtime = "nodejs";
@@ -38,6 +45,22 @@ function deriveSubagentInfo(sessionKey: string): { parentSessionId: string; task
 		// ignore
 	}
 	return null;
+}
+
+function normalizeLiveStreamEvent(event: SseEvent): SseEvent {
+	// AI SDK's UI stream schema does not define `tool-output-partial`.
+	// It expects repeated `tool-output-available` chunks with
+	// `preliminary: true` while the tool is still running.
+	if (event.type === "tool-output-partial") {
+		return {
+			type: "tool-output-available",
+			toolCallId: event.toolCallId,
+			output: event.output,
+			preliminary: true,
+		};
+	}
+
+	return event;
 }
 
 export async function POST(req: Request) {
@@ -122,7 +145,19 @@ export async function POST(req: Request) {
 		});
 
 		const sessionMeta = getSessionMeta(sessionId);
-		const effectiveAgentId = sessionMeta?.chatAgentId ?? sessionMeta?.workspaceAgentId;
+		const workspaceName =
+			sessionMeta?.workspaceName
+			?? getActiveWorkspaceName()
+			?? "default";
+		const workspaceRoot =
+			sessionMeta?.workspaceRoot
+			?? resolveWorkspaceRoot()
+			?? resolveWorkspaceDirForName(workspaceName);
+		ensureManagedWorkspaceRouting(workspaceName, workspaceRoot, { markDefault: false });
+		const effectiveAgentId =
+			sessionMeta?.chatAgentId
+			?? sessionMeta?.workspaceAgentId
+			?? resolveActiveAgentId();
 
 		try {
 			startRun({
@@ -168,11 +203,8 @@ export async function POST(req: Request) {
 						try { controller.close(); } catch { /* already closed */ }
 						return;
 					}
-					// Skip custom event types not in the AI SDK v6 data stream schema;
-					// they're only consumed by the reconnection parser (processEvent).
-					if (event.type === "tool-output-partial") {return;}
 					try {
-						const json = JSON.stringify(event);
+						const json = JSON.stringify(normalizeLiveStreamEvent(event));
 						controller.enqueue(encoder.encode(`data: ${json}\n\n`));
 					} catch { /* ignore */ }
 				},

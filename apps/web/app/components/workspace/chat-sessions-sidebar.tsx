@@ -51,6 +51,10 @@ type ChatSessionsSidebarProps = {
 	onDeleteSession?: (sessionId: string) => void;
 	/** Called when the user renames a session from the sidebar menu. */
 	onRenameSession?: (sessionId: string, newTitle: string) => void;
+	/** Called when the user stops an actively running parent session. */
+	onStopSession?: (sessionId: string) => void;
+	/** Called when the user stops an actively running subagent session. */
+	onStopSubagent?: (sessionKey: string) => void;
 	/** Called when the user clicks the collapse/hide sidebar button. */
 	onCollapse?: () => void;
 	/** When true, show a loader instead of empty state (e.g. initial sessions fetch). */
@@ -149,6 +153,20 @@ function MoreHorizontalIcon() {
 	);
 }
 
+function StopIcon() {
+	return (
+		<svg
+			width="12"
+			height="12"
+			viewBox="0 0 24 24"
+			fill="currentColor"
+			aria-hidden="true"
+		>
+			<rect x="6" y="6" width="12" height="12" rx="2" />
+		</svg>
+	);
+}
+
 export function ChatSessionsSidebar({
 	sessions,
 	activeSessionId,
@@ -161,6 +179,8 @@ export function ChatSessionsSidebar({
 	onSelectSubagent,
 	onDeleteSession,
 	onRenameSession,
+	onStopSession,
+	onStopSubagent,
 	onCollapse,
 	mobile,
 	onClose,
@@ -286,8 +306,8 @@ export function ChatSessionsSidebar({
 							{group.sessions.map((session) => {
 								const isActive = session.id === activeSessionId && !activeSubagentKey;
 								const isHovered = session.id === hoveredId;
-								const showMore = isHovered;
 								const isStreamingSession = streamingSessionIds?.has(session.id) ?? false;
+								const showMore = isHovered || isStreamingSession;
 								const sessionSubagents = subagentsByParent.get(session.id);
 								return (
 									<div
@@ -366,8 +386,23 @@ export function ChatSessionsSidebar({
 											</div>
 										</button>
 										)}
-										{onDeleteSession && (
-											<div className={`shrink-0 flex items-center pr-1 transition-opacity ${showMore ? "opacity-100" : "opacity-0"}`}>
+										<div className={`shrink-0 flex items-center pr-1 gap-0.5 transition-opacity ${showMore ? "opacity-100" : "opacity-0"}`}>
+											{isStreamingSession && onStopSession && (
+												<button
+													type="button"
+													onClick={(e) => {
+														e.stopPropagation();
+														onStopSession(session.id);
+													}}
+													className="flex items-center justify-center w-6 h-6 rounded-md transition-colors hover:bg-black/5"
+													style={{ color: "var(--color-text-muted)" }}
+													title="Stop chat"
+													aria-label="Stop chat"
+												>
+													<StopIcon />
+												</button>
+											)}
+											{onDeleteSession && (
 												<DropdownMenu>
 													<DropdownMenuTrigger
 														onClick={(e) => e.stopPropagation()}
@@ -394,8 +429,8 @@ export function ChatSessionsSidebar({
 														</DropdownMenuItem>
 													</DropdownMenuContent>
 												</DropdownMenu>
-											</div>
-										)}
+											)}
+										</div>
 									</div>
 									{/* Subagent sub-items */}
 									{sessionSubagents && sessionSubagents.length > 0 && (
@@ -406,38 +441,57 @@ export function ChatSessionsSidebar({
 												const subLabel = sa.label || sa.task;
 												const truncated = subLabel.length > 40 ? subLabel.slice(0, 40) + "..." : subLabel;
 												return (
-													<button
+													<div
 														key={sa.childSessionKey}
-														type="button"
-														onClick={() => handleSelectSubagentItem(sa.childSessionKey)}
-														className="w-full text-left pl-3 pr-2 py-1.5 rounded-r-lg transition-colors cursor-pointer"
-														style={{
-															background: isSubActive
-																? "var(--color-chat-sidebar-active-bg)"
-																: "transparent",
-														}}
+														className="flex items-center"
 													>
-														<div className="flex items-center gap-1.5">
-															{isSubRunning && (
-																<UnicodeSpinner
-																	name="braille"
-																	className="text-[9px] flex-shrink-0"
-																	style={{ color: "var(--color-chat-sidebar-muted)" }}
-																/>
-															)}
-															<SubagentIcon />
-															<span
-																className="text-[11px] truncate"
-																style={{
-																	color: isSubActive
-																		? "var(--color-chat-sidebar-active-text)"
-																		: "var(--color-text-muted)",
+														<button
+															type="button"
+															onClick={() => handleSelectSubagentItem(sa.childSessionKey)}
+															className="flex-1 text-left pl-3 pr-2 py-1.5 rounded-r-lg transition-colors cursor-pointer"
+															style={{
+																background: isSubActive
+																	? "var(--color-chat-sidebar-active-bg)"
+																	: "transparent",
+															}}
+														>
+															<div className="flex items-center gap-1.5">
+																{isSubRunning && (
+																	<UnicodeSpinner
+																		name="braille"
+																		className="text-[9px] flex-shrink-0"
+																		style={{ color: "var(--color-chat-sidebar-muted)" }}
+																	/>
+																)}
+																<SubagentIcon />
+																<span
+																	className="text-[11px] truncate"
+																	style={{
+																		color: isSubActive
+																			? "var(--color-chat-sidebar-active-text)"
+																			: "var(--color-text-muted)",
+																	}}
+																>
+																	{truncated}
+																</span>
+															</div>
+														</button>
+														{isSubRunning && onStopSubagent && (
+															<button
+																type="button"
+																onClick={(e) => {
+																	e.stopPropagation();
+																	onStopSubagent(sa.childSessionKey);
 																}}
+																className="shrink-0 flex items-center justify-center w-6 h-6 rounded-md mr-1 transition-colors hover:bg-black/5"
+																style={{ color: "var(--color-text-muted)" }}
+																title="Stop subagent"
+																aria-label="Stop subagent"
 															>
-																{truncated}
-															</span>
-														</div>
-													</button>
+																<StopIcon />
+															</button>
+														)}
+													</div>
 												);
 											})}
 										</div>

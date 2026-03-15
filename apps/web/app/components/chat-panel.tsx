@@ -29,6 +29,11 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { UnicodeSpinner } from "./unicode-spinner";
+import type { ChatPanelRuntimeState } from "@/lib/chat-session-registry";
+import {
+	getStreamActivityLabel,
+	hasAssistantText,
+} from "./chat-stream-status";
 
 // ── Prompt suggestions for new chat hero ──
 
@@ -590,6 +595,7 @@ type ParsedPart =
 			state: string;
 			input?: Record<string, unknown>;
 			output?: Record<string, unknown>;
+			preliminary?: boolean;
 		};
 
 export function createStreamParser() {
@@ -685,6 +691,7 @@ export function createStreamParser() {
 						p.type === "dynamic-tool" &&
 						p.toolCallId === event.toolCallId
 					) {
+						p.preliminary = true;
 						p.output =
 							(event.output as Record<
 								string,
@@ -701,7 +708,13 @@ export function createStreamParser() {
 						p.type === "dynamic-tool" &&
 						p.toolCallId === event.toolCallId
 					) {
-						p.state = "output-available";
+						if (event.preliminary === true) {
+							p.preliminary = true;
+							p.state = "input-available";
+						} else {
+							delete p.preliminary;
+							p.state = "output-available";
+						}
 						p.output =
 							(event.output as Record<
 								string,
@@ -814,6 +827,8 @@ type ChatPanelProps = {
 	onBack?: () => void;
 	/** Hide the header action buttons (when they're rendered elsewhere, e.g. tab bar). */
 	hideHeaderActions?: boolean;
+	/** Called whenever the panel's runtime state changes. */
+	onRuntimeStateChange?: (state: ChatPanelRuntimeState) => void;
 };
 
 export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
@@ -836,6 +851,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			subagentLabel,
 			onBack,
 			hideHeaderActions,
+			onRuntimeStateChange,
 		},
 		ref,
 	) {
@@ -961,6 +977,25 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			status === "streaming" ||
 			status === "submitted" ||
 			isReconnecting;
+
+		useEffect(() => {
+			onRuntimeStateChange?.({
+				sessionId: currentSessionId,
+				sessionKey: subagentSessionKey ?? null,
+				isStreaming,
+				status,
+				isReconnecting,
+				loadingSession,
+			});
+		}, [
+			currentSessionId,
+			subagentSessionKey,
+			isStreaming,
+			status,
+			isReconnecting,
+			loadingSession,
+			onRuntimeStateChange,
+		]);
 
 		// Stream stall detection: if we stay in "submitted" (no first
 		// token received) for too long, surface an error and reset.
@@ -1955,29 +1990,18 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			[],
 		);
 
-		// ── Status label ──
+		// ── Active stream status row ──
 
-		const _statusLabel = loadingSession
-			? "Loading session..."
-			: isReconnecting
-					? "Resuming stream..."
-					: status === "ready"
-						? "Ready"
-						: status === "submitted"
-							? "Thinking..."
-							: status === "streaming"
-								? (hasRunningSubagents ? "Waiting for subagents..." : "Streaming...")
-								: status === "error"
-									? "Error"
-									: status;
-
-		// Show an inline Unicode spinner in the message flow when the AI
-		// is thinking/streaming but hasn't produced visible text yet.
 		const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
-		const lastAssistantHasText =
-			lastMsg?.role === "assistant" &&
-			lastMsg.parts.some((p) => p.type === "text" && (p as { text: string }).text.length > 0);
-		const showInlineSpinner = isStreaming && !lastAssistantHasText;
+		const lastAssistantHasText = hasAssistantText(lastMsg);
+		const streamActivityLabel = getStreamActivityLabel({
+			loadingSession,
+			isReconnecting,
+			status,
+			hasRunningSubagents,
+			lastMessage: lastMsg,
+		});
+		const showStreamActivity = isStreaming && !!streamActivityLabel;
 
 		const showHeroState = messages.length === 0 && !compact && !isSubagentMode && !loadingSession;
 
@@ -2159,12 +2183,12 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 
 		return (
 			<div
-				className="h-full flex flex-col"
+				className="h-full min-h-0 flex flex-col overflow-hidden"
 				style={{ background: "var(--color-main-bg)" }}
 			>
 				{/* Header — sticky glass bar */}
 				<header
-					className={`${compact ? "px-3 py-2" : "px-3 py-2 md:px-6 md:py-3"} flex items-center ${isSubagentMode ? "gap-3" : "justify-between"} z-20`}
+					className={`${compact ? "px-3 py-2" : "px-3 py-2 md:px-6 md:py-3"} flex shrink-0 items-center ${isSubagentMode ? "gap-3" : "justify-between"} z-20`}
 				>
 				{isSubagentMode ? (
 					<>
@@ -2280,7 +2304,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				{/* File-scoped session tabs (compact mode, not in subagent mode) */}
 				{!isSubagentMode && compact && fileContext && fileSessions.length > 0 && (
 					<div
-						className="px-2 py-1.5 border-b flex gap-1 overflow-x-auto z-20"
+						className="px-2 py-1.5 border-b flex shrink-0 gap-1 overflow-x-auto z-20"
 						style={{
 							borderColor: "var(--color-border)",
 							background: "var(--color-bg-glass)",
@@ -2319,7 +2343,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 
 				<div
 					ref={scrollContainerRef}
-					className="flex-1 overflow-y-auto min-h-0"
+					className="min-h-0 min-w-0 flex-1 overflow-y-auto"
 					style={{ scrollbarGutter: "stable" }}
 				>
 				{/* Messages */}
@@ -2444,13 +2468,25 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								userHtmlMap={userHtmlMapRef.current}
 							/>
 						))}
-						{showInlineSpinner && (
+						{showStreamActivity && (
 							<div className="py-3 min-w-0">
-								<UnicodeSpinner
-									name="pulse"
-									className="text-base"
-									style={{ color: "var(--color-text-muted)" }}
-								/>
+								<div
+									className="inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1.5"
+									style={{
+										background: "var(--color-surface-hover)",
+										border: "1px solid var(--color-border)",
+										color: "var(--color-text-muted)",
+									}}
+								>
+									<UnicodeSpinner
+										name="braille"
+										className={`text-sm ${lastAssistantHasText ? "" : "opacity-90"}`}
+										style={{ color: "inherit" }}
+									/>
+									<span className="text-xs truncate">
+										{streamActivityLabel}
+									</span>
+								</div>
 							</div>
 						)}
 							<div ref={messagesEndRef} />
@@ -2501,7 +2537,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				{/* Input bar at bottom (hidden when hero state is active) */}
 				{!showHeroState && (
 					<div
-						className={`${compact ? "px-3 py-2" : "px-3 pb-3 pt-0 md:px-6 md:pb-5"} z-20`}
+						className={`${compact ? "px-3 py-2" : "px-3 pb-3 pt-0 md:px-6 md:pb-5"} shrink-0 z-20`}
 						style={{ background: "var(--color-bg-glass)" }}
 					>
 						<div className={compact ? "" : "max-w-[720px] mx-auto"}>

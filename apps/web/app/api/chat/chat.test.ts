@@ -13,7 +13,17 @@ vi.mock("@/lib/active-runs", () => ({
 
 // Mock workspace module
 vi.mock("@/lib/workspace", () => ({
+  ensureManagedWorkspaceRouting: vi.fn(),
+  getActiveWorkspaceName: vi.fn(() => "default"),
+  resolveActiveAgentId: vi.fn(() => "main"),
   resolveAgentWorkspacePrefix: vi.fn(() => null),
+  resolveOpenClawStateDir: vi.fn(() => "/home/testuser/.openclaw-dench"),
+  resolveWorkspaceDirForName: vi.fn((name: string) =>
+    name === "default"
+      ? "/home/testuser/.openclaw-dench/workspace"
+      : `/home/testuser/.openclaw-dench/workspace-${name}`,
+  ),
+  resolveWorkspaceRoot: vi.fn(() => "/home/testuser/.openclaw-dench/workspace"),
 }));
 
 // Mock web-sessions shared module
@@ -42,7 +52,17 @@ describe("Chat API routes", () => {
       getRunningSessionIds: vi.fn(() => []),
     }));
     vi.mock("@/lib/workspace", () => ({
+      ensureManagedWorkspaceRouting: vi.fn(),
+      getActiveWorkspaceName: vi.fn(() => "default"),
+      resolveActiveAgentId: vi.fn(() => "main"),
       resolveAgentWorkspacePrefix: vi.fn(() => null),
+      resolveOpenClawStateDir: vi.fn(() => "/home/testuser/.openclaw-dench"),
+      resolveWorkspaceDirForName: vi.fn((name: string) =>
+        name === "default"
+          ? "/home/testuser/.openclaw-dench/workspace"
+          : `/home/testuser/.openclaw-dench/workspace-${name}`,
+      ),
+      resolveWorkspaceRoot: vi.fn(() => "/home/testuser/.openclaw-dench/workspace"),
     }));
     vi.mock("@/app/api/web-sessions/shared", () => ({
       getSessionMeta: vi.fn(() => undefined),
@@ -115,6 +135,40 @@ describe("Chat API routes", () => {
       expect(startRun).toHaveBeenCalled();
     });
 
+    it("maps partial tool output into AI SDK preliminary output chunks", async () => {
+      const { hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
+      vi.mocked(hasActiveRun).mockReturnValue(false);
+      vi.mocked(subscribeToRun).mockImplementation(((_sessionId, callback) => {
+        callback({
+          type: "tool-output-partial",
+          toolCallId: "tool-1",
+          output: { text: "partial output" },
+        } as never);
+        callback(null);
+        return () => {};
+      }) as never);
+
+      const { POST } = await import("./route.js");
+      const req = new Request("http://localhost/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+          ],
+          sessionId: "s1",
+        }),
+      });
+      const res = await POST(req);
+      const body = await res.text();
+
+      expect(body).toContain('"type":"tool-output-available"');
+      expect(body).toContain('"toolCallId":"tool-1"');
+      expect(body).toContain('"preliminary":true');
+      expect(body).toContain('"text":"partial output"');
+      expect(body).not.toContain("tool-output-partial");
+    });
+
     it("does not reuse an old run when sessionId is absent", async () => {
       const { startRun, hasActiveRun, subscribeToRun, persistUserMessage } = await import("@/lib/active-runs");
       vi.mocked(hasActiveRun).mockReturnValue(true);
@@ -159,6 +213,48 @@ describe("Chat API routes", () => {
       });
       await POST(req);
       expect(persistUserMessage).toHaveBeenCalledWith("s1", expect.objectContaining({ id: "m1" }));
+    });
+
+    it("repairs managed workspace routing before starting a persisted session run", async () => {
+      const { ensureManagedWorkspaceRouting } = await import("@/lib/workspace");
+      const { getSessionMeta } = await import("@/app/api/web-sessions/shared");
+      const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
+      vi.mocked(hasActiveRun).mockReturnValue(false);
+      vi.mocked(subscribeToRun).mockReturnValue(() => {});
+      vi.mocked(getSessionMeta).mockReturnValue({
+        id: "s1",
+        title: "Chat",
+        createdAt: 1,
+        updatedAt: 1,
+        messageCount: 1,
+        workspaceName: "default",
+        workspaceRoot: "/home/testuser/.openclaw-dench/workspace",
+        workspaceAgentId: "main",
+        chatAgentId: "chat-slot-main-2",
+      } as never);
+
+      const { POST } = await import("./route.js");
+      const req = new Request("http://localhost/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { id: "m1", role: "user", parts: [{ type: "text", text: "repair routing" }] },
+          ],
+          sessionId: "s1",
+        }),
+      });
+      await POST(req);
+      expect(ensureManagedWorkspaceRouting).toHaveBeenCalledWith(
+        "default",
+        "/home/testuser/.openclaw-dench/workspace",
+        { markDefault: false },
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          overrideAgentId: "chat-slot-main-2",
+        }),
+      );
     });
 
     it("resolves workspace file paths in message", async () => {

@@ -59,8 +59,28 @@ import {
   generateTabId, loadTabs, saveTabs, openTab, closeTab,
   closeOtherTabs, closeTabsToRight, closeAllTabs,
   activateTab, reorderTabs, togglePinTab,
-  inferTabType, inferTabTitle, updateTabTitle,
+  inferTabType, inferTabTitle,
 } from "@/lib/tab-state";
+import {
+  bindParentSessionToChatTab,
+  closeChatTabsForSession,
+  createBlankChatTab,
+  isChatTab,
+  openOrFocusParentChatTab,
+  openOrFocusSubagentChatTab,
+  resolveChatIdentityForTab,
+  syncParentChatTabTitles,
+  syncSubagentChatTabTitles,
+  updateChatTabTitle,
+} from "@/lib/chat-tabs";
+import {
+  createChatRunsSnapshot,
+  mergeChatRuntimeSnapshot,
+  removeChatRuntimeSnapshot,
+  type ChatTabRuntimeSnapshot,
+  type ChatRunsSnapshot,
+  type ChatPanelRuntimeState,
+} from "@/lib/chat-session-registry";
 import dynamic from "next/dynamic";
 
 const TerminalDrawer = dynamic(
@@ -409,8 +429,10 @@ function WorkspacePageInner() {
   const rendersSinceHydration = useRef(-1);
   const lastPushedQs = useRef<string | null>(null);
 
-  // Chat panel ref for session management
+  // Visible main chat panel ref for session management
   const chatRef = useRef<ChatPanelHandle>(null);
+  // Mounted main chat panels keyed by tab id so inactive tabs can keep streaming.
+  const chatPanelRefs = useRef<Record<string, ChatPanelHandle | null>>({});
   // Compact (file-scoped) chat panel ref for sidebar drag-and-drop
   const compactChatRef = useRef<ChatPanelHandle>(null);
   // Root layout ref for resize handle position (handle follows cursor)
@@ -442,52 +464,14 @@ function WorkspacePageInner() {
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
   const [streamingSessionIds, setStreamingSessionIds] = useState<Set<string>>(new Set());
+  const [chatRuntimeSnapshots, setChatRuntimeSnapshots] = useState<Record<string, ChatTabRuntimeSnapshot>>({});
+  const [chatRunsSnapshot, setChatRunsSnapshot] = useState<ChatRunsSnapshot>(() =>
+    createChatRunsSnapshot({ parentRuns: [], subagents: [] }),
+  );
 
   // Subagent tracking
   const [subagents, setSubagents] = useState<SubagentSpawnInfo[]>([]);
   const [activeSubagentKey, setActiveSubagentKey] = useState<string | null>(null);
-
-  const handleSubagentSpawned = useCallback((info: SubagentSpawnInfo) => {
-    setSubagents((prev) => {
-      const idx = prev.findIndex((sa) => sa.childSessionKey === info.childSessionKey);
-      if (idx >= 0) {
-        // Update status if changed
-        if (prev[idx].status === info.status) {return prev;}
-        const updated = [...prev];
-        updated[idx] = { ...prev[idx], ...info };
-        return updated;
-      }
-      return [...prev, info];
-    });
-  }, []);
-
-  const handleSelectSubagent = useCallback((sessionKey: string) => {
-    setActiveSubagentKey(sessionKey);
-  }, []);
-
-  const handleBackFromSubagent = useCallback(() => {
-    setActiveSubagentKey(null);
-  }, []);
-
-  // Navigate to a subagent panel when its card is clicked in the chat.
-  // The identifier may be a childSessionKey (preferred) or a task label (legacy fallback).
-  const handleSubagentClickFromChat = useCallback((identifier: string) => {
-    const byKey = subagents.find((sa) => sa.childSessionKey === identifier);
-    if (byKey) {
-      setActiveSubagentKey(byKey.childSessionKey);
-      return;
-    }
-    const byTask = subagents.find((sa) => sa.task === identifier);
-    if (byTask) {
-      setActiveSubagentKey(byTask.childSessionKey);
-    }
-  }, [subagents]);
-
-  // Find the active subagent's info for the panel
-  const activeSubagent = useMemo(() => {
-    if (!activeSubagentKey) {return null;}
-    return subagents.find((sa) => sa.childSessionKey === activeSubagentKey) ?? null;
-  }, [activeSubagentKey, subagents]);
 
   // Cron jobs state
   const [cronJobs, setCronJobs] = useState<CronJob[]>([]);
@@ -531,15 +515,11 @@ function WorkspacePageInner() {
     const loaded = loadTabs(key);
     const hasNonHomeTabs = loaded.tabs.some((t) => t.id !== HOME_TAB_ID);
     if (!hasNonHomeTabs) {
-      const newTab: Tab = {
-        id: generateTabId(),
-        type: "chat",
-        title: "New Chat",
-      };
-      setTabState(openTab(loaded, newTab));
+      setTabState(openTab(loaded, createBlankChatTab()));
     } else {
       setTabState(loaded);
     }
+    setChatRuntimeSnapshots({});
   }, [workspaceName]);
 
   // Persist tabs to localStorage on change (only after initial load for this workspace)
@@ -549,8 +529,171 @@ function WorkspacePageInner() {
     saveTabs(tabState, key);
   }, [tabState, workspaceName]);
 
+  useEffect(() => {
+    const validTabIds = new Set(tabState.tabs.map((tab) => tab.id));
+    setChatRuntimeSnapshots((prev) => {
+      let next = prev;
+      for (const tabId of Object.keys(prev)) {
+        if (!validTabIds.has(tabId)) {
+          next = removeChatRuntimeSnapshot(next, tabId);
+        }
+      }
+      return next;
+    });
+    for (const tabId of Object.keys(chatPanelRefs.current)) {
+      if (!validTabIds.has(tabId)) {
+        delete chatPanelRefs.current[tabId];
+      }
+    }
+  }, [tabState.tabs]);
+
   // Ref for the keyboard shortcut to close the active tab (avoids stale closure over loadContent)
   const tabCloseActiveRef = useRef<(() => void) | null>(null);
+  const activeTab = useMemo(
+    () => tabState.tabs.find((tab) => tab.id === tabState.activeTabId) ?? HOME_TAB,
+    [tabState],
+  );
+  const mainChatTabs = useMemo(
+    () => tabState.tabs.filter((tab) => tab.id !== HOME_TAB_ID && isChatTab(tab)),
+    [tabState.tabs],
+  );
+
+  const openBlankChatTab = useCallback(() => {
+    const tab = createBlankChatTab();
+    setActivePath(null);
+    setContent({ kind: "none" });
+    setActiveSessionId(null);
+    setActiveSubagentKey(null);
+    setTabState((prev) => openTab(prev, tab));
+    return tab;
+  }, []);
+
+  const openSessionChatTab = useCallback((sessionId: string, title?: string) => {
+    setActivePath(null);
+    setContent({ kind: "none" });
+    setActiveSessionId(sessionId);
+    setActiveSubagentKey(null);
+    setTabState((prev) => openOrFocusParentChatTab(prev, { sessionId, title }));
+  }, []);
+
+  const openSubagentChatTab = useCallback((params: {
+    sessionKey: string;
+    parentSessionId: string;
+    title?: string;
+  }) => {
+    setActivePath(null);
+    setContent({ kind: "none" });
+    setActiveSessionId(params.parentSessionId);
+    setActiveSubagentKey(params.sessionKey);
+    setTabState((prev) => openOrFocusSubagentChatTab(prev, params));
+  }, []);
+
+  const visibleMainChatTabId = useMemo(() => {
+    if (isChatTab(activeTab)) {
+      return activeTab.id;
+    }
+    if (activeSubagentKey) {
+      const matchingSubagentTab = mainChatTabs.find((tab) => tab.sessionKey === activeSubagentKey);
+      if (matchingSubagentTab) {
+        return matchingSubagentTab.id;
+      }
+    }
+    if (activeSessionId) {
+      const matchingParentTab = mainChatTabs.find((tab) => tab.sessionId === activeSessionId);
+      if (matchingParentTab) {
+        return matchingParentTab.id;
+      }
+    }
+    return mainChatTabs[0]?.id ?? null;
+  }, [activeTab, activeSessionId, activeSubagentKey, mainChatTabs]);
+
+  useEffect(() => {
+    if (!isChatTab(activeTab)) {
+      return;
+    }
+    const identity = resolveChatIdentityForTab(activeTab);
+    setActiveSessionId((prev) => prev === identity.sessionId ? prev : identity.sessionId);
+    setActiveSubagentKey((prev) => prev === identity.subagentKey ? prev : identity.subagentKey);
+  }, [activeTab]);
+
+  const setMainChatPanelRef = useCallback((tabId: string, handle: ChatPanelHandle | null) => {
+    chatPanelRefs.current[tabId] = handle;
+  }, []);
+
+  useEffect(() => {
+    chatRef.current = visibleMainChatTabId ? chatPanelRefs.current[visibleMainChatTabId] ?? null : null;
+  }, [visibleMainChatTabId]);
+
+  const handleChatRuntimeStateChange = useCallback((tabId: string, runtime: ChatPanelRuntimeState) => {
+    setChatRuntimeSnapshots((prev) =>
+      mergeChatRuntimeSnapshot(prev, {
+        tabId,
+        ...runtime,
+      }),
+    );
+  }, []);
+
+  const handleChatTabSessionChange = useCallback((tabId: string, sessionId: string | null) => {
+    setTabState((prev) => bindParentSessionToChatTab(prev, tabId, sessionId));
+    if (tabState.activeTabId === tabId || visibleMainChatTabId === tabId) {
+      setActiveSessionId(sessionId);
+      setActiveSubagentKey(null);
+    }
+  }, [tabState.activeTabId, visibleMainChatTabId]);
+
+  const sendMessageInChatTab = useCallback((tabId: string, message: string) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        void chatPanelRefs.current[tabId]?.sendNewMessage(message);
+      });
+    });
+  }, []);
+
+  // Navigate to a subagent panel when its card is clicked in the chat.
+  // The identifier may be a childSessionKey (preferred) or a task label (legacy fallback).
+  const handleSubagentClickFromChat = useCallback((identifier: string) => {
+    const byKey = subagents.find((sa) => sa.childSessionKey === identifier);
+    if (byKey) {
+      openSubagentChatTab({
+        sessionKey: byKey.childSessionKey,
+        parentSessionId: byKey.parentSessionId,
+        title: byKey.label || byKey.task,
+      });
+      return;
+    }
+    const byTask = subagents.find((sa) => sa.task === identifier);
+    if (byTask) {
+      openSubagentChatTab({
+        sessionKey: byTask.childSessionKey,
+        parentSessionId: byTask.parentSessionId,
+        title: byTask.label || byTask.task,
+      });
+    }
+  }, [openSubagentChatTab, subagents]);
+
+  const handleSelectSubagent = useCallback((sessionKey: string) => {
+    const subagent = subagents.find((entry) => entry.childSessionKey === sessionKey);
+    if (!subagent) {
+      return;
+    }
+    openSubagentChatTab({
+      sessionKey,
+      parentSessionId: subagent.parentSessionId,
+      title: subagent.label || subagent.task,
+    });
+  }, [openSubagentChatTab, subagents]);
+
+  const handleBackFromSubagent = useCallback(() => {
+    if (!activeSubagentKey) {
+      return;
+    }
+    const activeChild = subagents.find((entry) => entry.childSessionKey === activeSubagentKey);
+    if (activeChild) {
+      openSessionChatTab(activeChild.parentSessionId);
+      return;
+    }
+    setActiveSubagentKey(null);
+  }, [activeSubagentKey, openSessionChatTab, subagents]);
 
   const openTabForNode = useCallback((node: { path: string; name: string; type: string }) => {
     const tab: Tab = {
@@ -700,7 +843,12 @@ function WorkspacePageInner() {
       setActiveSessionId,
       setActiveSubagentKey,
       resetMainChat: () => {
-        void chatRef.current?.newSession();
+        chatPanelRefs.current = {};
+        setChatRuntimeSnapshots({});
+        setChatRunsSnapshot(createChatRunsSnapshot({ parentRuns: [], subagents: [] }));
+        setStreamingSessionIds(new Set());
+        setSubagents([]);
+        setTabState({ tabs: [HOME_TAB], activeTabId: HOME_TAB_ID });
       },
       replaceUrlToRoot: () => {
         // URL sync effect will write the correct URL after state is cleared
@@ -717,21 +865,37 @@ function WorkspacePageInner() {
     async (sessionId: string) => {
       const res = await fetch(`/api/web-sessions/${sessionId}`, { method: "DELETE" });
       if (!res.ok) {return;}
+      const closedTabIds = new Set(
+        tabState.tabs
+          .filter((tab) => tab.type === "chat" && (tab.sessionId === sessionId || tab.parentSessionId === sessionId))
+          .map((tab) => tab.id),
+      );
+      setTabState((prev) => {
+        let next = closeChatTabsForSession(prev, sessionId);
+        const hasNonHomeTabs = next.tabs.some((tab) => tab.id !== HOME_TAB_ID);
+        if (!hasNonHomeTabs) {
+          next = openTab(next, createBlankChatTab());
+        }
+        return next;
+      });
+      setChatRuntimeSnapshots((prev) => {
+        let next = prev;
+        for (const tabId of closedTabIds) {
+          next = removeChatRuntimeSnapshot(next, tabId);
+        }
+        return next;
+      });
       if (activeSessionId === sessionId) {
-        setActiveSessionId(null);
-        setActiveSubagentKey(null);
         const remaining = sessions.filter((s) => s.id !== sessionId);
         if (remaining.length > 0) {
-          const next = remaining[0];
-          setActiveSessionId(next.id);
-          void chatRef.current?.loadSession(next.id);
+          openSessionChatTab(remaining[0].id, remaining[0].title);
         } else {
-          void chatRef.current?.newSession();
+          openBlankChatTab();
         }
       }
       void fetchSessions();
     },
-    [activeSessionId, sessions, fetchSessions],
+    [activeSessionId, sessions, fetchSessions, openBlankChatTab, openSessionChatTab, tabState.tabs],
   );
 
   const handleRenameSession = useCallback(
@@ -746,15 +910,28 @@ function WorkspacePageInner() {
     [fetchSessions],
   );
 
-  // Poll for active (streaming) agent runs so the sidebar can show indicators.
+  // Poll for parent/subagent run state so tabs and sidebars can reflect
+  // background activity across all open chats.
   useEffect(() => {
     let cancelled = false;
     const poll = async () => {
       try {
-        const res = await fetch("/api/chat/active");
+        const res = await fetch("/api/chat/runs");
         if (cancelled) {return;}
         const data = await res.json();
-        const ids: string[] = data.sessionIds ?? [];
+        const parentRuns: Array<{ sessionId: string; status: "running" | "waiting-for-subagents" | "completed" | "error" }> = data.parentRuns ?? [];
+        const nextSubagents: SubagentSpawnInfo[] = data.subagents ?? [];
+        const ids = parentRuns
+          .filter((run) => run.status === "running" || run.status === "waiting-for-subagents")
+          .map((run) => run.sessionId);
+        setChatRunsSnapshot(createChatRunsSnapshot({
+          parentRuns,
+          subagents: nextSubagents.map((subagent) => ({
+            childSessionKey: subagent.childSessionKey,
+            status: subagent.status ?? "completed",
+          })),
+        }));
+        setSubagents(nextSubagents);
         setStreamingSessionIds((prev) => {
           // Only update state if the set actually changed (avoid re-renders).
           if (prev.size === ids.length && ids.every((id) => prev.has(id))) {return prev;}
@@ -924,7 +1101,7 @@ function WorkspacePageInner() {
             setBrowseDir(null);
             setActivePath(null);
             setContent({ kind: "none" });
-            void chatRef.current?.newSession();
+            openBlankChatTab();
             return;
           }
         }
@@ -944,18 +1121,12 @@ function WorkspacePageInner() {
       // Intercept chat folder item clicks
       if (node.path.startsWith("~chats/")) {
         const sessionId = node.path.slice("~chats/".length);
-        setActivePath(null);
-        setContent({ kind: "none" });
-        setActiveSessionId(sessionId);
-        void chatRef.current?.loadSession(sessionId);
-        // URL is synced by the activeSessionId effect
+        openSessionChatTab(sessionId);
         return;
       }
       // Clicking the Chats folder itself opens a new chat
       if (node.path === "~chats") {
-        setActivePath(null);
-        setContent({ kind: "none" });
-        void chatRef.current?.newSession();
+        openBlankChatTab();
         return;
       }
       // Intercept cron job item clicks
@@ -977,15 +1148,44 @@ function WorkspacePageInner() {
       openTabForNode(node);
       void loadContent(node);
     },
-    [loadContent, openTabForNode, cronJobs, browseDir, workspaceRoot, openclawDir, setBrowseDir],
+    [loadContent, openBlankChatTab, openSessionChatTab, openTabForNode, cronJobs, browseDir, workspaceRoot, openclawDir, setBrowseDir],
   );
+
+  const applyActivatedTab = useCallback((tab: Tab | undefined) => {
+    if (!tab || tab.id === HOME_TAB_ID) {
+      setActivePath(null);
+      setContent({ kind: "none" });
+      return;
+    }
+    if (tab.type === "chat") {
+      setActivePath(null);
+      setContent({ kind: "none" });
+      const identity = resolveChatIdentityForTab(tab);
+      setActiveSessionId(identity.sessionId);
+      setActiveSubagentKey(identity.subagentKey);
+      return;
+    }
+    if (tab.path) {
+      const node = resolveNode(tree, tab.path);
+      if (node) {
+        void loadContent(node);
+      } else if (tab.path === "~cron") {
+        setActivePath("~cron");
+        setContent({ kind: "cron-dashboard" });
+      } else if (tab.path.startsWith("~cron/")) {
+        setActivePath(tab.path);
+        const jobId = tab.path.slice("~cron/".length);
+        const job = cronJobs.find((j) => j.id === jobId);
+        if (job) setContent({ kind: "cron-job", jobId, job });
+      }
+    }
+  }, [tree, loadContent, cronJobs]);
 
   // Tab handler callbacks (defined after loadContent is available)
   const handleTabActivate = useCallback((tabId: string) => {
     if (tabId === HOME_TAB_ID) {
-      setActivePath(null);
-      setContent({ kind: "none" });
       setTabState((prev) => activateTab(prev, tabId));
+      applyActivatedTab(undefined);
       return;
     }
     let tab: Tab | undefined;
@@ -995,81 +1195,36 @@ function WorkspacePageInner() {
       return next;
     });
     requestAnimationFrame(() => {
-      if (!tab) return;
-      if (tab.type === "chat") {
-        setActivePath(null);
-        setContent({ kind: "none" });
-        if (tab.sessionId) {
-          setActiveSessionId(tab.sessionId);
-          setActiveSubagentKey(null);
-          void chatRef.current?.loadSession(tab.sessionId);
-        } else {
-          setActiveSessionId(null);
-          setActiveSubagentKey(null);
-          void chatRef.current?.newSession();
-        }
-      } else if (tab.path) {
-        const node = resolveNode(tree, tab.path);
-        if (node) {
-          void loadContent(node);
-        } else if (tab.path === "~cron") {
-          setActivePath("~cron");
-          setContent({ kind: "cron-dashboard" });
-        } else if (tab.path.startsWith("~cron/")) {
-          setActivePath(tab.path);
-          const jobId = tab.path.slice("~cron/".length);
-          const job = cronJobs.find((j) => j.id === jobId);
-          if (job) setContent({ kind: "cron-job", jobId, job });
-        }
-      }
+      applyActivatedTab(tab);
     });
-  }, [tree, loadContent, cronJobs]);
+  }, [applyActivatedTab]);
 
   const handleTabClose = useCallback((tabId: string) => {
     const prev = tabState;
     let next = closeTab(prev, tabId);
     const hasNonHomeTabs = next.tabs.some((t) => t.id !== HOME_TAB_ID);
     if (!hasNonHomeTabs) {
-      const newTab: Tab = {
-        id: generateTabId(),
-        type: "chat",
-        title: "New Chat",
-      };
-      next = openTab(next, newTab);
+      next = openTab(next, createBlankChatTab());
       setTabState(next);
       setActivePath(null);
       setContent({ kind: "none" });
       setActiveSessionId(null);
       setActiveSubagentKey(null);
-      requestAnimationFrame(() => {
-        void chatRef.current?.newSession();
-      });
       return;
     }
     setTabState(next);
     if (next.activeTabId !== prev.activeTabId) {
       const newActive = next.tabs.find((t) => t.id === next.activeTabId);
       if (!newActive || newActive.id === HOME_TAB_ID) {
-        setActivePath(null);
-        setContent({ kind: "none" });
-      } else if (newActive.type === "chat") {
-        setActivePath(null);
-        setContent({ kind: "none" });
-        if (newActive.sessionId) {
-          setActiveSessionId(newActive.sessionId);
-          setActiveSubagentKey(null);
-          requestAnimationFrame(() => {
-            void chatRef.current?.loadSession(newActive.sessionId!);
-          });
-        }
-      } else if (newActive.path) {
-        const node = resolveNode(tree, newActive.path);
-        if (node) {
-          void loadContent(node);
-        }
+        const identity = resolveChatIdentityForTab(next.tabs.find((tab) => tab.type === "chat"));
+        setActiveSessionId(identity.sessionId);
+        setActiveSubagentKey(identity.subagentKey);
+        applyActivatedTab(undefined);
+      } else {
+        applyActivatedTab(newActive);
       }
     }
-  }, [tree, loadContent, tabState]);
+  }, [applyActivatedTab, tabState]);
 
   // Keep ref in sync so keyboard shortcut can close active tab
   useEffect(() => {
@@ -1081,12 +1236,16 @@ function WorkspacePageInner() {
   }, [tabState.activeTabId, handleTabClose]);
 
   const handleTabCloseOthers = useCallback((tabId: string) => {
-    setTabState((prev) => closeOtherTabs(prev, tabId));
-  }, []);
+    const next = closeOtherTabs(tabState, tabId);
+    setTabState(next);
+    applyActivatedTab(next.tabs.find((tab) => tab.id === next.activeTabId));
+  }, [applyActivatedTab, tabState]);
 
   const handleTabCloseToRight = useCallback((tabId: string) => {
-    setTabState((prev) => closeTabsToRight(prev, tabId));
-  }, []);
+    const next = closeTabsToRight(tabState, tabId);
+    setTabState(next);
+    applyActivatedTab(next.tabs.find((tab) => tab.id === next.activeTabId));
+  }, [applyActivatedTab, tabState]);
 
   const handleTabCloseAll = useCallback(() => {
     setTabState((prev) => {
@@ -1095,15 +1254,7 @@ function WorkspacePageInner() {
       setContent({ kind: "none" });
       setActiveSessionId(null);
       setActiveSubagentKey(null);
-      const newTab: Tab = {
-        id: generateTabId(),
-        type: "chat",
-        title: "New Chat",
-      };
-      return openTab(closed, newTab);
-    });
-    requestAnimationFrame(() => {
-      void chatRef.current?.newSession();
+      return openTab(closed, createBlankChatTab());
     });
   }, []);
 
@@ -1185,50 +1336,14 @@ function WorkspacePageInner() {
     [],
   );
 
-  // Open inline file-path mentions from chat.
-  // In chat mode, render a Dropbox-style preview in the right sidebar.
+  // Open inline file-path mentions from chat in a new workspace tab.
   const handleFilePathClickFromChat = useCallback(
     async (rawPath: string) => {
       const inputPath = normalizeChatPath(rawPath);
       if (!inputPath) {return false;}
 
-      // Desktop behavior: always use right-sidebar preview for chat path clicks.
-      const shouldPreviewInSidebar = !isMobile;
-
-      const openNode = async (node: TreeNode) => {
-        if (!shouldPreviewInSidebar) {
-          handleNodeSelect(node);
-          setShowChatSidebar(true);
-          return true;
-        }
-
-        // Ensure we are in main-chat layout so the preview panel is visible.
-        if (activePath || content.kind !== "none") {
-          setActivePath(null);
-          setContent({ kind: "none" });
-        }
-
-        setChatSidebarPreview({
-          status: "loading",
-          path: node.path,
-          filename: node.name,
-        });
-        const previewContent = await loadSidebarPreviewFromNode(node);
-        if (!previewContent) {
-          setChatSidebarPreview({
-            status: "error",
-            path: node.path,
-            filename: node.name,
-            message: "Could not preview this file.",
-          });
-          return false;
-        }
-        setChatSidebarPreview({
-          status: "ready",
-          path: node.path,
-          filename: node.name,
-          content: previewContent,
-        });
+      const openNode = (node: TreeNode) => {
+        handleNodeSelect(node);
         return true;
       };
 
@@ -1241,7 +1356,7 @@ function WorkspacePageInner() {
       ) {
         const node = resolveNode(tree, inputPath);
         if (node) {
-          return await openNode(node);
+          return openNode(node);
         }
       }
 
@@ -1262,24 +1377,14 @@ function WorkspacePageInner() {
           if (relPath) {
             const node = resolveNode(tree, relPath);
             if (node) {
-              return await openNode(node);
+              return openNode(node);
             }
           }
         }
 
         if (info.type === "directory") {
           const dirNode: TreeNode = { name: info.name, path: info.path, type: "folder" };
-          if (shouldPreviewInSidebar) {
-            return await openNode(dirNode);
-          }
-          setBrowseDir(info.path);
-          setActivePath(info.path);
-          setContent({
-            kind: "directory",
-            node: { name: info.name, path: info.path, type: "folder" },
-          });
-          setShowChatSidebar(true);
-          return true;
+          return openNode(dirNode);
         }
 
         if (info.type === "file") {
@@ -1288,16 +1393,7 @@ function WorkspacePageInner() {
             path: info.path,
             type: inferNodeTypeFromFileName(info.name),
           };
-          if (shouldPreviewInSidebar) {
-            return await openNode(fileNode);
-          }
-          const parentDir = info.path.split("/").slice(0, -1).join("/") || "/";
-          if (isAbsolutePath(info.path)) {
-            setBrowseDir(parentDir);
-          }
-          await loadContent(fileNode);
-          setShowChatSidebar(true);
-          return true;
+          return openNode(fileNode);
         }
       } catch {
         // Ignore -- chat message bubble shows inline error state.
@@ -1305,7 +1401,7 @@ function WorkspacePageInner() {
 
       return false;
     },
-    [activePath, content.kind, isMobile, tree, handleNodeSelect, workspaceRoot, loadSidebarPreviewFromNode, setBrowseDir, loadContent, router],
+    [tree, handleNodeSelect, workspaceRoot],
   );
 
   // Build the enhanced tree: real tree + Cron virtual folder at the bottom
@@ -1532,13 +1628,14 @@ function WorkspacePageInner() {
       }
     } else if (urlState.chat) {
       initialPathHandled.current = true;
-      setActiveSessionId(urlState.chat);
-      setActivePath(null);
-      setContent({ kind: "none" });
-      void chatRef.current?.loadSession(urlState.chat);
-
       if (urlState.subagent) {
-        setActiveSubagentKey(urlState.subagent);
+        openSubagentChatTab({
+          sessionKey: urlState.subagent,
+          parentSessionId: urlState.chat,
+          title: "Subagent",
+        });
+      } else {
+        openSessionChatTab(urlState.chat);
       }
     } else {
       // No path or chat param — mark hydration done (bare / or browse-only)
@@ -1611,12 +1708,15 @@ function WorkspacePageInner() {
         }
         setFileChatSessionId(urlState.fileChat);
       } else if (urlState.chat) {
-        setActiveSessionId(urlState.chat);
-        setActivePath(null);
-        setContent({ kind: "none" });
-        void chatRef.current?.loadSession(urlState.chat);
-        setActiveSubagentKey(urlState.subagent);
-        setTabState((prev) => activateTab(prev, HOME_TAB_ID));
+        if (urlState.subagent) {
+          openSubagentChatTab({
+            sessionKey: urlState.subagent,
+            parentSessionId: urlState.chat,
+            title: "Subagent",
+          });
+        } else {
+          openSessionChatTab(urlState.chat);
+        }
       } else {
         setActivePath(null);
         setContent({ kind: "none" });
@@ -1693,11 +1793,9 @@ function WorkspacePageInner() {
     setActivePath(null);
     setContent({ kind: "none" });
 
-    // Give ChatPanel a frame to mount, then send the message
-    requestAnimationFrame(() => {
-      void chatRef.current?.sendNewMessage(sendParam);
-    });
-  }, [searchParams, router]);
+    const tab = openBlankChatTab();
+    sendMessageInChatTab(tab.id, sendParam);
+  }, [openBlankChatTab, searchParams, router, sendMessageInChatTab]);
 
   const handleBreadcrumbNavigate = useCallback(
     (path: string) => {
@@ -1844,10 +1942,9 @@ function WorkspacePageInner() {
   const handleCronSendCommand = useCallback((message: string) => {
     setActivePath(null);
     setContent({ kind: "none" });
-    requestAnimationFrame(() => {
-      void chatRef.current?.sendNewMessage(message);
-    });
-  }, []);
+    const tab = openBlankChatTab();
+    sendMessageInChatTab(tab.id, message);
+  }, [openBlankChatTab, sendMessageInChatTab]);
 
   // Derive the active session's title for the header / right sidebar
   const activeSessionTitle = useMemo(() => {
@@ -1857,18 +1954,128 @@ function WorkspacePageInner() {
   }, [activeSessionId, sessions]);
 
   useEffect(() => {
-    if (!activeSessionTitle) return;
     setTabState((prev) => {
-      const active = prev.tabs.find((t) => t.id === prev.activeTabId);
-      if (active?.type === "chat" && active.title !== activeSessionTitle) {
-        return updateTabTitle(prev, active.id, activeSessionTitle);
+      let next = syncParentChatTabTitles(prev, sessions);
+      next = syncSubagentChatTabTitles(next, subagents);
+      if (!activeSessionTitle) {
+        return next;
       }
-      return prev;
+      const active = next.tabs.find((t) => t.id === next.activeTabId);
+      if (active?.type === "chat" && active.title !== activeSessionTitle && !active.sessionKey) {
+        return updateChatTabTitle(next, active.id, activeSessionTitle);
+      }
+      return next;
     });
-  }, [activeSessionTitle]);
+  }, [activeSessionTitle, sessions, subagents]);
 
-  // Whether to show the main ChatPanel (no file/content selected)
-  const showMainChat = !activePath || content.kind === "none";
+  const runningSubagentKeys = useMemo(
+    () => new Set(subagents.filter((subagent) => subagent.status === "running").map((subagent) => subagent.childSessionKey)),
+    [subagents],
+  );
+
+  const liveChatTabIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const tab of mainChatTabs) {
+      const runtime = chatRuntimeSnapshots[tab.id];
+      if (runtime?.isStreaming) {
+        ids.add(tab.id);
+        continue;
+      }
+      if (tab.sessionKey && (runningSubagentKeys.has(tab.sessionKey) || chatRunsSnapshot.subagentStatuses.get(tab.sessionKey) === "running")) {
+        ids.add(tab.id);
+        continue;
+      }
+      if (tab.sessionId && streamingSessionIds.has(tab.sessionId)) {
+        ids.add(tab.id);
+      }
+    }
+    return ids;
+  }, [chatRunsSnapshot.subagentStatuses, chatRuntimeSnapshots, mainChatTabs, runningSubagentKeys, streamingSessionIds]);
+
+  const optimisticallyStopParentSession = useCallback((sessionId: string) => {
+    setStreamingSessionIds((prev) => {
+      if (!prev.has(sessionId)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.delete(sessionId);
+      return next;
+    });
+    setSubagents((prev) => prev.map((subagent) =>
+      subagent.parentSessionId === sessionId && subagent.status === "running"
+        ? { ...subagent, status: "completed" }
+        : subagent,
+    ));
+    setChatRuntimeSnapshots((prev) => {
+      const next: Record<string, ChatTabRuntimeSnapshot> = {};
+      for (const [tabId, snapshot] of Object.entries(prev)) {
+        next[tabId] = snapshot.sessionId === sessionId
+          ? { ...snapshot, isStreaming: false, isReconnecting: false, status: "ready" }
+          : snapshot;
+      }
+      return next;
+    });
+  }, []);
+
+  const optimisticallyStopSubagent = useCallback((sessionKey: string) => {
+    setSubagents((prev) => prev.map((subagent) =>
+      subagent.childSessionKey === sessionKey && subagent.status === "running"
+        ? { ...subagent, status: "completed" }
+        : subagent,
+    ));
+    setChatRuntimeSnapshots((prev) => {
+      const next: Record<string, ChatTabRuntimeSnapshot> = {};
+      for (const [tabId, snapshot] of Object.entries(prev)) {
+        next[tabId] = snapshot.sessionKey === sessionKey
+          ? { ...snapshot, isStreaming: false, isReconnecting: false, status: "ready" }
+          : snapshot;
+      }
+      return next;
+    });
+  }, []);
+
+  const stopParentSession = useCallback(async (sessionId: string) => {
+    optimisticallyStopParentSession(sessionId);
+    try {
+      await fetch("/api/chat/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, cascadeChildren: true }),
+      });
+    } catch {
+      // Best-effort optimistic stop; polling will reconcile state.
+    }
+  }, [optimisticallyStopParentSession]);
+
+  const stopSubagentSession = useCallback(async (sessionKey: string) => {
+    optimisticallyStopSubagent(sessionKey);
+    try {
+      await fetch("/api/chat/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionKey }),
+      });
+    } catch {
+      // Best-effort optimistic stop; polling will reconcile state.
+    }
+  }, [optimisticallyStopSubagent]);
+
+  const handleStopChatTab = useCallback((tabId: string) => {
+    const tab = tabState.tabs.find((entry) => entry.id === tabId);
+    if (!tab || tab.type !== "chat") {
+      return;
+    }
+    if (tab.sessionKey) {
+      void stopSubagentSession(tab.sessionKey);
+      return;
+    }
+    if (tab.sessionId) {
+      void stopParentSession(tab.sessionId);
+    }
+  }, [stopParentSession, stopSubagentSession, tabState.tabs]);
+
+  // Whether to show the main chat workspace instead of file/object content.
+  const showMainChat = activeTab.type === "chat" || activeTab.id === HOME_TAB_ID || (!activePath || content.kind === "none");
 
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
@@ -1908,15 +2115,12 @@ function WorkspacePageInner() {
             chatActiveSubagentKey={activeSubagentKey}
             chatSessionsLoading={sessionsLoading}
             onSelectChatSession={(sessionId) => {
-              setActiveSessionId(sessionId);
-              setActiveSubagentKey(null);
-              void chatRef.current?.loadSession(sessionId);
+              const session = sessions.find((entry) => entry.id === sessionId);
+              openSessionChatTab(sessionId, session?.title);
               setSidebarOpen(false);
             }}
             onNewChatSession={() => {
-              setActiveSessionId(null);
-              setActiveSubagentKey(null);
-              void chatRef.current?.newSession();
+              openBlankChatTab();
               setSidebarOpen(false);
             }}
             onSelectChatSubagent={handleSelectSubagent}
@@ -1974,14 +2178,11 @@ function WorkspacePageInner() {
                 chatActiveSubagentKey={activeSubagentKey}
                 chatSessionsLoading={sessionsLoading}
                 onSelectChatSession={(sessionId) => {
-                  setActiveSessionId(sessionId);
-                  setActiveSubagentKey(null);
-                  void chatRef.current?.loadSession(sessionId);
+                  const session = sessions.find((entry) => entry.id === sessionId);
+                  openSessionChatTab(sessionId, session?.title);
                 }}
                 onNewChatSession={() => {
-                  setActiveSessionId(null);
-                  setActiveSubagentKey(null);
-                  void chatRef.current?.newSession();
+                  openBlankChatTab();
                 }}
                 onSelectChatSubagent={handleSelectSubagent}
                 onDeleteChatSession={handleDeleteSession}
@@ -1997,7 +2198,7 @@ function WorkspacePageInner() {
       {/* Main content */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden" style={{ background: "var(--color-surface)" }}>
         <div className="flex flex-1 min-h-0">
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {/* Mobile top bar — always visible on mobile */}
             {isMobile && (
               <div
@@ -2065,23 +2266,24 @@ function WorkspacePageInner() {
                 onCloseAll={handleTabCloseAll}
                 onReorder={handleTabReorder}
                 onTogglePin={handleTabTogglePin}
-                onNewTab={() => {
-                  const newTab: Tab = {
-                    id: generateTabId(),
-                    type: "chat",
-                    title: "New Chat",
-                  };
-                  setActivePath(null);
-                  setContent({ kind: "none" });
-                  setActiveSessionId(null);
-                  setActiveSubagentKey(null);
-                  setTabState((prev) => openTab(prev, newTab));
-                  requestAnimationFrame(() => {
-                    void chatRef.current?.newSession();
-                  });
-                }}
+                liveChatTabIds={liveChatTabIds}
+                onStopTab={handleStopChatTab}
+                onNewTab={openBlankChatTab}
                 rightContent={showMainChat ? (
                   <>
+                    {visibleMainChatTabId && liveChatTabIds.has(visibleMainChatTabId) && (
+                      <button
+                        type="button"
+                        onClick={() => handleStopChatTab(visibleMainChatTabId)}
+                        className="p-1.5 rounded-lg cursor-pointer"
+                        style={{ color: "var(--color-text-muted)" }}
+                        title="Stop active chat"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                          <rect x="6" y="6" width="12" height="12" rx="2" />
+                        </svg>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setChatSidebarOpen((v) => !v)}
@@ -2096,7 +2298,7 @@ function WorkspacePageInner() {
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                       </svg>
                     </button>
-                    {activeSessionId && (
+                    {activeSessionId && !activeSubagentKey && (
                       <DropdownMenu>
                         <DropdownMenuTrigger
                           className="p-1.5 rounded-lg cursor-pointer"
@@ -2173,46 +2375,43 @@ function WorkspacePageInner() {
 
             {/* Content area */}
             <div className="flex-1 flex min-h-0">
-              {showMainChat ? (
-                <div className="flex-1 flex flex-col min-w-0" style={{ background: "var(--color-main-bg)" }}>
-                  <ChatPanel
-                    key={activeSubagent?.childSessionKey ?? "main"}
-                    ref={activeSubagent ? undefined : chatRef}
-                    sessionTitle={activeSessionTitle}
-                    initialSessionId={activeSessionId ?? undefined}
-                    onActiveSessionChange={activeSubagent ? undefined : (id) => {
-                      setActiveSessionId(id);
-                      setActiveSubagentKey(null);
-                      if (id) {
-                        setTabState((prev) => {
-                          const active = prev.tabs.find((t) => t.id === prev.activeTabId);
-                          if (active?.type === "chat" && !active.sessionId) {
-                            return {
-                              ...prev,
-                              tabs: prev.tabs.map((t) =>
-                                t.id === active.id ? { ...t, sessionId: id } : t,
-                              ),
-                            };
-                          }
-                          return prev;
-                        });
-                      }
-                    }}
-                    onSessionsChange={activeSubagent ? undefined : refreshSessions}
-                    onSubagentSpawned={activeSubagent ? undefined : handleSubagentSpawned}
-                    onSubagentClick={handleSubagentClickFromChat}
-                    onFilePathClick={handleFilePathClickFromChat}
-                    onDeleteSession={activeSubagent ? undefined : handleDeleteSession}
-                    onRenameSession={activeSubagent ? undefined : handleRenameSession}
-                    compact={isMobile}
-                    sessionKey={activeSubagent?.childSessionKey}
-                    subagentTask={activeSubagent?.task}
-                    subagentLabel={activeSubagent?.label}
-                    onBack={activeSubagent ? handleBackFromSubagent : undefined}
-                    hideHeaderActions={!isMobile}
-                  />
-                </div>
-              ) : (
+              <div
+                className={showMainChat ? "flex-1 flex min-h-0 min-w-0 flex-col overflow-hidden" : "hidden"}
+                style={{ background: "var(--color-main-bg)" }}
+              >
+                {mainChatTabs.map((tab) => {
+                  const subagent = tab.sessionKey
+                    ? subagents.find((entry) => entry.childSessionKey === tab.sessionKey)
+                    : null;
+                  const isVisible = tab.id === visibleMainChatTabId;
+                  return (
+                    <div
+                      key={tab.id}
+                      className={isVisible ? "flex-1 flex min-h-0 min-w-0 flex-col overflow-hidden" : "hidden"}
+                    >
+                      <ChatPanel
+                        ref={(handle) => setMainChatPanelRef(tab.id, handle)}
+                        sessionTitle={tab.title}
+                        initialSessionId={tab.sessionKey ? undefined : tab.sessionId ?? undefined}
+                        onActiveSessionChange={tab.sessionKey ? undefined : (id) => handleChatTabSessionChange(tab.id, id)}
+                        onSessionsChange={refreshSessions}
+                        onSubagentClick={handleSubagentClickFromChat}
+                        onFilePathClick={handleFilePathClickFromChat}
+                        onDeleteSession={tab.sessionKey ? undefined : handleDeleteSession}
+                        onRenameSession={tab.sessionKey ? undefined : handleRenameSession}
+                        compact={isMobile}
+                        sessionKey={tab.sessionKey ?? undefined}
+                        subagentTask={subagent?.task}
+                        subagentLabel={subagent?.label}
+                        onBack={tab.sessionKey ? handleBackFromSubagent : undefined}
+                        hideHeaderActions={!isMobile}
+                        onRuntimeStateChange={(runtime) => handleChatRuntimeStateChange(tab.id, runtime)}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              {!showMainChat && (
                 <div className="flex-1 overflow-y-auto">
                   <ContentRenderer
                     content={content}
@@ -2259,7 +2458,7 @@ function WorkspacePageInner() {
                 transition: "width 200ms ease",
               }}
             >
-              <div className="flex flex-col h-full relative" style={{ width: chatSidebarWidth, minWidth: chatSidebarWidth }}>
+              <div className="flex h-full min-h-0 flex-col relative overflow-hidden" style={{ width: chatSidebarWidth, minWidth: chatSidebarWidth }}>
                 <ResizeHandle
                   mode="right"
                   containerRef={layoutRef}
@@ -2276,18 +2475,17 @@ function WorkspacePageInner() {
                   activeSubagentKey={activeSubagentKey}
                   loading={sessionsLoading}
                   onSelectSession={(sessionId) => {
-                    setActiveSessionId(sessionId);
-                    setActiveSubagentKey(null);
-                    void chatRef.current?.loadSession(sessionId);
+                    const session = sessions.find((entry) => entry.id === sessionId);
+                    openSessionChatTab(sessionId, session?.title);
                   }}
                   onNewSession={() => {
-                    setActiveSessionId(null);
-                    setActiveSubagentKey(null);
-                    void chatRef.current?.newSession();
+                    openBlankChatTab();
                   }}
                   onSelectSubagent={handleSelectSubagent}
                   onDeleteSession={handleDeleteSession}
                   onRenameSession={handleRenameSession}
+                  onStopSession={(sessionId) => { void stopParentSession(sessionId); }}
+                  onStopSubagent={(sessionKey) => { void stopSubagentSession(sessionKey); }}
                   embedded
                 />
               </div>
@@ -2304,7 +2502,7 @@ function WorkspacePageInner() {
                 transition: "width 200ms ease",
               }}
             >
-              <div className="flex flex-col h-full relative" style={{ width: rightSidebarWidth, minWidth: rightSidebarWidth }}>
+              <div className="flex h-full min-h-0 flex-col relative overflow-hidden" style={{ width: rightSidebarWidth, minWidth: rightSidebarWidth }}>
                 <ResizeHandle
                   mode="right"
                   containerRef={layoutRef}

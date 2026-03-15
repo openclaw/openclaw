@@ -21,6 +21,8 @@ type TabBarProps = {
   onCloseAll: () => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onTogglePin: (tabId: string) => void;
+  liveChatTabIds?: Set<string>;
+  onStopTab?: (tabId: string) => void;
   onNewTab?: () => void;
   leftContent?: React.ReactNode;
   rightContent?: React.ReactNode;
@@ -32,10 +34,10 @@ type ContextMenuState = {
   y: number;
 } | null;
 
-function tabToFaviconClass(tab: Tab): string | undefined {
+function tabToFaviconClass(tab: Tab, isLive: boolean): string | undefined {
   switch (tab.type) {
     case "home": return "dench-favicon-home";
-    case "chat": return "dench-favicon-chat";
+    case "chat": return isLive ? "dench-favicon-chat-live" : "dench-favicon-chat";
     case "app": return "dench-favicon-app";
     case "cron": return "dench-favicon-cron";
     case "object": return "dench-favicon-object";
@@ -60,6 +62,8 @@ export function TabBar({
   onCloseAll,
   onReorder,
   onTogglePin,
+  liveChatTabIds,
+  onStopTab,
   onNewTab,
   leftContent,
   rightContent,
@@ -104,10 +108,10 @@ export function TabBar({
       title: tab.title,
       active: tab.id === activeTabId,
       favicon: tabToFavicon(tab),
-      faviconClass: tabToFaviconClass(tab),
+      faviconClass: tabToFaviconClass(tab, liveChatTabIds?.has(tab.id) ?? false),
       isCloseIconVisible: !tab.pinned,
     }));
-  }, [nonHomeTabs, activeTabId]);
+  }, [nonHomeTabs, activeTabId, liveChatTabIds]);
 
   const handleActive = useCallback((id: string) => onActivate(id), [onActivate]);
   const handleClose = useCallback((id: string) => onClose(id), [onClose]);
@@ -177,6 +181,15 @@ export function TabBar({
             label={contextTab.pinned ? "Unpin Tab" : "Pin Tab"}
             onClick={() => { onTogglePin(contextMenu.tabId); setContextMenu(null); }}
           />
+          {contextTab.type === "chat" && liveChatTabIds?.has(contextMenu.tabId) && onStopTab && (
+            <>
+              <div className="h-px my-0.5 mx-1 bg-neutral-400/15" />
+              <ContextMenuItem
+                label="Stop Session"
+                onClick={() => { onStopTab(contextMenu.tabId); setContextMenu(null); }}
+              />
+            </>
+          )}
           <div className="h-px my-0.5 mx-1 bg-neutral-400/15" />
           <ContextMenuItem
             label="Close"

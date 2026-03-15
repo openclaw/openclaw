@@ -10,6 +10,7 @@ import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChainOfThought, type ChainPart } from "./chain-of-thought";
+import { isStatusReasoningText } from "./chat-stream-status";
 import { splitReportBlocks, hasReportBlocks } from "@/lib/report-blocks";
 import { splitDiffBlocks, hasDiffBlocks } from "@/lib/diff-blocks";
 import type { ReportConfig } from "./charts/types";
@@ -55,12 +56,15 @@ type MessageSegment =
 	| { type: "subagent-card"; task: string; label?: string; sessionKey?: string; status: "running" | "done" | "error" };
 
 /** Map AI SDK tool state string to a simplified status */
-function toolStatus(state: string): "running" | "done" | "error" {
-	if (state === "output-available") {
-		return "done";
-	}
-	if (state === "error") {
+function toolStatus(
+	state: string,
+	preliminary = false,
+): "running" | "done" | "error" {
+	if (state === "output-error" || state === "error") {
 		return "error";
+	}
+	if (state === "output-available" && !preliminary) {
+		return "done";
 	}
 	return "running";
 }
@@ -115,18 +119,10 @@ function groupParts(parts: UIMessage["parts"]): MessageSegment[] {
 				text: string;
 				state?: string;
 			};
-			// Skip lifecycle/compaction status labels — they add noise
-			// (e.g. "Preparing response...", "Optimizing session context...")
-			const statusLabels = [
-				"Preparing response...",
-				"Optimizing session context...",
-				"Waiting for subagent results...",
-				"Waiting for subagents...",
-			];
-			const isStatus = statusLabels.some((l) =>
-				rp.text.startsWith(l),
-			);
-			if (!isStatus) {
+			// Skip lifecycle/compaction status labels in the thought body.
+			// The active stream row renders them separately so they stay visible
+			// without cluttering the permanent transcript.
+			if (!isStatusReasoningText(rp.text)) {
 				chain.push({
 					kind: "reasoning",
 					text: rp.text,
@@ -141,6 +137,7 @@ function groupParts(parts: UIMessage["parts"]): MessageSegment[] {
 			state: string;
 			input?: unknown;
 			output?: unknown;
+			preliminary?: boolean;
 		};
 		if (tp.toolName === "sessions_spawn") {
 			flush(true);
@@ -149,13 +146,19 @@ function groupParts(parts: UIMessage["parts"]): MessageSegment[] {
 			const task = typeof args?.task === "string" ? args.task : "Subagent task";
 			const label = typeof args?.label === "string" ? args.label : undefined;
 			const sessionKey = typeof out?.sessionKey === "string" ? out.sessionKey : undefined;
-			segments.push({ type: "subagent-card", task, label, sessionKey, status: toolStatus(tp.state) });
+			segments.push({
+				type: "subagent-card",
+				task,
+				label,
+				sessionKey,
+				status: toolStatus(tp.state, tp.preliminary === true),
+			});
 		} else {
 			chain.push({
 				kind: "tool",
 				toolName: tp.toolName,
 				toolCallId: tp.toolCallId,
-				status: toolStatus(tp.state),
+				status: toolStatus(tp.state, tp.preliminary === true),
 				args: asRecord(tp.input),
 				output: asRecord(tp.output),
 			});
@@ -175,6 +178,7 @@ function groupParts(parts: UIMessage["parts"]): MessageSegment[] {
 			args?: unknown;
 			result?: unknown;
 			errorText?: string;
+			preliminary?: boolean;
 		};
 		const resolvedToolName = tp.title ?? tp.toolName ?? part.type.replace("tool-", "");
 		if (resolvedToolName === "sessions_spawn") {
@@ -186,19 +190,25 @@ function groupParts(parts: UIMessage["parts"]): MessageSegment[] {
 			const sessionKey = typeof out?.sessionKey === "string" ? out.sessionKey : undefined;
 			const resolvedState =
 				tp.state ??
-				(tp.errorText ? "error" : ("result" in tp || "output" in tp) ? "output-available" : "input-available");
-			segments.push({ type: "subagent-card", task, label, sessionKey, status: toolStatus(resolvedState) });
+				(tp.errorText ? "output-error" : ("result" in tp || "output" in tp) ? "output-available" : "input-available");
+			segments.push({
+				type: "subagent-card",
+				task,
+				label,
+				sessionKey,
+				status: toolStatus(resolvedState, tp.preliminary === true),
+			});
 		} else {
 			// Persisted tool-invocation parts have no state field but
 			// include result/output/errorText to indicate completion.
 			const resolvedState =
 				tp.state ??
-				(tp.errorText ? "error" : ("result" in tp || "output" in tp) ? "output-available" : "input-available");
+				(tp.errorText ? "output-error" : ("result" in tp || "output" in tp) ? "output-available" : "input-available");
 			chain.push({
 				kind: "tool",
 				toolName: resolvedToolName,
 				toolCallId: tp.toolCallId,
-				status: toolStatus(resolvedState),
+				status: toolStatus(resolvedState, tp.preliminary === true),
 				args: asRecord(tp.input) ?? asRecord(tp.args),
 				output: asRecord(tp.output) ?? asRecord(tp.result),
 			});
@@ -784,7 +794,7 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onS
 		if (attachmentInfo) {
 			return (
 				<div className="flex flex-col items-end gap-1.5 py-2">
-					{!richHtml && <AttachedFilesCard paths={attachmentInfo.paths} />}
+					<AttachedFilesCard paths={attachmentInfo.paths} />
 					{(attachmentInfo.message || richHtml) && (
 						<div
 							className="max-w-[80%] w-fit rounded-2xl rounded-br-sm px-3 py-2 text-sm leading-6 break-words chat-message-font"

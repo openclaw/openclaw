@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import { trackServer } from "@/lib/telemetry";
 import { type WebSessionMeta, ensureDir, readIndex, writeIndex } from "./shared";
 import {
+  ensureManagedWorkspaceRouting,
   getActiveWorkspaceName,
   resolveActiveAgentId,
+  resolveWorkspaceDirForName,
   resolveWorkspaceRoot,
 } from "@/lib/workspace";
 import { allocateChatAgent } from "@/lib/chat-agent-registry";
@@ -34,9 +36,10 @@ export async function POST(req: Request) {
   const id = randomUUID();
   const now = Date.now();
 
-  const workspaceName = getActiveWorkspaceName() ?? undefined;
+  const workspaceName = getActiveWorkspaceName() ?? "default";
+  const workspaceRoot = resolveWorkspaceRoot() ?? resolveWorkspaceDirForName(workspaceName);
+  ensureManagedWorkspaceRouting(workspaceName, workspaceRoot, { markDefault: false });
   const workspaceAgentId = resolveActiveAgentId();
-  const workspaceRoot = resolveWorkspaceRoot() ?? undefined;
 
   // Assign a pool slot agent for concurrent chat support.
   // Falls back to the workspace agent if no slots are available.
@@ -59,7 +62,7 @@ export async function POST(req: Request) {
     updatedAt: now,
     messageCount: 0,
     ...(body.filePath ? { filePath: body.filePath } : {}),
-    workspaceName,
+    workspaceName: workspaceName || undefined,
     workspaceRoot,
     workspaceAgentId,
     chatAgentId,

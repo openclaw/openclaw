@@ -5,12 +5,15 @@
  * Works for both parent sessions (by sessionId) and subagent sessions (by sessionKey).
  */
 import { abortRun, getActiveRun } from "@/lib/active-runs";
+import { listSubagentsForRequesterSession } from "@/lib/subagent-registry";
 import { trackServer } from "@/lib/telemetry";
+import { resolveActiveAgentId } from "@/lib/workspace";
+import { resolveSessionKey } from "@/app/api/web-sessions/shared";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-	const body: { sessionId?: string; sessionKey?: string } = await req
+	const body: { sessionId?: string; sessionKey?: string; cascadeChildren?: boolean } = await req
 		.json()
 		.catch(() => ({}));
 
@@ -25,8 +28,22 @@ export async function POST(req: Request) {
 	const canAbort =
 		run?.status === "running" || run?.status === "waiting-for-subagents";
 	const aborted = canAbort ? abortRun(runKey) : false;
-	if (aborted) {
+	let abortedChildren = 0;
+
+	if (!isSubagentSession && body.sessionId && body.cascadeChildren) {
+		const fallbackAgentId = resolveActiveAgentId();
+		const requesterSessionKey = resolveSessionKey(body.sessionId, fallbackAgentId);
+		for (const subagent of listSubagentsForRequesterSession(requesterSessionKey)) {
+			const childRun = getActiveRun(subagent.childSessionKey);
+			const canAbortChild =
+				childRun?.status === "running" || childRun?.status === "waiting-for-subagents";
+			if (canAbortChild && abortRun(subagent.childSessionKey)) {
+				abortedChildren += 1;
+			}
+		}
+	}
+	if (aborted || abortedChildren > 0) {
 		trackServer("chat_stopped");
 	}
-	return Response.json({ aborted });
+	return Response.json({ aborted, abortedChildren });
 }

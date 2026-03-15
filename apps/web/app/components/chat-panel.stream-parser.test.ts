@@ -72,6 +72,33 @@ describe("createStreamParser", () => {
     ]);
   });
 
+  it("keeps partial tool output visible without marking the tool complete", () => {
+    const parser = createStreamParser();
+
+    parser.processEvent({
+      type: "tool-input-start",
+      toolCallId: "tool-1",
+      toolName: "readFile",
+    });
+    parser.processEvent({
+      type: "tool-output-partial",
+      toolCallId: "tool-1",
+      output: { text: "first chunk" },
+    });
+
+    expect(parser.getParts()).toEqual([
+      {
+        type: "dynamic-tool",
+        toolCallId: "tool-1",
+        toolName: "readFile",
+        state: "input-available",
+        input: {},
+        output: { text: "first chunk" },
+        preliminary: true,
+      },
+    ]);
+  });
+
   it("closes reasoning state on reasoning-end to prevent stuck streaming badges", () => {
     const parser = createStreamParser();
 

@@ -23,6 +23,8 @@ export type Tab = {
   icon?: string;
   path?: string;
   sessionId?: string;
+  sessionKey?: string;
+  parentSessionId?: string;
   pinned?: boolean;
 };
 
@@ -72,8 +74,8 @@ export function saveTabs(state: TabState, workspaceId?: string | null): void {
   if (typeof window === "undefined") return;
   try {
     const serializable: TabState = {
-      tabs: state.tabs.map(({ id, type, title, icon, path, sessionId, pinned }) => ({
-        id, type, title, icon, path, sessionId, pinned,
+      tabs: state.tabs.map(({ id, type, title, icon, path, sessionId, sessionKey, parentSessionId, pinned }) => ({
+        id, type, title, icon, path, sessionId, sessionKey, parentSessionId, pinned,
       })),
       activeTabId: state.activeTabId,
     };
@@ -91,12 +93,18 @@ export function findTabBySessionId(tabs: Tab[], sessionId: string): Tab | undefi
   return tabs.find((t) => t.type === "chat" && t.sessionId === sessionId);
 }
 
+export function findTabBySessionKey(tabs: Tab[], sessionKey: string): Tab | undefined {
+  return tabs.find((t) => t.type === "chat" && t.sessionKey === sessionKey);
+}
+
 export function openTab(state: TabState, tab: Tab): TabState {
   const existing = tab.path
     ? findTabByPath(state.tabs, tab.path)
-    : tab.sessionId
-      ? findTabBySessionId(state.tabs, tab.sessionId)
-      : undefined;
+    : tab.sessionKey
+      ? findTabBySessionKey(state.tabs, tab.sessionKey)
+      : tab.sessionId
+        ? findTabBySessionId(state.tabs, tab.sessionId)
+        : undefined;
 
   if (existing) {
     return { ...state, activeTabId: existing.id };
