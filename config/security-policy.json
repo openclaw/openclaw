@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "defaults": {
+    "benign": "allow",
+    "suspicious": "manual_review",
+    "malicious": "block",
+    "unknown": "manual_review",
+    "error": "manual_review"
+  },
+  "thresholds": {
+    "allowMinConfidence": 0.8,
+    "suspiciousManualReviewMinConfidence": 0.65,
+    "blockMinConfidence": 0.85
+  }
+}

@@ -456,10 +456,10 @@ export function renderApp(state: AppViewState) {
                   navCollapsed
                     ? nothing
                     : html`
-                        <img class="sidebar-brand__logo" src="${agentLogoUrl(basePath)}" alt="OpenClaw" />
+                        <img class="sidebar-brand__logo" src="${agentLogoUrl(basePath)}" alt="Radar Claw Defender" />
                         <span class="sidebar-brand__copy">
                           <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
-                          <span class="sidebar-brand__title">OpenClaw</span>
+                          <span class="sidebar-brand__title">Radar Claw Defender</span>
                         </span>
                       `
                 }

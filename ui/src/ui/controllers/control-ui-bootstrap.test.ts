@@ -20,8 +20,8 @@ describe("loadControlUiBootstrapConfig", () => {
 
     const state = {
       basePath: "/openclaw",
-      assistantName: "Assistant",
-      assistantAvatar: null,
+      assistantName: "Radar Defender",
+      assistantAvatar: "RD",
       assistantAgentId: null,
       serverVersion: null,
     };
@@ -46,8 +46,8 @@ describe("loadControlUiBootstrapConfig", () => {
 
     const state = {
       basePath: "",
-      assistantName: "Assistant",
-      assistantAvatar: null,
+      assistantName: "Radar Defender",
+      assistantAvatar: "RD",
       assistantAgentId: null,
       serverVersion: null,
     };
@@ -58,7 +58,7 @@ describe("loadControlUiBootstrapConfig", () => {
       CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
       expect.objectContaining({ method: "GET" }),
     );
-    expect(state.assistantName).toBe("Assistant");
+    expect(state.assistantName).toBe("Radar Defender");
 
     vi.unstubAllGlobals();
   });
@@ -69,8 +69,8 @@ describe("loadControlUiBootstrapConfig", () => {
 
     const state = {
       basePath: "/openclaw/",
-      assistantName: "Assistant",
-      assistantAvatar: null,
+      assistantName: "Radar Defender",
+      assistantAvatar: "RD",
       assistantAgentId: null,
       serverVersion: null,
     };

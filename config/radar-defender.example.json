@@ -1,0 +1,42 @@
+{
+  "server": {
+    "name": "radar-claw-defender",
+    "transport": "stdio"
+  },
+  "review": {
+    "minimumSeverity": "medium",
+    "enabledTools": [
+      "analyze_code_snippet",
+      "analyze_route",
+      "analyze_sql_policy",
+      "threat_model_flow",
+      "summarize_finding",
+      "review_auth_boundary",
+      "review_rls_assumptions"
+    ],
+    "enabledAnalyzers": [
+      "auth-bypass",
+      "authorization-idor",
+      "rls-alignment",
+      "admin-boundary",
+      "otp-abuse",
+      "webhook-verification",
+      "xss-rendering",
+      "data-exposure",
+      "rate-limiting",
+      "input-validation"
+    ],
+    "outputMode": "json"
+  },
+  "contextOverrides": {
+    "productName": "Radar Meseriași",
+    "deploymentSurface": ["vercel", "supabase", "twilio", "stripe"],
+    "priorityRiskAreas": [
+      "auth-bypass",
+      "authorization-idor",
+      "rls-policy-gaps",
+      "admin-privilege-escalation",
+      "otp-abuse"
+    ]
+  }
+}
