@@ -43,6 +43,7 @@ export const logWarnMock = createMock();
 export const countActiveDescendantRunsMock = createMock();
 export const listDescendantRunsForRequesterMock = createMock();
 export const pickLastNonEmptyTextFromPayloadsMock = createMock();
+export const deliverOutboundPayloadsMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 
@@ -240,7 +241,7 @@ vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/outbound/deliver.js")>();
   return {
     ...actual,
-    deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
+    deliverOutboundPayloads: deliverOutboundPayloadsMock,
   };
 });
 
@@ -387,6 +388,8 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   listDescendantRunsForRequesterMock.mockReturnValue([]);
   pickLastNonEmptyTextFromPayloadsMock.mockReset();
   pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
+  deliverOutboundPayloadsMock.mockReset();
+  deliverOutboundPayloadsMock.mockResolvedValue([]);
   resolveCronDeliveryPlanMock.mockReset();
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
   resolveDeliveryTargetMock.mockReset();

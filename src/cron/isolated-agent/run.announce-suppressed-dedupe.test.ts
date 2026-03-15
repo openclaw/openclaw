@@ -10,10 +10,10 @@
  * proceed normally.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearFastTestEnv,
+  deliverOutboundPayloadsMock,
   loadRunCronIsolatedAgentTurn,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronDeliveryPlanMock,
@@ -83,9 +83,7 @@ describe("runCronIsolatedAgentTurn -- announce suppressed send dedupe (#42244)",
       source: "delivery",
     });
 
-    // The harness mock returns undefined which causes TypeError in delivery
-    // dispatch. Override to return a proper result array.
-    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+    deliverOutboundPayloadsMock.mockResolvedValue([{ ok: true } as never]);
   });
 
   afterEach(() => {
