@@ -5,6 +5,7 @@ import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/
 import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { setGatewayPluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -124,6 +125,7 @@ export async function createGatewayRuntimeState(params: {
     logHooks: params.logHooks,
   });
 
+  setGatewayPluginRegistry(params.pluginRegistry);
   const handlePluginRequest = createGatewayPluginRequestHandler({
     registry: params.pluginRegistry,
     log: params.logPlugins,
