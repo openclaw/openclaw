@@ -1,15 +1,15 @@
 /**
  * Chunk text by finding break points within a sliding window.
- * 
+ *
  * @param text - The text to chunk
  * @param limit - Maximum chunk length
- * @param resolveBreakIndex - Function to find break point within window, receives window text and window start position
+ * @param resolveBreakIndex - Function to find break point within window, receives window text and optional window start position
  * @returns Array of text chunks
  */
 export function chunkTextByBreakResolver(
   text: string,
   limit: number,
-  resolveBreakIndex: (window: string, windowStart: number) => number,
+  resolveBreakIndex: (window: string, windowStart?: number) => number,
 ): string[] {
   if (!text) {
     return [];

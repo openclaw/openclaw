@@ -52,6 +52,20 @@ describe("plugin-sdk/text-chunking", () => {
       }
     });
 
+    it("handles adjacent code blocks without breaking inside", () => {
+      const text = "```\nfirst\n```\n```\nsecond\n```";
+      const chunks = chunkTextForOutbound(text, 25);
+      // With limit 25, should still keep blocks intact
+      let totalMarkers = 0;
+      for (const chunk of chunks) {
+        const markerCount = (chunk.match(/```/g) || []).length;
+        totalMarkers += markerCount;
+        // Each chunk must have even number of markers
+        expect(markerCount % 2).toBe(0);
+      }
+      expect(totalMarkers).toBe(4); // All 4 markers accounted for
+    });
+
     it("handles code block with language specifier", () => {
       const text = "```typescript\nconst x = 1;\n```";
       expect(chunkTextForOutbound(text, 100)).toEqual([text]);
@@ -62,6 +76,13 @@ describe("plugin-sdk/text-chunking", () => {
       const chunks = chunkTextForOutbound(text, 15);
       // Should still produce chunks, even if malformed
       expect(chunks.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("does not treat inline backticks as code block markers", () => {
+      const text = "Use ``` to start a code block. And ``` to end it.";
+      const chunks = chunkTextForOutbound(text, 30);
+      // Should split at newline/space, not at the inline ```
+      expect(chunks.length).toBeGreaterThan(1);
     });
   });
 });
