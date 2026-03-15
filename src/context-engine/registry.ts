@@ -49,7 +49,9 @@ export function registerContextEngine(
 ): ContextEngineRegistrationResult {
   const rawOwner = opts?.owner?.trim();
   if (opts?.owner !== undefined && !rawOwner) {
-    throw new Error(`registerContextEngine: owner must be a non-empty string, got ${JSON.stringify(opts.owner)}`);
+    throw new Error(
+      `registerContextEngine: owner must be a non-empty string, got ${JSON.stringify(opts.owner)}`,
+    );
   }
   const owner = rawOwner || "core";
   const registry = getContextEngineRegistryState().engines;

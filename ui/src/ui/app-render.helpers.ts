@@ -616,11 +616,7 @@ function renderChatModelSelect(state: AppViewState) {
   const currentOverride = resolveModelOverrideValue(state);
   const defaultModel = resolveDefaultModelValue(state);
   const catalog = state.chatModelCatalog ?? [];
-  const options = buildChatModelOptions(
-    catalog,
-    currentOverride,
-    defaultModel,
-  );
+  const options = buildChatModelOptions(catalog, currentOverride, defaultModel);
   const resolvedOverride = currentOverride ? qualifyModelId(catalog, currentOverride) : "";
   const defaultLabel = defaultModel ? `Default (${defaultModel})` : "Default model";
   const busy =
