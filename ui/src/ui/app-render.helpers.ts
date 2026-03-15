@@ -567,7 +567,7 @@ function buildChatModelOptions(
     if (provider) {
       providerById.set(entry.id, provider);
     }
-    const value = provider ? `${provider}/${entry.id}` : entry.id;
+    const value = provider && !entry.id.includes("/") ? `${provider}/${entry.id}` : entry.id;
     addOption(value, provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
