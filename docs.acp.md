@@ -65,7 +65,7 @@ session with predictable session mapping and basic streaming updates.
 ## How can I use this
 
 Use ACP when an IDE or tooling speaks Agent Client Protocol and you want it to
-drive a OpenClaw Gateway session.
+drive an OpenClaw Gateway session.
 
 Quick steps:
 
