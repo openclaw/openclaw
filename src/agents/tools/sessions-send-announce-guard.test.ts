@@ -297,7 +297,79 @@ describe("sessions_send fail-closed announce flow", () => {
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(2);
   });
 
-  it("does not block timeoutSeconds=0 on announce precheck and still runs internal announce later", async () => {
+  it("preserves internal announce flow when target lookup misses and keys are not channel-shaped", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        const reply = params?.extraSystemPrompt?.includes("Agent-to-agent announce step")
+          ? "announce now"
+          : "done";
+        replyByRunId.set(runId, reply);
+        return { runId, status: "accepted" };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return { sessions: [] };
+      }
+      if (request.method === "send") {
+        throw new Error("send should not be called for internal announce flow on lookup miss");
+      }
+      return {};
+    });
+
+    const tool = createSessionsSendTool({
+      agentSessionKey: "main",
+      agentChannel: "discord",
+      config: testConfig,
+    });
+
+    const result = await tool.execute("call-missed-internal-target", {
+      sessionKey: "main",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      reply: "done",
+      delivery: { status: "pending", mode: "announce" },
+    });
+
+    await flushBackgroundTasks();
+    expect(calls.filter((call) => call.method === "sessions.list")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(2);
+  });
+
+  it("does not block timeoutSeconds=0 on announce precheck and still runs internal announce later when lookup misses", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
     let lastWaitedRunId: string | undefined;
@@ -376,7 +448,7 @@ describe("sessions_send fail-closed announce flow", () => {
     });
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
 
-    sessionsList.resolve({ sessions: [{ key: "main", displayName: "main" }] });
+    sessionsList.resolve({ sessions: [] });
     await resultPromise;
     await flushBackgroundTasks(2);
 
@@ -384,7 +456,7 @@ describe("sessions_send fail-closed announce flow", () => {
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(2);
   });
 
-  it("skips announce flow when target resolution is unknown", async () => {
+  it("skips announce flow when target resolution is partial", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
     let lastWaitedRunId: string | undefined;
@@ -425,10 +497,12 @@ describe("sessions_send fail-closed announce flow", () => {
         };
       }
       if (request.method === "sessions.list") {
-        return { sessions: [] };
+        return {
+          sessions: [{ key: "main", displayName: "main", lastChannel: "discord" }],
+        };
       }
       if (request.method === "send") {
-        throw new Error("send should not be called when announce target resolution is unknown");
+        throw new Error("send should not be called when announce target resolution is partial");
       }
       return {};
     });

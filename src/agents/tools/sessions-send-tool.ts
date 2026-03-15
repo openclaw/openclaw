@@ -26,7 +26,11 @@ import {
   resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
-import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import {
+  buildAgentToAgentMessageContext,
+  resolveAnnounceTargetFromKey,
+  resolvePingPongTurns,
+} from "./sessions-send-helpers.js";
 import { type SessionsSendAnnouncePlan, runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
@@ -266,9 +270,14 @@ export function createSessionsSendTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
+      const hasChannelShapedTarget =
+        resolveAnnounceTargetFromKey(resolvedKey) !== null ||
+        resolveAnnounceTargetFromKey(displayKey) !== null;
       const pendingAnnounceDelivery = { status: "pending" as const, mode: "announce" as const };
       const resolveAnnouncePlan = (decision: AnnounceTargetDecision): SessionsSendAnnouncePlan => {
-        const shouldRunAnnounceFlow = decision.kind === "no_external_target";
+        const shouldRunAnnounceFlow =
+          decision.kind === "no_external_target" ||
+          (decision.kind === "unknown" && decision.reason !== "partial" && !hasChannelShapedTarget);
         return {
           shouldRunAnnounceFlow,
           delivery: shouldRunAnnounceFlow
