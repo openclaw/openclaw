@@ -162,17 +162,18 @@ function a2aDeniedMessage(action: SessionAccessAction): string {
   return "Agent-to-agent listing denied by tools.agentToAgent.allow.";
 }
 
-function crossVisibilityMessage(action: SessionAccessAction): string {
+function crossVisibilityMessage(action: SessionAccessAction, a2aAlreadyEnabled: boolean): string {
+  const a2aSuffix = a2aAlreadyEnabled ? "" : " and tools.agentToAgent.enabled=true";
   if (action === "history") {
-    return "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+    return `Session history visibility is restricted. Set tools.sessions.visibility=all${a2aSuffix} to allow cross-agent access.`;
   }
   if (action === "send") {
-    return "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+    return `Session send visibility is restricted. Set tools.sessions.visibility=all${a2aSuffix} to allow cross-agent access.`;
   }
   if (action === "status") {
-    return "Session status visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+    return `Session status visibility is restricted. Set tools.sessions.visibility=all${a2aSuffix} to allow cross-agent access.`;
   }
-  return "Session list visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+  return `Session list visibility is restricted. Set tools.sessions.visibility=all${a2aSuffix} to allow cross-agent access.`;
 }
 
 function selfVisibilityMessage(action: SessionAccessAction): string {
@@ -205,7 +206,7 @@ export async function createSessionVisibilityGuard(params: {
         return {
           allowed: false,
           status: "forbidden",
-          error: crossVisibilityMessage(params.action),
+          error: crossVisibilityMessage(params.action, params.a2aPolicy.enabled),
         };
       }
       if (!params.a2aPolicy.enabled) {
