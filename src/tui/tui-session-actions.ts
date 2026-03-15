@@ -120,17 +120,30 @@ export function createSessionActions(context: SessionActionContext) {
     }
   };
 
-  const resolveModelSelection = (entry?: SessionInfoEntry) => {
+  const resolveModelSelection = (
+    entry?: SessionInfoEntry,
+    defaults?: SessionInfoDefaults | null,
+  ) => {
+    // 1. Explicit user override (set via /model) wins over last-run runtime model.
+    //    This matches the priority in resolveSessionModelRef (session-utils.ts).
+    const overrideModel = entry?.modelOverride?.trim();
+    if (overrideModel) {
+      const overrideProvider = entry?.providerOverride?.trim() || state.sessionInfo.modelProvider;
+      return { modelProvider: overrideProvider, model: overrideModel };
+    }
+    // 2. Fall back to runtime model from last run.
     if (entry?.modelProvider || entry?.model) {
       return {
         modelProvider: entry.modelProvider ?? state.sessionInfo.modelProvider,
         model: entry.model ?? state.sessionInfo.model,
       };
     }
-    const overrideModel = entry?.modelOverride?.trim();
-    if (overrideModel) {
-      const overrideProvider = entry?.providerOverride?.trim() || state.sessionInfo.modelProvider;
-      return { modelProvider: overrideProvider, model: overrideModel };
+    // 3. Configured defaults.
+    if (defaults?.modelProvider || defaults?.model) {
+      return {
+        modelProvider: defaults.modelProvider ?? state.sessionInfo.modelProvider,
+        model: defaults.model ?? state.sessionInfo.model,
+      };
     }
     return {
       modelProvider: state.sessionInfo.modelProvider,
@@ -203,7 +216,7 @@ export function createSessionActions(context: SessionActionContext) {
       next.updatedAt = entry.updatedAt;
     }
 
-    const selection = resolveModelSelection(entry);
+    const selection = resolveModelSelection(entry, defaults);
     if (selection.modelProvider !== undefined) {
       next.modelProvider = selection.modelProvider;
     }

@@ -396,7 +396,7 @@ describe("gateway session utils", () => {
 });
 
 describe("resolveSessionModelRef", () => {
-  test("prefers runtime model/provider from session entry", () => {
+  test("prefers override over runtime model when both are present", () => {
     const cfg = createModelDefaultsConfig({
       primary: "anthropic/claude-opus-4-6",
     });
@@ -410,7 +410,8 @@ describe("resolveSessionModelRef", () => {
       providerOverride: "anthropic",
     });
 
-    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
+    // Override reflects user intent for the *next* run and wins over last-run runtime model.
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
   });
 
   test("preserves openrouter provider when model contains vendor prefix", () => {
@@ -478,6 +479,38 @@ describe("resolveSessionModelRef", () => {
     });
 
     expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+  });
+
+  test("preserves providerOverride for slash-containing modelOverride (wrapper providers)", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s-wrapper",
+      updatedAt: Date.now(),
+      modelOverride: "anthropic/claude-sonnet-4-6",
+      providerOverride: "openrouter",
+    });
+
+    // providerOverride should be preserved as-is; re-parsing the model string
+    // would incorrectly treat "anthropic" as the provider.
+    expect(resolved).toEqual({ provider: "openrouter", model: "anthropic/claude-sonnet-4-6" });
+  });
+
+  test("uses runtime model when no override is set", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s-runtime-only",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.3-codex",
+    });
+
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
   });
 });
 
