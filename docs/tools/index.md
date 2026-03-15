@@ -176,6 +176,24 @@ Optional plugin tools:
 - [LLM Task](/tools/llm-task): JSON-only LLM step for structured workflow output (optional schema validation).
 - [Diffs](/tools/diffs): read-only diff viewer and PNG or PDF file renderer for before/after text or unified patches.
 
+## Owner-only tools
+
+Some tools are restricted to **owner senders** and are automatically removed from the agent's tool list when the sender is not recognized as an owner:
+
+- `cron` — manage Gateway cron jobs and wakeups
+- `gateway` — restart or apply updates to the running Gateway
+- `whatsapp_login` — WhatsApp QR login flow
+
+To grant owner status, add the sender's chat ID to `commands.ownerAllowFrom`:
+
+```json
+"commands": {
+    "ownerAllowFrom": ["<sender_chat_id>"]
+}
+```
+
+If `ownerAllowFrom` is not configured, these tools are silently excluded. [DM pairing](/channels/pairing) grants messaging access but does not currently grant owner status for tools.
+
 ## Tool inventory
 
 ### `apply_patch`
@@ -437,7 +455,7 @@ Notes:
 
 ### `cron`
 
-Manage Gateway cron jobs and wakeups.
+Manage Gateway cron jobs and wakeups. **Owner-only** — requires [`commands.ownerAllowFrom`](#owner-only-tools).
 
 Core actions:
 
@@ -452,7 +470,7 @@ Notes:
 
 ### `gateway`
 
-Restart or apply updates to the running Gateway process (in-place).
+Restart or apply updates to the running Gateway process (in-place). **Owner-only** — requires [`commands.ownerAllowFrom`](#owner-only-tools).
 
 Core actions:
 
