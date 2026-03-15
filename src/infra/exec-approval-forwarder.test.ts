@@ -377,6 +377,62 @@ describe("exec approval forwarder", () => {
     });
   });
 
+  it("prefers turn-source routing over stale session last route", async () => {
+    vi.useFakeTimers();
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approval-forwarder-test-"));
+    try {
+      const storePath = path.join(tmpDir, "sessions.json");
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          "agent:main:main": {
+            updatedAt: 1,
+            channel: "slack",
+            to: "U1",
+            lastChannel: "slack",
+            lastTo: "U1",
+          },
+        }),
+        "utf-8",
+      );
+
+      const cfg = {
+        session: { store: storePath },
+        approvals: { exec: { enabled: true, mode: "session" } },
+      } as OpenClawConfig;
+
+      const { deliver, forwarder } = createForwarder({ cfg });
+      await expect(
+        forwarder.handleRequested({
+          ...baseRequest,
+          request: {
+            ...baseRequest.request,
+            turnSourceChannel: "whatsapp",
+            turnSourceTo: "+15555550123",
+            turnSourceAccountId: "work",
+            turnSourceThreadId: "1739201675.123",
+          },
+        }),
+      ).resolves.toBe(true);
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "whatsapp",
+          to: "+15555550123",
+          accountId: "work",
+          threadId: "1739201675.123",
+          toolContext: expect.objectContaining({
+            currentChannelId: "+15555550123",
+            currentChannelProvider: "whatsapp",
+          }),
+        }),
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("can forward resolved notices without pending cache when request payload is present", async () => {
     vi.useFakeTimers();
     const cfg = {
@@ -403,6 +459,16 @@ describe("exec approval forwarder", () => {
     });
 
     expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123",
+        toolContext: expect.objectContaining({
+          currentChannelId: "123",
+          currentChannelProvider: "telegram",
+        }),
+      }),
+    );
   });
 
   it("uses a longer fence when command already contains triple backticks", async () => {
