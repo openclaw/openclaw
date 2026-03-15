@@ -96,6 +96,26 @@ export async function createMatrixClient(params: {
       changedDeviceLists,
       leftDeviceLists,
     ) => {
+      // Extract and emit to-device verification events before passing to crypto.
+      // The MatrixClient does not normally emit to-device events, so we
+      // monkey-patch here to surface them for the SAS verification handler.
+      if (Array.isArray(toDeviceMessages)) {
+        for (const msg of toDeviceMessages) {
+          const msgType = (msg as { type?: string })?.type;
+          if (typeof msgType === "string" && msgType.startsWith("m.key.verification.")) {
+            try {
+              client.emit("todevice.verification", msg);
+            } catch (emitErr) {
+              LogService.warn(
+                "MatrixClientLite",
+                "Failed to emit to-device verification event",
+                emitErr,
+              );
+            }
+          }
+        }
+      }
+
       const safeChanged = sanitizeUserIdList(changedDeviceLists, "changed device list");
       const safeLeft = sanitizeUserIdList(leftDeviceLists, "left device list");
       try {

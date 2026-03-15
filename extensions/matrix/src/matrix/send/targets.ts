@@ -146,5 +146,16 @@ export async function resolveMatrixRoomId(client: MatrixClient, raw: string): Pr
     }
     return resolved;
   }
+  // If it doesn't look like a Matrix ID, reject it with a helpful message.
+  // This prevents bare display names like "Stephan" or "Stephan Ferraro"
+  // from being silently passed through, which would cause messages to be
+  // sent to wrong targets.
+  if (!target.startsWith("!") && !target.startsWith("@") && !target.startsWith("#")) {
+    throw new Error(
+      `Matrix target "${target}" is not a valid Matrix ID. ` +
+        `Use room:!roomId:server, @userId:server, or #alias:server. ` +
+        `Display names like "${target}" cannot be resolved.`,
+    );
+  }
   return target;
 }

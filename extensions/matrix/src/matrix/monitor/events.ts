@@ -2,6 +2,8 @@ import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/matrix";
 import type { MatrixAuth } from "../client.js";
 import { sendReadReceiptMatrix } from "../send.js";
+import type { SasVerificationHandler } from "../verification/sas-handler.js";
+import type { VerificationRawEvent } from "../verification/types.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 
@@ -46,6 +48,18 @@ function createSelfUserIdResolver(client: Pick<MatrixClient, "getUserId">) {
   };
 }
 
+/** Set of event types that belong to the verification protocol. */
+const VERIFICATION_EVENT_TYPES: Set<string> = new Set([
+  EventType.VerificationRequest,
+  EventType.VerificationReady,
+  EventType.VerificationStart,
+  EventType.VerificationAccept,
+  EventType.VerificationKey,
+  EventType.VerificationMac,
+  EventType.VerificationDone,
+  EventType.VerificationCancel,
+]);
+
 export function registerMatrixMonitorEvents(params: {
   client: MatrixClient;
   auth: MatrixAuth;
@@ -55,6 +69,7 @@ export function registerMatrixMonitorEvents(params: {
   logger: RuntimeLogger;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
+  verificationHandler?: SasVerificationHandler | null;
 }): void {
   if (!matrixMonitorListenerRegistry.tryRegister(params.client)) {
     params.logVerboseMessage("matrix: skipping duplicate listener registration for client");
@@ -70,10 +85,24 @@ export function registerMatrixMonitorEvents(params: {
     logger,
     formatNativeDependencyHint,
     onRoomMessage,
+    verificationHandler,
   } = params;
 
   const resolveSelfUserId = createSelfUserIdResolver(client);
   client.on("room.message", (roomId: string, event: MatrixRawEvent) => {
+    // Check for in-room verification requests (m.room.message with msgtype m.key.verification.request)
+    if (
+      verificationHandler &&
+      event?.type === EventType.RoomMessage &&
+      (event.content as { msgtype?: string })?.msgtype === EventType.VerificationRequest
+    ) {
+      logVerboseMessage(
+        `matrix: in-room verification request room=${roomId} sender=${event.sender ?? "unknown"}`,
+      );
+      verificationHandler.handleVerificationEvent(event as unknown as VerificationRawEvent, roomId);
+      return;
+    }
+
     const eventId = event?.event_id;
     const senderId = event?.sender;
     if (eventId && senderId) {
@@ -135,6 +164,16 @@ export function registerMatrixMonitorEvents(params: {
 
   client.on("room.event", (roomId: string, event: MatrixRawEvent) => {
     const eventType = event?.type ?? "unknown";
+
+    // Route verification events to the SAS handler
+    if (verificationHandler && VERIFICATION_EVENT_TYPES.has(eventType)) {
+      logVerboseMessage(
+        `matrix: verification event room=${roomId} type=${eventType} sender=${event?.sender ?? "unknown"}`,
+      );
+      verificationHandler.handleVerificationEvent(event as unknown as VerificationRawEvent, roomId);
+      return;
+    }
+
     if (eventType === EventType.RoomMessageEncrypted) {
       logVerboseMessage(
         `matrix: encrypted raw event room=${roomId} id=${event?.event_id ?? "unknown"}`,
@@ -165,4 +204,15 @@ export function registerMatrixMonitorEvents(params: {
       );
     }
   });
+
+  // Listen for to-device verification events emitted by the monkey-patched crypto.updateSyncData
+  if (verificationHandler) {
+    client.on("todevice.verification", (event: VerificationRawEvent) => {
+      const eventType = event?.type ?? "unknown";
+      logVerboseMessage(
+        `matrix: to-device verification event type=${eventType} sender=${event?.sender ?? "unknown"}`,
+      );
+      verificationHandler.handleVerificationEvent(event);
+    });
+  }
 }
