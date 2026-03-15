@@ -219,6 +219,132 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
+  it("reuses a session token across loopback host aliases", async () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "127.0.0.1:18789",
+      pathname: "/",
+    });
+
+    const { loadSettings, saveSettings } = await import("./storage.ts");
+    saveSettings({
+      gatewayUrl: "ws://127.0.0.1:18789",
+      token: "loopback-token",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "system",
+      chatFocusMode: false,
+      chatShowThinking: true,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navGroupsCollapsed: {},
+    });
+
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "ws://localhost:18789",
+        sessionKey: "main",
+        lastActiveSessionKey: "main",
+        theme: "system",
+        chatFocusMode: false,
+        chatShowThinking: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navGroupsCollapsed: {},
+      }),
+    );
+
+    expect(loadSettings()).toMatchObject({
+      gatewayUrl: "ws://localhost:18789",
+      token: "loopback-token",
+    });
+  });
+
+  it("reuses a session token across IPv6 and IPv4 loopback aliases", async () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "[::1]:18789",
+      pathname: "/",
+    });
+
+    const { loadSettings, saveSettings } = await import("./storage.ts");
+    saveSettings({
+      gatewayUrl: "ws://[::1]:18789",
+      token: "loopback-token",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "system",
+      chatFocusMode: false,
+      chatShowThinking: true,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navGroupsCollapsed: {},
+    });
+
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "ws://127.0.0.1:18789",
+        sessionKey: "main",
+        lastActiveSessionKey: "main",
+        theme: "system",
+        chatFocusMode: false,
+        chatShowThinking: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navGroupsCollapsed: {},
+      }),
+    );
+
+    expect(loadSettings()).toMatchObject({
+      gatewayUrl: "ws://127.0.0.1:18789",
+      token: "loopback-token",
+    });
+  });
+
+  it("does not reuse a loopback token across different ports", async () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "127.0.0.1:18789",
+      pathname: "/",
+    });
+
+    const { loadSettings, saveSettings } = await import("./storage.ts");
+    saveSettings({
+      gatewayUrl: "ws://127.0.0.1:18789",
+      token: "loopback-token",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "system",
+      chatFocusMode: false,
+      chatShowThinking: true,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navGroupsCollapsed: {},
+    });
+
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "ws://localhost:19999",
+        sessionKey: "main",
+        lastActiveSessionKey: "main",
+        theme: "system",
+        chatFocusMode: false,
+        chatShowThinking: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navGroupsCollapsed: {},
+      }),
+    );
+
+    expect(loadSettings()).toMatchObject({
+      gatewayUrl: "ws://localhost:19999",
+      token: "",
+    });
+  });
+
   it("does not persist gateway tokens when saving settings", async () => {
     setTestLocation({
       protocol: "https:",
