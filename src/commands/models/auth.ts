@@ -22,7 +22,6 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import { resolvePluginProviders } from "../../plugins/providers.js";
 import type { ProviderAuthResult, ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
@@ -44,6 +43,10 @@ import {
   resolveProviderMatch,
 } from "../provider-auth-helpers.js";
 import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
+
+async function loadModelsAuthRuntime() {
+  return import("./auth.runtime.js");
+}
 
 function guardCancel<T>(value: T | symbol): T {
   if (typeof value === "symbol" || isCancel(value)) {
@@ -389,6 +392,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     return;
   }
 
+  const { resolvePluginProviders } = await loadModelsAuthRuntime();
   const providers = resolvePluginProviders({ config, workspaceDir });
   if (providers.length === 0) {
     throw new Error(
