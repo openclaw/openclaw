@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/mattermost";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import { createSlashCommandHttpHandler } from "./slash-http.js";
 
@@ -9,6 +9,7 @@ function createRequest(params: {
   method?: string;
   body?: string;
   contentType?: string;
+  autoEnd?: boolean;
 }): IncomingMessage {
   const req = new PassThrough();
   const incoming = req as unknown as IncomingMessage;
@@ -20,7 +21,9 @@ function createRequest(params: {
     if (params.body) {
       req.write(params.body);
     }
-    req.end();
+    if (params.autoEnd !== false) {
+      req.end();
+    }
   });
   return incoming;
 }
@@ -127,5 +130,28 @@ describe("slash-http", () => {
 
     expect(response.res.statusCode).toBe(401);
     expect(response.getBody()).toContain("Unauthorized: invalid command token.");
+  });
+
+  it("returns 408 when the request body stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = createSlashCommandHttpHandler({
+        account: accountFixture,
+        cfg: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
+        commandTokens: new Set(["valid-token"]),
+      });
+      const req = createRequest({ autoEnd: false });
+      const response = createResponse();
+      const pending = handler(req, response.res);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await pending;
+
+      expect(response.res.statusCode).toBe(408);
+      expect(response.getBody()).toBe("Request body timeout");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
