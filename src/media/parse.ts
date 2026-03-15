@@ -7,7 +7,46 @@ import { parseAudioTag } from "./audio-tags.js";
 export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
 export function normalizeMediaSource(src: string) {
-  return src.startsWith("file://") ? src.replace("file://", "") : src;
+  const stripped = src.startsWith("file://") ? src.replace("file://", "") : src;
+  return sanitizeMediaDirective(stripped);
+}
+
+/**
+ * Reject MEDIA directives that contain path traversal or sandbox-escape
+ * patterns. This is defense-in-depth — the load layer also enforces sandbox
+ * roots via realpath + containment checks, but catching obvious attack
+ * payloads early avoids unnecessary filesystem I/O and log noise.
+ */
+function sanitizeMediaDirective(directive: string): string {
+  // Reject null bytes (CWE-158)
+  if (directive.includes("\0")) {
+    throw new Error("MEDIA directive contains null bytes");
+  }
+  // Skip validation for HTTP(S) URLs — they don't touch the local filesystem
+  if (/^https?:\/\//i.test(directive)) {
+    return directive;
+  }
+  // Decode percent-encoded sequences before checking (double-encoding bypass)
+  let decoded = directive;
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch {
+    // If decoding fails, proceed with the raw directive
+  }
+  // Reject ".." path components (traversal)
+  const segments = decoded.split(/[/\\]/);
+  if (segments.some((s) => s === ".." || s === "....")) {
+    throw new Error("MEDIA directive contains path traversal");
+  }
+  // Reject UNC paths (Windows network share / device access)
+  if (/^\\\\/.test(decoded) || /^\\\\\?\\/.test(decoded)) {
+    throw new Error("MEDIA directive contains UNC path");
+  }
+  // Reject non-file protocol handlers (mcp://, etc.)
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(decoded) && !/^[a-zA-Z]:[\\/]/.test(decoded)) {
+    throw new Error("MEDIA directive contains disallowed protocol");
+  }
+  return directive;
 }
 
 function cleanCandidate(raw: string) {
