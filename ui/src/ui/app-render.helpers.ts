@@ -561,17 +561,30 @@ function buildChatModelOptions(
     options.push({ value: trimmed, label: label ?? trimmed });
   };
 
+  const providerById = new Map<string, string>();
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
+    if (provider) {
+      providerById.set(entry.id, provider);
+    }
     const value = provider ? `${provider}/${entry.id}` : entry.id;
     addOption(value, provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
+  const qualify = (raw: string): string => {
+    const v = raw.trim();
+    if (!v || v.includes("/")) {
+      return v;
+    }
+    const provider = providerById.get(v);
+    return provider ? `${provider}/${v}` : v;
+  };
+
   if (currentOverride) {
-    addOption(currentOverride);
+    addOption(qualify(currentOverride));
   }
   if (defaultModel) {
-    addOption(defaultModel);
+    addOption(qualify(defaultModel));
   }
   return options;
 }
