@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,
@@ -111,7 +112,7 @@ describe("runServiceRestart token drift", () => {
           token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
         },
       },
-    });
+    } as OpenClawConfig);
     service.readCommand.mockResolvedValue({
       programArguments: [],
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
