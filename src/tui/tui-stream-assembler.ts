@@ -125,7 +125,12 @@ export class TuiStreamAssembler {
     opts?: { boundaryDropMode?: BoundaryDropMode },
   ) {
     const thinkingText = extractThinkingFromMessage(message);
-    const contentText = extractContentFromMessage(message);
+    // When thinking display is disabled, strip <think>...</think> tags from text.
+    // This handles models that emit reasoning as plain text tags rather than
+    // structured thinking blocks.
+    const contentText = extractContentFromMessage(message, {
+      stripReasoningTags: !showThinking,
+    });
     const { textBlocks, sawNonTextContentBlocks } = extractTextBlocksAndSignals(message);
 
     if (thinkingText) {

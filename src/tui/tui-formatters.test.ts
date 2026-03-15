@@ -202,6 +202,60 @@ describe("extractContentFromMessage", () => {
 
     expect(text).toContain("HTTP 429");
   });
+
+  it("strips <think> tags from text content when stripReasoningTags is true", () => {
+    const text = extractContentFromMessage(
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "<think>Internal reasoning</think>The actual response" }],
+      },
+      { stripReasoningTags: true },
+    );
+
+    expect(text).toBe("The actual response");
+  });
+
+  it("preserves <think> tags when stripReasoningTags is false", () => {
+    const text = extractContentFromMessage(
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "<think>Reasoning</think>Response" }],
+      },
+      { stripReasoningTags: false },
+    );
+
+    expect(text).toContain("<think>");
+    expect(text).toContain("Reasoning");
+  });
+
+  it("strips <think> tags from string content when stripReasoningTags is true", () => {
+    const text = extractContentFromMessage(
+      {
+        role: "assistant",
+        content: "<think>Secret thoughts</think>Visible text",
+      },
+      { stripReasoningTags: true },
+    );
+
+    expect(text).toBe("Visible text");
+  });
+
+  it("handles multiple <think> blocks when stripping", () => {
+    const text = extractContentFromMessage(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "<think>First</think>Hello<think>Second</think>World",
+          },
+        ],
+      },
+      { stripReasoningTags: true },
+    );
+
+    expect(text).toBe("HelloWorld");
+  });
 });
 
 describe("isCommandMessage", () => {

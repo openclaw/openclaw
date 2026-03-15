@@ -1,5 +1,6 @@
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
@@ -263,27 +264,38 @@ export function extractThinkingFromMessage(message: unknown): string {
 /**
  * Extract ONLY text content blocks from message (excludes thinking).
  * Model-agnostic: works for any model with text content blocks.
+ *
+ * When `stripReasoningTags` is true, removes any `<think>...</think>` tags
+ * from the extracted text. This handles models that emit reasoning as plain
+ * text tags rather than structured thinking blocks.
  */
-export function extractContentFromMessage(message: unknown): string {
+export function extractContentFromMessage(
+  message: unknown,
+  opts?: { stripReasoningTags?: boolean },
+): string {
   const resolved = resolveMessageRecord(message);
   if (!resolved) {
     return "";
   }
   const { record, content } = resolved;
 
+  let text: string;
   if (typeof content === "string") {
-    return sanitizeRenderableText(content).trim();
+    text = sanitizeRenderableText(content).trim();
+  } else {
+    const parts = collectSanitizedBlockStrings({
+      content,
+      blockType: "text",
+      valueKey: "text",
+    });
+    text = parts.length > 0 ? parts.join("\n").trim() : formatAssistantErrorFromRecord(record);
   }
 
-  const parts = collectSanitizedBlockStrings({
-    content,
-    blockType: "text",
-    valueKey: "text",
-  });
-  if (parts.length > 0) {
-    return parts.join("\n").trim();
+  if (opts?.stripReasoningTags && text) {
+    text = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
   }
-  return formatAssistantErrorFromRecord(record);
+
+  return text;
 }
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
