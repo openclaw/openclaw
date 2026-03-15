@@ -69,7 +69,8 @@ async function pollForAccessToken(params: {
   deviceCode: string;
   intervalMs: number;
   expiresAt: number;
-  skipFirstDelay?: boolean;
+  /** Earliest timestamp (ms) at which the first poll may fire. Defaults to now + intervalMs. */
+  firstPollAfter?: number;
 }): Promise<string> {
   const bodyBase = new URLSearchParams({
     client_id: CLIENT_ID,
@@ -78,16 +79,16 @@ async function pollForAccessToken(params: {
   });
 
   let intervalMs = params.intervalMs;
-  let first = true;
+  let nextPollAfter = params.firstPollAfter ?? Date.now() + intervalMs;
 
   while (Date.now() < params.expiresAt) {
-    if (!first || !params.skipFirstDelay) {
-      // Wait before polling — avoids immediate `authorization_pending`
-      // on the first request which triggers GitHub's slow_down backoff.
-      await new Promise((r) => setTimeout(r, intervalMs));
+    // Wait only the remaining portion of the interval — respects GitHub's
+    // minimum polling rate whether or not the user pre-confirmed via --wait.
+    const delay = Math.max(0, nextPollAfter - Date.now());
+    if (delay > 0) {
+      await new Promise((r) => setTimeout(r, delay));
       if (Date.now() >= params.expiresAt) break;
     }
-    first = false;
 
     const res = await fetch(ACCESS_TOKEN_URL, {
       method: "POST",
@@ -109,6 +110,7 @@ async function pollForAccessToken(params: {
 
     const err = "error" in json ? json.error : "unknown";
     if (err === "authorization_pending") {
+      nextPollAfter = Date.now() + intervalMs;
       continue;
     }
     if (err === "slow_down") {
@@ -119,6 +121,7 @@ async function pollForAccessToken(params: {
       } else {
         intervalMs += 5000;
       }
+      nextPollAfter = Date.now() + intervalMs;
       continue;
     }
     if (err === "expired_token") {
@@ -157,6 +160,7 @@ export async function githubCopilotLoginCommand(
 
   const spin = spinner();
   spin.start("Requesting device code from GitHub...");
+  const deviceCodeIssuedAt = Date.now();
   const device = await requestDeviceCode({ scope: "read:user" });
   spin.stop("Device code ready");
 
@@ -178,6 +182,9 @@ export async function githubCopilotLoginCommand(
 
   const expiresAt = Date.now() + device.expires_in * 1000;
   const intervalMs = Math.max(1000, device.interval * 1000);
+  // Earliest the first poll may fire: respect GitHub's interval from when the
+  // device code was issued, minus time already elapsed (e.g. during --wait prompt).
+  const firstPollAfter = deviceCodeIssuedAt + intervalMs;
 
   const polling = spinner();
   polling.start("Waiting for GitHub authorization...");
@@ -185,7 +192,7 @@ export async function githubCopilotLoginCommand(
     deviceCode: device.device_code,
     intervalMs,
     expiresAt,
-    skipFirstDelay: opts.wait,
+    firstPollAfter,
   });
   polling.stop("GitHub access token acquired");
 
