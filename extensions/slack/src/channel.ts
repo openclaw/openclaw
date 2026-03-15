@@ -372,7 +372,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     deliveryMode: "direct",
     chunker: null,
     textChunkLimit: 4000,
-    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg, identity }) => {
       const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
         cfg,
         accountId: accountId ?? undefined,
@@ -380,11 +380,22 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         replyToId,
         threadId,
       });
+      const slackIdentity = (() => {
+        if (!identity) return undefined;
+        const username = identity.name?.trim() || undefined;
+        const iconUrl = identity.avatarUrl?.trim() || undefined;
+        const rawEmoji = identity.emoji?.trim();
+        const iconEmoji =
+          !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+        if (!username && !iconUrl && !iconEmoji) return undefined;
+        return { username, iconUrl, iconEmoji };
+      })();
       const result = await send(to, text, {
         cfg,
         threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
+        ...(slackIdentity ? { identity: slackIdentity } : {}),
       });
       return { channel: "slack", ...result };
     },
@@ -398,6 +409,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       replyToId,
       threadId,
       cfg,
+      identity,
     }) => {
       const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
         cfg,
@@ -406,6 +418,16 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         replyToId,
         threadId,
       });
+      const slackIdentity = (() => {
+        if (!identity) return undefined;
+        const username = identity.name?.trim() || undefined;
+        const iconUrl = identity.avatarUrl?.trim() || undefined;
+        const rawEmoji = identity.emoji?.trim();
+        const iconEmoji =
+          !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+        if (!username && !iconUrl && !iconEmoji) return undefined;
+        return { username, iconUrl, iconEmoji };
+      })();
       const result = await send(to, text, {
         cfg,
         mediaUrl,
@@ -413,6 +435,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
+        ...(slackIdentity ? { identity: slackIdentity } : {}),
       });
       return { channel: "slack", ...result };
     },
