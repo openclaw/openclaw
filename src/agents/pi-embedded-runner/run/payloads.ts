@@ -57,6 +57,7 @@ function resolveToolErrorWarningPolicy(params: {
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
+  suppressMutatingToolErrorWarnings?: boolean;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const includeDetails = isVerboseToolDetailEnabled(params.verboseLevel);
@@ -76,6 +77,10 @@ function resolveToolErrorWarningPolicy(params: {
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
+    // Allow suppressing mutating tool error warnings via config (#39631).
+    if (params.suppressMutatingToolErrorWarnings) {
+      return { showWarning: false, includeDetails };
+    }
     return { showWarning: true, includeDetails };
   }
   if (params.suppressToolErrors) {
@@ -288,10 +293,13 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      suppressMutatingToolErrorWarnings: Boolean(
+        params.config?.messages?.suppressMutatingToolErrorWarnings,
+      ),
       verboseLevel: params.verboseLevel,
     });
 
-    // Always surface mutating tool failures so we do not silently confirm actions that did not happen.
+    // Surface mutating tool failures unless explicitly suppressed via config.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
     if (warningPolicy.showWarning) {
       const toolSummary = formatToolAggregate(

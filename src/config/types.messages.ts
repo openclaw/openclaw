@@ -120,6 +120,12 @@ export type MessagesConfig = {
   statusReactions?: StatusReactionsConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
+  /**
+   * When true, suppress ⚠️ warnings for mutating tool failures (edit, write, etc.)
+   * from being shown to the user. Use with caution — users won't see when file
+   * operations fail. Default: false.
+   */
+  suppressMutatingToolErrorWarnings?: boolean;
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
 };

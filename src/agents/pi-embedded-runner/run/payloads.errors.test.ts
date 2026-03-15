@@ -294,6 +294,26 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(0);
   });
 
+  it("suppresses mutating tool errors when messages.suppressMutatingToolErrorWarnings is enabled", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "edit", error: "non-unique match" },
+      config: { messages: { suppressMutatingToolErrorWarnings: true } },
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("still shows mutating tool errors when only messages.suppressToolErrors is enabled", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "edit", error: "non-unique match" },
+      config: { messages: { suppressToolErrors: true } },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Edit");
+  });
+
   it.each([
     {
       name: "still shows mutating tool errors when messages.suppressToolErrors is enabled",
