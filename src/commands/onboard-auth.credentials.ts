@@ -217,6 +217,19 @@ export async function setAnthropicApiKey(
   });
 }
 
+export async function setAnthropicAzureApiKey(
+  key: SecretInput,
+  agentDir: string | undefined,
+  metadata: { baseUrl: string; modelId: string; resource?: string },
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "anthropic-azure:default",
+    credential: buildApiKeyCredential("anthropic-azure", key, metadata, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setOpenaiApiKey(
   key: SecretInput,
   agentDir?: string,
