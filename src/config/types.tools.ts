@@ -1,5 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { SecretInput } from "./types.secrets.js";
 
@@ -538,6 +539,12 @@ export type ToolsConfig = {
         /** Timeout in seconds for Firecrawl requests. */
         timeoutSeconds?: number;
       };
+      /**
+       * SSRF policy overrides for web_fetch requests.
+       * Use allowedHostnames to permit specific internal hosts, or dangerouslyAllowPrivateNetwork
+       * to disable all private-network blocking (not recommended for production).
+       */
+      ssrfPolicy?: SsrFPolicy;
     };
   };
   media?: MediaToolsConfig;

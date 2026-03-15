@@ -386,3 +386,31 @@ Notes:
 - Responses are cached (default 15 minutes) to reduce repeated fetches.
 - If you use tool profiles/allowlists, add `web_search`/`web_fetch` or `group:web`.
 - If the API key is missing, `web_search` returns a short setup hint with a docs link.
+
+### SSRF policy for web_fetch
+
+`tools.web.fetch.ssrfPolicy` lets you tighten or relax the SSRF guard for `web_fetch` requests without affecting other tools. The optional fields mirror the browser-level settings:
+
+- `allowPrivateNetwork`: legacy alias for `dangerouslyAllowPrivateNetwork`. Set to `true` to permit private/internal IP addresses.
+- `dangerouslyAllowPrivateNetwork`: high-risk toggle that removes private/internal/special-use blocking. Enable only in trusted, isolated environments.
+- `allowedHostnames`: explicitly allowed hostnames or IPs that bypass private network checks even when private access is blocked globally.
+- `hostnameAllowlist`: pattern-based allowlist (e.g. `*.internal`) that shortlists which hostnames `web_fetch` is allowed to reach.
+
+Example:
+
+```json5
+{
+  tools: {
+    web: {
+      fetch: {
+        ssrfPolicy: {
+          hostnameAllowlist: ["example.com", "*.example.internal"],
+          allowedHostnames: ["192.168.1.42"],
+        },
+      },
+    },
+  },
+}
+```
+
+**Risk note:** `dangerouslyAllowPrivateNetwork` (and its alias `allowPrivateNetwork`) undermines the default SSRF blocking, so avoid enabling it unless you fully trust the target network. Prefer allowlists/whitelists to expand access only for specific hosts. If you do need to relax the guard, keep a narrow `hostnameAllowlist` or `allowedHostnames` and monitor the usage closely.

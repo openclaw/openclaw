@@ -255,3 +255,30 @@ await web_search({
 - 响应会被缓存（默认 15 分钟）以减少重复获取。
 - 如果你使用工具配置文件/允许列表，添加 `web_search`/`web_fetch` 或 `group:web`。
 - 如果缺少 Brave 密钥，`web_search` 返回一个简短的设置提示和文档链接。
+
+* +### web_fetch 的 SSRF 策略
+  `tools.web.fetch.ssrfPolicy` 允许你在不影响其他工具的前提下，放宽或收紧 `web_fetch` 的 SSRF 保护。可选字段沿用了浏览器层的语义：
+
+- `allowPrivateNetwork`：`dangerouslyAllowPrivateNetwork` 的兼容别名。设置为 `true` 可允许访问私有/内部 IP。
+- `dangerouslyAllowPrivateNetwork`：高风险开关，禁用私网/特殊用途地址拦截。仅在完全受控的环境中启用。
+- `allowedHostnames`：显式允许的主机名或 IP，哪怕私网检查仍在，也能绕过拦截。
+- `hostnameAllowlist`：支持模式（例如 `*.internal`）的 hostname 白名单，用于限定 `web_fetch` 的目标范围。
+
+示例：
+
+```json5
+{
+  tools: {
+    web: {
+      fetch: {
+        ssrfPolicy: {
+          hostnameAllowlist: ["example.com", "*.example.internal"],
+          allowedHostnames: ["192.168.1.42"],
+        },
+      },
+    },
+  },
+}
+```
+
+**风险提示：** `dangerouslyAllowPrivateNetwork`（及其别名 `allowPrivateNetwork`）会弱化默认 SSRF 拦截，非必要不要启用。优先使用 allowlist/hostname 精准放行特定主机；若必须放宽，务必限制 `hostnameAllowlist` 或 `allowedHostnames`，并密切监控访问。

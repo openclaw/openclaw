@@ -707,6 +707,16 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  "tools.web.fetch.ssrfPolicy":
+    "SSRF policy for web_fetch requests. Use to allow or restrict access to private/internal network addresses.",
+  "tools.web.fetch.ssrfPolicy.allowPrivateNetwork":
+    "Legacy alias for dangerouslyAllowPrivateNetwork. Allow web_fetch to access private/internal network addresses.",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Allow web_fetch to access private/internal/special-use IP addresses. Only enable in trusted network environments.",
+  "tools.web.fetch.ssrfPolicy.allowedHostnames":
+    "Explicitly allowed hostnames or IPs for web_fetch, even when private network access is otherwise blocked.",
+  "tools.web.fetch.ssrfPolicy.hostnameAllowlist":
+    "Pattern-based hostname allowlist for web_fetch (e.g. *.internal). Matched hosts bypass SSRF blocking.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
