@@ -6,8 +6,8 @@ import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "../config/types.js";
-import type { PairingMessageConfig } from "../pairing/pairing-messages.js";
+} from "../../../src/config/types.js";
+import type { PairingMessageConfig } from "../../../src/pairing/pairing-messages.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 
 export type TelegramMediaRef = {

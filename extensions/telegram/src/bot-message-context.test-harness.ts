@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { PairingMessageConfig } from "../pairing/pairing-messages.js";
+import type { PairingMessageConfig } from "../../../src/pairing/pairing-messages.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,

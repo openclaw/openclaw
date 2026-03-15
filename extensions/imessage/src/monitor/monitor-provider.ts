@@ -28,10 +28,10 @@ import {
   isInboundPathAllowed,
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
-} from "../../media/inbound-path-policy.js";
-import { kindFromMime } from "../../media/mime.js";
-import { issuePairingChallenge } from "../../pairing/pairing-challenge.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
+} from "../../../../src/media/inbound-path-policy.js";
+import { kindFromMime } from "../../../../src/media/mime.js";
+import { issuePairingChallenge } from "../../../../src/pairing/pairing-challenge.js";
+import { buildPairingReply } from "../../../../src/pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
