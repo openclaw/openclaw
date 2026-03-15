@@ -32,6 +32,12 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import {
+  markSignalReplyConsumed,
+  resolveSignalReplyDelivery,
+  type SignalReplyDeliveryState,
+} from "./monitor/reply-delivery.js";
+import { isSignalGroupTarget } from "./reply-quote.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -295,36 +301,66 @@ async function deliverReplies(params: {
   maxBytes: number;
   textLimit: number;
   chunkMode: "length" | "newline";
+  inheritedReplyToId?: string;
+  replyDeliveryState?: SignalReplyDeliveryState;
+  resolveQuoteAuthor?: (replyToId: string) => string | undefined;
 }) {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
   for (const payload of replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const text = payload.text ?? "";
-    if (!text && mediaList.length === 0) {
+    const { payload: resolvedPayload, effectiveReplyTo } = resolveSignalReplyDelivery({
+      payload,
+      inheritedReplyToId: params.inheritedReplyToId,
+      state: params.replyDeliveryState,
+    });
+    const effectiveQuoteAuthor = effectiveReplyTo
+      ? params.resolveQuoteAuthor?.(effectiveReplyTo)
+      : undefined;
+    const text = resolvedPayload.text ?? "";
+    const resolvedMediaList =
+      resolvedPayload.mediaUrls ?? (resolvedPayload.mediaUrl ? [resolvedPayload.mediaUrl] : []);
+    if (!text && resolvedMediaList.length === 0) {
       continue;
     }
-    if (mediaList.length === 0) {
+    if (resolvedMediaList.length === 0) {
+      let first = true;
       for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
         await sendMessageSignal(target, chunk, {
           baseUrl,
           account,
           maxBytes,
           accountId,
+          replyTo: first ? effectiveReplyTo : undefined,
+          quoteAuthor: first ? effectiveQuoteAuthor : undefined,
         });
+        if (first) {
+          markSignalReplyConsumed(params.replyDeliveryState, effectiveReplyTo, {
+            isGroup: isSignalGroupTarget(target),
+            quoteAuthor: effectiveQuoteAuthor,
+          });
+        }
+        first = false;
       }
     } else {
       let first = true;
-      for (const url of mediaList) {
+      for (const url of resolvedMediaList) {
         const caption = first ? text : "";
-        first = false;
         await sendMessageSignal(target, caption, {
           baseUrl,
           account,
           mediaUrl: url,
           maxBytes,
           accountId,
+          replyTo: first ? effectiveReplyTo : undefined,
+          quoteAuthor: first ? effectiveQuoteAuthor : undefined,
         });
+        if (first) {
+          markSignalReplyConsumed(params.replyDeliveryState, effectiveReplyTo, {
+            isGroup: isSignalGroupTarget(target),
+            quoteAuthor: effectiveQuoteAuthor,
+          });
+        }
+        first = false;
       }
     }
     runtime.log?.(`delivered reply to ${target}`);

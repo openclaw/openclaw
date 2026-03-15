@@ -6,6 +6,7 @@ import {
   createBaseSignalEventHandlerDeps,
   createSignalReceiveEvent,
 } from "./event-handler.test-harness.js";
+import type { SignalQuote } from "./event-handler.types.js";
 
 type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
   Body?: string;
@@ -32,6 +33,7 @@ type GroupEventOpts = {
   message?: string;
   attachments?: unknown[];
   quoteText?: string;
+  quote?: SignalQuote;
   mentions?: Array<{
     uuid?: string;
     number?: string;
@@ -45,7 +47,7 @@ function makeGroupEvent(opts: GroupEventOpts) {
     dataMessage: {
       message: opts.message ?? "",
       attachments: opts.attachments ?? [],
-      quote: opts.quoteText ? { text: opts.quoteText } : undefined,
+      quote: opts.quote ?? (opts.quoteText ? { text: opts.quoteText } : undefined),
       mentions: opts.mentions ?? undefined,
       groupInfo: { groupId: "g1", groupName: "Test Group" },
     },
@@ -201,6 +203,33 @@ describe("signal mention gating", () => {
 
   it("records quote text in pending history for skipped quote-only group messages", async () => {
     await expectSkippedGroupHistory({ message: "", quoteText: "quoted context" }, "quoted context");
+  });
+
+  it("records quoted media placeholders in pending history for skipped quote-only group messages", async () => {
+    await expectSkippedGroupHistory(
+      {
+        message: "",
+        quote: {
+          id: 1700000000000,
+          attachments: [{ contentType: "image/png", filename: "photo.png" }],
+        },
+      },
+      "<media:image>",
+    );
+  });
+
+  it("hydrates quote mentions in pending history for skipped quote-only group messages", async () => {
+    const placeholder = "\uFFFC";
+    await expectSkippedGroupHistory(
+      {
+        message: "",
+        quote: {
+          text: `${placeholder} quoted context`,
+          mentions: [{ uuid: "123e4567", start: 0, length: placeholder.length }],
+        },
+      },
+      "@123e4567 quoted context",
+    );
   });
 
   it("bypasses mention gating for authorized control commands", async () => {

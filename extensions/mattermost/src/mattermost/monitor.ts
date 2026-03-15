@@ -267,7 +267,7 @@ export function evaluateMattermostMentionGate(
 
 export function resolveMattermostReplyRootId(params: {
   threadRootId?: string;
-  replyToId?: string;
+  replyToId?: string | null;
 }): string | undefined {
   const threadRootId = params.threadRootId?.trim();
   if (threadRootId) {

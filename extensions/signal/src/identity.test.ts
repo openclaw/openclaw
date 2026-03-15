@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isStrictUuid,
   looksLikeUuid,
   resolveSignalPeerId,
   resolveSignalRecipient,
@@ -22,6 +23,30 @@ describe("looksLikeUuid", () => {
   it("rejects numeric ids and phone-like values", () => {
     expect(looksLikeUuid("1234567890")).toBe(false);
     expect(looksLikeUuid("+15555551212")).toBe(false);
+  });
+});
+
+describe("isStrictUuid", () => {
+  it("accepts canonical hyphenated UUIDs", () => {
+    expect(isStrictUuid("123e4567-e89b-12d3-a456-426614174000")).toBe(true);
+  });
+
+  it("accepts compact 32-hex UUIDs", () => {
+    expect(isStrictUuid("123e4567e89b12d3a456426614174000")).toBe(true); // pragma: allowlist secret
+  });
+
+  it("rejects short hex fragments that looksLikeUuid accepts", () => {
+    expect(isStrictUuid("abcd-1234")).toBe(false);
+  });
+
+  it("rejects numeric ids and phone-like values", () => {
+    expect(isStrictUuid("1234567890")).toBe(false);
+    expect(isStrictUuid("+15555551212")).toBe(false);
+  });
+
+  it("rejects attacker-crafted strings with hex chars", () => {
+    expect(isStrictUuid("deadbeef")).toBe(false);
+    expect(isStrictUuid("not-a-uuid-but-has-hex-cafe")).toBe(false);
   });
 });
 

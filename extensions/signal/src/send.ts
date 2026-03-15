@@ -5,6 +5,7 @@ import { resolveOutboundAttachmentFromUrl } from "../../../src/media/outbound-at
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
+import { resolveSignalQuoteMetadata } from "./reply-quote.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalSendOpts = {
@@ -18,6 +19,8 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
+  replyTo?: string;
+  quoteAuthor?: string;
 };
 
 export type SignalSendResult = {
@@ -180,6 +183,19 @@ export async function sendMessageSignal(
     throw new Error("Signal recipient is required");
   }
   Object.assign(params, targetParams);
+
+  // Add quote parameters for reply functionality
+  const { quoteTimestamp, quoteAuthor } = resolveSignalQuoteMetadata({
+    replyToId: opts.replyTo,
+    quoteAuthor: opts.quoteAuthor,
+    isGroup: target.type === "group",
+  });
+  if (quoteTimestamp !== undefined) {
+    params["quote-timestamp"] = quoteTimestamp;
+    if (quoteAuthor) {
+      params["quote-author"] = quoteAuthor;
+    }
+  }
 
   const result = await signalRpcRequest<{ timestamp?: number }>("send", params, {
     baseUrl,

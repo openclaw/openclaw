@@ -96,6 +96,7 @@ export type ChannelOutboundContext = {
   /** Send image as document to avoid Telegram compression. */
   forceDocument?: boolean;
   replyToId?: string | null;
+  quoteAuthor?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;
   identity?: OutboundIdentity;

@@ -45,7 +45,7 @@ describe("createBlockReplyContentKey", () => {
 
 describe("createBlockReplyPipeline dedup with threading", () => {
   it("keeps separate deliveries for same text with different replyToId", async () => {
-    const sent: Array<{ text?: string; replyToId?: string }> = [];
+    const sent: Array<{ text?: string; replyToId?: string | null }> = [];
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async (payload) => {
         sent.push({ text: payload.text, replyToId: payload.replyToId });
