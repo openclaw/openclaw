@@ -72,7 +72,7 @@ export async function runSessionsSendA2AFlow(params: {
       // eslint-disable-next-line no-unused-vars
       let _hookChain: Promise<void> = Promise.resolve();
       for (let turn = 1; turn <= params.maxPingPongTurns; turn += 1) {
-        const currentRole =
+        const currentRole: "requester" | "target" =
           currentSessionKey === params.requesterSessionKey ? "requester" : "target";
         const replyPrompt = buildAgentToAgentReplyContext({
           requesterSessionKey: params.requesterSessionKey,
