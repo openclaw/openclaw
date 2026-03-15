@@ -43,6 +43,10 @@ Current OpenClaw releases use date-based versioning.
   - `beta` = prerelease/testing
 - Dev is the moving head of `main`, not a normal git-tagged release.
 - The tag-triggered preview run accepts stable, beta, and fallback correction tags, and rejects versions whose CalVer date is more than 2 UTC calendar days away from the release date.
+- Release order:
+  - cut and validate a beta release first
+  - before a stable release, verify the most recent beta release passed all required build workflows
+  - create the GitHub release before running the actual npm publish
 
 Historical note:
 
@@ -86,7 +90,18 @@ Historical note:
   - `pnpm test:install:e2e` (requires both keys; runs both providers)
 - [ ] (Optional) Spot-check the web gateway if your changes affect send/receive paths.
 
-5. **macOS app (Sparkle)**
+5. **Beta gate**
+
+- [ ] Cut a beta release first (`vYYYY.M.D-beta.N`) and treat it as the release candidate for the upcoming stable release.
+- [ ] Before a stable release, inspect the most recent beta release and confirm the related build workflows succeeded.
+- [ ] Check GitHub Actions outputs for the latest beta release manually. Do not rely only on a green summary.
+- [ ] Confirm the latest beta release passed at least:
+  - Docker build/release workflows
+  - npm package build/release preview workflows
+  - other release-related build workflows touched by the release
+- [ ] If an agent is doing this, the agent must open the GitHub Actions runs and verify the outputs manually before continuing.
+
+6. **macOS app (Sparkle)**
 
 - [ ] Build + sign the macOS app, then zip it for distribution.
 - [ ] Generate the Sparkle appcast (HTML notes via [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)) and update `appcast.xml`.
@@ -95,18 +110,31 @@ Historical note:
   - `APP_BUILD` must be numeric + monotonic (no `-beta`) so Sparkle compares versions correctly.
   - If notarizing, use your configured `notarytool` keychain profile (see [macOS release](/platforms/mac/release)).
 
-6. **Publish (npm)**
+7. **GitHub release + appcast**
+
+- [ ] Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z` (or `git push --tags`).
+  - Pushing the tag also triggers the npm release workflow preview.
+- [ ] Create/refresh the GitHub release for `vX.Y.Z` with **title `openclaw X.Y.Z`** (not just the tag); body should include the **full** changelog section for that version (Highlights + Changes + Fixes), inline (no bare links), and **must not repeat the title inside the body**.
+- [ ] For beta releases, create a GitHub prerelease first and use that beta as the release candidate for the later stable release.
+- [ ] Attach artifacts: `npm pack` tarball (optional), `OpenClaw-X.Y.Z.zip`, and `OpenClaw-X.Y.Z.dSYM.zip` (if generated).
+- [ ] Commit the updated `appcast.xml` and push it (Sparkle feeds from main).
+- [ ] From a clean temp directory (no `package.json`), run `npx -y openclaw@X.Y.Z send --help` to confirm install/CLI entrypoints work.
+- [ ] Announce/share release notes.
+
+8. **Publish (npm)**
 
 - [ ] Confirm git status is clean; commit and push as needed.
 - [ ] Confirm npm trusted publishing is configured for the `openclaw` package.
 - [ ] Do not rely on an `NPM_TOKEN` secret for this workflow; the publish job uses GitHub OIDC trusted publishing.
-- [ ] Push the matching git tag to trigger the preview run in [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml).
+- [ ] Ensure the tag-triggered preview run exists in [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml) for the release tag you are about to publish.
+- [ ] Create or refresh the matching GitHub release before doing the actual npm publish.
 - [ ] Run `OpenClaw NPM Release` manually with the same tag to publish after `npm-release` environment approval.
   - Stable tags publish to npm `latest`.
   - Beta tags publish to npm `beta`.
   - Fallback correction tags like `v2026.3.13-1` map to npm version `2026.3.13`.
   - Both the preview run and the manual publish run reject tags that do not map back to `package.json`, are not on `main`, or whose CalVer date is more than 2 UTC calendar days away from the release date.
   - If `openclaw@YYYY.M.D` is already published, a fallback correction tag is still useful for GitHub release and Docker recovery, but npm publish will not republish that version.
+- [ ] If you are using an agent or automation, require it to inspect the relevant GitHub Actions outputs manually and confirm they all passed before dispatching publish.
 - [ ] Verify the registry: `npm view openclaw version`, `npm view openclaw dist-tags`, and `npx -y openclaw@X.Y.Z --version` (or `--help`).
 
 ### Troubleshooting (notes from 2.0.0-beta2 release)
@@ -119,16 +147,6 @@ Historical note:
 - **Tag needs recovery after a late fix**: if the original stable tag is tied to an immutable GitHub release, mint a fallback correction tag like `vX.Y.Z-1` instead of trying to force-update `vX.Y.Z`.
   - Keep the npm package version at `X.Y.Z`; the correction suffix is for the git tag and GitHub release only.
   - Use this only as a last resort. For normal iteration, prefer beta tags and then cut a clean stable release.
-
-7. **GitHub release + appcast**
-
-- [ ] Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z` (or `git push --tags`).
-  - Pushing the tag also triggers the npm release workflow.
-- [ ] Create/refresh the GitHub release for `vX.Y.Z` with **title `openclaw X.Y.Z`** (not just the tag); body should include the **full** changelog section for that version (Highlights + Changes + Fixes), inline (no bare links), and **must not repeat the title inside the body**.
-- [ ] Attach artifacts: `npm pack` tarball (optional), `OpenClaw-X.Y.Z.zip`, and `OpenClaw-X.Y.Z.dSYM.zip` (if generated).
-- [ ] Commit the updated `appcast.xml` and push it (Sparkle feeds from main).
-- [ ] From a clean temp directory (no `package.json`), run `npx -y openclaw@X.Y.Z send --help` to confirm install/CLI entrypoints work.
-- [ ] Announce/share release notes.
 
 ## Plugin publish scope (npm)
 
