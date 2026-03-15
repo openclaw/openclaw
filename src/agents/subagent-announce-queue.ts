@@ -1,4 +1,5 @@
 import { type QueueDropPolicy, type QueueMode } from "../auto-reply/reply/queue.js";
+import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   type DeliveryContext,
@@ -56,6 +57,17 @@ type AnnounceQueueState = {
   /** Consecutive drain failures — drives exponential backoff on errors. */
   consecutiveFailures: number;
 };
+
+/** Default max consecutive drain failures before the failing item is dropped. */
+const DEFAULT_ANNOUNCE_MAX_DRAIN_FAILURES = 5;
+
+function resolveAnnounceMaxDrainFailures(): number {
+  const configured = loadConfig().agents?.defaults?.subagents?.announceMaxDrainFailures;
+  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+    return DEFAULT_ANNOUNCE_MAX_DRAIN_FAILURES;
+  }
+  return Math.max(1, Math.floor(configured));
+}
 
 const ANNOUNCE_QUEUES = new Map<string, AnnounceQueueState>();
 
@@ -191,12 +203,30 @@ function scheduleAnnounceDrain(key: string) {
       queue.consecutiveFailures = 0;
     } catch (err) {
       queue.consecutiveFailures++;
+      const maxFailures = resolveAnnounceMaxDrainFailures();
+      if (queue.consecutiveFailures >= maxFailures) {
+        queue.items.shift();
+        defaultRuntime.error?.(
+          `announce queue for ${key} exceeded ${maxFailures} consecutive failures, dropping failing item and continuing (${queue.items.length} remaining): ${String(err)}`,
+        );
+        // Reset failure counter so the next item gets a fair chance.
+        queue.consecutiveFailures = 0;
+        // Clear stale summary state only when the queue is now empty,
+        // so it does not keep the queue alive forever (droppedCount > 0
+        // with no items to carry the summary). When items remain,
+        // preserve the overflow notice for the next successful delivery.
+        if (queue.items.length === 0) {
+          queue.droppedCount = 0;
+          queue.summaryLines.length = 0;
+        }
+        return;
+      }
       // Exponential backoff on consecutive failures: 2s, 4s, 8s, ... capped at 60s.
       const errorBackoffMs = Math.min(1000 * Math.pow(2, queue.consecutiveFailures), 60_000);
       const retryDelayMs = Math.max(errorBackoffMs, queue.debounceMs);
       queue.lastEnqueuedAt = Date.now() + retryDelayMs - queue.debounceMs;
       defaultRuntime.error?.(
-        `announce queue drain failed for ${key} (attempt ${queue.consecutiveFailures}, retry in ${Math.round(retryDelayMs / 1000)}s): ${String(err)}`,
+        `announce queue drain failed for ${key} (attempt ${queue.consecutiveFailures}/${maxFailures}, retry in ${Math.round(retryDelayMs / 1000)}s): ${String(err)}`,
       );
     } finally {
       queue.draining = false;

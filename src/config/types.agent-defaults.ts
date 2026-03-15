@@ -288,6 +288,8 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     announceTimeoutMs?: number;
+    /** Max consecutive announce queue drain failures before dropping the failing item (default: 5). */
+    announceMaxDrainFailures?: number;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
