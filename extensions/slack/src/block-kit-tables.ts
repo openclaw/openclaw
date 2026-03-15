@@ -41,9 +41,15 @@ export function markdownTableToBlockKit(table: MarkdownTableData): SlackTableBlo
   return { type: "table", column_settings, rows };
 }
 
+/** Slack allows at most 50 blocks per attachment. */
+const SLACK_MAX_BLOCKS_PER_ATTACHMENT = 50;
+
 /**
  * Convert multiple parsed tables into Block Kit table blocks,
  * suitable for use in the `attachments` parameter of `chat.postMessage`.
+ *
+ * Tables are split across multiple attachments when the total count
+ * exceeds Slack's 50-block-per-attachment limit.
  */
 export function markdownTablesToBlockKitAttachment(
   tables: MarkdownTableData[],
@@ -51,11 +57,12 @@ export function markdownTablesToBlockKitAttachment(
   if (!tables.length) {
     return [];
   }
-  // Each attachment can contain multiple blocks.
-  // We put all tables in a single attachment.
-  return [
-    {
-      blocks: tables.map(markdownTableToBlockKit),
-    },
-  ];
+  const allBlocks = tables.map(markdownTableToBlockKit);
+  const attachments: { blocks: SlackTableBlock[] }[] = [];
+  for (let i = 0; i < allBlocks.length; i += SLACK_MAX_BLOCKS_PER_ATTACHMENT) {
+    attachments.push({
+      blocks: allBlocks.slice(i, i + SLACK_MAX_BLOCKS_PER_ATTACHMENT),
+    });
+  }
+  return attachments;
 }
