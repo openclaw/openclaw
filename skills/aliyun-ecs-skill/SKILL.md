@@ -122,15 +122,15 @@ aliyun-ecs restart --region cn-hangzhou --id i-xxxxxxxxxx
 
 ```bash
 # 获取监控数据（CPU、内存、网络）
-aliyun-ecs monitor --region cn-hangzhou --id i-xxxxxxxxxx --metrics CPUUtilization,MemoryUtilization
+aliyun-ecs monitor --region cn-hangzhou --id i-xxxxxxxxxx --metrics CPU,Memory
 
 # 支持的监控指标:
-# CPUUtilization - CPU使用率
-# MemoryUtilization - 内存使用率
-# InternetInRate - 公网入带宽
-# InternetOutRate - 公网出带宽
-# DiskReadIOPS - 磁盘读IOPS
-# DiskWriteIOPS - 磁盘写IOPS
+# CPU - CPU使用率
+# Memory - 内存使用率
+# InternetIn - 公网入带宽(Kbps)
+# InternetOut - 公网出带宽(Kbps)
+# IntranetIn - 内网入带宽(Kbps)
+# IntranetOut - 内网出带宽(Kbps)
 ```
 
 ### 快照管理

@@ -136,10 +136,20 @@ async function main() {
                     console.error('错误: 请提供 --region 参数');
                     process.exit(1);
                 }
-                const instances = await ecs.describeInstances(options.region);
-                console.log(`\n地域 ${options.region} 的实例列表:\n`);
+                const pageSize = parseInt(options['page-size']) || 20;
+                const pageNumber = parseInt(options.page) || 1;
+                const listOptions = {
+                    pageSize: pageSize,
+                    pageNumber: pageNumber,
+                };
+                const instances = await ecs.describeInstances(options.region, listOptions);
+                console.log(`\n地域 ${options.region} 的实例列表 (第${pageNumber}页, 每页${pageSize}条):\n`);
                 if (instances.length === 0) {
-                    console.log('暂无实例');
+                    if (pageNumber > 1) {
+                        console.log('该页无实例，可能是已到达末尾');
+                    } else {
+                        console.log('暂无实例');
+                    }
                 } else {
                     console.log(formatTable(instances.map(inst => ({
                         ...inst,
@@ -152,6 +162,7 @@ async function main() {
                         { key: 'instanceType', header: '类型' },
                         { key: 'ip', header: 'IP地址' },
                     ]));
+                    console.log(`\n提示: 使用 --page N 查看下一页，--page-size N 调整每页数量`);
                 }
                 break;
             }

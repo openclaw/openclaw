@@ -32,13 +32,9 @@ node_check() {
 
 # 检查阿里云SDK
 sdk_check() {
-    if npm list -g @alicloud/openapi-client &> /dev/null; then
+    # 优先检查本地 node_modules（skill 运行时从这里加载）
+    if [ -d "$SCRIPT_DIR/../node_modules/@alicloud/openapi-client" ] && [ -d "$SCRIPT_DIR/../node_modules/@alicloud/ecs20140526" ]; then
         echo -e "${GREEN}✓ 阿里云SDK已安装${NC}"
-        return 0
-    fi
-    
-    if npm list @alicloud/openapi-client &> /dev/null 2>&1; then
-        echo -e "${GREEN}✓ 阿里云SDK已安装（本地）${NC}"
         return 0
     fi
     
