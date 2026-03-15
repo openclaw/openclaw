@@ -1,4 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+beforeAll(() => {
+  (globalThis as Record<string, unknown>).window = {
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  };
+});
+afterAll(() => {
+  delete (globalThis as Record<string, unknown>).window;
+});
 
 const { applySettingsFromUrlMock, connectGatewayMock, loadBootstrapMock } = vi.hoisted(() => ({
   applySettingsFromUrlMock: vi.fn(),
