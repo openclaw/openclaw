@@ -11,6 +11,7 @@ vi.mock("../../infra/outbound/channel-selection.js", () => ({
   resolveMessageChannelSelection: vi
     .fn()
     .mockResolvedValue({ channel: "telegram", configured: ["telegram"] }),
+  listConfiguredMessageChannels: vi.fn().mockResolvedValue(["telegram"]),
 }));
 
 vi.mock("../../infra/outbound/target-resolver.js", () => ({
@@ -27,7 +28,10 @@ vi.mock("../../../extensions/whatsapp/src/accounts.js", () => ({
 
 import { resolveWhatsAppAccount } from "../../../extensions/whatsapp/src/accounts.js";
 import { loadSessionStore } from "../../config/sessions.js";
-import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import {
+  listConfiguredMessageChannels,
+  resolveMessageChannelSelection,
+} from "../../infra/outbound/channel-selection.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
@@ -279,18 +283,70 @@ describe("resolveDeliveryTarget", () => {
     expect(result.error.message).toContain("requires target");
   });
 
-  it("returns an error when channel selection is ambiguous", async () => {
+  it("does not auto-resolve when channel selection is ambiguous (multiple configured channels)", async () => {
     setMainSessionEntry(undefined);
     vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
       new Error("Channel is required when multiple channels are configured: telegram, slack"),
     );
+    vi.mocked(listConfiguredMessageChannels).mockResolvedValueOnce(["telegram", "slack"]);
+
+    const result = await resolveLastTarget(makeCfg({ bindings: [] }));
+    // With multiple channels the ambiguity must surface — no silent fallback.
+    expect(result.channel).toBeUndefined();
+    expect(result.to).toBeUndefined();
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected ambiguous channel selection error");
+    }
+    expect(result.error.message).toContain("Channel is required");
+  });
+
+  it("falls back to the single configured channel when selection fails", async () => {
+    setMainSessionEntry(undefined);
+    vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
+      new Error("Channel is required when multiple channels are configured: telegram"),
+    );
+    vi.mocked(listConfiguredMessageChannels).mockResolvedValueOnce(["telegram"]);
+
+    const result = await resolveLastTarget(makeCfg({ bindings: [] }));
+    // Exactly one channel configured — safe to use as fallback.
+    expect(result.channel).toBe("telegram");
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected error with single-channel fallback");
+    }
+    expect(result.error.message).toContain("requires target");
+  });
+
+  it("returns undefined channel when selection fails and no channels are configured", async () => {
+    setMainSessionEntry(undefined);
+    vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
+      new Error("Channel is required (no configured channels detected)."),
+    );
+    vi.mocked(listConfiguredMessageChannels).mockResolvedValueOnce([]);
 
     const result = await resolveLastTarget(makeCfg({ bindings: [] }));
     expect(result.channel).toBeUndefined();
     expect(result.to).toBeUndefined();
     expect(result.ok).toBe(false);
     if (result.ok) {
-      throw new Error("expected ambiguous channel selection error");
+      throw new Error("expected channel selection error");
+    }
+    expect(result.error.message).toContain("Channel is required");
+  });
+
+  it("returns undefined channel when listConfiguredMessageChannels throws", async () => {
+    setMainSessionEntry(undefined);
+    vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
+      new Error("Channel is required"),
+    );
+    vi.mocked(listConfiguredMessageChannels).mockRejectedValueOnce(new Error("plugin I/O error"));
+
+    const result = await resolveLastTarget(makeCfg({ bindings: [] }));
+    expect(result.channel).toBeUndefined();
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected channel selection error");
     }
     expect(result.error.message).toContain("Channel is required");
   });
