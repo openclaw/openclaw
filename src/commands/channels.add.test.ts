@@ -11,7 +11,7 @@ import {
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const catalogMocks = vi.hoisted(() => ({
-  listChannelPluginCatalogEntries: vi.fn(() => []),
+  listChannelPluginCatalogEntries: vi.fn((): ChannelPluginCatalogEntry[] => []),
 }));
 
 vi.mock("../channels/plugins/catalog.js", async (importOriginal) => {
