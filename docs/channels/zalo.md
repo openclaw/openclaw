@@ -170,6 +170,7 @@ If you are using a different Zalo bot product surface and have verified working 
 | Direct messages             | ✅ Supported                                                         |
 | Groups                      | ❌ Not available in current Marketplace-bot testing                  |
 | Media (inbound images)      | ⚠️ Limited / verify in your environment                              |
+| Media (outbound images)     | ⚠️ Not re-tested in current Marketplace-bot testing                  |
 | Plain URLs in text          | ✅ Supported                                                         |
 | Link previews               | ⚠️ Unreliable / no reply observed in current Marketplace-bot testing |
 | Reactions                   | ❌ Not supported                                                     |
@@ -236,3 +237,4 @@ Multi-account options:
 - `channels.zalo.accounts.<id>.webhookSecret`: per-account webhook secret.
 - `channels.zalo.accounts.<id>.webhookPath`: per-account webhook path.
 - `channels.zalo.accounts.<id>.proxy`: per-account proxy URL.
+  per-account proxy URL.
