@@ -337,7 +337,9 @@ export async function tryDispatchAcpReply(params: {
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           });
           queuedFinal = queuedFinal || delivered;
-          ttsSucceeded = true; // TTS succeeded, skip text fallback
+          if (delivered) {
+            ttsSucceeded = true; // TTS succeeded AND delivered, skip text fallback
+          }
         }
       } catch (err) {
         logVerbose(
