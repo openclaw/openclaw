@@ -79,6 +79,28 @@ export async function noteMemorySearchHealth(
       );
       return;
     }
+    if (resolved.provider === "ollama") {
+      // Ollama runs locally and does not require an API key.
+      // Only warn when the gateway probe explicitly reports not-ready;
+      // if no probe ran we cannot tell whether the service is up, so
+      // stay silent (consistent with the "local" branch above).
+      if (opts?.gatewayMemoryProbe?.checked && !opts.gatewayMemoryProbe.ready) {
+        const detail = opts.gatewayMemoryProbe.error?.trim();
+        note(
+          [
+            'Memory search provider is set to "ollama".',
+            "Ollama does not require an API key, but the ollama service must be running.",
+            detail ? `Gateway probe: ${detail}` : null,
+            "",
+            `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          "Memory search",
+        );
+      }
+      return;
+    }
     // Remote provider — check for API key
     if (hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir))) {
       return;
