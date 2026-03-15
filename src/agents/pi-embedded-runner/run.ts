@@ -50,6 +50,7 @@ import {
   formatAssistantErrorText,
   isAuthAssistantError,
   isBillingAssistantError,
+  isCloudflareOrHtmlErrorPage,
   isCompactionFailureError,
   isLikelyContextOverflowError,
   isFailoverAssistantError,
@@ -98,6 +99,13 @@ const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0.2,
 };
+const TRANSIENT_TRANSPORT_RETRY_BACKOFF_POLICY: BackoffPolicy = {
+  initialMs: 500,
+  maxMs: 4_000,
+  factor: 2,
+  jitter: 0.2,
+};
+const MAX_TRANSIENT_TRANSPORT_RETRIES = 4;
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -755,6 +763,54 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let transientTransportRetryAttempts = 0;
+      let transientTransportRetryScopeKey: string | null = null;
+      const maybeRetryStandaloneHtmlTransport = async (retry: {
+        aborted: boolean;
+        failoverReason: FailoverReason | null;
+        rawErrorText: string;
+        profileId?: string;
+        stage: "assistant" | "prompt";
+      }) => {
+        if (
+          retry.aborted ||
+          retry.failoverReason !== "timeout" ||
+          !isCloudflareOrHtmlErrorPage(retry.rawErrorText) ||
+          /^\s*(?:http\s*)?\d{3}\b/i.test(retry.rawErrorText)
+        ) {
+          return false;
+        }
+
+        const currentRetryScopeKey = `${provider}\u0000${modelId}\u0000${retry.profileId ?? ""}`;
+        if (currentRetryScopeKey !== transientTransportRetryScopeKey) {
+          transientTransportRetryScopeKey = currentRetryScopeKey;
+          transientTransportRetryAttempts = 0;
+        }
+        if (transientTransportRetryAttempts >= MAX_TRANSIENT_TRANSPORT_RETRIES) {
+          return false;
+        }
+
+        transientTransportRetryAttempts += 1;
+        const delayMs = computeBackoff(
+          TRANSIENT_TRANSPORT_RETRY_BACKOFF_POLICY,
+          transientTransportRetryAttempts,
+        );
+        log.warn(
+          `transient provider transport failure during ${retry.stage} for ${provider}/${modelId}; retrying same profile/model ` +
+            `attempt=${transientTransportRetryAttempts}/${MAX_TRANSIENT_TRANSPORT_RETRIES} delayMs=${delayMs}`,
+        );
+        try {
+          await sleepWithAbort(delayMs, params.abortSignal);
+        } catch (err) {
+          if (params.abortSignal?.aborted) {
+            const abortError = new Error("Operation aborted", { cause: err });
+            abortError.name = "AbortError";
+            throw abortError;
+          }
+          throw err;
+        }
+        return true;
+      };
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1298,6 +1354,18 @@ export async function runEmbeddedPiAgent(
             }
             const promptFailoverReason =
               promptErrorDetails.reason ?? classifyFailoverReason(errorText);
+            const failedPromptProfileId = lastProfileId;
+            if (
+              await maybeRetryStandaloneHtmlTransport({
+                aborted,
+                failoverReason: promptFailoverReason,
+                rawErrorText: errorText,
+                profileId: failedPromptProfileId,
+                stage: "prompt",
+              })
+            ) {
+              continue;
+            }
             const promptProfileFailureReason =
               resolveAuthProfileFailureReason(promptFailoverReason);
             await maybeMarkAuthProfileFailure({
@@ -1306,8 +1374,6 @@ export async function runEmbeddedPiAgent(
             });
             const promptFailoverFailure =
               promptFailoverReason !== null || isFailoverErrorMessage(errorText);
-            // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
-            const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
               stage: "prompt",
               runId: params.runId,
@@ -1385,6 +1451,7 @@ export async function runEmbeddedPiAgent(
             resolveAuthProfileFailureReason(assistantFailoverReason);
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
+          const rawAssistantError = lastAssistant?.errorMessage?.trim() ?? "";
           // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
           const failedAssistantProfileId = lastProfileId;
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
@@ -1409,6 +1476,17 @@ export async function runEmbeddedPiAgent(
             ))
           ) {
             authRetryPending = true;
+            continue;
+          }
+          if (
+            await maybeRetryStandaloneHtmlTransport({
+              aborted,
+              failoverReason: assistantFailoverReason,
+              rawErrorText: rawAssistantError,
+              profileId: failedAssistantProfileId,
+              stage: "assistant",
+            })
+          ) {
             continue;
           }
           if (imageDimensionError && lastProfileId) {

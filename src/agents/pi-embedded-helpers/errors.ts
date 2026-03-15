@@ -223,6 +223,14 @@ const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
 const TRANSIENT_HTTP_ERROR_CODES = new Set([499, 500, 502, 503, 504, 521, 522, 523, 524, 529]);
+const STANDALONE_HTML_ERROR_HINTS = [
+  "unable to load site",
+  "status.openai.com",
+  "ray id:",
+  "if you are using a vpn, try turning it off",
+  "cf-ray",
+  "cloudflare",
+] as const;
 const HTTP_ERROR_HINTS = [
   "error",
   "bad request",
@@ -362,6 +370,14 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
     return false;
+  }
+
+  const looksLikeStandaloneHtmlErrorPage =
+    HTML_ERROR_PREFIX_RE.test(trimmed) &&
+    /<\/html>/i.test(trimmed) &&
+    STANDALONE_HTML_ERROR_HINTS.some((hint) => trimmed.toLowerCase().includes(hint));
+  if (looksLikeStandaloneHtmlErrorPage) {
+    return true;
   }
 
   const status = extractLeadingHttpStatus(trimmed);
@@ -647,6 +663,10 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return "LLM request failed with an unknown error.";
   }
 
+  if (isCloudflareOrHtmlErrorPage(trimmed) && !extractLeadingHttpStatus(trimmed)) {
+    return "The AI service is temporarily unavailable. Please try again in a moment.";
+  }
+
   const leadingStatus = extractLeadingHttpStatus(trimmed);
   if (leadingStatus && isCloudflareOrHtmlErrorPage(trimmed)) {
     return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
@@ -750,6 +770,10 @@ export function formatAssistantErrorText(
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
+  if (isCloudflareOrHtmlErrorPage(raw)) {
+    return formatRawAssistantErrorForUi(raw);
+  }
+
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
     return formatRawAssistantErrorForUi(raw);
   }
@@ -791,6 +815,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    if (isCloudflareOrHtmlErrorPage(trimmed)) {
+      return formatRawAssistantErrorForUi(trimmed);
     }
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
@@ -996,6 +1024,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isOverloadedErrorMessage(raw)) {
     return "overloaded";
+  }
+  if (isCloudflareOrHtmlErrorPage(raw) && !extractLeadingHttpStatus(raw.trim())) {
+    return "timeout";
   }
   if (isTransientHttpError(raw)) {
     // 529 is always overloaded, even without explicit overload keywords in the body.

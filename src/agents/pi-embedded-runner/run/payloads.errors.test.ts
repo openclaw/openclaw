@@ -85,6 +85,69 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
   });
 
+  it("rewrites standalone OpenAI HTML error pages into a safe transient message", () => {
+    const htmlError = `<!DOCTYPE html>
+<html>
+  <head><title>Unable to load site</title></head>
+  <body>
+    <p>Unable to load site</p>
+    <a href="https://status.openai.com/">status page</a>
+    <span>Ray ID: 9db04bc5cf66e92d</span>
+    <span>If you are using a VPN, try turning it off.</span>
+  </body>
+</html>`;
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        errorMessage: htmlError,
+        content: [],
+      }),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toBe(
+      "The AI service is temporarily unavailable. Please try again in a moment.",
+    );
+  });
+
+  it("suppresses standalone HTML assistant text and keeps only the safe transient message", () => {
+    const htmlError = `<!DOCTYPE html>
+<html>
+  <head><title>Unable to load site</title></head>
+  <body>
+    <p>Unable to load site</p>
+    <a href="https://status.openai.com/">status page</a>
+    <span>Ray ID: 9db04bc5cf66e92d</span>
+    <span>If you are using a VPN, try turning it off.</span>
+  </body>
+</html>`;
+    const payloads = buildPayloads({
+      assistantTexts: [htmlError],
+      lastAssistant: makeAssistant({
+        errorMessage: htmlError,
+        content: [],
+      }),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toBe(
+      "The AI service is temporarily unavailable. Please try again in a moment.",
+    );
+  });
+
+  it("keeps distinct Cloudflare-classified diagnostics when they are not the same payload", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["526 Invalid SSL certificate"],
+      lastAssistant: makeAssistant({
+        errorMessage: "525 SSL handshake failed",
+        content: [],
+      }),
+    });
+
+    expect(payloads.some((payload) => payload.text === "526 Invalid SSL certificate")).toBe(true);
+  });
+
   it("includes provider and model context for billing errors", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
