@@ -323,7 +323,8 @@ async function executeUsage(
       lines.push(`Context: **${pct}%** of ${fmtTokens(ctx)}`);
     }
     if (session.model) {
-      lines.push(`Model: \`${session.model}\``);
+      const canonicalModel = buildCanonicalModelRef(session.model, session.modelProvider);
+      lines.push(`Model: \`${canonicalModel || session.model}\``);
     }
     return { content: lines.join("\n") };
   } catch (err) {

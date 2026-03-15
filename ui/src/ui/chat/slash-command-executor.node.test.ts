@@ -302,6 +302,7 @@ describe("executeSlashCommand directives", () => {
         return {
           sessions: [
             row("agent:main:main", {
+              modelProvider: "openai",
               model: "gpt-4.1-mini",
               inputTokens: 1200,
               outputTokens: 300,
@@ -322,7 +323,7 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **30%** of 4k\nModel: `gpt-4.1-mini`",
+      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **30%** of 4k\nModel: `openai/gpt-4.1-mini`",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
