@@ -253,13 +253,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
     },
-    models: {
+    modelAuth: {
+      getApiKeyForModel: vi.fn(
+        () => undefined,
+      ) as unknown as PluginRuntime["modelAuth"]["getApiKeyForModel"],
       resolveApiKeyForProvider: vi.fn(
         () => undefined,
-      ) as unknown as PluginRuntime["models"]["resolveApiKeyForProvider"],
-      resolveProviderInfo: vi.fn(
-        () => undefined,
-      ) as unknown as PluginRuntime["models"]["resolveProviderInfo"],
+      ) as unknown as PluginRuntime["modelAuth"]["resolveApiKeyForProvider"],
     },
     subagent: {
       run: vi.fn(),

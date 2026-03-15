@@ -512,8 +512,7 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
   function makeMockApi(
     overrides: {
       pluginConfig?: Record<string, unknown>;
-      resolveApiKeyForProvider?: PluginRuntime["models"]["resolveApiKeyForProvider"];
-      resolveProviderInfo?: PluginRuntime["models"]["resolveProviderInfo"];
+      resolveApiKeyForProvider?: PluginRuntime["modelAuth"]["resolveApiKeyForProvider"];
       openclawConfig?: Record<string, unknown>;
     } = {},
   ) {
@@ -525,12 +524,6 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
         apiKey: "sk-mock-key",
         source: "mock",
         mode: "api-key",
-      });
-    const mockResolveProvider =
-      overrides.resolveProviderInfo ??
-      vi.fn().mockResolvedValue({
-        baseUrl: "https://api.anthropic.com",
-        api: "anthropic-messages",
       });
 
     const api: OpenClawPluginApi = {
@@ -545,6 +538,15 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
             },
           },
         },
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              api: "anthropic-messages",
+              models: [],
+            },
+          },
+        },
       }) as OpenClawPluginApi["config"],
       pluginConfig: {
         model: "anthropic/claude-haiku-4-5",
@@ -553,9 +555,8 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
         ...overrides.pluginConfig,
       },
       runtime: {
-        models: {
+        modelAuth: {
           resolveApiKeyForProvider: mockResolveAuth,
-          resolveProviderInfo: mockResolveProvider,
         },
       } as unknown as PluginRuntime,
       logger: {
@@ -582,7 +583,7 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
       resolvePath: vi.fn((s: string) => s),
     };
 
-    return { api, hooks, mockResolveAuth, mockResolveProvider };
+    return { api, hooks, mockResolveAuth };
   }
 
   beforeEach(() => {
@@ -595,21 +596,16 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
     vi.restoreAllMocks();
   });
 
-  it("resolves provider info + API key from SDK on first before_tool_call", async () => {
+  it("resolves API key from SDK on first before_tool_call", async () => {
     const mockResolveAuth = vi.fn().mockResolvedValue({
       apiKey: "sk-from-auth-profiles",
       profileId: "anthropic:default",
       source: "profile:anthropic:default",
       mode: "oauth",
     });
-    const mockResolveProvider = vi.fn().mockResolvedValue({
-      baseUrl: "https://api.anthropic.com",
-      api: "anthropic-messages",
-    });
 
     const { api, hooks } = makeMockApi({
       resolveApiKeyForProvider: mockResolveAuth,
-      resolveProviderInfo: mockResolveProvider,
     });
 
     guardianPlugin.register(api);
@@ -626,17 +622,12 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
       { sessionKey: "s1", toolName: "exec" },
     );
 
-    // Provider info should be resolved
-    expect(mockResolveProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "anthropic" }),
-    );
-
     // Auth should be resolved
     expect(mockResolveAuth).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "anthropic" }),
     );
 
-    // callGuardian should receive both baseUrl and apiKey
+    // callGuardian should receive baseUrl from config and apiKey from auth
     expect(callGuardian).toHaveBeenCalledWith(
       expect.objectContaining({
         model: expect.objectContaining({
@@ -648,13 +639,11 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
     );
   });
 
-  it("skips SDK resolution when explicit config already provides baseUrl + apiKey", async () => {
+  it("skips auth resolution when explicit config already provides apiKey", async () => {
     const mockResolveAuth = vi.fn();
-    const mockResolveProvider = vi.fn();
 
     const { api, hooks } = makeMockApi({
       resolveApiKeyForProvider: mockResolveAuth,
-      resolveProviderInfo: mockResolveProvider,
       openclawConfig: {
         agents: { defaults: { model: { primary: "myapi/model-x" } } },
         models: {
@@ -682,9 +671,7 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
       { sessionKey: "s1", toolName: "exec" },
     );
 
-    // Should NOT call resolveProviderInfo or resolveApiKeyForProvider
-    // since config provides both baseUrl and apiKey
-    expect(mockResolveProvider).not.toHaveBeenCalled();
+    // Should NOT call resolveApiKeyForProvider since config provides apiKey
     expect(mockResolveAuth).not.toHaveBeenCalled();
 
     expect(callGuardian).toHaveBeenCalledWith(
@@ -697,20 +684,15 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
     );
   });
 
-  it("only resolves once across multiple before_tool_call invocations", async () => {
+  it("only resolves auth once across multiple before_tool_call invocations", async () => {
     const mockResolveAuth = vi.fn().mockResolvedValue({
       apiKey: "sk-resolved-once",
       source: "profile:anthropic:default",
       mode: "api-key",
     });
-    const mockResolveProvider = vi.fn().mockResolvedValue({
-      baseUrl: "https://api.anthropic.com",
-      api: "anthropic-messages",
-    });
 
     const { api, hooks } = makeMockApi({
       resolveApiKeyForProvider: mockResolveAuth,
-      resolveProviderInfo: mockResolveProvider,
     });
 
     guardianPlugin.register(api);
@@ -726,16 +708,12 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
     decisionCache.clear();
     await handler({ toolName: "exec", params: {} }, { sessionKey: "s1", toolName: "exec" });
 
-    // Each SDK function should be called only once
-    expect(mockResolveProvider).toHaveBeenCalledTimes(1);
+    // Auth should be called only once
     expect(mockResolveAuth).toHaveBeenCalledTimes(1);
   });
 
-  it("handles provider resolution failure — falls back per config", async () => {
-    const mockResolveProvider = vi.fn().mockResolvedValue(undefined); // provider not found
-
+  it("handles missing baseUrl — falls back per config", async () => {
     const { api, hooks } = makeMockApi({
-      resolveProviderInfo: mockResolveProvider,
       pluginConfig: {
         model: "unknown/model",
         fallback_on_error: "allow",
@@ -753,27 +731,20 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
       { sessionKey: "s1", toolName: "exec" },
     );
 
-    // Should not call callGuardian since provider couldn't be resolved
+    // Should not call callGuardian since provider has no baseUrl
     expect(callGuardian).not.toHaveBeenCalled();
 
     // With fallback_on_error: "allow", should return undefined (allow)
     expect(result).toBeUndefined();
 
-    expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Provider resolution failed"),
-    );
+    expect(api.logger.warn).toHaveBeenCalledWith(expect.stringContaining("not fully resolved"));
   });
 
   it("handles auth resolution failure gracefully — still calls guardian", async () => {
     const mockResolveAuth = vi.fn().mockRejectedValue(new Error("No API key found"));
-    const mockResolveProvider = vi.fn().mockResolvedValue({
-      baseUrl: "https://api.anthropic.com",
-      api: "anthropic-messages",
-    });
 
     const { api, hooks } = makeMockApi({
       resolveApiKeyForProvider: mockResolveAuth,
-      resolveProviderInfo: mockResolveProvider,
     });
 
     guardianPlugin.register(api);
@@ -790,7 +761,7 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
       { sessionKey: "s1", toolName: "exec" },
     );
 
-    // Provider resolved, but auth failed — should still call callGuardian
+    // baseUrl resolved from config, but auth failed — should still call callGuardian
     expect(callGuardian).toHaveBeenCalled();
 
     expect(api.logger.warn).toHaveBeenCalledWith(expect.stringContaining("Auth resolution failed"));

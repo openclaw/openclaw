@@ -102,43 +102,20 @@ const guardianPlugin = {
       if (resolutionAttempted) return !!resolvedModel.baseUrl;
       resolutionAttempted = true;
 
-      // --- Resolve provider info (baseUrl, api type) via SDK ---
+      // --- Resolve provider info (baseUrl, api type) from config ---
       if (!resolvedModel.baseUrl) {
-        try {
-          const info = await runtime.models.resolveProviderInfo({
-            provider: resolvedModel.provider,
-            cfg: openclawConfig,
-          });
-          if (info) {
-            resolvedModel.baseUrl = info.baseUrl;
-            resolvedModel.api = info.api;
-            if (info.headers) {
-              resolvedModel.headers = { ...info.headers, ...resolvedModel.headers };
-            }
-            api.logger.info(
-              `[guardian] Provider resolved via SDK: provider=${resolvedModel.provider}, ` +
-                `baseUrl=${info.baseUrl}, api=${info.api}`,
-            );
-          } else {
-            api.logger.warn(
-              `[guardian] Provider resolution failed: provider=${resolvedModel.provider} ` +
-                `not found in config or models.json. Guardian will not function.`,
-            );
-            return false;
-          }
-        } catch (err) {
-          api.logger.warn(
-            `[guardian] Provider resolution error for ${resolvedModel.provider}: ` +
-              `${err instanceof Error ? err.message : String(err)}`,
-          );
-          return false;
-        }
+        api.logger.warn(
+          `[guardian] Provider not fully resolved: provider=${resolvedModel.provider} ` +
+            `has no baseUrl. Configure models.providers.${resolvedModel.provider}.baseUrl ` +
+            `in openclaw.json. Guardian will not function.`,
+        );
+        return false;
       }
 
       // --- Resolve API key via SDK ---
       if (!resolvedModel.apiKey) {
         try {
-          const auth = await runtime.models.resolveApiKeyForProvider({
+          const auth = await runtime.modelAuth.resolveApiKeyForProvider({
             provider: resolvedModel.provider,
             cfg: openclawConfig,
           });
