@@ -529,6 +529,16 @@ export function buildStatusMessage(args: StatusArgs): string {
     .filter(Boolean)
     .join(" • ");
 
+  const deliveryChannel = entry?.lastChannel ?? entry?.channel;
+  const deliveryParts = [
+    deliveryChannel ? `channel: ${deliveryChannel}` : null,
+    entry?.lastAccountId ? `account: ${entry.lastAccountId}` : null,
+    entry?.lastTo ? `to: ${entry.lastTo}` : null,
+    entry?.lastThreadId != null ? `thread: ${entry.lastThreadId}` : null,
+  ].filter(Boolean);
+  const deliveryLine =
+    deliveryParts.length > 0 ? `📬 Delivery: ${deliveryParts.join(" • ")}` : null;
+
   const isGroupSession =
     entry?.chatType === "group" ||
     entry?.chatType === "channel" ||
@@ -679,6 +689,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     mediaLine,
     args.usageLine,
     `🧵 ${sessionLine}`,
+    deliveryLine,
     args.subagentsLine,
     `⚙️ ${optionsLine}`,
     voiceLine,
