@@ -25,6 +25,8 @@ import {
 const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
+const MAX_BRAVE_LANG_TAG_LENGTH = 64;
+const MAX_CHINESE_SEARCH_LANG_SUBTAG_SEPARATORS = 4;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
@@ -102,11 +104,6 @@ const BRAVE_SEARCH_LANG_CODES = new Set([
 ]);
 const BRAVE_SEARCH_LANG_ALIASES: Record<string, string> = {
   ja: "jp",
-  zh: "zh-hans",
-  "zh-cn": "zh-hans",
-  "zh-hk": "zh-hant",
-  "zh-sg": "zh-hans",
-  "zh-tw": "zh-hant",
 };
 const BRAVE_UI_LANG_LOCALE = /^([a-z]{2})-([a-z]{2})$/i;
 const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
@@ -1027,19 +1024,104 @@ function resolveSearchCount(value: unknown, fallback: number): number {
   return clamped;
 }
 
+function isChineseRegionSubtag(value: string): boolean {
+  return /^[a-z]{2}$|^\d{3}$/.test(value);
+}
+
+function canonicalizeChineseSearchLang(value: string): string {
+  const lowered = value.toLowerCase();
+
+  if (lowered.length > MAX_BRAVE_LANG_TAG_LENGTH) {
+    return lowered;
+  }
+
+  if (lowered === "zh") {
+    return "zh-hans";
+  }
+
+  // Only canonicalize locale-tag forms (`zh-*` / `zh_*`). Inputs that merely
+  // start with `zh` (for example, `zhx` or `zhtw`) should stay invalid.
+  if (!/^zh[-_][a-z0-9]+(?:[-_][a-z0-9]+)*$/.test(lowered)) {
+    return lowered;
+  }
+
+  const normalized = lowered.replace(/_/g, "-");
+  let separators = 0;
+  for (let i = 0; i < normalized.length; i++) {
+    if (normalized[i] === "-") {
+      separators += 1;
+      if (separators > MAX_CHINESE_SEARCH_LANG_SUBTAG_SEPARATORS) {
+        return lowered;
+      }
+    }
+  }
+
+  const parts = normalized.split("-");
+  if (parts.length < 2 || parts.length > 3) {
+    return lowered;
+  }
+
+  const firstSubtag = parts[1];
+  const secondSubtag = parts[2];
+
+  // Script-driven forms: zh-Hans and zh-Hant (optionally with a region tail).
+  if (firstSubtag === "hans" || firstSubtag === "hant") {
+    if (secondSubtag && !isChineseRegionSubtag(secondSubtag)) {
+      return lowered;
+    }
+    return firstSubtag === "hant" ? "zh-hant" : "zh-hans";
+  }
+
+  // Region-driven forms: zh-CN, zh-TW, zh_HK, etc. Reject arbitrary subtags.
+  if (!isChineseRegionSubtag(firstSubtag) || secondSubtag) {
+    return lowered;
+  }
+
+  if (firstSubtag === "tw" || firstSubtag === "hk" || firstSubtag === "mo") {
+    return "zh-hant";
+  }
+  return "zh-hans";
+}
+
 function normalizeBraveSearchLang(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
   }
   const trimmed = value.trim();
-  if (!trimmed) {
+  if (!trimmed || trimmed.length > MAX_BRAVE_LANG_TAG_LENGTH) {
     return undefined;
   }
-  const canonical = BRAVE_SEARCH_LANG_ALIASES[trimmed.toLowerCase()] ?? trimmed.toLowerCase();
+
+  const canonicalInput = canonicalizeChineseSearchLang(trimmed);
+  const canonical = BRAVE_SEARCH_LANG_ALIASES[canonicalInput] ?? canonicalInput;
   if (!BRAVE_SEARCH_LANG_CODES.has(canonical)) {
     return undefined;
   }
   return canonical;
+}
+
+function isDirectBraveSearchLangToken(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > MAX_BRAVE_LANG_TAG_LENGTH) {
+    return false;
+  }
+
+  const lowered = trimmed.toLowerCase();
+  const aliased = BRAVE_SEARCH_LANG_ALIASES[lowered] ?? lowered;
+  if (BRAVE_SEARCH_LANG_CODES.has(aliased)) {
+    return true;
+  }
+
+  // Accept canonical Chinese alias forms for swap recovery (`zh`, `zh-CN`,
+  // `zh-Hant-HK`, etc.) while still rejecting underscore formats like `zh_CN`.
+  if (/^zh(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$/.test(lowered)) {
+    return normalizeBraveSearchLang(lowered) !== undefined;
+  }
+
+  return false;
 }
 
 function normalizeBraveUiLang(value: string | undefined): string | undefined {
@@ -1069,7 +1151,13 @@ function normalizeBraveLanguageParams(params: { search_lang?: string; ui_lang?: 
   let uiLangCandidate = rawUiLang;
 
   // Recover common LLM mix-up: locale in search_lang + short code in ui_lang.
-  if (normalizeBraveUiLang(rawSearchLang) && normalizeBraveSearchLang(rawUiLang)) {
+  // Only swap when ui_lang already looks like a Brave search_lang token
+  // (including canonical Chinese aliases like `zh`/`zh-CN`, but not `zh_CN`).
+  if (
+    normalizeBraveUiLang(rawSearchLang) &&
+    normalizeBraveSearchLang(rawUiLang) &&
+    isDirectBraveSearchLangToken(rawUiLang)
+  ) {
     searchLangCandidate = rawUiLang;
     uiLangCandidate = rawSearchLang;
   }

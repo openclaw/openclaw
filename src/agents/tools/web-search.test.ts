@@ -122,9 +122,44 @@ describe("web_search brave language param normalization", () => {
       search_lang: "tr",
       ui_lang: "tr-TR",
     });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-TW", ui_lang: "zh-hant" })).toEqual({
+      search_lang: "zh-hant",
+      ui_lang: "zh-TW",
+    });
     expect(normalizeBraveLanguageParams({ search_lang: "EN", ui_lang: "en-us" })).toEqual({
       search_lang: "en",
       ui_lang: "en-US",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "en-US", ui_lang: "zh" })).toEqual({
+      search_lang: "zh-hans",
+      ui_lang: "en-US",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "en-US", ui_lang: "zh-CN" })).toEqual({
+      search_lang: "zh-hans",
+      ui_lang: "en-US",
+    });
+  });
+
+  it("normalizes Chinese locale variants to Brave-supported search_lang values", () => {
+    expect(normalizeBraveLanguageParams({ search_lang: "zh" })).toEqual({
+      search_lang: "zh-hans",
+      ui_lang: undefined,
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh_CN" })).toEqual({
+      search_lang: "zh-hans",
+      ui_lang: undefined,
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-Hans-CN" })).toEqual({
+      search_lang: "zh-hans",
+      ui_lang: undefined,
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-TW" })).toEqual({
+      search_lang: "zh-hant",
+      ui_lang: undefined,
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-Hant-HK" })).toEqual({
+      search_lang: "zh-hant",
+      ui_lang: undefined,
     });
   });
 
@@ -132,7 +167,31 @@ describe("web_search brave language param normalization", () => {
     expect(normalizeBraveLanguageParams({ search_lang: "en-US" })).toEqual({
       invalidField: "search_lang",
     });
+    expect(normalizeBraveLanguageParams({ search_lang: "en_GB" })).toEqual({
+      invalidField: "search_lang",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zhx" })).toEqual({
+      invalidField: "search_lang",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zhtw" })).toEqual({
+      invalidField: "search_lang",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-foobar" })).toEqual({
+      invalidField: "search_lang",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-hanst-cn" })).toEqual({
+      invalidField: "search_lang",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: `zh-${"a".repeat(80)}` })).toEqual({
+      invalidField: "search_lang",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-a-a-a-a-a" })).toEqual({
+      invalidField: "search_lang",
+    });
     expect(normalizeBraveLanguageParams({ ui_lang: "en" })).toEqual({
+      invalidField: "ui_lang",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-TW", ui_lang: "zh_CN" })).toEqual({
       invalidField: "ui_lang",
     });
   });
