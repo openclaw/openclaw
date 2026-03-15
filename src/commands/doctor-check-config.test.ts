@@ -52,7 +52,7 @@ describe("formatCheckConfigResults", () => {
     expect(lines[0]).not.toContain("\u2014");
   });
 
-  it("formats multiple results", () => {
+  it("formats multiple results including fallback validation", () => {
     const results: CheckConfigResult[] = [
       { category: "schema", label: "Config schema", status: "ok" },
       {
@@ -61,12 +61,34 @@ describe("formatCheckConfigResults", () => {
         status: "ok",
         message: "anthropic/claude-opus-4-6",
       },
+      {
+        category: "model",
+        label: "Model fallbacks",
+        status: "ok",
+        message: "2 fallbacks validated",
+      },
       { category: "tts", label: "TTS", status: "ok", message: "disabled" },
       { category: "channels", label: "Channel: telegram", status: "ok", message: "enabled" },
     ];
     const lines = formatCheckConfigResults(results);
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(5);
     expect(lines.every((line) => line.includes("\u2705"))).toBe(true);
+  });
+
+  it("formats fallback validation failure", () => {
+    const results: CheckConfigResult[] = [
+      {
+        category: "model",
+        label: "Model fallbacks",
+        status: "fail",
+        message: 'agents.defaults.model.fallbacks: could not parse fallback "kimi-coding/k2p5"',
+      },
+    ];
+    const lines = formatCheckConfigResults(results);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("\u274C");
+    expect(lines[0]).toContain("Model fallbacks");
+    expect(lines[0]).toContain("kimi-coding/k2p5");
   });
 
   it("returns empty array for empty results", () => {

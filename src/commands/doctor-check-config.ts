@@ -1,3 +1,4 @@
+import { resolveAgentModelFallbacksOverride } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
@@ -7,6 +8,7 @@ import {
 } from "../agents/model-selection.js";
 import { readConfigFileSnapshot, validateConfigObjectWithPlugins } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveTtsConfig, isTtsProviderConfigured, TTS_PROVIDERS } from "../tts/tts.js";
 
@@ -92,6 +94,7 @@ export async function runCheckConfig(): Promise<{
   // Layer 2: Subsystem dry-run checks
   checkModelResolution(cfg, results);
   await checkModelCatalog(cfg, results);
+  checkFallbackModels(cfg, results);
   checkTtsConfig(cfg, results);
   checkChannelConfig(cfg, results);
 
@@ -176,6 +179,13 @@ async function checkModelCatalog(cfg: OpenClawConfig, results: CheckConfigResult
           status: "ok",
         });
       }
+    } else {
+      results.push({
+        category: "model",
+        label: "Model catalog",
+        status: "warn",
+        message: "skipped — primary model ref could not be parsed",
+      });
     }
   } catch (err) {
     results.push({
@@ -183,6 +193,76 @@ async function checkModelCatalog(cfg: OpenClawConfig, results: CheckConfigResult
       label: "Model catalog",
       status: "warn",
       message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+function checkFallbackModels(cfg: OpenClawConfig, results: CheckConfigResult[]): void {
+  const { provider: defaultProvider } = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+
+  // Collect all fallback refs: global defaults + per-agent overrides
+  const globalFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+  const allFallbackSources: Array<{ source: string; fallbacks: string[] }> = [];
+
+  if (globalFallbacks.length > 0) {
+    allFallbackSources.push({
+      source: "agents.defaults.model.fallbacks",
+      fallbacks: globalFallbacks,
+    });
+  }
+
+  if (Array.isArray(cfg.agents?.list)) {
+    for (const agent of cfg.agents.list) {
+      if (!agent?.id) {
+        continue;
+      }
+      const override = resolveAgentModelFallbacksOverride(cfg, agent.id);
+      if (override && override.length > 0) {
+        allFallbackSources.push({
+          source: `agents.list[${agent.id}].model.fallbacks`,
+          fallbacks: override,
+        });
+      }
+    }
+  }
+
+  if (allFallbackSources.length === 0) {
+    results.push({
+      category: "model",
+      label: "Model fallbacks",
+      status: "ok",
+      message: "no fallbacks configured",
+    });
+    return;
+  }
+
+  let hasIssue = false;
+  for (const { source, fallbacks } of allFallbackSources) {
+    for (const fallback of fallbacks) {
+      const ref = parseModelRef(String(fallback), defaultProvider);
+      if (!ref) {
+        results.push({
+          category: "model",
+          label: "Model fallbacks",
+          status: "fail",
+          message: `${source}: could not parse fallback "${fallback}"`,
+        });
+        hasIssue = true;
+      }
+    }
+  }
+
+  if (!hasIssue) {
+    const totalCount = allFallbackSources.reduce((sum, s) => sum + s.fallbacks.length, 0);
+    results.push({
+      category: "model",
+      label: "Model fallbacks",
+      status: "ok",
+      message: `${totalCount} fallback${totalCount === 1 ? "" : "s"} validated`,
     });
   }
 }
@@ -205,25 +285,30 @@ function checkTtsConfig(cfg: OpenClawConfig, results: CheckConfigResult[]): void
     const configuredProvider = ttsConfig.provider;
     const isConfigured = isTtsProviderConfigured(ttsConfig, configuredProvider);
 
-    if (!isConfigured && configuredProvider !== "edge") {
+    if (!isConfigured) {
       // Check if any fallback provider is available
       const availableFallback = TTS_PROVIDERS.find(
         (p) => p !== configuredProvider && isTtsProviderConfigured(ttsConfig, p),
       );
+
+      const reason =
+        configuredProvider === "edge"
+          ? 'configured provider "edge" is disabled'
+          : `configured provider "${configuredProvider}" missing API key`;
 
       if (availableFallback) {
         results.push({
           category: "tts",
           label: "TTS provider",
           status: "warn",
-          message: `configured provider "${configuredProvider}" missing API key — will fall back to "${availableFallback}"`,
+          message: `${reason} — will fall back to "${availableFallback}"`,
         });
       } else {
         results.push({
           category: "tts",
           label: "TTS provider",
           status: "fail",
-          message: `configured provider "${configuredProvider}" missing API key and no fallback available`,
+          message: `${reason} and no fallback available`,
         });
       }
       return;
@@ -271,6 +356,7 @@ function checkChannelConfig(cfg: OpenClawConfig, results: CheckConfigResult[]): 
     return;
   }
 
+  let enabledCount = 0;
   for (const [channelId, channelConfig] of channelEntries) {
     if (!channelConfig || typeof channelConfig !== "object") {
       continue;
@@ -280,12 +366,21 @@ function checkChannelConfig(cfg: OpenClawConfig, results: CheckConfigResult[]): 
     if (!enabled) {
       continue;
     }
-
+    enabledCount++;
     results.push({
       category: "channels",
       label: `Channel: ${channelId}`,
       status: "ok",
       message: "enabled",
+    });
+  }
+
+  if (enabledCount === 0) {
+    results.push({
+      category: "channels",
+      label: "Channels",
+      status: "ok",
+      message: "all channels disabled",
     });
   }
 }
