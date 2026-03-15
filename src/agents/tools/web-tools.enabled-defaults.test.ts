@@ -1,6 +1,7 @@
 import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import * as authProfiles from "../auth-profiles.js";
 import { __testing as webSearchTesting } from "./web-search.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
 
@@ -68,7 +69,25 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
   });
 }
 
-function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+function createMinimaxSearchTool(minimaxConfig?: { apiKey?: string }) {
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: {
+            provider: "minimax",
+            ...(minimaxConfig ? { minimax: minimaxConfig } : {}),
+          },
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
+function createProviderSearchTool(
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "minimax",
+) {
   const searchConfig =
     provider === "perplexity"
       ? { provider, perplexity: { apiKey: "pplx-config-test" } } // pragma: allowlist secret
@@ -78,7 +97,9 @@ function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "g
           ? { provider, gemini: { apiKey: "gemini-config-test" } } // pragma: allowlist secret
           : provider === "kimi"
             ? { provider, kimi: { apiKey: "moonshot-config-test" } } // pragma: allowlist secret
-            : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
+            : provider === "minimax"
+              ? { provider, minimax: { apiKey: "minimax-config-test" } } // pragma: allowlist secret
+              : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
   return createWebSearchTool({
     config: {
       tools: {
@@ -123,7 +144,7 @@ function installPerplexityChatFetch(payload?: Record<string, unknown>) {
 }
 
 function createProviderSuccessPayload(
-  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "minimax",
 ) {
   if (provider === "brave") {
     return { web: { results: [] } };
@@ -142,6 +163,13 @@ function createProviderSuccessPayload(
           groundingMetadata: { groundingChunks: [] },
         },
       ],
+    };
+  }
+  if (provider === "minimax") {
+    return {
+      base_resp: { status_code: 0, status_msg: "ok" },
+      organic: [],
+      related_searches: [],
     };
   }
   return {
@@ -305,7 +333,7 @@ describe("web_search provider proxy dispatch", () => {
     global.fetch = priorFetch;
   });
 
-  it.each(["brave", "perplexity", "grok", "gemini", "kimi"] as const)(
+  it.each(["brave", "perplexity", "grok", "gemini", "kimi", "minimax"] as const)(
     "uses proxy-aware dispatcher for %s provider when HTTP_PROXY is configured",
     async (provider) => {
       vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
@@ -330,6 +358,7 @@ describe("web_search perplexity Search API", () => {
     vi.unstubAllEnvs();
     global.fetch = priorFetch;
     webSearchTesting.SEARCH_CACHE.clear();
+    webSearchTesting.MINIMAX_VERIFY_CACHE.clear();
   });
 
   it("uses Perplexity Search API when PERPLEXITY_API_KEY is set", async () => {
@@ -774,6 +803,318 @@ describe("web_search kimi provider", () => {
     expect(details.provider).toBe("kimi");
     expect(details.citations).toEqual(["https://openclaw.ai/docs"]);
     expect(details.content).toContain("final answer");
+  });
+});
+
+describe("web_search minimax provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    webSearchTesting.SEARCH_CACHE.clear();
+    webSearchTesting.MINIMAX_VERIFY_CACHE.clear();
+  });
+
+  it("returns a setup hint when MiniMax credentials are missing", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "");
+    const tool = createMinimaxSearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+    expect(result?.details).toMatchObject({ error: "missing_minimax_api_key" });
+  });
+
+  it("uses MINIMAX_OAUTH_TOKEN when MINIMAX_API_KEY is not set", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-token");
+    const mockFetch = installMockFetch({
+      base_resp: { status_code: 0, status_msg: "ok" },
+      organic: [{ title: "MiniMax", link: "https://example.com", snippet: "snippet" }],
+      related_searches: ["another query"],
+    });
+    const tool = createMinimaxSearchTool();
+    const result = await tool?.execute?.("call-1", { query: "minimax oauth" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    const verifyUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(verifyUrl.pathname).toBe("/v1/coding_plan/search");
+    const verifyRequestInit = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    const verifyBody = JSON.parse(
+      typeof verifyRequestInit?.body === "string" ? verifyRequestInit.body : "{}",
+    ) as {
+      q?: string;
+      count?: number;
+    };
+    expect(verifyBody).toMatchObject({ q: "ping", count: 1 });
+
+    const requestUrl = new URL(String(mockFetch.mock.calls[1]?.[0]));
+    expect(requestUrl.pathname).toBe("/v1/coding_plan/search");
+    const requestInit = mockFetch.mock.calls[1]?.[1] as RequestInit | undefined;
+    expect(requestInit?.method).toBe("POST");
+    const requestBody = JSON.parse(
+      typeof requestInit?.body === "string" ? requestInit.body : "{}",
+    ) as {
+      q?: string;
+      count?: number;
+    };
+    expect(requestBody).toMatchObject({ q: "minimax oauth", count: 5 });
+    expect(result?.details).toMatchObject({
+      provider: "minimax",
+      count: 1,
+      externalContent: { untrusted: true, source: "web_search", wrapped: true },
+    });
+    const relatedSearches = (result?.details as { relatedSearches?: string[] } | undefined)
+      ?.relatedSearches;
+    expect(relatedSearches?.[0]).toContain("another query");
+    const headers = requestInit?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBe("Bearer minimax-oauth-token");
+  });
+  it("reuses successful MiniMax probe for subsequent requests", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-token");
+    const mockFetch = installMockFetch({
+      base_resp: { status_code: 0, status_msg: "ok" },
+      organic: [{ title: "MiniMax", link: "https://example.com", snippet: "snippet" }],
+    });
+    const tool = createMinimaxSearchTool();
+    await tool?.execute?.("call-1", { query: "first-query" });
+    await tool?.execute?.("call-2", { query: "second-query" });
+
+    // first-query: probe + search ; second-query: search only
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    const firstRequestBody = (mockFetch.mock.calls[0]?.[1] as RequestInit | undefined)?.body;
+    const secondRequestBody = (mockFetch.mock.calls[1]?.[1] as RequestInit | undefined)?.body;
+    const thirdRequestBody = (mockFetch.mock.calls[2]?.[1] as RequestInit | undefined)?.body;
+    const firstBody = JSON.parse(
+      typeof firstRequestBody === "string" ? firstRequestBody : "{}",
+    ) as { q?: string };
+    const secondBody = JSON.parse(
+      typeof secondRequestBody === "string" ? secondRequestBody : "{}",
+    ) as { q?: string };
+    const thirdBody = JSON.parse(
+      typeof thirdRequestBody === "string" ? thirdRequestBody : "{}",
+    ) as { q?: string };
+    expect(firstBody.q).toBe("ping");
+    expect(secondBody.q).toBe("first-query");
+    expect(thirdBody.q).toBe("second-query");
+  });
+
+  it("falls back to MiniMax when Brave is configured but Brave key is missing", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-token");
+    const mockFetch = installMockFetch({
+      base_resp: { status_code: 0, status_msg: "ok" },
+      organic: [{ title: "MiniMax", link: "https://example.com", snippet: "snippet" }],
+    });
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", { query: "fallback to minimax" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const verifyUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const searchUrl = new URL(String(mockFetch.mock.calls[1]?.[0]));
+    expect(verifyUrl.pathname).toBe("/v1/coding_plan/search");
+    expect(searchUrl.pathname).toBe("/v1/coding_plan/search");
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("minimax");
+  });
+
+  it("does not fallback away from Brave when Brave-specific filter args are provided", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-token");
+    const mockFetch = installMockFetch({
+      base_resp: { status_code: 0, status_msg: "ok" },
+      organic: [{ title: "MiniMax", link: "https://example.com", snippet: "snippet" }],
+    });
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", { query: "filter call", search_lang: "en" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "missing_brave_api_key" });
+  });
+
+  it("falls back to another provider when MiniMax verify fails during Brave fallback", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-token");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      if (mockFetch.mock.calls.length === 1) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              base_resp: { status_code: 401, status_msg: "forbidden" },
+              organic: [],
+            }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            candidates: [
+              {
+                content: { parts: [{ text: "gemini ok" }] },
+                groundingMetadata: { groundingChunks: [] },
+              },
+            ],
+          }),
+      } as Response);
+    });
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              gemini: {
+                apiKey: "gemini-config-test", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", { query: "fallback to gemini" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const verifyUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const fallbackUrl = new URL(String(mockFetch.mock.calls[1]?.[0]));
+    expect(verifyUrl.pathname).toBe("/v1/coding_plan/search");
+    expect(fallbackUrl.hostname).toBe("generativelanguage.googleapis.com");
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("gemini");
+  });
+
+  it("shows MiniMax subscription hint only when OAuth credentials are present", async () => {
+    const failingProbePayload = {
+      base_resp: { status_code: 401, status_msg: "forbidden" },
+      organic: [],
+    };
+
+    vi.stubEnv("BRAVE_API_KEY", "");
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-token");
+    installMockFetch(failingProbePayload);
+    const oauthTool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const oauthResult = await oauthTool?.execute?.("call-oauth", { query: "probe fail oauth" });
+    const oauthMessage = String(
+      (oauthResult?.details as { message?: string } | undefined)?.message ?? "",
+    );
+    expect(oauthResult?.details).toMatchObject({ error: "minimax_search_unavailable" });
+    expect(oauthMessage).toContain("Coding Plan subscription/entitlement");
+
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "");
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-api-key");
+    installMockFetch(failingProbePayload);
+    const apiKeyTool = createMinimaxSearchTool();
+    const apiKeyResult = await apiKeyTool?.execute?.("call-api-key", { query: "probe fail key" });
+    const apiKeyMessage = String(
+      (apiKeyResult?.details as { message?: string } | undefined)?.message ?? "",
+    );
+    expect(apiKeyResult?.details).toMatchObject({ error: "minimax_search_unavailable" });
+    expect(apiKeyMessage).not.toContain("Coding Plan subscription/entitlement");
+  });
+
+  it("tries the next MiniMax auth profile when the first entitlement probe fails", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "");
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
+      version: 1,
+      profiles: {
+        "minimax-portal:first": {
+          type: "token",
+          provider: "minimax-portal",
+          token: "first-token", // pragma: allowlist secret
+        },
+        "minimax-cn:second": {
+          type: "token",
+          provider: "minimax-cn",
+          token: "second-token", // pragma: allowlist secret
+        },
+      },
+      order: {},
+      usageStats: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
+    vi.spyOn(authProfiles, "resolveAuthProfileOrder").mockImplementation(({ provider }) => {
+      if (provider === "minimax-portal") {
+        return ["minimax-portal:first"];
+      }
+      if (provider === "minimax-cn") {
+        return ["minimax-cn:second"];
+      }
+      return [];
+    });
+
+    const mockFetch = vi.fn(async (_input?: unknown, init?: unknown) => {
+      const request = init as RequestInit | undefined;
+      const headers = request?.headers as Record<string, string> | undefined;
+      const auth = headers?.Authorization ?? "";
+      if (auth.includes("first-token")) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              base_resp: { status_code: 401, status_msg: "forbidden" },
+              organic: [],
+            }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            base_resp: { status_code: 0, status_msg: "ok" },
+            organic: [{ title: "MiniMax", link: "https://example.com", snippet: "snippet" }],
+          }),
+      } as Response);
+    });
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const tool = createMinimaxSearchTool();
+    const result = await tool?.execute?.("call-1", { query: "probe profile fallback" });
+
+    expect(mockFetch.mock.calls.length).toBe(3);
+    const thirdUrl = new URL(String(mockFetch.mock.calls[2]?.[0]));
+    const thirdRequest = mockFetch.mock.calls[2]?.[1] as RequestInit | undefined;
+    const thirdHeaders = thirdRequest?.headers as Record<string, string> | undefined;
+    expect(thirdUrl.host).toBe("api.minimaxi.com");
+    expect(thirdHeaders?.Authorization).toBe("Bearer second-token");
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("minimax");
   });
 });
 

@@ -1,4 +1,11 @@
+import {
+  type AuthProfileStore,
+  loadAuthProfileStoreForSecretsRuntime,
+  resolveAuthProfileOrder,
+  type AuthProfileCredential,
+} from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
@@ -10,15 +17,22 @@ import {
   type SecretDefaults,
 } from "./runtime-shared.js";
 
-const WEB_SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const WEB_SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "minimax", "perplexity"] as const;
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
+const MINIMAX_AUTH_PROFILE_PROVIDERS = ["minimax-portal", "minimax-cn", "minimax"] as const;
+type MinimaxAuthProfileProvider = (typeof MINIMAX_AUTH_PROFILE_PROVIDERS)[number];
+const MINIMAX_DEFAULT_API_HOST_BY_PROVIDER: Record<MinimaxAuthProfileProvider, string> = {
+  minimax: "https://api.minimax.io",
+  "minimax-portal": "https://api.minimax.io",
+  "minimax-cn": "https://api.minimaxi.com",
+};
 
 type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
 
-type SecretResolutionSource = "config" | "secretRef" | "env" | "missing"; // pragma: allowlist secret
+type SecretResolutionSource = "config" | "secretRef" | "env" | "auth_profile" | "missing"; // pragma: allowlist secret
 type RuntimeWebProviderSource = "configured" | "auto-detect" | "none";
 
 export type RuntimeWebDiagnosticCode =
@@ -40,6 +54,7 @@ export type RuntimeWebSearchMetadata = {
   providerSource: RuntimeWebProviderSource;
   selectedProvider?: WebSearchProvider;
   selectedProviderKeySource?: SecretResolutionSource;
+  minimaxApiHost?: string;
   perplexityTransport?: "search_api" | "chat_completions";
   diagnostics: RuntimeWebDiagnostic[];
 };
@@ -73,6 +88,8 @@ type SecretResolutionResult = {
   fallbackUsedAfterRefFailure: boolean;
 };
 
+type AuthStoreLoader = (agentDir?: string) => AuthProfileStore;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -87,6 +104,7 @@ function normalizeProvider(value: unknown): WebSearchProvider | undefined {
     normalized === "gemini" ||
     normalized === "grok" ||
     normalized === "kimi" ||
+    normalized === "minimax" ||
     normalized === "perplexity"
   ) {
     return normalized;
@@ -329,6 +347,9 @@ function envVarsForProvider(provider: WebSearchProvider): string[] {
   if (provider === "kimi") {
     return ["KIMI_API_KEY", "MOONSHOT_API_KEY"];
   }
+  if (provider === "minimax") {
+    return ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"];
+  }
   return ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"];
 }
 
@@ -346,6 +367,261 @@ function resolveProviderKeyValue(
   return scoped.apiKey;
 }
 
+function resolveMinimaxBaseUrlValue(search: Record<string, unknown>): unknown {
+  const scoped = search["minimax"];
+  if (!isRecord(scoped)) {
+    return undefined;
+  }
+  return scoped.baseUrl;
+}
+
+function setResolvedWebSearchMinimaxBaseUrl(params: {
+  resolvedConfig: OpenClawConfig;
+  value: string;
+}): void {
+  const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
+  const web = ensureObject(tools, "web");
+  const search = ensureObject(web, "search");
+  const minimax = ensureObject(search, "minimax");
+  minimax.baseUrl = params.value;
+}
+
+function normalizeUrlOrigin(raw: string | undefined): string | undefined {
+  const trimmed = normalizeSecretInput(raw);
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    // Not a full URL yet; retry below by prefixing "https://".
+  }
+  try {
+    return new URL(`https://${trimmed}`).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveMinimaxApiHostFromProfile(params: {
+  sourceConfig: OpenClawConfig;
+  profileProvider: MinimaxAuthProfileProvider;
+}): string {
+  const providers = isRecord(params.sourceConfig.models?.providers)
+    ? (params.sourceConfig.models.providers as Record<string, unknown>)
+    : undefined;
+  const provider = providers?.[params.profileProvider];
+  if (isRecord(provider)) {
+    const configured = normalizeUrlOrigin(
+      typeof provider.baseUrl === "string" ? provider.baseUrl : undefined,
+    );
+    if (configured) {
+      return configured;
+    }
+  }
+  return MINIMAX_DEFAULT_API_HOST_BY_PROVIDER[params.profileProvider];
+}
+
+function resolveMinimaxProfileProviderFromHost(
+  host?: string,
+): MinimaxAuthProfileProvider | undefined {
+  const origin = normalizeUrlOrigin(host);
+  if (!origin) {
+    return undefined;
+  }
+  if (origin.includes("minimaxi.com")) {
+    return "minimax-cn";
+  }
+  if (origin.includes("minimax.io")) {
+    return "minimax-portal";
+  }
+  return undefined;
+}
+
+function resolveMinimaxAuthProfileProviderPriority(params: {
+  sourceConfig: OpenClawConfig;
+  context: ResolverContext;
+}): MinimaxAuthProfileProvider[] {
+  const search = isRecord(params.sourceConfig.tools?.web?.search)
+    ? (params.sourceConfig.tools?.web?.search as Record<string, unknown>)
+    : undefined;
+  const minimax = isRecord(search?.minimax) ? search.minimax : undefined;
+  const searchHost = typeof minimax?.baseUrl === "string" ? minimax.baseUrl : undefined;
+  const runtimeHost = normalizeSecretInput(params.context.env.MINIMAX_API_HOST);
+  const preferredFromHost =
+    resolveMinimaxProfileProviderFromHost(searchHost) ??
+    resolveMinimaxProfileProviderFromHost(runtimeHost);
+  if (preferredFromHost) {
+    return [
+      preferredFromHost,
+      ...MINIMAX_AUTH_PROFILE_PROVIDERS.filter((provider) => provider !== preferredFromHost),
+    ];
+  }
+
+  const modelProviderPrefix = resolveAgentModelPrimaryValue(
+    params.sourceConfig.agents?.defaults?.model,
+  )
+    ?.trim()
+    .toLowerCase()
+    .split("/")[0];
+  if (
+    modelProviderPrefix &&
+    MINIMAX_AUTH_PROFILE_PROVIDERS.includes(modelProviderPrefix as MinimaxAuthProfileProvider)
+  ) {
+    const preferred = modelProviderPrefix as MinimaxAuthProfileProvider;
+    return [
+      preferred,
+      ...MINIMAX_AUTH_PROFILE_PROVIDERS.filter((provider) => provider !== preferred),
+    ];
+  }
+
+  return [...MINIMAX_AUTH_PROFILE_PROVIDERS];
+}
+
+export async function resolveMinimaxApiKeyFromAuthProfiles(params: {
+  sourceConfig: OpenClawConfig;
+  context: ResolverContext;
+  loadAuthStore?: AuthStoreLoader;
+}): Promise<
+  { apiKey: string; profileProvider: MinimaxAuthProfileProvider; apiHost: string } | undefined
+> {
+  const matches = await resolveMinimaxApiKeysFromAuthProfiles(params);
+  return matches[0];
+}
+
+export async function resolveMinimaxApiKeysFromAuthProfiles(params: {
+  sourceConfig: OpenClawConfig;
+  context: ResolverContext;
+  loadAuthStore?: AuthStoreLoader;
+}): Promise<
+  Array<{ apiKey: string; profileProvider: MinimaxAuthProfileProvider; apiHost: string }>
+> {
+  const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
+  let store: AuthProfileStore;
+  try {
+    store = loadAuthStore(params.context.env.OPENCLAW_AGENT_DIR);
+  } catch {
+    return [];
+  }
+
+  const matches: Array<{
+    apiKey: string;
+    profileProvider: MinimaxAuthProfileProvider;
+    apiHost: string;
+  }> = [];
+  const providerPriority = resolveMinimaxAuthProfileProviderPriority({
+    sourceConfig: params.sourceConfig,
+    context: params.context,
+  });
+  const visited = new Set<string>();
+  for (const provider of providerPriority) {
+    const profileIds = resolveAuthProfileOrder({
+      cfg: params.sourceConfig,
+      store,
+      provider,
+    });
+    for (const profileId of profileIds) {
+      if (visited.has(profileId)) {
+        continue;
+      }
+      visited.add(profileId);
+      try {
+        const credential = store.profiles[profileId];
+        const value = await resolveMinimaxCredentialValueReadOnly({
+          credential,
+          sourceConfig: params.sourceConfig,
+          context: params.context,
+        });
+        if (value) {
+          matches.push({
+            apiKey: value,
+            profileProvider: provider,
+            apiHost: resolveMinimaxApiHostFromProfile({
+              sourceConfig: params.sourceConfig,
+              profileProvider: provider,
+            }),
+          });
+        }
+      } catch {
+        // Ignore profile-specific failures and continue probing next profile.
+      }
+    }
+  }
+
+  return matches;
+}
+
+async function resolveProfileSecretValueReadOnly(params: {
+  sourceConfig: OpenClawConfig;
+  context: ResolverContext;
+  value: unknown;
+  refValue?: unknown;
+}): Promise<string | undefined> {
+  const { ref } = resolveSecretInputRef({
+    value: params.value,
+    refValue: params.refValue,
+    defaults: params.sourceConfig.secrets?.defaults,
+  });
+  if (!ref) {
+    return normalizeSecretInput(params.value);
+  }
+
+  try {
+    const resolved = await resolveSecretRefValues([ref], {
+      config: params.sourceConfig,
+      env: params.context.env,
+      cache: params.context.cache,
+    });
+    const resolvedValue = resolved.get(secretRefKey(ref));
+    return typeof resolvedValue === "string" ? normalizeSecretInput(resolvedValue) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveMinimaxCredentialValueReadOnly(params: {
+  credential: AuthProfileCredential | undefined;
+  sourceConfig: OpenClawConfig;
+  context: ResolverContext;
+}): Promise<string | undefined> {
+  const credential = params.credential;
+  if (!credential) {
+    return undefined;
+  }
+
+  if (credential.type === "oauth") {
+    const expires = typeof credential.expires === "number" ? credential.expires : undefined;
+    if (expires === undefined || Date.now() >= expires) {
+      return undefined;
+    }
+    return normalizeSecretInput(credential.access);
+  }
+
+  if (credential.type === "token") {
+    const expires = typeof credential.expires === "number" ? credential.expires : undefined;
+    if (expires !== undefined && Date.now() >= expires) {
+      return undefined;
+    }
+    return resolveProfileSecretValueReadOnly({
+      sourceConfig: params.sourceConfig,
+      context: params.context,
+      value: credential.token,
+      refValue: credential.tokenRef,
+    });
+  }
+
+  if (credential.type === "api_key") {
+    return resolveProfileSecretValueReadOnly({
+      sourceConfig: params.sourceConfig,
+      context: params.context,
+      value: credential.key,
+      refValue: credential.keyRef,
+    });
+  }
+
+  return undefined;
+}
+
 function hasConfiguredSecretRef(value: unknown, defaults: SecretDefaults | undefined): boolean {
   return Boolean(
     resolveSecretInputRef({
@@ -359,6 +635,7 @@ export async function resolveRuntimeWebTools(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;
   context: ResolverContext;
+  loadAuthStore?: AuthStoreLoader;
 }): Promise<RuntimeWebToolsMetadata> {
   const defaults = params.sourceConfig.secrets?.defaults;
   const diagnostics: RuntimeWebDiagnostic[] = [];
@@ -398,7 +675,21 @@ export async function resolveRuntimeWebTools(params: {
   }
 
   if (searchEnabled && search) {
-    const candidates = configuredProvider ? [configuredProvider] : [...WEB_SEARCH_PROVIDERS];
+    const runtimeMinimaxApiHost = normalizeUrlOrigin(params.context.env.MINIMAX_API_HOST);
+    if (runtimeMinimaxApiHost) {
+      searchMetadata.minimaxApiHost = runtimeMinimaxApiHost;
+      setResolvedWebSearchMinimaxBaseUrl({
+        resolvedConfig: params.resolvedConfig,
+        value: runtimeMinimaxApiHost,
+      });
+    }
+
+    const candidates = configuredProvider
+      ? [
+          configuredProvider,
+          ...WEB_SEARCH_PROVIDERS.filter((provider) => provider !== configuredProvider),
+        ]
+      : [...WEB_SEARCH_PROVIDERS];
     const unresolvedWithoutFallback: Array<{
       provider: WebSearchProvider;
       path: string;
@@ -412,7 +703,7 @@ export async function resolveRuntimeWebTools(params: {
       const path =
         provider === "brave" ? "tools.web.search.apiKey" : `tools.web.search.${provider}.apiKey`;
       const value = resolveProviderKeyValue(search, provider);
-      const resolution = await resolveSecretInputWithEnvFallback({
+      let resolution = await resolveSecretInputWithEnvFallback({
         sourceConfig: params.sourceConfig,
         context: params.context,
         defaults,
@@ -420,6 +711,30 @@ export async function resolveRuntimeWebTools(params: {
         path,
         envVars: envVarsForProvider(provider),
       });
+
+      if (provider === "minimax" && !resolution.value) {
+        const authProfileMatch = await resolveMinimaxApiKeyFromAuthProfiles({
+          sourceConfig: params.sourceConfig,
+          context: params.context,
+          loadAuthStore: params.loadAuthStore,
+        });
+        if (authProfileMatch) {
+          resolution = {
+            ...resolution,
+            value: authProfileMatch.apiKey,
+            source: "auth_profile",
+          };
+          const hasConfiguredMinimaxBaseUrl = Boolean(
+            normalizeSecretInput(resolveMinimaxBaseUrlValue(search)),
+          );
+          if (!hasConfiguredMinimaxBaseUrl) {
+            setResolvedWebSearchMinimaxBaseUrl({
+              resolvedConfig: params.resolvedConfig,
+              value: authProfileMatch.apiHost,
+            });
+          }
+        }
+      }
 
       if (resolution.secretRefConfigured && resolution.fallbackUsedAfterRefFailure) {
         const diagnostic: RuntimeWebDiagnostic = {
@@ -446,19 +761,6 @@ export async function resolveRuntimeWebTools(params: {
         });
       }
 
-      if (configuredProvider) {
-        selectedProvider = provider;
-        selectedResolution = resolution;
-        if (resolution.value) {
-          setResolvedWebSearchApiKey({
-            resolvedConfig: params.resolvedConfig,
-            provider,
-            value: resolution.value,
-          });
-        }
-        break;
-      }
-
       if (resolution.value) {
         selectedProvider = provider;
         selectedResolution = resolution;
@@ -471,7 +773,32 @@ export async function resolveRuntimeWebTools(params: {
       }
     }
 
-    const failUnresolvedSearchNoFallback = (unresolved: { path: string; reason: string }) => {
+    const unresolvedConfiguredProvider = configuredProvider
+      ? unresolvedWithoutFallback.find((entry) => entry.provider === configuredProvider)
+      : undefined;
+    if (unresolvedConfiguredProvider) {
+      const diagnostic: RuntimeWebDiagnostic = {
+        code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+        message: unresolvedConfiguredProvider.reason,
+        path: unresolvedConfiguredProvider.path,
+      };
+      diagnostics.push(diagnostic);
+      searchMetadata.diagnostics.push(diagnostic);
+      pushWarning(params.context, {
+        code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+        path: unresolvedConfiguredProvider.path,
+        message: unresolvedConfiguredProvider.reason,
+      });
+      throw new Error(
+        `[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK] ${unresolvedConfiguredProvider.reason}`,
+      );
+    }
+
+    if (!selectedProvider && unresolvedWithoutFallback.length > 0) {
+      const unresolved = configuredProvider
+        ? (unresolvedWithoutFallback.find((entry) => entry.provider === configuredProvider) ??
+          unresolvedWithoutFallback[0])
+        : unresolvedWithoutFallback[0];
       const diagnostic: RuntimeWebDiagnostic = {
         code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
         message: unresolved.reason,
@@ -485,27 +812,24 @@ export async function resolveRuntimeWebTools(params: {
         message: unresolved.reason,
       });
       throw new Error(`[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK] ${unresolved.reason}`);
-    };
+    }
 
-    if (configuredProvider) {
-      const unresolved = unresolvedWithoutFallback[0];
-      if (unresolved) {
-        failUnresolvedSearchNoFallback(unresolved);
-      }
-    } else {
-      if (!selectedProvider && unresolvedWithoutFallback.length > 0) {
-        failUnresolvedSearchNoFallback(unresolvedWithoutFallback[0]);
-      }
-
-      if (selectedProvider) {
-        const diagnostic: RuntimeWebDiagnostic = {
-          code: "WEB_SEARCH_AUTODETECT_SELECTED",
-          message: `tools.web.search auto-detected provider "${selectedProvider}" from available credentials.`,
-          path: "tools.web.search.provider",
-        };
-        diagnostics.push(diagnostic);
-        searchMetadata.diagnostics.push(diagnostic);
-      }
+    if (configuredProvider && selectedProvider && selectedProvider !== configuredProvider) {
+      const diagnostic: RuntimeWebDiagnostic = {
+        code: "WEB_SEARCH_AUTODETECT_SELECTED",
+        message: `tools.web.search.provider is "${configuredProvider}" but no usable credentials were found. Falling back to "${selectedProvider}".`,
+        path: "tools.web.search.provider",
+      };
+      diagnostics.push(diagnostic);
+      searchMetadata.diagnostics.push(diagnostic);
+    } else if (!configuredProvider && selectedProvider) {
+      const diagnostic: RuntimeWebDiagnostic = {
+        code: "WEB_SEARCH_AUTODETECT_SELECTED",
+        message: `tools.web.search auto-detected provider "${selectedProvider}" from available credentials.`,
+        path: "tools.web.search.provider",
+      };
+      diagnostics.push(diagnostic);
+      searchMetadata.diagnostics.push(diagnostic);
     }
 
     if (selectedProvider) {
@@ -525,7 +849,7 @@ export async function resolveRuntimeWebTools(params: {
     }
   }
 
-  if (searchEnabled && search && !configuredProvider && searchMetadata.selectedProvider) {
+  if (searchEnabled && search && searchMetadata.selectedProvider) {
     for (const provider of WEB_SEARCH_PROVIDERS) {
       if (provider === searchMetadata.selectedProvider) {
         continue;
@@ -539,7 +863,7 @@ export async function resolveRuntimeWebTools(params: {
       pushInactiveSurfaceWarning({
         context: params.context,
         path,
-        details: `tools.web.search auto-detected provider is "${searchMetadata.selectedProvider}".`,
+        details: `tools.web.search selected provider is "${searchMetadata.selectedProvider}".`,
       });
     }
   } else if (search && !searchEnabled) {
@@ -558,7 +882,7 @@ export async function resolveRuntimeWebTools(params: {
     }
   }
 
-  if (searchEnabled && search && configuredProvider) {
+  if (searchEnabled && search && configuredProvider && !searchMetadata.selectedProvider) {
     for (const provider of WEB_SEARCH_PROVIDERS) {
       if (provider === configuredProvider) {
         continue;

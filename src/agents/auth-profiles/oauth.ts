@@ -114,6 +114,7 @@ type ResolveApiKeyForProfileParams = {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
+  env?: NodeJS.ProcessEnv;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
@@ -262,6 +263,7 @@ async function resolveProfileSecretString(params: {
   valueRef: unknown;
   refDefaults: SecretDefaults | undefined;
   configForRefResolution: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
   cache: SecretRefResolveCache;
   inlineFailureMessage: string;
   refFailureMessage: string;
@@ -273,7 +275,7 @@ async function resolveProfileSecretString(params: {
       try {
         resolvedValue = await resolveSecretRefString(inlineRef, {
           config: params.configForRefResolution,
-          env: process.env,
+          env: params.env,
           cache: params.cache,
         });
       } catch (err) {
@@ -291,7 +293,7 @@ async function resolveProfileSecretString(params: {
     try {
       resolvedValue = await resolveSecretRefString(explicitRef, {
         config: params.configForRefResolution,
-        env: process.env,
+        env: params.env,
         cache: params.cache,
       });
     } catch (err) {
@@ -330,6 +332,7 @@ export async function resolveApiKeyForProfile(
   const refResolveCache: SecretRefResolveCache = {};
   const configForRefResolution = cfg ?? loadConfig();
   const refDefaults = configForRefResolution.secrets?.defaults;
+  const env = params.env ?? process.env;
 
   if (cred.type === "api_key") {
     const key = await resolveProfileSecretString({
@@ -339,6 +342,7 @@ export async function resolveApiKeyForProfile(
       valueRef: cred.keyRef,
       refDefaults,
       configForRefResolution,
+      env,
       cache: refResolveCache,
       inlineFailureMessage: "failed to resolve inline auth profile api_key ref",
       refFailureMessage: "failed to resolve auth profile api_key ref",
@@ -360,6 +364,7 @@ export async function resolveApiKeyForProfile(
       valueRef: cred.tokenRef,
       refDefaults,
       configForRefResolution,
+      env,
       cache: refResolveCache,
       inlineFailureMessage: "failed to resolve inline auth profile token ref",
       refFailureMessage: "failed to resolve auth profile token ref",
