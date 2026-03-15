@@ -1,4 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AccessPolicyConfig } from "../config/types.tools.js";
+import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
   addAllowlistEntry,
   type ExecAsk,
@@ -13,22 +15,20 @@ import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { logInfo } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
+import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
 import {
-  buildDefaultExecApprovalRequestArgs,
-  buildExecApprovalFollowupTarget,
-  buildExecApprovalPendingToolResult,
-  createExecApprovalDecisionState,
   createAndRegisterDefaultExecApprovalRequest,
+  resolveBaseExecApprovalDecision,
   resolveApprovalDecisionOrUndefined,
   resolveExecHostApprovalContext,
-  sendExecApprovalFollowupResult,
 } from "./bash-tools.exec-host-shared.js";
 import {
+  buildApprovalPendingMessage,
   DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
   normalizeNotifyOutput,
@@ -60,6 +60,7 @@ export type ProcessGatewayAllowlistParams = {
   maxOutput: number;
   pendingMaxOutput: number;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  permissions?: AccessPolicyConfig;
 };
 
 export type ProcessGatewayAllowlistResult = {
@@ -141,28 +142,6 @@ export async function processGatewayAllowlist(
   }
 
   if (requiresAsk) {
-    const requestArgs = buildDefaultExecApprovalRequestArgs({
-      warnings: params.warnings,
-      approvalRunningNoticeMs: params.approvalRunningNoticeMs,
-      createApprovalSlug,
-      turnSourceChannel: params.turnSourceChannel,
-      turnSourceAccountId: params.turnSourceAccountId,
-    });
-    const registerGatewayApproval = async (approvalId: string) =>
-      await registerExecApprovalRequestForHostOrThrow({
-        approvalId,
-        command: params.command,
-        workdir: params.workdir,
-        host: "gateway",
-        security: hostSecurity,
-        ask: hostAsk,
-        ...buildExecApprovalRequesterContext({
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-        }),
-        resolvedPath: allowlistEval.segments[0]?.resolution?.resolvedPath,
-        ...buildExecApprovalTurnSourceContext(params),
-      });
     const {
       approvalId,
       approvalSlug,
@@ -173,46 +152,57 @@ export async function processGatewayAllowlist(
       sentApproverDms,
       unavailableReason,
     } = await createAndRegisterDefaultExecApprovalRequest({
-      ...requestArgs,
-      register: registerGatewayApproval,
+      warnings: params.warnings,
+      approvalRunningNoticeMs: params.approvalRunningNoticeMs,
+      createApprovalSlug,
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceAccountId: params.turnSourceAccountId,
+      register: async (approvalId) =>
+        await registerExecApprovalRequestForHostOrThrow({
+          approvalId,
+          command: params.command,
+          workdir: params.workdir,
+          host: "gateway",
+          security: hostSecurity,
+          ask: hostAsk,
+          ...buildExecApprovalRequesterContext({
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+          }),
+          resolvedPath: allowlistEval.segments[0]?.resolution?.resolvedPath,
+          ...buildExecApprovalTurnSourceContext(params),
+        }),
     });
     const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
-    const followupTarget = buildExecApprovalFollowupTarget({
-      approvalId,
-      sessionKey: params.notifySessionKey,
-      turnSourceChannel: params.turnSourceChannel,
-      turnSourceTo: params.turnSourceTo,
-      turnSourceAccountId: params.turnSourceAccountId,
-      turnSourceThreadId: params.turnSourceThreadId,
-    });
 
     void (async () => {
       const decision = await resolveApprovalDecisionOrUndefined({
         approvalId,
         preResolvedDecision,
         onFailure: () =>
-          void sendExecApprovalFollowupResult(
-            followupTarget,
-            `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
-          ),
+          void sendExecApprovalFollowup({
+            approvalId,
+            sessionKey: params.notifySessionKey,
+            turnSourceChannel: params.turnSourceChannel,
+            turnSourceTo: params.turnSourceTo,
+            turnSourceAccountId: params.turnSourceAccountId,
+            turnSourceThreadId: params.turnSourceThreadId,
+            resultText: `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
+          }),
       });
       if (decision === undefined) {
         return;
       }
 
-      const {
-        baseDecision,
-        approvedByAsk: initialApprovedByAsk,
-        deniedReason: initialDeniedReason,
-      } = createExecApprovalDecisionState({
+      const baseDecision = resolveBaseExecApprovalDecision({
         decision,
         askFallback,
         obfuscationDetected: obfuscation.detected,
       });
-      let approvedByAsk = initialApprovedByAsk;
-      let deniedReason = initialDeniedReason;
+      let approvedByAsk = baseDecision.approvedByAsk;
+      let deniedReason = baseDecision.deniedReason;
 
       if (baseDecision.timedOut && askFallback === "allowlist") {
         if (!analysisOk || !allowlistSatisfied) {
@@ -244,10 +234,15 @@ export async function processGatewayAllowlist(
       }
 
       if (deniedReason) {
-        await sendExecApprovalFollowupResult(
-          followupTarget,
-          `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`,
-        );
+        await sendExecApprovalFollowup({
+          approvalId,
+          sessionKey: params.notifySessionKey,
+          turnSourceChannel: params.turnSourceChannel,
+          turnSourceTo: params.turnSourceTo,
+          turnSourceAccountId: params.turnSourceAccountId,
+          turnSourceThreadId: params.turnSourceThreadId,
+          resultText: `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`,
+        }).catch(() => {});
         return;
       }
 
@@ -271,12 +266,18 @@ export async function processGatewayAllowlist(
           scopeKey: params.scopeKey,
           sessionKey: params.notifySessionKey,
           timeoutSec: effectiveTimeout,
+          permissions: params.permissions,
         });
       } catch {
-        await sendExecApprovalFollowupResult(
-          followupTarget,
-          `Exec denied (gateway id=${approvalId}, spawn-failed): ${params.command}`,
-        );
+        await sendExecApprovalFollowup({
+          approvalId,
+          sessionKey: params.notifySessionKey,
+          turnSourceChannel: params.turnSourceChannel,
+          turnSourceTo: params.turnSourceTo,
+          turnSourceAccountId: params.turnSourceAccountId,
+          turnSourceThreadId: params.turnSourceThreadId,
+          resultText: `Exec denied (gateway id=${approvalId}, spawn-failed): ${params.command}`,
+        }).catch(() => {});
         return;
       }
 
@@ -290,25 +291,70 @@ export async function processGatewayAllowlist(
       const summary = output
         ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
         : `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
-      await sendExecApprovalFollowupResult(followupTarget, summary);
+      await sendExecApprovalFollowup({
+        approvalId,
+        sessionKey: params.notifySessionKey,
+        turnSourceChannel: params.turnSourceChannel,
+        turnSourceTo: params.turnSourceTo,
+        turnSourceAccountId: params.turnSourceAccountId,
+        turnSourceThreadId: params.turnSourceThreadId,
+        resultText: summary,
+      }).catch(() => {});
     })();
 
     return {
-      pendingResult: buildExecApprovalPendingToolResult({
-        host: "gateway",
-        command: params.command,
-        cwd: params.workdir,
-        warningText,
-        approvalId,
-        approvalSlug,
-        expiresAtMs,
-        initiatingSurface,
-        sentApproverDms,
-        unavailableReason,
-      }),
+      pendingResult: {
+        content: [
+          {
+            type: "text",
+            text:
+              unavailableReason !== null
+                ? (buildExecApprovalUnavailableReplyPayload({
+                    warningText,
+                    reason: unavailableReason,
+                    channelLabel: initiatingSurface.channelLabel,
+                    sentApproverDms,
+                  }).text ?? "")
+                : buildApprovalPendingMessage({
+                    warningText,
+                    approvalSlug,
+                    approvalId,
+                    command: params.command,
+                    cwd: params.workdir,
+                    host: "gateway",
+                  }),
+          },
+        ],
+        details:
+          unavailableReason !== null
+            ? ({
+                status: "approval-unavailable",
+                reason: unavailableReason,
+                channelLabel: initiatingSurface.channelLabel,
+                sentApproverDms,
+                host: "gateway",
+                command: params.command,
+                cwd: params.workdir,
+                warningText,
+              } satisfies ExecToolDetails)
+            : ({
+                status: "approval-pending",
+                approvalId,
+                approvalSlug,
+                expiresAtMs,
+                host: "gateway",
+                command: params.command,
+                cwd: params.workdir,
+                warningText,
+              } satisfies ExecToolDetails),
+      },
     };
   }
 
+  // Allowlist and path-level sandboxing (seatbelt/bwrap) are orthogonal controls:
+  // allowlist governs which binaries may run; seatbelt governs which paths they touch.
+  // Both must be enforced independently — having seatbelt active does not exempt a
+  // command from passing allowlist analysis.
   if (hostSecurity === "allowlist" && (!analysisOk || !allowlistSatisfied)) {
     throw new Error("exec denied: allowlist miss");
   }

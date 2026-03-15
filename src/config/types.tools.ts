@@ -3,6 +3,39 @@ import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { SecretInput } from "./types.secrets.js";
 
+/** Three-character permission string: `rwx`, `r--`, `rw-`, `---`, etc. */
+export type PermStr = string;
+
+/** Per-script policy entry — allows narrower permissions for a specific script binary. */
+export type ScriptPolicyEntry = {
+  /** Extra path rules for this script, merged over the shared script policy. */
+  policy?: Record<string, PermStr>;
+  /** SHA-256 hex of the script file for integrity checking (best-effort, not atomic). */
+  sha256?: string;
+};
+
+/**
+ * Filesystem RWX access-policy config loaded from `access-policy.json`.
+ * Applied per-agent to read, write, and exec tool calls.
+ *
+ * Implicit fallback when no rule matches: `"---"` (deny-all).
+ * To set a permissive default, add a `"/**"` rule (e.g. `"/**": "r--"`).
+ */
+export type AccessPolicyConfig = {
+  /** Glob-pattern rules: path → permission string. Longest prefix wins. */
+  policy?: Record<string, PermStr>;
+  /**
+   * Per-script argv0 policy overrides keyed by resolved binary path.
+   * Reserved key "policy" holds shared rules applied to every script before
+   * per-script policy is merged in.
+   */
+  scripts?: {
+    /** Shared rules applied to all scripts; per-script policy wins on collision. */
+    policy?: Record<string, PermStr>;
+    [path: string]: ScriptPolicyEntry | Record<string, PermStr> | undefined;
+  };
+};
+
 export type MediaUnderstandingScopeMatch = {
   channel?: string;
   chatType?: ChatType;

@@ -1,8 +1,11 @@
+import type { AccessPolicyConfig } from "../config/types.tools.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 export type ExecToolDefaults = {
+  /** Path-scoped RWX permissions — x bit gates binary execution. */
+  permissions?: AccessPolicyConfig;
   host?: ExecHost;
   security?: ExecSecurity;
   ask?: ExecAsk;
