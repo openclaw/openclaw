@@ -1,3 +1,4 @@
+import { getModels as piGetModels } from "@mariozechner/pi-ai";
 import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { callGuardian } from "./guardian-client.js";
@@ -334,8 +335,25 @@ function resolveModelFromConfig(
     };
   }
 
-  // No explicit provider config — return partial model.
-  // baseUrl and api will be resolved lazily via SDK's resolveProviderInfo.
+  // No explicit provider config — try pi-ai's built-in model database.
+  // This covers well-known providers (anthropic, openai, google, etc.)
+  // that don't need explicit baseUrl config.
+  try {
+    const knownModels = piGetModels(provider as Parameters<typeof piGetModels>[0]);
+    if (knownModels.length > 0) {
+      const match = knownModels.find((m) => m.id === modelId) ?? knownModels[0];
+      return {
+        provider,
+        modelId,
+        baseUrl: match.baseUrl,
+        api: match.api,
+        headers: extractStringHeaders(providerConfig?.headers, match.headers),
+      };
+    }
+  } catch {
+    // Provider not in pi-ai's database — fall through
+  }
+
   return {
     provider,
     modelId,

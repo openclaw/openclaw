@@ -463,12 +463,13 @@ describe("guardian index — resolveModelFromConfig", () => {
     expect(result.api).toBe("openai-completions"); // default
   });
 
-  it("returns partial model for known providers not in explicit config — pending SDK resolution", () => {
+  it("resolves known providers from pi-ai built-in database when not in explicit config", () => {
     const result = resolveModelFromConfig("anthropic", "claude-haiku-4-5", {});
     expect(result).toBeDefined();
     expect(result.provider).toBe("anthropic");
     expect(result.modelId).toBe("claude-haiku-4-5");
-    expect(result.baseUrl).toBeUndefined(); // will be resolved via SDK
+    expect(result.baseUrl).toBe("https://api.anthropic.com");
+    expect(result.api).toBe("anthropic-messages");
   });
 
   it("inline config provider with baseUrl is fully resolved", () => {
@@ -489,12 +490,12 @@ describe("guardian index — resolveModelFromConfig", () => {
     expect(result.apiKey).toBe("custom-key");
   });
 
-  it("preserves api type from config even without baseUrl", () => {
+  it("falls back to pi-ai database when config has empty baseUrl", () => {
     const result = resolveModelFromConfig("anthropic", "claude-haiku-4-5", {
       models: {
         providers: {
           anthropic: {
-            baseUrl: "", // empty — treated as missing
+            baseUrl: "", // empty — falls through to pi-ai
             api: "anthropic-messages",
             models: [],
           },
@@ -502,7 +503,8 @@ describe("guardian index — resolveModelFromConfig", () => {
       },
     });
 
-    expect(result.baseUrl).toBeUndefined();
+    // pi-ai resolves the baseUrl for known providers
+    expect(result.baseUrl).toBe("https://api.anthropic.com");
     expect(result.api).toBe("anthropic-messages");
   });
 });
