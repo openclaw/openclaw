@@ -260,7 +260,9 @@ export async function statusCommand(
     const reach = remoteUrlMissing
       ? warn("misconfigured (remote.url missing)")
       : gatewayReachable
-        ? ok(`reachable ${formatDuration(gatewayProbe?.connectLatencyMs)}`)
+        ? `${ok(`reachable ${formatDuration(gatewayProbe?.connectLatencyMs)}`)}${
+            gatewayProbe?.error ? ` · ${warn(`diagnostics limited (${gatewayProbe.error})`)}` : ""
+          }`
         : warn(gatewayProbe?.error ? `unreachable (${gatewayProbe.error})` : "unreachable");
     const auth =
       gatewayReachable && !remoteUrlMissing

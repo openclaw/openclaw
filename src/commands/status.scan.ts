@@ -16,6 +16,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { buildChannelsTable } from "./status-all/channels.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
 import {
+  isGatewayProbeReachable,
   pickGatewaySelfPresence,
   resolveGatewayProbeAuthResolution,
 } from "./status.gateway-probe.js";
@@ -231,7 +232,7 @@ async function scanStatusJsonFast(opts: {
     gatewayProbeAuthWarning,
     gatewayProbe,
   } = gatewaySnapshot;
-  const gatewayReachable = gatewayProbe?.ok === true;
+  const gatewayReachable = isGatewayProbeReachable(gatewayProbe);
   const gatewaySelf = gatewayProbe?.presence
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;
@@ -341,7 +342,7 @@ export async function scanStatus(
         gatewayProbeAuthWarning,
         gatewayProbe,
       } = await resolveGatewayProbeSnapshot({ cfg, opts });
-      const gatewayReachable = gatewayProbe?.ok === true;
+      const gatewayReachable = isGatewayProbeReachable(gatewayProbe);
       const gatewaySelf = gatewayProbe?.presence
         ? pickGatewaySelfPresence(gatewayProbe.presence)
         : null;

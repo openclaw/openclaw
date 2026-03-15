@@ -509,6 +509,24 @@ describe("statusCommand", () => {
     expect(payload.gateway.error).toContain("SecretRef");
   });
 
+  it("reports reachable when probe connect succeeds but diagnostics are scope-limited", async () => {
+    mockProbeGatewayResult({
+      ok: false,
+      connectLatencyMs: 12,
+      error: "missing scope: operator.read",
+      close: { code: 1008, reason: "missing scope: operator.read" },
+      health: null,
+      status: null,
+      presence: [],
+    });
+
+    const joined = await runStatusAndGetJoinedLogs();
+    expect(joined).toContain("reachable");
+    expect(joined).toContain("diagnostics limited");
+    expect(joined).toContain("scope: operator.read");
+    expect(joined).not.toContain("unreachable (missing scope: operator.read)");
+  });
+
   it("surfaces channel runtime errors from the gateway", async () => {
     mockProbeGatewayResult({
       ok: true,
