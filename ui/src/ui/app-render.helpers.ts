@@ -563,7 +563,8 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    const value = provider ? `${provider}/${entry.id}` : entry.id;
+    addOption(value, provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
   if (currentOverride) {
