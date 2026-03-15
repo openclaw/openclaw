@@ -28,6 +28,35 @@ export async function getMemorySearchManager(params: {
   purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
+
+  // ── PostgreSQL backend ──────────────────────────────────────────────────
+  if (resolved.backend === "postgres") {
+    try {
+      const { PostgresMemoryManager } = await import("./postgres-manager.js");
+      const primary = await PostgresMemoryManager.create({
+        cfg: params.cfg,
+        agentId: params.agentId,
+      });
+      const wrapper = new FallbackMemoryManager(
+        {
+          primary,
+          fallbackFactory: async () => {
+            const { MemoryIndexManager } = await loadManagerRuntime();
+            return await MemoryIndexManager.get(params);
+          },
+        },
+        () => {},
+      );
+      return { manager: wrapper };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error(`postgres memory backend failed to initialize: ${message}`);
+      log.warn("falling back to builtin memory backend");
+      // Fall through to builtin below
+    }
+  }
+
+  // ── QMD backend ─────────────────────────────────────────────────────────
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
     let cacheKey: string | undefined;
