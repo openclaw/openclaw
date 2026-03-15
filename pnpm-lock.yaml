@@ -455,6 +455,14 @@ importers:
 
   extensions/open-prose: {}
 
+  extensions/self-evolve:
+    dependencies:
+      openai:
+        specifier: ^6.25.0
+        version: 6.26.0(ws@8.19.0)(zod@4.3.6)
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
   extensions/sglang: {}
 
   extensions/signal: {}

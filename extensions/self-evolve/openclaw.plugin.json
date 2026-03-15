@@ -1,0 +1,228 @@
+{
+  "id": "self-evolve",
+  "name": "Self Evolve",
+  "description": "MemRL-style self-evolving retrieval policy over episodic memory.",
+  "uiHints": {
+    "embedding.provider": {
+      "label": "Embedding Provider",
+      "help": "Use OpenAI for semantic embeddings, or hash for local deterministic embeddings."
+    },
+    "embedding.apiKey": {
+      "label": "OpenAI API Key",
+      "sensitive": true,
+      "placeholder": "sk-proj-..."
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "text-embedding-3-small"
+    },
+    "retrieval.k1": {
+      "label": "Phase-A Top K",
+      "help": "Top-k candidate count after similarity gating."
+    },
+    "retrieval.k2": {
+      "label": "Phase-B Top K",
+      "help": "Final selected memory count injected into context."
+    },
+    "retrieval.lambda": {
+      "label": "Q Weight",
+      "help": "Blend ratio between z-normalized similarity and Q-value."
+    },
+    "retrieval.delta": {
+      "label": "Similarity Gate",
+      "help": "Minimum cosine similarity for Phase-A candidate admission."
+    },
+    "learning.alpha": {
+      "label": "Learning Rate",
+      "help": "Q-learning step size."
+    },
+    "reward.provider": {
+      "label": "Reward Provider",
+      "help": "Use an LLM judge over user feedback text."
+    },
+    "reward.model": {
+      "label": "Reward Model",
+      "help": "Model used to score user feedback when reward provider is OpenAI."
+    },
+    "experience.summarizer": {
+      "label": "Experience Summarizer",
+      "help": "Use an LLM summarizer for procedural memory experience text."
+    },
+    "experience.model": {
+      "label": "Experience Model",
+      "help": "Model used to summarize hidden reasoning and tool traces into reusable memory."
+    },
+    "experience.apiKey": {
+      "label": "Experience API Key",
+      "sensitive": true,
+      "placeholder": "sk-proj-..."
+    },
+    "runtime.observeTurns": {
+      "label": "Observe Turns",
+      "help": "First N turns only observe and skip Q-value learning updates."
+    },
+    "runtime.minAbsReward": {
+      "label": "Min |Reward|",
+      "help": "Skip learning updates when reward magnitude is too small."
+    },
+    "runtime.minRewardConfidence": {
+      "label": "Min Reward Confidence",
+      "help": "Skip learning updates when reward confidence is below this threshold."
+    },
+    "runtime.learnMode": {
+      "label": "Learning Mode",
+      "help": "balanced: prefer tool turns and allow very strong no-tool feedback; tools_only: learn only when tools were called; all: learn from every qualified turn."
+    },
+    "runtime.noToolMinAbsReward": {
+      "label": "No-Tool Min |Reward|",
+      "help": "In balanced mode, no-tool turns must reach this reward magnitude to learn."
+    },
+    "runtime.noToolMinRewardConfidence": {
+      "label": "No-Tool Min Confidence",
+      "help": "In balanced mode, no-tool turns must reach this confidence to learn."
+    },
+    "runtime.newIntentSimilarityThreshold": {
+      "label": "New Intent Similarity Threshold",
+      "help": "When a new user prompt similarity is lower than this threshold, close the current task and start a new one."
+    },
+    "runtime.idleTurnsToClose": {
+      "label": "Idle Turns To Close",
+      "help": "Close waiting tasks after N non-feedback idle turns."
+    },
+    "runtime.pendingTtlMs": {
+      "label": "Pending TTL (ms)",
+      "help": "Close pending tasks when no update is observed for this duration."
+    },
+    "runtime.maxTurnsPerTask": {
+      "label": "Max Turns Per Task",
+      "help": "Hard cap of turns accumulated into one learnable task."
+    },
+    "reward.apiKey": {
+      "label": "Reward API Key",
+      "sensitive": true,
+      "placeholder": "sk-proj-..."
+    },
+    "learning.gamma": {
+      "label": "Discount Factor",
+      "help": "Future utility discount for Q update bootstrap term."
+    },
+    "memory.maxEntries": {
+      "label": "Max Memories",
+      "help": "Maximum episodic memory entries persisted for this plugin."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": ["openai", "hash"]
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "number",
+            "minimum": 16,
+            "maximum": 4096
+          }
+        }
+      },
+      "retrieval": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "k1": { "type": "number", "minimum": 1, "maximum": 100 },
+          "k2": { "type": "number", "minimum": 1, "maximum": 20 },
+          "delta": { "type": "number", "minimum": -1, "maximum": 1 },
+          "tau": { "type": "number", "minimum": -1, "maximum": 1 },
+          "lambda": { "type": "number", "minimum": 0, "maximum": 1 },
+          "epsilon": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      },
+      "learning": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "alpha": { "type": "number", "minimum": 0.0001, "maximum": 1 },
+          "gamma": { "type": "number", "minimum": 0, "maximum": 1 },
+          "qInit": { "type": "number", "minimum": -1, "maximum": 1 },
+          "rewardSuccess": { "type": "number", "minimum": -1, "maximum": 2 },
+          "rewardFailure": { "type": "number", "minimum": -2, "maximum": 1 }
+        }
+      },
+      "memory": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxEntries": { "type": "number", "minimum": 20, "maximum": 50000 },
+          "maxExperienceChars": { "type": "number", "minimum": 120, "maximum": 12000 },
+          "includeFailures": { "type": "boolean" },
+          "stateFile": { "type": "string" }
+        }
+      },
+      "reward": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": ["openai"]
+          },
+          "apiKey": { "type": "string" },
+          "baseUrl": { "type": "string" },
+          "model": { "type": "string" },
+          "temperature": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      },
+      "runtime": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "minPromptChars": { "type": "number", "minimum": 1, "maximum": 200 },
+          "observeTurns": { "type": "number", "minimum": 0, "maximum": 500 },
+          "minAbsReward": { "type": "number", "minimum": 0, "maximum": 1 },
+          "minRewardConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "learnMode": {
+            "type": "string",
+            "enum": ["balanced", "tools_only", "all"]
+          },
+          "noToolMinAbsReward": { "type": "number", "minimum": 0, "maximum": 1 },
+          "noToolMinRewardConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "newIntentSimilarityThreshold": { "type": "number", "minimum": -1, "maximum": 1 },
+          "idleTurnsToClose": { "type": "number", "minimum": 0, "maximum": 20 },
+          "pendingTtlMs": { "type": "number", "minimum": 1000, "maximum": 86400000 },
+          "maxTurnsPerTask": { "type": "number", "minimum": 1, "maximum": 100 }
+        }
+      },
+      "experience": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "summarizer": {
+            "type": "string",
+            "enum": ["openai"]
+          },
+          "apiKey": { "type": "string" },
+          "baseUrl": { "type": "string" },
+          "model": { "type": "string" },
+          "temperature": { "type": "number", "minimum": 0, "maximum": 1 },
+          "maxToolEvents": { "type": "number", "minimum": 1, "maximum": 100 },
+          "maxRawChars": { "type": "number", "minimum": 200, "maximum": 20000 },
+          "maxSummaryChars": { "type": "number", "minimum": 100, "maximum": 4000 }
+        }
+      }
+    }
+  }
+}

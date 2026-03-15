@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/self-evolve",
+  "version": "2026.3.2",
+  "private": true,
+  "description": "OpenClaw self-evolve plugin with MemRL-style value-aware retrieval",
+  "type": "module",
+  "dependencies": {
+    "openai": "^6.25.0",
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
