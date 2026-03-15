@@ -12,6 +12,7 @@ import {
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
+import { resolveUserTimezone } from "../../../agents/date-time.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
@@ -27,6 +28,24 @@ import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+
+/** Format a timestamp as YYYY-MM-DD in the given IANA timezone. */
+function formatLocalDate(nowMs: number, timezone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(nowMs));
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  const day = parts.find((p) => p.type === "day")?.value;
+  if (year && month && day) {
+    return `${year}-${month}-${day}`;
+  }
+  // Fallback to UTC if Intl parsing fails
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
 
 function resolveDisplaySessionKey(params: {
   cfg?: OpenClawConfig;
@@ -226,9 +245,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Get today's date for filename
+    // Get today's date for filename, using the user's local timezone
     const now = new Date(event.timestamp);
-    const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
+    const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
+    const dateStr = formatLocalDate(now.getTime(), timezone);
 
     // Generate descriptive slug from session using LLM
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
@@ -304,10 +324,17 @@ const saveSessionToMemory: HookHandler = async (event) => {
       }
     }
 
-    // If no slug, use timestamp
+    // If no slug, use local-time HHMM as fallback
     if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
-      slug = timeSlug.slice(0, 4); // HHMM
+      const timeParts = new Intl.DateTimeFormat("en-US", {
+        timeZone: timezone,
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).formatToParts(now);
+      const hh = timeParts.find((p) => p.type === "hour")?.value ?? "00";
+      const mm = timeParts.find((p) => p.type === "minute")?.value ?? "00";
+      slug = `${hh}${mm}`;
       log.debug("Using fallback timestamp slug", { slug });
     }
 
