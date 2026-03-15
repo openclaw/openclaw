@@ -114,12 +114,15 @@ async function executeCompact(
   }
 }
 
+/** Subcommands that should show model info rather than set the model. */
+const MODEL_INFO_SUBCOMMANDS = new Set(["status", "list", "info"]);
+
 async function executeModel(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
 ): Promise<SlashCommandResult> {
-  if (!args) {
+  if (!args || MODEL_INFO_SUBCOMMANDS.has(args.trim().toLowerCase())) {
     try {
       const [sessions, models] = await Promise.all([
         client.request<SessionsListResult>("sessions.list", {}),
