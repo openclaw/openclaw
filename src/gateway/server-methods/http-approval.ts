@@ -7,7 +7,10 @@
  */
 
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
-import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
+import type {
+  ExecApprovalDecision,
+  ExecApprovalRequestPayload,
+} from "../../infra/exec-approvals.js";
 import {
   DEFAULT_HTTP_APPROVAL_TIMEOUT_MS,
   type HttpApprovalRequestPayload,
@@ -20,6 +23,11 @@ export function createHttpApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
+  // Keep the original HTTP-shaped request alongside each pending approval so
+  // resolved events broadcast the url/method payload, not the exec-shaped
+  // command/commandPreview that the manager stores internally.
+  const httpRequests = new Map<string, HttpApprovalRequestPayload>();
+
   return {
     "http.approval.request": async ({ params, respond, context, client }) => {
       const p = params as {
@@ -92,6 +100,7 @@ export function createHttpApprovalHandlers(
       record.requestedByConnId = client?.connId ?? null;
       record.requestedByDeviceId = client?.connect?.device?.id ?? null;
       record.requestedByClientId = client?.connect?.client?.id ?? null;
+      httpRequests.set(record.id, request);
 
       let decisionPromise: Promise<ExecApprovalDecision | null>;
       try {
@@ -133,6 +142,7 @@ export function createHttpApprovalHandlers(
 
       if (!hasApprovalClients && !forwarded) {
         manager.expire(record.id, "no-approval-route");
+        httpRequests.delete(record.id);
         respond(
           true,
           {
@@ -237,7 +247,7 @@ export function createHttpApprovalHandlers(
         return;
       }
       const approvalId = resolvedId.id;
-      const snapshot = manager.getSnapshot(approvalId);
+      const httpRequest = httpRequests.get(approvalId);
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(approvalId, decision as ExecApprovalDecision, resolvedBy ?? null);
       if (!ok) {
@@ -248,18 +258,21 @@ export function createHttpApprovalHandlers(
         );
         return;
       }
+      httpRequests.delete(approvalId);
       context.broadcast(
         "http.approval.resolved",
-        { id: approvalId, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        { id: approvalId, decision, resolvedBy, ts: Date.now(), request: httpRequest },
         { dropIfSlow: true },
       );
+      // Cast HTTP payload to exec shape for routing. The forwarder only reads
+      // shared routing fields (agentId, sessionKey, turnSource*), not command.
       void opts?.forwarder
         ?.handleResolved({
           id: approvalId,
           decision,
           resolvedBy,
           ts: Date.now(),
-          request: snapshot?.request,
+          request: httpRequest as unknown as ExecApprovalRequestPayload,
         })
         .catch((err) => {
           context.logGateway?.error?.(`http approvals: forward resolve failed: ${String(err)}`);

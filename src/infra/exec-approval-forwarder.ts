@@ -50,6 +50,8 @@ export type ExecApprovalForwarderDeps = {
     cfg: OpenClawConfig;
     request: ExecApprovalRequest;
   }) => ExecApprovalForwardTarget | null;
+  /** Which `approvals.*` config section to read. Default: "exec". */
+  configKey?: "exec" | "http";
 };
 
 const DEFAULT_MODE = "session" as const;
@@ -439,11 +441,12 @@ export function createExecApprovalForwarder(
   const deliver = deps.deliver ?? deliverOutboundPayloads;
   const nowMs = deps.nowMs ?? Date.now;
   const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;
+  const configKey = deps.configKey ?? "exec";
   const pending = new Map<string, PendingApproval>();
 
   const handleRequested = async (request: ExecApprovalRequest): Promise<boolean> => {
     const cfg = getConfig();
-    const config = cfg.approvals?.exec;
+    const config = cfg.approvals?.[configKey];
     const filteredTargets = [
       ...(shouldForward({ config, request })
         ? resolveForwardTargets({
@@ -518,7 +521,7 @@ export function createExecApprovalForwarder(
         createdAtMs: resolved.ts,
         expiresAtMs: resolved.ts,
       };
-      const config = cfg.approvals?.exec;
+      const config = cfg.approvals?.[configKey];
       targets = [
         ...(shouldForward({ config, request })
           ? resolveForwardTargets({
