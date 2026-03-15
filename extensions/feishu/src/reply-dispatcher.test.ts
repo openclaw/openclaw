@@ -704,4 +704,168 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       streamingInstances.push = origPush;
     }
   });
+
+  it("provides onToolStart, onAssistantMessageStart, onCompactionStart/End when streaming is enabled", () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    expect(result.replyOptions.onToolStart).toBeTypeOf("function");
+    expect(result.replyOptions.onAssistantMessageStart).toBeTypeOf("function");
+    expect(result.replyOptions.onCompactionStart).toBeTypeOf("function");
+    expect(result.replyOptions.onCompactionEnd).toBeTypeOf("function");
+  });
+
+  it("omits tool/compaction callbacks when streaming is disabled", () => {
+    setupNonStreamingAutoDispatcher();
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    expect(result.replyOptions.onToolStart).toBeUndefined();
+    expect(result.replyOptions.onAssistantMessageStart).toBeUndefined();
+    expect(result.replyOptions.onCompactionStart).toBeUndefined();
+    expect(result.replyOptions.onCompactionEnd).toBeUndefined();
+  });
+
+  it("onToolStart shows tool name in streaming card", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const { onToolStart } =
+      options._opts?.replyOptions ??
+      createFeishuReplyDispatcher({
+        cfg: {} as never,
+        agentId: "agent",
+        runtime: {} as never,
+        chatId: "oc_chat",
+      }).replyOptions;
+
+    onToolStart?.({ name: "web_search" });
+    await vi.waitFor(() => expect(streamingInstances.length).toBeGreaterThan(0));
+
+    const session = streamingInstances[0];
+    await vi.waitFor(() => expect(session.update).toHaveBeenCalled());
+    const lastUpdateCall = session.update.mock.calls.at(-1)?.[0] as string;
+    expect(lastUpdateCall).toContain("🔧");
+    expect(lastUpdateCall).toContain("web_search");
+  });
+
+  it("separates reasoning blockquote from status line with blank line", async () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_analyzing_" });
+    await vi.waitFor(() => expect(streamingInstances.length).toBeGreaterThan(0));
+
+    result.replyOptions.onToolStart?.({ name: "web_search" });
+    const session = streamingInstances[0];
+    await vi.waitFor(() => expect(session.update.mock.calls.length).toBeGreaterThan(1));
+    const combined = session.update.mock.calls.at(-1)?.[0] as string;
+    expect(combined).toContain("> analyzing");
+    expect(combined).toMatch(/analyzing\n\n🔧/);
+  });
+
+  it("onCompactionStart shows compaction status, onCompactionEnd clears it", async () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    result.replyOptions.onCompactionStart?.();
+    await vi.waitFor(() => expect(streamingInstances.length).toBeGreaterThan(0));
+
+    const session = streamingInstances[0];
+    await vi.waitFor(() => expect(session.update).toHaveBeenCalled());
+    const compactingUpdate = session.update.mock.calls.at(-1)?.[0] as string;
+    expect(compactingUpdate).toContain("📦");
+    expect(compactingUpdate).toContain("Compacting");
+
+    result.replyOptions.onCompactionEnd?.();
+    await vi.waitFor(() => expect(session.update.mock.calls.length).toBeGreaterThan(1));
+    const clearedUpdate = session.update.mock.calls.at(-1)?.[0] as string;
+    expect(clearedUpdate).not.toContain("📦");
+  });
+
+  it("onAssistantMessageStart clears tool status line", async () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    result.replyOptions.onToolStart?.({ name: "code_interpreter" });
+    await vi.waitFor(() => expect(streamingInstances.length).toBeGreaterThan(0));
+
+    const session = streamingInstances[0];
+    await vi.waitFor(() => expect(session.update).toHaveBeenCalled());
+    const toolUpdate = session.update.mock.calls.at(-1)?.[0] as string;
+    expect(toolUpdate).toContain("code_interpreter");
+
+    const updateCountBeforeClear = session.update.mock.calls.length;
+    result.replyOptions.onAssistantMessageStart?.();
+
+    await vi.waitFor(() =>
+      expect(session.update.mock.calls.length).toBeGreaterThan(updateCountBeforeClear),
+    );
+    const clearedUpdate = session.update.mock.calls.at(-1)?.[0] as string;
+    expect(clearedUpdate).not.toContain("code_interpreter");
+
+    result.replyOptions.onPartialReply?.({ text: "Here is the result" });
+    await vi.waitFor(() =>
+      expect(session.update.mock.calls.length).toBeGreaterThan(updateCountBeforeClear + 1),
+    );
+    const answerUpdate = session.update.mock.calls.at(-1)?.[0] as string;
+    expect(answerUpdate).toContain("Here is the result");
+    expect(answerUpdate).not.toContain("code_interpreter");
+  });
+
+  it("status line is excluded from final closed card", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    result.replyOptions.onToolStart?.({ name: "calculator" });
+    await vi.waitFor(() => expect(streamingInstances.length).toBeGreaterThan(0));
+
+    result.replyOptions.onPartialReply?.({ text: "The answer is 42" });
+    const session = streamingInstances.at(-1)!;
+    await vi.waitFor(() => expect(session.update).toHaveBeenCalled());
+
+    const opts2 = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
+    await opts2.deliver({ text: "The answer is 42" }, { kind: "final" });
+    expect(session.close).toHaveBeenCalled();
+    const closedText = session.close.mock.calls[0]?.[0] as string;
+    expect(closedText).toContain("The answer is 42");
+    expect(closedText).not.toContain("🔧");
+    expect(closedText).not.toContain("calculator");
+  });
 });
