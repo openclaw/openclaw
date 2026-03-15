@@ -316,6 +316,7 @@ export type PresenceEntry = {
 };
 
 export type GatewaySessionsDefaults = {
+  modelProvider?: string | null;
   model: string | null;
   contextTokens: number | null;
 };
@@ -401,7 +402,12 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
-}>;
+}> & {
+  resolved?: {
+    modelProvider?: string;
+    model?: string;
+  };
+};
 
 export type {
   CostUsageDailyEntry,

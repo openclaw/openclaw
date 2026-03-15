@@ -17,7 +17,13 @@ import {
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../types.ts";
+import { buildCanonicalModelRef, buildCanonicalModelRefFromEntry } from "../model-refs.ts";
+import type {
+  AgentsListResult,
+  GatewaySessionRow,
+  SessionsListResult,
+  SessionsPatchResult,
+} from "../types.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 
 export type SlashCommandResult = {
@@ -126,8 +132,17 @@ async function executeModel(
         client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
-      const model = session?.model || sessions?.defaults?.model || "default";
-      const available = models?.models?.map((m: ModelCatalogEntry) => m.id) ?? [];
+      const model =
+        buildCanonicalModelRef(session?.model, session?.modelProvider) ||
+        buildCanonicalModelRef(sessions?.defaults?.model, sessions?.defaults?.modelProvider) ||
+        "default";
+      const available = Array.from(
+        new Set(
+          (models?.models ?? [])
+            .map((entry: ModelCatalogEntry) => buildCanonicalModelRefFromEntry(entry))
+            .filter(Boolean),
+        ),
+      );
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
         lines.push(
@@ -144,11 +159,17 @@ async function executeModel(
   }
 
   try {
-    await client.request("sessions.patch", { key: sessionKey, model: args.trim() });
+    const response = await client.request<SessionsPatchResult>("sessions.patch", {
+      key: sessionKey,
+      model: args.trim(),
+    });
+    const resolvedModel =
+      buildCanonicalModelRef(response?.resolved?.model, response?.resolved?.modelProvider) ||
+      args.trim();
     return {
-      content: `Model set to \`${args.trim()}\`.`,
+      content: `Model set to \`${resolvedModel}\`.`,
       action: "refresh",
-      sessionPatch: { model: args.trim() },
+      sessionPatch: { model: resolvedModel },
     };
   } catch (err) {
     return { content: `Failed to set model: ${String(err)}` };
@@ -302,7 +323,8 @@ async function executeUsage(
       lines.push(`Context: **${pct}%** of ${fmtTokens(ctx)}`);
     }
     if (session.model) {
-      lines.push(`Model: \`${session.model}\``);
+      const canonicalModel = buildCanonicalModelRef(session.model, session.modelProvider);
+      lines.push(`Model: \`${canonicalModel || session.model}\``);
     }
     return { content: lines.join("\n") };
   } catch (err) {
