@@ -61,4 +61,16 @@ describe("sanitizeOutboundText", () => {
     expect(result).not.toMatch(/assistant to=final/i);
     expect(result).toContain("Actual reply");
   });
+
+  it("strips [[reply_to:ID]] tags", () => {
+    expect(sanitizeOutboundText("[[reply_to:1578]] Hey Matt.")).toBe("Hey Matt.");
+  });
+
+  it("strips [[reply_to_current]] tags", () => {
+    expect(sanitizeOutboundText("[[reply_to_current]] Hello!")).toBe("Hello!");
+  });
+
+  it("strips [[reply_to:ID]] with whitespace inside brackets", () => {
+    expect(sanitizeOutboundText("[[ reply_to: 42 ]] Hi there")).toBe("Hi there");
+  });
 });
