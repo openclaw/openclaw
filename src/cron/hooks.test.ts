@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronConfig } from "../config/types.cron.js";
 import { isValidJobHookPath, loadHookEntries, runCronHooks } from "./hooks.js";
 import type { CronHookContext } from "./hooks.js";
-import type { CronJob } from "./types.js";
+import type { CronJob, CronPayload } from "./types.js";
 
 function stubJob(overrides?: Partial<CronJob>): CronJob {
   return {
@@ -35,6 +35,7 @@ beforeEach(() => {
 
 function makeCtx(
   hookPoint: "beforeRun" | "afterComplete" | "onFailure" | "afterRun",
+  payload: CronPayload = { kind: "agentTurn", message: "hello" },
 ): CronHookContext {
   return {
     hookPoint,
@@ -45,6 +46,7 @@ function makeCtx(
       agentId: "test-agent",
       schedule: { kind: "every", everyMs: 60_000 },
     },
+    payload,
     meta: {},
     log: noopLog,
   };
@@ -311,6 +313,43 @@ describe("runCronHooks", () => {
     const script = inlineHook(`async function(ctx) { return { abort: true, reason: "ignored" }; }`);
     const entries = [{ script, priority: 10 }];
     const result = await runCronHooks("afterRun", makeCtx("afterRun"), entries);
+    expect(result.aborted).toBe(false);
+  });
+
+  it("hook receives ctx.payload for agentTurn job", async () => {
+    // Hook reads ctx.payload.kind and aborts only if it sees the expected kind.
+    const script = inlineHook(
+      `async function(ctx) { return ctx.payload?.kind === "agentTurn" ? { abort: true, reason: "saw-agent-turn" } : null; }`,
+    );
+    const entries = [{ script, priority: 10 }];
+    const result = await runCronHooks(
+      "beforeRun",
+      makeCtx("beforeRun", { kind: "agentTurn", message: "hello" }),
+      entries,
+    );
+    expect(result.aborted).toBe(true);
+    expect(result.reason).toBe("saw-agent-turn");
+  });
+
+  it("hook receives ctx.payload for script job", async () => {
+    // Hook reads ctx.payload.command and aborts only for forbidden scripts.
+    const script = inlineHook(
+      `async function(ctx) { return ctx.payload?.kind === "script" && ctx.payload.command === "forbidden.sh" ? { abort: true, reason: "forbidden" } : null; }`,
+    );
+    const entries = [{ script, priority: 10 }];
+    const scriptPayload = { kind: "script" as const, command: "forbidden.sh" };
+    const result = await runCronHooks("beforeRun", makeCtx("beforeRun", scriptPayload), entries);
+    expect(result.aborted).toBe(true);
+    expect(result.reason).toBe("forbidden");
+  });
+
+  it("hook ctx.payload does not abort for different script command", async () => {
+    const script = inlineHook(
+      `async function(ctx) { return ctx.payload?.kind === "script" && ctx.payload.command === "forbidden.sh" ? { abort: true, reason: "forbidden" } : null; }`,
+    );
+    const entries = [{ script, priority: 10 }];
+    const scriptPayload = { kind: "script" as const, command: "allowed.sh" };
+    const result = await runCronHooks("beforeRun", makeCtx("beforeRun", scriptPayload), entries);
     expect(result.aborted).toBe(false);
   });
 });

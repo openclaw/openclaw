@@ -91,6 +91,9 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === "script") {
+    // script payloads pass through normalization unchanged
+    next.kind = "script";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }

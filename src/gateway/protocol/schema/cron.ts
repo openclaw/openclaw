@@ -1,6 +1,33 @@
 import { Type, type TSchema } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
+const CronScriptPayloadSchema = Type.Object(
+  {
+    kind: Type.Literal("script"),
+    command: NonEmptyString,
+    args: Type.Optional(Type.Array(Type.String())),
+    env: Type.Optional(Type.Record(Type.String(), Type.String())),
+    cwd: Type.Optional(Type.String()),
+    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+    deliver: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+// Patch variant: command is optional so partial updates preserve existing fields.
+const CronScriptPayloadPatchSchema = Type.Object(
+  {
+    kind: Type.Literal("script"),
+    command: Type.Optional(NonEmptyString),
+    args: Type.Optional(Type.Array(Type.String())),
+    env: Type.Optional(Type.Record(Type.String(), Type.String())),
+    cwd: Type.Optional(Type.String()),
+    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+    deliver: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
   return Type.Object(
     {
@@ -139,6 +166,7 @@ export const CronPayloadSchema = Type.Union([
     { additionalProperties: false },
   ),
   cronAgentTurnPayloadSchema({ message: NonEmptyString }),
+  CronScriptPayloadSchema,
 ]);
 
 export const CronPayloadPatchSchema = Type.Union([
@@ -150,6 +178,7 @@ export const CronPayloadPatchSchema = Type.Union([
     { additionalProperties: false },
   ),
   cronAgentTurnPayloadSchema({ message: Type.Optional(NonEmptyString) }),
+  CronScriptPayloadPatchSchema,
 ]);
 
 export const CronFailureAlertSchema = Type.Object(
