@@ -53,13 +53,18 @@ Run: `pkill -f "bodhi_viz.serve"`
 
 ### `/viz status`
 Check if server is running on port 8085.
-Run: `curl -s -o /dev/null -w "%{http_code}" http://localhost:8085/graph.html`
+```bash
+VIZ_IP=$(tailscale ip -4 2>/dev/null | head -1)
+curl -s -o /dev/null -w "%{http_code}" "http://${VIZ_IP}:8085/ping"
+```
 
 ## Implementation
 
 ### Check if server is running
 ```bash
-lsof -ti:8085 | head -1
+VIZ_IP=$(tailscale ip -4 2>/dev/null | head -1)
+curl -s -o /dev/null -w "%{http_code}" "http://${VIZ_IP}:8085/ping"
+# 200 = running, curl error = not running
 ```
 
 ### Export data
