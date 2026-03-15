@@ -69,6 +69,7 @@ function getJiti() {
   const { createJiti } = require("jiti");
   jitiLoader = createJiti(__filename, {
     interopDefault: true,
+    nativeModules: ["typescript", "sqlite3", "better-sqlite3", "bindings"],
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
   return jitiLoader;
