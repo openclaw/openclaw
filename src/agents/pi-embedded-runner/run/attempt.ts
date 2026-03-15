@@ -2324,6 +2324,7 @@ export async function runEmbeddedAttempt(
       scheduleAbortTimer(params.timeoutMs, "initial");
 
       let messagesSnapshot: AgentMessage[] = [];
+      let responseEmitBlocked = false;
       let sessionIdUsed = activeSession.sessionId;
       const onAbort = () => {
         const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
@@ -2652,6 +2653,90 @@ export async function runEmbeddedAttempt(
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
 
+        // --- before_response_emit hook ---
+        // Fires after the prompt completes, before the response is finalized.
+        // Modifies the persisted session history and the delivered response text.
+        //
+        // LIMITATION: In streaming mode, text_delta chunks may already have been
+        // emitted to the client by this point. The hook cannot retract streamed
+        // chunks. It CAN modify/redact what gets persisted to session history
+        // (affecting future LLM context) and what gets delivered in non-streaming
+        // paths. For full real-time stream interception, use before_llm_call to
+        // block the call or after_llm_call to filter tool execution.
+        // Run regardless of promptError — prior tool-loop iterations may have
+        // accumulated PII in assistantTexts before the final call errored.
+        // The hook's natural no-op (assistantTexts.length === 0) handles the
+        // case where no content was produced.
+        if (hookRunner?.hasHooks("before_response_emit")) {
+          try {
+            const { applyBeforeResponseEmitHook } = await import("./hook-response-emit.js");
+            const emitResult = await applyBeforeResponseEmitHook({
+              hookRunner,
+              agentCtx: hookCtx,
+              assistantTexts,
+              messagesSnapshot,
+              activeSession,
+              channel: params.messageChannel ?? params.messageProvider,
+            });
+            if (emitResult !== undefined) {
+              if (emitResult.blocked) {
+                // Blocked — suppress the entire accumulated response, not just
+                // the last chunk. Earlier tool-loop iterations may have added
+                // text that would otherwise escape the hook.
+                responseEmitBlocked = true;
+                assistantTexts.splice(0, assistantTexts.length);
+              } else if (emitResult.consolidatedTexts !== undefined) {
+                // Replace assistantTexts with per-turn content from the
+                // (now-modified) session messages. This handles both content
+                // and allContent paths, and correctly consolidates block-reply
+                // chunks into per-turn entries so earlier chunks can't leak
+                // unredacted content through payloads.ts.
+                if (emitResult.consolidatedTexts.length === 0) {
+                  // All content removed. Treat as blocked to prevent
+                  // lastAssistant fallback from delivering stale text.
+                  responseEmitBlocked = true;
+                }
+                assistantTexts.splice(0, assistantTexts.length, ...emitResult.consolidatedTexts);
+              }
+              // Refresh messagesSnapshot so downstream consumers (agent_end,
+              // llm_output, cache trace) see the post-redaction content.
+              messagesSnapshot = activeSession.messages.slice();
+            }
+          } catch (err) {
+            // Fail-closed: if the hook machinery itself throws (import failure,
+            // internal bug, plugin escaping per-handler catchErrors), suppress
+            // the response rather than delivering potentially unredacted PII.
+            // Plugin authors writing output-policy hooks expect crash = blocked.
+            responseEmitBlocked = true;
+            log.error(
+              `before_response_emit hook error — FAIL CLOSED, clearing response: runId=${params.runId} ${String(err)}`,
+            );
+            assistantTexts.splice(0, assistantTexts.length);
+            // Also clear assistant content from session messages so downstream
+            // payloads.ts fallback (lastAssistant from session) can't leak.
+            try {
+              const { clearAllAssistantContent } = await import("./hook-response-emit.js");
+              clearAllAssistantContent(activeSession.messages);
+            } catch {
+              // If even the import fails, remove assistant + toolResult messages manually.
+              // Splice in reverse so indices stay valid. Removes the messages
+              // entirely — empty-content ghosts would break LLM API calls, and
+              // orphaned toolResults may contain sensitive tool output.
+              for (let i = activeSession.messages.length - 1; i >= 0; i--) {
+                const role = activeSession.messages[i].role;
+                if (role === "assistant" || role === "toolResult") {
+                  activeSession.messages.splice(i, 1);
+                }
+              }
+            }
+            // Refresh messagesSnapshot so lastAssistant (derived from it later)
+            // reflects the scrubbed state. Without this, the compaction-timeout
+            // snapshot or the pre-scrub snapshot leaks unredacted text through
+            // the lastAssistant fallback in payloads.ts.
+            messagesSnapshot = activeSession.messages.slice();
+          }
+        }
+
         if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
           try {
             sessionManager.appendCustomEntry("openclaw:prompt-error", {
@@ -2781,10 +2866,11 @@ export async function runEmbeddedAttempt(
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
-      const lastAssistant = messagesSnapshot
-        .slice()
-        .toReversed()
-        .find((m) => m.role === "assistant");
+      // When before_response_emit blocked the response, suppress lastAssistant
+      // so payloads.ts doesn't fall back to a prior turn's assistant text.
+      const lastAssistant = responseEmitBlocked
+        ? undefined
+        : messagesSnapshot.findLast((m) => m.role === "assistant");
 
       const toolMetasNormalized = toolMetas
         .filter(
