@@ -3741,6 +3741,58 @@
 }
 
 /* Bottom grid (event log + log tail) */
+
+.ov-event-log-list {
+  max-height: 400px;
+  overflow-y: auto;
+  margin-top: 12px;
+  padding-right: 8px;
+}
+
+.ov-event-log-entry {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.ov-event-log-entry:last-child {
+  border-bottom: none;
+}
+
+.ov-event-log-ts {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.ov-event-log-name {
+  font-weight: 500;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.ov-event-log-payload {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ov-log-tail-content {
+  margin: 12px 0 0 0;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
 .ov-bottom-grid {
   display: grid;
   gap: 20px;
