@@ -1256,4 +1256,79 @@ describe("sessions tools", () => {
     const worker = descendants.find((entry) => entry.runId === "run-worker-active");
     expect(worker?.endedAt).toBeTypeOf("number");
   });
+
+  it("sessions_send includes threadId in announce delivery for thread-bound target", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "discord:group:req";
+    const targetKey = "agent:main:discord:group:target:thread:456";
+    let sendParams: { to?: string; channel?: string; message?: string; threadId?: string } = {};
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: targetKey,
+              kind: "group",
+              channel: "discord",
+              deliveryContext: {
+                channel: "discord",
+                to: "channel:target",
+                threadId: "456",
+              },
+            },
+          ],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-1", status: "accepted" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        let text = "initial reply";
+        if (params?.sessionKey === targetKey) {
+          // Check if this is the announce step
+          const latestAgentCall = calls.filter((c) => c.method === "agent").pop();
+          if (
+            (latestAgentCall?.params as any)?.extraSystemPrompt?.includes(
+              "Agent-to-agent announce step",
+            )
+          ) {
+            text = "announce this";
+          }
+        }
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text }] }],
+        };
+      }
+      if (request.method === "send") {
+        sendParams = request.params as any;
+        return { messageId: "m1" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+
+    await tool!.execute("call-thread-test", {
+      sessionKey: targetKey,
+      message: "hello",
+      timeoutSeconds: 1,
+    });
+
+    await vi.waitFor(() => expect(sendParams.message).toBe("announce this"), { timeout: 2000 });
+    expect(sendParams).toMatchObject({
+      to: "channel:target",
+      channel: "discord",
+      threadId: "456",
+    });
+  });
 });
