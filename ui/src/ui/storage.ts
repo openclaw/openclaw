@@ -17,12 +17,42 @@ export type UiSettings = {
   themeMode: ThemeMode;
   chatFocusMode: boolean;
   chatShowThinking: boolean;
+  chatShowToolCalls: boolean;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
-  navWidth: number; // Sidebar width when expanded (200–400px)
+  navWidth: number; // Sidebar width when expanded (240–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   locale?: string;
 };
+
+function isViteDevPage(): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  return Boolean(document.querySelector('script[src*="/@vite/client"]'));
+}
+
+function formatHostWithPort(hostname: string, port: string): string {
+  const normalizedHost = hostname.includes(":") ? `[${hostname}]` : hostname;
+  return `${normalizedHost}:${port}`;
+}
+
+function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const configured =
+    typeof window !== "undefined" &&
+    typeof window.__OPENCLAW_CONTROL_UI_BASE_PATH__ === "string" &&
+    window.__OPENCLAW_CONTROL_UI_BASE_PATH__.trim();
+  const basePath = configured
+    ? normalizeBasePath(configured)
+    : inferBasePathFromPathname(location.pathname);
+  const pageUrl = `${proto}://${location.host}${basePath}`;
+  if (!isViteDevPage()) {
+    return { pageUrl, effectiveUrl: pageUrl };
+  }
+  const effectiveUrl = `${proto}://${formatHostWithPort(location.hostname, "18789")}`;
+  return { pageUrl, effectiveUrl };
+}
 
 function getSessionStorage(): Storage | null {
   if (typeof window !== "undefined" && window.sessionStorage) {
@@ -91,17 +121,7 @@ function persistSessionToken(gatewayUrl: string, token: string) {
 }
 
 export function loadSettings(): UiSettings {
-  const defaultUrl = (() => {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const configured =
-      typeof window !== "undefined" &&
-      typeof window.__OPENCLAW_CONTROL_UI_BASE_PATH__ === "string" &&
-      window.__OPENCLAW_CONTROL_UI_BASE_PATH__.trim();
-    const basePath = configured
-      ? normalizeBasePath(configured)
-      : inferBasePathFromPathname(location.pathname);
-    return `${proto}://${location.host}${basePath}`;
-  })();
+  const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl } = deriveDefaultGatewayUrl();
 
   const defaults: UiSettings = {
     gatewayUrl: defaultUrl,
@@ -112,6 +132,7 @@ export function loadSettings(): UiSettings {
     themeMode: "system",
     chatFocusMode: false,
     chatShowThinking: true,
+    chatShowToolCalls: true,
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 220,
@@ -124,21 +145,19 @@ export function loadSettings(): UiSettings {
       return defaults;
     }
     const parsed = JSON.parse(raw) as Partial<UiSettings>;
+    const parsedGatewayUrl =
+      typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
+        ? parsed.gatewayUrl.trim()
+        : defaults.gatewayUrl;
+    const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
     const { theme, mode } = parseThemeSelection(
       (parsed as { theme?: unknown }).theme,
       (parsed as { themeMode?: unknown }).themeMode,
     );
     const settings = {
-      gatewayUrl:
-        typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
-          ? parsed.gatewayUrl.trim()
-          : defaults.gatewayUrl,
+      gatewayUrl,
       // Gateway auth is intentionally in-memory only; scrub any legacy persisted token on load.
-      token: loadSessionToken(
-        typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
-          ? parsed.gatewayUrl.trim()
-          : defaults.gatewayUrl,
-      ),
+      token: loadSessionToken(gatewayUrl),
       sessionKey:
         typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()
           ? parsed.sessionKey.trim()
@@ -156,6 +175,10 @@ export function loadSettings(): UiSettings {
         typeof parsed.chatShowThinking === "boolean"
           ? parsed.chatShowThinking
           : defaults.chatShowThinking,
+      chatShowToolCalls:
+        typeof parsed.chatShowToolCalls === "boolean"
+          ? parsed.chatShowToolCalls
+          : defaults.chatShowToolCalls,
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&
@@ -197,6 +220,7 @@ function persistSettings(next: UiSettings) {
     themeMode: next.themeMode,
     chatFocusMode: next.chatFocusMode,
     chatShowThinking: next.chatShowThinking,
+    chatShowToolCalls: next.chatShowToolCalls,
     splitRatio: next.splitRatio,
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,

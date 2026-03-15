@@ -134,43 +134,14 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
 @Composable
 private fun ScreenTabScreen(viewModel: MainViewModel) {
   val isConnected by viewModel.isConnected.collectAsState()
-  val isNodeConnected by viewModel.isNodeConnected.collectAsState()
-  val canvasUrl by viewModel.canvasCurrentUrl.collectAsState()
-  val canvasA2uiHydrated by viewModel.canvasA2uiHydrated.collectAsState()
-  val canvasRehydratePending by viewModel.canvasRehydratePending.collectAsState()
-  val canvasRehydrateErrorText by viewModel.canvasRehydrateErrorText.collectAsState()
-  val isA2uiUrl = canvasUrl?.contains("/__openclaw__/a2ui/") == true
-  val showRestoreCta = isConnected && isNodeConnected && (canvasUrl.isNullOrBlank() || (isA2uiUrl && !canvasA2uiHydrated))
-  val restoreCtaText =
-    when {
-      canvasRehydratePending -> "Restore requested. Waiting for agent…"
-      !canvasRehydrateErrorText.isNullOrBlank() -> canvasRehydrateErrorText!!
-      else -> "Canvas reset. Tap to restore dashboard."
+  LaunchedEffect(isConnected) {
+    if (isConnected) {
+      viewModel.refreshHomeCanvasOverviewIfConnected()
     }
+  }
 
   Box(modifier = Modifier.fillMaxSize()) {
     CanvasScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
-
-    if (showRestoreCta) {
-      Surface(
-        onClick = {
-          if (canvasRehydratePending) return@Surface
-          viewModel.requestCanvasRehydrate(source = "screen_tab_cta")
-        },
-        modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 16.dp, vertical = 16.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = mobileSurface.copy(alpha = 0.9f),
-        border = BorderStroke(1.dp, mobileBorder),
-        shadowElevation = 4.dp,
-      ) {
-        Text(
-          text = restoreCtaText,
-          modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-          style = mobileCallout.copy(fontWeight = FontWeight.Medium),
-          color = mobileText,
-        )
-      }
-    }
   }
 }
 
@@ -188,28 +159,28 @@ private fun TopStatusBar(
           mobileSuccessSoft,
           mobileSuccess,
           mobileSuccess,
-          Color(0xFFCFEBD8),
+          LocalMobileColors.current.chipBorderConnected,
         )
       StatusVisual.Connecting ->
         listOf(
           mobileAccentSoft,
           mobileAccent,
           mobileAccent,
-          Color(0xFFD5E2FA),
+          LocalMobileColors.current.chipBorderConnecting,
         )
       StatusVisual.Warning ->
         listOf(
           mobileWarningSoft,
           mobileWarning,
           mobileWarning,
-          Color(0xFFEED8B8),
+          LocalMobileColors.current.chipBorderWarning,
         )
       StatusVisual.Error ->
         listOf(
           mobileDangerSoft,
           mobileDanger,
           mobileDanger,
-          Color(0xFFF3C8C8),
+          LocalMobileColors.current.chipBorderError,
         )
       StatusVisual.Offline ->
         listOf(
@@ -278,7 +249,7 @@ private fun BottomTabBar(
   ) {
     Surface(
       modifier = Modifier.fillMaxWidth(),
-      color = Color.White.copy(alpha = 0.97f),
+      color = mobileCardSurface.copy(alpha = 0.97f),
       shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
       border = BorderStroke(1.dp, mobileBorder),
       shadowElevation = 6.dp,
@@ -299,7 +270,7 @@ private fun BottomTabBar(
             modifier = Modifier.weight(1f).heightIn(min = 58.dp),
             shape = RoundedCornerShape(16.dp),
             color = if (active) mobileAccentSoft else Color.Transparent,
-            border = if (active) BorderStroke(1.dp, Color(0xFFD5E2FA)) else null,
+            border = if (active) BorderStroke(1.dp, LocalMobileColors.current.chipBorderConnecting) else null,
             shadowElevation = 0.dp,
           ) {
             Column(

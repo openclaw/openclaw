@@ -61,6 +61,42 @@ describe("system-presence", () => {
     expect(entry?.scopes).toEqual(expect.arrayContaining(["operator.admin", "system.run"]));
   });
 
+  it("parses node presence text and normalizes the update key", () => {
+    const update = updateSystemPresence({
+      text: "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon",
+      instanceId: "  Mixed-Case-Node  ",
+    });
+
+    expect(update.key).toBe("mixed-case-node");
+    expect(update.changedKeys).toEqual(["host", "ip", "version", "mode", "reason"]);
+    expect(update.next).toMatchObject({
+      host: "Relay-Host",
+      ip: "10.0.0.9",
+      version: "2.1.0",
+      lastInputSeconds: 7,
+      mode: "ui",
+      reason: "beacon",
+      text: "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon",
+    });
+  });
+
+  it("drops blank role and scope entries while keeping fallback text", () => {
+    const deviceId = randomUUID();
+
+    upsertPresence(deviceId, {
+      deviceId,
+      host: "relay-host",
+      mode: "operator",
+      roles: [" operator ", "", "  "],
+      scopes: ["operator.admin", "", "  "],
+    });
+
+    const entry = listSystemPresence().find((candidate) => candidate.deviceId === deviceId);
+    expect(entry?.roles).toEqual(["operator"]);
+    expect(entry?.scopes).toEqual(["operator.admin"]);
+    expect(entry?.text).toBe("Node: relay-host · mode operator");
+  });
+
   it("prunes stale non-self entries after TTL", () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.now());
