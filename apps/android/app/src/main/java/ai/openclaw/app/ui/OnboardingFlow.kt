@@ -121,6 +121,7 @@ private enum class PermissionToggle {
   Calendar,
   Motion,
   Sms,
+  CallLog,
 }
 
 private enum class SpecialAccessToggle {
@@ -288,6 +289,10 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     rememberSaveable {
       mutableStateOf(smsAvailable && isPermissionGranted(context, Manifest.permission.SEND_SMS))
     }
+  var enableCallLog by
+    rememberSaveable {
+      mutableStateOf(isPermissionGranted(context, Manifest.permission.READ_CALL_LOG))
+    }
 
   var pendingPermissionToggle by remember { mutableStateOf<PermissionToggle?>(null) }
   var pendingSpecialAccessToggle by remember { mutableStateOf<SpecialAccessToggle?>(null) }
@@ -304,6 +309,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       PermissionToggle.Calendar -> enableCalendar = enabled
       PermissionToggle.Motion -> enableMotion = enabled && motionAvailable
       PermissionToggle.Sms -> enableSms = enabled && smsAvailable
+      PermissionToggle.CallLog -> enableCallLog = enabled
     }
   }
 
@@ -331,6 +337,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
           isPermissionGranted(context, Manifest.permission.ACTIVITY_RECOGNITION)
       PermissionToggle.Sms ->
         !smsAvailable || isPermissionGranted(context, Manifest.permission.SEND_SMS)
+      PermissionToggle.CallLog -> isPermissionGranted(context, Manifest.permission.READ_CALL_LOG)
     }
 
   fun setSpecialAccessToggleEnabled(toggle: SpecialAccessToggle, enabled: Boolean) {
@@ -352,6 +359,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       enableCalendar,
       enableMotion,
       enableSms,
+      enableCallLog,
       smsAvailable,
       motionAvailable,
     ) {
@@ -367,6 +375,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       if (enableCalendar) enabled += "Calendar"
       if (enableMotion && motionAvailable) enabled += "Motion"
       if (smsAvailable && enableSms) enabled += "SMS"
+      if (enableCallLog) enabled += "Call Log"
       if (enabled.isEmpty()) "None selected" else enabled.joinToString(", ")
     }
 
@@ -455,19 +464,28 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val prompt = pendingTrust!!
     AlertDialog(
       onDismissRequest = { viewModel.declineGatewayTrustPrompt() },
-      title = { Text("Trust this gateway?") },
+      containerColor = onboardingSurface,
+      title = { Text("Trust this gateway?", style = onboardingHeadlineStyle, color = onboardingText) },
       text = {
         Text(
           "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}",
+          style = onboardingCalloutStyle,
+          color = onboardingText,
         )
       },
       confirmButton = {
-        TextButton(onClick = { viewModel.acceptGatewayTrustPrompt() }) {
+        TextButton(
+          onClick = { viewModel.acceptGatewayTrustPrompt() },
+          colors = ButtonDefaults.textButtonColors(contentColor = onboardingAccent),
+        ) {
           Text("Trust and continue")
         }
       },
       dismissButton = {
-        TextButton(onClick = { viewModel.declineGatewayTrustPrompt() }) {
+        TextButton(
+          onClick = { viewModel.declineGatewayTrustPrompt() },
+          colors = ButtonDefaults.textButtonColors(contentColor = onboardingTextSecondary),
+        ) {
           Text("Cancel")
         }
       },
@@ -586,6 +604,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               motionPermissionRequired = motionPermissionRequired,
               enableSms = enableSms,
               smsAvailable = smsAvailable,
+              enableCallLog = enableCallLog,
               context = context,
               onDiscoveryChange = { checked ->
                 requestPermissionToggle(
@@ -682,6 +701,13 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     listOf(Manifest.permission.SEND_SMS),
                   )
                 }
+              },
+              onCallLogChange = { checked ->
+                requestPermissionToggle(
+                  PermissionToggle.CallLog,
+                  checked,
+                  listOf(Manifest.permission.READ_CALL_LOG),
+                )
               },
             )
           OnboardingStep.FinalCheck ->
@@ -1273,6 +1299,7 @@ private fun PermissionsStep(
   motionPermissionRequired: Boolean,
   enableSms: Boolean,
   smsAvailable: Boolean,
+  enableCallLog: Boolean,
   context: Context,
   onDiscoveryChange: (Boolean) -> Unit,
   onLocationChange: (Boolean) -> Unit,
@@ -1285,6 +1312,7 @@ private fun PermissionsStep(
   onCalendarChange: (Boolean) -> Unit,
   onMotionChange: (Boolean) -> Unit,
   onSmsChange: (Boolean) -> Unit,
+  onCallLogChange: (Boolean) -> Unit,
 ) {
   val discoveryPermission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION
   val locationGranted =
@@ -1415,6 +1443,15 @@ private fun PermissionsStep(
         onCheckedChange = onSmsChange,
       )
     }
+    InlineDivider()
+    PermissionToggleRow(
+      title = "Call Log",
+      subtitle = "callLog.search",
+      checked = enableCallLog,
+      granted = isPermissionGranted(context, Manifest.permission.READ_CALL_LOG),
+      onCheckedChange = onCallLogChange,
+    )
+    Text("All settings can be changed later in Settings.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
   }
 }
 

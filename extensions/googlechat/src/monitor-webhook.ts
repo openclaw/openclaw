@@ -141,6 +141,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
                 bearer: headerBearer,
                 audienceType: target.audienceType,
                 audience: target.audience,
+                expectedAddOnPrincipal: target.account.config.appPrincipal,
               });
               return verification.ok;
             },
@@ -175,6 +176,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
                 bearer: parsed.addOnBearerToken,
                 audienceType: target.audienceType,
                 audience: target.audience,
+                expectedAddOnPrincipal: target.account.config.appPrincipal,
               });
               return verification.ok;
             },
