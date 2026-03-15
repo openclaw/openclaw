@@ -4,10 +4,9 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
-import ai.openclaw.android.gateway.GatewayClientInfo
 import ai.openclaw.android.gateway.GatewayClientProfiles
-import ai.openclaw.android.gateway.GatewayConnectProfiles
-import ai.openclaw.android.gateway.GatewayEvent
+import ai.openclaw.android.gateway.GatewayConnectBuilder
+import ai.openclaw.wear.gateway.GatewayEvent
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
@@ -305,22 +304,6 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
   }
 }
 
-internal fun buildWearGatewayClientInfo(
-  deviceId: String,
-  versionName: String = "dev",
-): GatewayClientInfo {
-  return GatewayClientInfo(
-    id = GatewayClientProfiles.AndroidClientId,
-    displayName = GatewayClientProfiles.resolveWearDisplayName(),
-    version = versionName,
-    platform = GatewayClientProfiles.WearOsPlatform,
-    mode = GatewayClientProfiles.UiMode,
-    instanceId = deviceId,
-    deviceFamily = GatewayClientProfiles.WatchDeviceFamily,
-    modelIdentifier = GatewayClientProfiles.resolveModelIdentifier(),
-  )
-}
-
 internal fun buildWearConnectParams(
   config: WearGatewayConfig,
   deviceId: String,
@@ -338,10 +321,11 @@ internal fun buildWearConnectParams(
         }
       else -> null
     }
-  return GatewayConnectProfiles.buildConnectParamsJson(
+  return GatewayConnectBuilder.buildConnectParamsJson(
     options =
-      GatewayConnectProfiles.buildOperatorConnectOptions(
-        client = buildWearGatewayClientInfo(deviceId = deviceId, versionName = versionName),
+      GatewayConnectBuilder.buildWearOperatorConnectOptions(
+        deviceId = deviceId,
+        versionName = versionName,
       ),
     authJson = authJson,
   )

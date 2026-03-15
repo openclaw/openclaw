@@ -6,7 +6,6 @@ import ai.openclaw.android.gateway.asArrayOrNull
 import ai.openclaw.android.gateway.asLongOrNull
 import ai.openclaw.android.gateway.asObjectOrNull
 import ai.openclaw.android.gateway.asStringOrNull
-import ai.openclaw.android.gateway.parseSessionsList
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -292,7 +291,7 @@ class ChatController(
           if (limit != null && limit > 0) put("limit", JsonPrimitive(limit))
         }
       val res = session.request("sessions.list", params.toString())
-      _sessions.value = parseSessionsList(res)
+      _sessions.value = GatewaySessionEntry.parseList(res)
     } catch (_: Throwable) {
       // best-effort
     }

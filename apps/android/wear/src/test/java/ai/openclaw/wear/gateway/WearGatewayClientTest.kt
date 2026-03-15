@@ -1,7 +1,7 @@
 package ai.openclaw.wear.gateway
 
 import ai.openclaw.android.gateway.GatewayClientProfiles
-import ai.openclaw.android.gateway.GatewayConnectProfiles
+import ai.openclaw.android.gateway.GatewayConnectBuilder
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -15,10 +15,11 @@ import okhttp3.WebSocket
 class WearGatewayClientTest {
   @Test
   fun `wear connect client info uses schema valid id and mode`() {
-    val clientInfo = buildWearGatewayClientInfo(
-      deviceId = "watch-device-123",
-      versionName = "2026.3.14-dev",
-    )
+    val clientInfo =
+      GatewayConnectBuilder.buildWearClientInfo(
+        deviceId = "watch-device-123",
+        versionName = "2026.3.14-dev",
+      )
 
     assertEquals(GatewayClientProfiles.AndroidClientId, clientInfo.id)
     assertEquals(GatewayClientProfiles.UiMode, clientInfo.mode)
@@ -40,7 +41,7 @@ class WearGatewayClientTest {
 
     assertEquals("operator", connectParams["role"]?.jsonPrimitive?.content)
     assertEquals(
-      GatewayConnectProfiles.OperatorScopes,
+      GatewayConnectBuilder.OperatorScopes,
       connectParams["scopes"]?.jsonArray?.map { it.jsonPrimitive.content },
     )
     assertEquals("secret-token", connectParams["auth"]?.jsonObject?.get("token")?.jsonPrimitive?.content)

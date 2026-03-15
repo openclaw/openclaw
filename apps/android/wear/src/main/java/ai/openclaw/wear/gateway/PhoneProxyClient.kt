@@ -30,7 +30,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
-import ai.openclaw.android.gateway.GatewayEvent
+import ai.openclaw.wear.gateway.GatewayEvent
 import ai.openclaw.android.gateway.ProxyPaths
 import ai.openclaw.wear.R
 

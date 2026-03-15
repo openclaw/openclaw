@@ -2,6 +2,10 @@ package ai.openclaw.android.gateway
 
 import android.os.Build
 
+/**
+ * Device identity constants and resolution helpers shared between
+ * the main Android app and the Wear OS app.
+ */
 object GatewayClientProfiles {
   const val AndroidClientId = "openclaw-android"
   const val UiMode = "ui"
@@ -10,24 +14,6 @@ object GatewayClientProfiles {
   const val WearOsPlatform = "wearos"
   const val AndroidDeviceFamily = "Android"
   const val WatchDeviceFamily = "watch"
-
-  fun normalizeGatewayHost(host: String): String {
-    return host.trim().removePrefix("[").removeSuffix("]")
-  }
-
-  fun formatHostForUrlAuthority(host: String): String {
-    val trimmedHost = normalizeGatewayHost(host)
-    if (trimmedHost.isEmpty()) return trimmedHost
-    return if (':' in trimmedHost) {
-      "[$trimmedHost]"
-    } else {
-      trimmedHost
-    }
-  }
-
-  fun buildGatewayUrl(scheme: String, host: String, port: Int): String {
-    return "$scheme://${formatHostForUrlAuthority(host)}:$port"
-  }
 
   fun resolveModelIdentifier(): String? {
     return listOfNotNull(Build.MANUFACTURER, Build.MODEL)
