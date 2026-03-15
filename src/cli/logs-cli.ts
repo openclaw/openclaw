@@ -206,7 +206,12 @@ export function registerLogsCli(program: Command) {
     .option("--json", "Emit JSON log lines", false)
     .option("--plain", "Plain text output (no ANSI styling)", false)
     .option("--no-color", "Disable ANSI colors")
-    .option("--local-time", "Display timestamps in local timezone", false)
+    .option(
+      "--local-time",
+      "Display timestamps in local timezone (default; use --no-local-time for UTC)",
+      true,
+    )
+    .option("--no-local-time", "Display timestamps in UTC")
     .addHelpText(
       "after",
       () =>
