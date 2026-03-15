@@ -1,19 +1,17 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { activateExtensionHostRegistry } from "../extension-host/activation.js";
 import {
-  buildExtensionHostRegistryCacheKey,
   clearExtensionHostRegistryCache,
-  getCachedExtensionHostRegistry,
   setCachedExtensionHostRegistry,
 } from "../extension-host/loader-cache.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { clearPluginCommands } from "../plugins/commands.js";
-import { applyTestPluginDefaults, normalizePluginsConfig } from "../plugins/config-state.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime, type CreatePluginRuntimeOptions } from "../plugins/runtime/index.js";
 import type { PluginLogger } from "../plugins/types.js";
 import { prepareExtensionHostLoaderExecution } from "./loader-execution.js";
+import { prepareExtensionHostLoaderPreflight } from "./loader-preflight.js";
 import { runExtensionHostLoaderSession } from "./loader-run.js";
 
 export type ExtensionHostPluginLoadOptions = {
@@ -39,39 +37,23 @@ export function clearExtensionHostLoaderState(): void {
 export function loadExtensionHostPluginRegistry(
   options: ExtensionHostPluginLoadOptions = {},
 ): PluginRegistry {
-  const env = options.env ?? process.env;
-  // Test env: default-disable plugins unless explicitly configured.
-  // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
-  const cfg = applyTestPluginDefaults(options.config ?? {}, env);
-  const logger = options.logger ?? defaultLogger();
-  const validateOnly = options.mode === "validate";
-  const normalized = normalizePluginsConfig(cfg.plugins);
-  const cacheKey = buildExtensionHostRegistryCacheKey({
-    workspaceDir: options.workspaceDir,
-    plugins: normalized,
-    installs: cfg.plugins?.installs,
-    env,
+  const preflight = prepareExtensionHostLoaderPreflight({
+    options,
+    createDefaultLogger: defaultLogger,
+    clearPluginCommands,
   });
-  const cacheEnabled = options.cache !== false;
-  if (cacheEnabled) {
-    const cached = getCachedExtensionHostRegistry(cacheKey);
-    if (cached) {
-      activateExtensionHostRegistry(cached, cacheKey);
-      return cached;
-    }
+  if (preflight.cacheHit) {
+    return preflight.registry;
   }
 
-  // Clear previously registered plugin commands before reloading.
-  clearPluginCommands();
-
   const execution = prepareExtensionHostLoaderExecution({
-    config: cfg,
+    config: preflight.config,
     workspaceDir: options.workspaceDir,
-    env,
+    env: preflight.env,
     cache: options.cache,
-    cacheKey,
-    normalizedConfig: normalized,
-    logger,
+    cacheKey: preflight.cacheKey,
+    normalizedConfig: preflight.normalizedConfig,
+    logger: preflight.logger,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
     runtimeOptions: options.runtimeOptions,
     warningCache: openAllowlistWarningCache,
@@ -84,9 +66,9 @@ export function loadExtensionHostPluginRegistry(
     session: execution.session,
     orderedCandidates: execution.orderedCandidates,
     manifestByRoot: execution.manifestByRoot,
-    normalizedConfig: normalized,
-    rootConfig: cfg,
-    validateOnly,
+    normalizedConfig: preflight.normalizedConfig,
+    rootConfig: preflight.config,
+    validateOnly: preflight.validateOnly,
     createApi: execution.createApi,
     loadModule: execution.loadModule,
   });
