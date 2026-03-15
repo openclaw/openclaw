@@ -4,10 +4,15 @@ import {
   collectBundledExtensionManifestErrors,
   collectBundledExtensionRootDependencyGapErrors,
   collectForbiddenPackPaths,
+  collectPackUnpackedSizeErrors,
 } from "../scripts/release-check.ts";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
   return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
+}
+
+function makePackResult(filename: string, unpackedSize: number) {
+  return { filename, unpackedSize };
 }
 
 describe("collectAppcastSparkleVersionErrors", () => {
@@ -161,5 +166,32 @@ describe("collectForbiddenPackPaths", () => {
         "node_modules/.bin/openclaw",
       ]),
     ).toEqual(["extensions/tlon/node_modules/.bin/tlon", "node_modules/.bin/openclaw"]);
+  });
+});
+
+describe("collectPackUnpackedSizeErrors", () => {
+  it("accepts pack results within the unpacked size budget", () => {
+    expect(
+      collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.14.tgz", 120_354_302)]),
+    ).toEqual([]);
+  });
+
+  it("flags oversized pack results that risk low-memory startup failures", () => {
+    expect(
+      collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.12.tgz", 224_002_564)]),
+    ).toEqual([
+      "openclaw-2026.3.12.tgz unpackedSize 224002564 bytes (213.6 MiB) exceeds budget 167772160 bytes (160.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
+    ]);
+  });
+
+  it("fails closed when npm pack output omits unpackedSize for every result", () => {
+    expect(
+      collectPackUnpackedSizeErrors([
+        { filename: "openclaw-2026.3.14.tgz" },
+        { filename: "openclaw-extra.tgz", unpackedSize: Number.NaN },
+      ]),
+    ).toEqual([
+      "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
+    ]);
   });
 });
