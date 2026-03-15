@@ -613,6 +613,60 @@ describe("convertMessagesToInputItems", () => {
   it("returns empty array for empty messages", () => {
     expect(convertMessagesToInputItems([])).toEqual([]);
   });
+
+  it("skips null entries in user content arrays", () => {
+    const msg = {
+      role: "user",
+      content: [null, { type: "text", text: "hello" }, null, undefined],
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ type: "message", role: "user", content: "hello" });
+  });
+
+  it("skips null entries in assistant content arrays", () => {
+    const msg = {
+      role: "assistant",
+      content: [null, { type: "text", text: "hi" }, undefined],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ type: "message", role: "assistant", content: "hi" });
+  });
+
+  it("handles content array of only null entries without crashing", () => {
+    const userOnlyNulls = {
+      role: "user",
+      content: [null, null],
+      timestamp: 0,
+    };
+    const assistantOnlyNulls = {
+      role: "assistant",
+      content: [null, undefined],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([
+      userOnlyNulls,
+      assistantOnlyNulls,
+    ] as unknown as Parameters<typeof convertMessagesToInputItems>[0]);
+    expect(items).toEqual([]);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
