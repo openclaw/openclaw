@@ -151,7 +151,7 @@ We are currently prioritizing:
 
 Check the [GitHub Issues](https://github.com/openclaw/openclaw/issues) for "good first issue" labels!
 
-## Maintainers
+## Becoming a Maintainer
 
 We're selectively expanding the maintainer team.
 If you're an experienced contributor who wants to help shape OpenClaw's direction — whether through code, docs, or community — we'd like to hear from you.
