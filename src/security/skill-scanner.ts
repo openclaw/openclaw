@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errors.js";
 import { isPathInside } from "./scan-paths.js";
+import { scanSkillMd } from "./skill-md-scanner.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -518,6 +519,18 @@ async function scanFileWithCache(params: {
   return { scanned: true, findings };
 }
 
+async function scanSkillMdIfPresent(
+  dirPath: string,
+  maxFileBytes: number,
+): Promise<SkillScanFinding[] | null> {
+  const mdPath = path.join(dirPath, "SKILL.md");
+  const source = await readScannableSource(mdPath, maxFileBytes);
+  if (source == null) {
+    return null;
+  }
+  return scanSkillMd(source, mdPath);
+}
+
 export async function scanDirectory(
   dirPath: string,
   opts?: SkillScanOptions,
@@ -525,6 +538,12 @@ export async function scanDirectory(
   const scanOptions = normalizeScanOptions(opts);
   const files = await collectScannableFiles(dirPath, scanOptions);
   const allFindings: SkillScanFinding[] = [];
+
+  // Scan SKILL.md for markdown-layer threats
+  const mdFindings = await scanSkillMdIfPresent(dirPath, scanOptions.maxFileBytes);
+  if (mdFindings !== null) {
+    allFindings.push(...mdFindings);
+  }
 
   for (const file of files) {
     const scanResult = await scanFileWithCache({
@@ -551,6 +570,13 @@ export async function scanDirectoryWithSummary(
   let critical = 0;
   let warn = 0;
   let info = 0;
+
+  // Scan SKILL.md for markdown-layer threats
+  const mdFindings = await scanSkillMdIfPresent(dirPath, scanOptions.maxFileBytes);
+  if (mdFindings !== null) {
+    allFindings.push(...mdFindings);
+    scannedFiles += 1;
+  }
 
   for (const file of files) {
     const scanResult = await scanFileWithCache({
