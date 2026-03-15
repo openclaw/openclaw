@@ -250,8 +250,8 @@ describe("runCliAgent with process supervisor", () => {
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "Run: node script.mjs",
-      provider: "codex-cli",
-      model: "gpt-5.2-codex",
+      provider: "claude-cli",
+      model: "sonnet",
       timeoutMs: 1_000,
       runId: "run-no-tools-disabled",
       extraSystemPrompt: "You are a helpful assistant.",
@@ -262,12 +262,14 @@ describe("runCliAgent with process supervisor", () => {
       argv?: string[];
       input?: string;
     };
-    // The CLI runner must not inject "Tools are disabled" into the system
-    // prompt passed to CLI backends. CLI backends (e.g., Claude Code CLI)
-    // manage their own native tools; the injected text caused them to
-    // refuse using their own tools. See: openclaw/openclaw#44135
+    // Use claude-cli because it defines systemPromptArg ("--append-system-prompt"),
+    // so the system prompt is serialized into argv. The codex-cli backend lacks
+    // systemPromptArg, meaning the prompt is dropped before reaching argv —
+    // making the assertion vacuous. See: openclaw/openclaw#44135
     const allArgs = (input.argv ?? []).join("\n");
     expect(allArgs).not.toContain("Tools are disabled in this session");
+    // Verify the user-supplied system prompt IS present (proves the arg path works)
+    expect(allArgs).toContain("You are a helpful assistant.");
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
