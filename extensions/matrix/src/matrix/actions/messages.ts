@@ -27,6 +27,7 @@ export async function sendMatrixMessage(
     threadId: opts.threadId,
     client: opts.client,
     timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId ?? undefined,
   });
 }
 
