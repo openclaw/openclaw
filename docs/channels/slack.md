@@ -302,6 +302,43 @@ Manual reply tags are supported:
 
 Note: `replyToMode="off"` disables **all** reply threading in Slack, including explicit `[[reply_to_*]]` tags. This differs from Telegram, where explicit tags are still honored in `"off"` mode. The difference reflects the platform threading models: Slack threads hide messages from the channel, while Telegram replies remain visible in the main chat flow.
 
+## Thread bindings (ACP sessions)
+
+Slack supports thread-bound ACP sessions, allowing `/acp spawn` to bind an ACP agent to a Slack thread. Messages in the bound thread route directly to the ACP session, and ACP output is delivered back to the same thread.
+
+Enable thread bindings in config:
+
+```json5
+{
+  session: {
+    threadBindings: {
+      enabled: true, // global toggle
+      idleHours: 24, // auto-unbind after idle period (0 = disabled)
+      maxAgeHours: 0, // max binding lifetime (0 = unlimited)
+    },
+  },
+  channels: {
+    slack: {
+      threadBindings: {
+        enabled: true, // adapter-level toggle
+        spawnAcpSessions: true, // required for /acp spawn --thread
+        spawnSubagentSessions: false,
+      },
+    },
+  },
+}
+```
+
+Thread placement modes:
+
+- `--thread auto`: in an existing thread, binds that thread; outside a thread, creates a new thread as the binding target.
+- `--thread here`: binds the current thread; fails if not in a thread.
+- `--thread off`: no binding (default).
+
+Bound threads bypass mention requirements -- messages in a bound thread are routed to the ACP session without needing to mention the bot. Bot-authored messages still follow `allowBots`; OpenClaw only suppresses its own bound-thread echoes to avoid loops.
+
+See [ACP Agents](/tools/acp-agents) for full `/acp` command reference.
+
 ## Media, chunking, and delivery
 
 <AccordionGroup>
@@ -536,6 +573,15 @@ openclaw pairing list slack
     Also check `commands.useAccessGroups` and channel/user allowlists.
 
   </Accordion>
+
+  <Accordion title="Bot to bot loops">
+    By default bot-authored messages are ignored.
+
+    If you set `channels.slack.allowBots=true` or `channels.slack.channels.<id>.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
+
+    In ACP-bound threads, OpenClaw still suppresses its own bot echoes, but third-party bot messages follow `allowBots`.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Text streaming
@@ -586,13 +632,13 @@ Primary reference:
 - [Configuration reference - Slack](/gateway/configuration-reference#slack)
 
   High-signal Slack fields:
-  - mode/auth: `mode`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
+  - mode/auth: `mode`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`, `allowBots`
   - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
   - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
   - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
   - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
   - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `nativeStreaming`
-  - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
+  - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `threadBindings`, `userToken`, `userTokenReadOnly`
 
 ## Related
 

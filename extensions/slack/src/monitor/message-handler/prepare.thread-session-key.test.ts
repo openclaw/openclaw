@@ -1,6 +1,12 @@
 import type { App } from "@slack/bolt";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../../../src/config/config.js";
+import {
+  __testing as sessionBindingTesting,
+  registerSessionBindingAdapter,
+  type SessionBindingRecord,
+} from "../../../../../src/infra/outbound/session-binding-service.js";
+import { buildAgentMainSessionKey } from "../../../../../src/routing/session-key.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { prepareSlackMessage } from "./prepare.js";
 import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
@@ -31,6 +37,14 @@ function buildChannelMessage(overrides?: Partial<SlackMessageEvent>): SlackMessa
 }
 
 describe("thread-level session keys", () => {
+  beforeEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  });
+
+  afterEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  });
+
   it("keeps top-level channel turns in one session when replyToMode=off", async () => {
     const ctx = buildCtx({ replyToMode: "off" });
     ctx.resolveUserName = async () => ({ name: "Alice" });
@@ -135,5 +149,182 @@ describe("thread-level session keys", () => {
     // DMs should NOT have :thread: in the session key
     const sessionKey = prepared!.ctxPayload.SessionKey as string;
     expect(sessionKey).not.toContain(":thread:");
+  });
+
+  it("keeps route mainSessionKey aligned with bound thread session agent", async () => {
+    const boundSessionKey = "agent:codex:acp:66f59af8-119a-41bb-befe-f2536602aa6b";
+    const bindingRecord: SessionBindingRecord = {
+      bindingId: "bind-1",
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "1770408518.451689",
+        parentConversationId: "D456",
+      },
+      status: "active",
+      boundAt: Date.now(),
+    };
+    registerSessionBindingAdapter({
+      channel: "slack",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) => {
+        if (
+          ref.conversationId === bindingRecord.conversation.conversationId &&
+          ref.parentConversationId === bindingRecord.conversation.parentConversationId
+        ) {
+          return bindingRecord;
+        }
+        return null;
+      },
+    });
+
+    const ctx = buildCtx({ replyToMode: "off" });
+    ctx.resolveUserName = async () => ({ name: "Carol" });
+    const account = createSlackTestAccount({ replyToMode: "off" });
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "dm reply",
+        ts: "1770408522.168859",
+        thread_ts: "1770408518.451689",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.route.agentId).toBe("codex");
+    expect(prepared!.route.sessionKey).toBe(boundSessionKey);
+    expect(prepared!.route.mainSessionKey).toBe(buildAgentMainSessionKey({ agentId: "codex" }));
+  });
+
+  it("keeps bound-thread third-party bot messages flowing when allowBots=true", async () => {
+    const boundSessionKey = "agent:codex:acp:bound-thread-bot";
+    const bindingRecord: SessionBindingRecord = {
+      bindingId: "bind-bot-pass",
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "1770408518.451689",
+        parentConversationId: "C123",
+      },
+      status: "active",
+      boundAt: Date.now(),
+    };
+    registerSessionBindingAdapter({
+      channel: "slack",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) => {
+        if (
+          ref.conversationId === bindingRecord.conversation.conversationId &&
+          ref.parentConversationId === bindingRecord.conversation.parentConversationId
+        ) {
+          return bindingRecord;
+        }
+        return null;
+      },
+    });
+
+    const ctx = createInboundSlackTestContext({
+      cfg: {
+        channels: {
+          slack: { enabled: true, replyToMode: "off" },
+        },
+      } as OpenClawConfig,
+      appClient: {} as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "off",
+    });
+    ctx.resolveUserName = async () => ({ name: "Relay" });
+    const account = createSlackTestAccount({ replyToMode: "off", allowBots: true });
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account,
+      message: {
+        channel: "C123",
+        channel_type: "channel",
+        app_id: "A_OTHER",
+        subtype: "bot_message",
+        text: "deploy finished",
+        ts: "1770408522.168859",
+        thread_ts: "1770408518.451689",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.route.agentId).toBe("codex");
+    expect(prepared!.route.sessionKey).toBe(boundSessionKey);
+  });
+
+  it("drops bound-thread bot echoes from this OpenClaw app", async () => {
+    const bindingRecord: SessionBindingRecord = {
+      bindingId: "bind-bot-drop",
+      targetSessionKey: "agent:codex:acp:bound-thread-self",
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "1770408518.451689",
+        parentConversationId: "C123",
+      },
+      status: "active",
+      boundAt: Date.now(),
+    };
+    registerSessionBindingAdapter({
+      channel: "slack",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) => {
+        if (
+          ref.conversationId === bindingRecord.conversation.conversationId &&
+          ref.parentConversationId === bindingRecord.conversation.parentConversationId
+        ) {
+          return bindingRecord;
+        }
+        return null;
+      },
+    });
+
+    const ctx = createInboundSlackTestContext({
+      cfg: {
+        channels: {
+          slack: { enabled: true, replyToMode: "off" },
+        },
+      } as OpenClawConfig,
+      appClient: {} as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "off",
+    });
+    ctx.resolveUserName = async () => ({ name: "OpenClaw" });
+    const account = createSlackTestAccount({ replyToMode: "off", allowBots: true });
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account,
+      message: {
+        channel: "C123",
+        channel_type: "channel",
+        app_id: "A1",
+        subtype: "bot_message",
+        text: "assistant reply",
+        ts: "1770408523.168859",
+        thread_ts: "1770408518.451689",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeNull();
   });
 });

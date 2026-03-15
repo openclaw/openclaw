@@ -80,12 +80,14 @@ Required feature flags for thread-bound ACP:
 - Channel-adapter ACP thread-spawn flag enabled (adapter-specific)
   - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
   - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
+  - Slack: `channels.slack.threadBindings.spawnAcpSessions=true`
 
 ### Thread supporting channels
 
 - Any channel adapter that exposes session/thread binding capability.
 - Current built-in support:
   - Discord threads/channels
+  - Slack threads
   - Telegram topics (forum topics in groups/supergroups and DM topics)
 - Plugin channels can add support through the same binding interface.
 
@@ -375,6 +377,7 @@ Notes:
 - On non-thread binding surfaces, default behavior is effectively `off`.
 - Thread-bound spawn requires channel policy support:
   - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
+  - Slack: `channels.slack.threadBindings.spawnAcpSessions=true`
   - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
 
 ## ACP controls
@@ -499,9 +502,32 @@ Thread binding config is channel-adapter specific. Example for Discord:
 }
 ```
 
+Example for Slack:
+
+```json5
+{
+  session: {
+    threadBindings: {
+      enabled: true,
+      idleHours: 24,
+      maxAgeHours: 0,
+    },
+  },
+  channels: {
+    slack: {
+      threadBindings: {
+        enabled: true,
+        spawnAcpSessions: true,
+      },
+    },
+  },
+}
+```
+
 If thread-bound ACP spawn does not work, verify the adapter feature flag first:
 
 - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
+- Slack: `channels.slack.threadBindings.spawnAcpSessions=true`
 
 See [Configuration Reference](/gateway/configuration-reference).
 

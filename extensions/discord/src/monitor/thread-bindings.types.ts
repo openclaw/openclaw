@@ -40,6 +40,7 @@ export type ThreadBindingManager = {
   listBindings: () => ThreadBindingRecord[];
   touchThread: (params: {
     threadId: string;
+    channelId?: string;
     at?: number;
     persist?: boolean;
   }) => ThreadBindingRecord | null;
@@ -59,6 +60,7 @@ export type ThreadBindingManager = {
   }) => Promise<ThreadBindingRecord | null>;
   unbindThread: (params: {
     threadId: string;
+    channelId?: string;
     reason?: string;
     sendFarewell?: boolean;
     farewellText?: string;

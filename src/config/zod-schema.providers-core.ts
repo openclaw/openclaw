@@ -896,6 +896,16 @@ export const SlackAccountSchema = z
       })
       .strict()
       .optional(),
+    threadBindings: z
+      .object({
+        enabled: z.boolean().optional(),
+        idleHours: z.number().nonnegative().optional(),
+        maxAgeHours: z.number().nonnegative().optional(),
+        spawnSubagentSessions: z.boolean().optional(),
+        spawnAcpSessions: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     // Aliases for channels.slack.dm.policy / channels.slack.dm.allowFrom. Prefer these for
     // inheritance in multi-account setups (shallow merge works; nested dm object doesn't).
     dmPolicy: DmPolicySchema.optional(),

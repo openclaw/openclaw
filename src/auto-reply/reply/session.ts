@@ -30,7 +30,10 @@ import {
 } from "../../config/sessions.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
-import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
+import {
+  resolveConversationIdFromTargets,
+  resolveParentConversationIdFromTargets,
+} from "../../infra/outbound/conversation-id.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -135,6 +138,31 @@ function resolveAcpResetBindingContext(ctx: MsgContext): {
         });
         if (fromTargets && fromTargets !== conversationId) {
           parentConversationId = fromTargets;
+        }
+      }
+    }
+  }
+  if (channelRaw === "slack" && normalizedThreadId) {
+    const fromContext = normalizeConversationText(ctx.ThreadParentId);
+    if (fromContext && fromContext !== conversationId) {
+      parentConversationId = fromContext;
+    } else {
+      const fromNativeConversationId = normalizeConversationText(ctx.NativeChannelId);
+      if (fromNativeConversationId && fromNativeConversationId !== conversationId) {
+        parentConversationId = fromNativeConversationId;
+      } else {
+        const fromOriginatingConversationId = normalizeConversationText(
+          ctx.OriginatingConversationId,
+        );
+        if (fromOriginatingConversationId && fromOriginatingConversationId !== conversationId) {
+          parentConversationId = fromOriginatingConversationId;
+        } else {
+          const fromTargets = resolveParentConversationIdFromTargets({
+            targets: [ctx.OriginatingTo, ctx.To],
+          });
+          if (fromTargets && fromTargets !== conversationId) {
+            parentConversationId = fromTargets;
+          }
         }
       }
     }

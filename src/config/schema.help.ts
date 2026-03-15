@@ -1604,6 +1604,16 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.activityType":
     "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",
   "channels.discord.activityUrl": "Discord presence streaming URL (required for activityType=1).",
+  "channels.slack.threadBindings.enabled":
+    "Enable Slack thread binding features (bound-thread routing/delivery and thread-bound sessions). Overrides session.threadBindings.enabled when set.",
+  "channels.slack.threadBindings.idleHours":
+    "Inactivity window in hours for Slack thread-bound sessions. Set 0 to disable idle auto-unbind (default: 24). Overrides session.threadBindings.idleHours when set.",
+  "channels.slack.threadBindings.maxAgeHours":
+    "Optional hard max age in hours for Slack thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
+  "channels.slack.threadBindings.spawnSubagentSessions":
+    "Allow subagent spawns with thread=true to auto-create and bind Slack threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
+  "channels.slack.threadBindings.spawnAcpSessions":
+    "Allow /acp spawn to auto-create and bind Slack threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
   "channels.slack.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
   "channels.slack.dmPolicy":

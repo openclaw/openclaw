@@ -562,6 +562,88 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(false);
   });
 
+  it("does not rotate local session state for /new on bound Slack DM thread ACP sessions", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-acp-reset-slack-dm-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:codex:acp:binding:slack:default:feedface";
+    const existingSessionId = "session-existing";
+    const now = Date.now();
+    const dmChannelId = "D8SRXRDNF";
+    const threadTs = "1709000000.000100";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: now,
+        systemSent: true,
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath },
+      channels: {
+        slack: {
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    registerSessionBindingAdapter({
+      channel: "slack",
+      accountId: "default",
+      capabilities: { bindSupported: false, unbindSupported: false, placements: ["current"] },
+      listBySession: () => [],
+      resolveByConversation: (ref) => {
+        if (
+          ref.conversationId !== threadTs ||
+          ref.parentConversationId !== dmChannelId ||
+          ref.channel !== "slack"
+        ) {
+          return null;
+        }
+        return {
+          bindingId: `default:${dmChannelId}:${threadTs}`,
+          targetSessionKey: sessionKey,
+          targetKind: "session",
+          conversation: {
+            channel: "slack",
+            accountId: "default",
+            conversationId: threadTs,
+            parentConversationId: dmChannelId,
+          },
+          status: "active",
+          boundAt: now,
+        };
+      },
+    });
+    try {
+      const result = await initSessionState({
+        ctx: {
+          RawBody: "/new",
+          CommandBody: "/new",
+          Provider: "slack",
+          Surface: "slack",
+          SenderId: "U12345",
+          From: "slack:U12345",
+          To: "user:U12345",
+          OriginatingTo: "user:U12345",
+          MessageThreadId: threadTs,
+          NativeChannelId: dmChannelId,
+          SessionKey: sessionKey,
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.isNewSession).toBe(false);
+    } finally {
+      sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    }
+  });
+
   it("keeps custom reset triggers working on bound ACP sessions", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-custom-reset-");
     const storePath = path.join(root, "sessions.json");

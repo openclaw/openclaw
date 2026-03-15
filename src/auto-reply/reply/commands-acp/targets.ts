@@ -41,11 +41,12 @@ export function resolveBoundAcpThreadSessionKey(params: HandleCommandsParams): s
       : "";
   const activeSessionKey = commandTargetSessionKey || params.sessionKey.trim();
   const bindingContext = resolveAcpCommandBindingContext(params);
+  const conversationId = bindingContext.conversationId ?? bindingContext.threadId;
   return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,
-    conversationId: bindingContext.conversationId,
+    conversationId,
     parentConversationId: bindingContext.parentConversationId,
     activeSessionKey,
     allowNonAcpBindingSessionKey: true,

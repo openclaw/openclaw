@@ -26,9 +26,14 @@ import { resolveMentionGatingWithBypass } from "../../../../../src/channels/ment
 import { recordInboundSession } from "../../../../../src/channels/session.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../../../src/config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../../../src/globals.js";
+import { getSessionBindingService } from "../../../../../src/infra/outbound/session-binding-service.js";
 import { enqueueSystemEvent } from "../../../../../src/infra/system-events.js";
 import { resolveAgentRoute } from "../../../../../src/routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../../../src/routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  resolveAgentIdFromSessionKey,
+  resolveThreadSessionKeys,
+} from "../../../../../src/routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../../../src/security/dm-policy-shared.js";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
@@ -88,6 +93,7 @@ type SlackConversationContext = {
   isRoomish: boolean;
   channelConfig: ReturnType<typeof resolveSlackChannelConfig> | null;
   allowBots: boolean;
+  botSenderId?: string;
   isBotMessage: boolean;
 };
 
@@ -107,6 +113,14 @@ type SlackRoutingContext = {
   sessionKey: string;
   historyKey: string;
 };
+
+function resolveSlackBotSenderId(message: SlackMessageEvent): string | undefined {
+  return message.bot_id?.trim() || message.app_id?.trim() || undefined;
+}
+
+function isSlackBotMessage(message: SlackMessageEvent): boolean {
+  return Boolean(resolveSlackBotSenderId(message) || message.subtype === "bot_message");
+}
 
 async function resolveSlackConversationContext(params: {
   ctx: SlackMonitorContext;
@@ -152,6 +166,7 @@ async function resolveSlackConversationContext(params: {
     account.config?.allowBots ??
     cfg.channels?.slack?.allowBots ??
     false;
+  const botSenderId = resolveSlackBotSenderId(message);
 
   return {
     channelInfo,
@@ -163,7 +178,8 @@ async function resolveSlackConversationContext(params: {
     isRoomish,
     channelConfig,
     allowBots,
-    isBotMessage: Boolean(message.bot_id),
+    botSenderId,
+    isBotMessage: isSlackBotMessage(message),
   };
 }
 
@@ -174,15 +190,21 @@ async function authorizeSlackInboundMessage(params: {
   conversation: SlackConversationContext;
 }): Promise<SlackAuthorizationContext | null> {
   const { ctx, account, message, conversation } = params;
-  const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBots } =
-    conversation;
+  const {
+    isDirectMessage,
+    channelName,
+    resolvedChannelType,
+    isBotMessage,
+    allowBots,
+    botSenderId,
+  } = conversation;
 
   if (isBotMessage) {
     if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
       return null;
     }
     if (!allowBots) {
-      logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
+      logVerbose(`slack: drop bot message ${botSenderId ?? "unknown"} (allowBots=false)`);
       return null;
     }
   }
@@ -192,7 +214,7 @@ async function authorizeSlackInboundMessage(params: {
     return null;
   }
 
-  const senderId = message.user ?? (isBotMessage ? message.bot_id : undefined);
+  const senderId = message.user ?? (isBotMessage ? botSenderId : undefined);
   if (!senderId) {
     logVerbose("slack: drop message (missing sender id)");
     return null;
@@ -251,6 +273,25 @@ async function authorizeSlackInboundMessage(params: {
     senderId,
     allowFromLower,
   };
+}
+
+function shouldIgnoreOwnBoundThreadBotMessage(params: {
+  ctx: SlackMonitorContext;
+  message: SlackMessageEvent;
+  isBoundThreadSession: boolean;
+  isBotMessage: boolean;
+}): boolean {
+  if (!params.isBoundThreadSession || !params.isBotMessage) {
+    return false;
+  }
+
+  const userId = params.message.user?.trim() || "";
+  if (userId && params.ctx.botUserId && userId === params.ctx.botUserId) {
+    return true;
+  }
+
+  const messageAppId = params.message.app_id?.trim() || "";
+  return Boolean(messageAppId && params.ctx.apiAppId && messageAppId === params.ctx.apiAppId);
 }
 
 function resolveSlackRoutingContext(params: {
@@ -332,6 +373,7 @@ export async function prepareSlackMessage(params: {
     isRoom,
     isRoomish,
     channelConfig,
+    botSenderId,
     isBotMessage,
   } = conversation;
   const authorization = await authorizeSlackInboundMessage({
@@ -353,7 +395,7 @@ export async function prepareSlackMessage(params: {
     isRoom,
     isRoomish,
   });
-  const {
+  let {
     route,
     replyToMode,
     threadContext,
@@ -363,6 +405,50 @@ export async function prepareSlackMessage(params: {
     sessionKey,
     historyKey,
   } = routing;
+
+  // Check for ACP/subagent thread binding — if this thread is bound, override routing.
+  let isBoundThreadSession = false;
+  let boundThreadBindingId: string | undefined;
+  if (threadTs) {
+    const threadBinding = getSessionBindingService().resolveByConversation({
+      channel: "slack",
+      accountId: account.accountId,
+      conversationId: threadTs,
+      parentConversationId: message.channel,
+    });
+    if (threadBinding) {
+      const boundSessionKey = threadBinding.targetSessionKey?.trim();
+      if (boundSessionKey) {
+        isBoundThreadSession = true;
+        boundThreadBindingId = threadBinding.bindingId;
+        sessionKey = boundSessionKey;
+        const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey);
+        const resolvedAgentId = boundAgentId ?? route.agentId;
+        route = {
+          ...route,
+          sessionKey: boundSessionKey,
+          agentId: resolvedAgentId,
+          mainSessionKey: boundAgentId
+            ? buildAgentMainSessionKey({ agentId: resolvedAgentId })
+            : route.mainSessionKey,
+        };
+      }
+    }
+  }
+
+  // Bound threads still honor allowBots for third-party bots. Only suppress
+  // echoes from this OpenClaw app so ACP-bound threads do not self-loop.
+  if (
+    shouldIgnoreOwnBoundThreadBotMessage({
+      ctx,
+      message,
+      isBoundThreadSession,
+      isBotMessage: conversation.isBotMessage,
+    })
+  ) {
+    logVerbose(`slack: drop own bound-thread bot message ${botSenderId ?? "unknown"}`);
+    return null;
+  }
 
   const mentionRegexes = resolveCachedMentionRegexes(ctx, route.agentId);
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
@@ -402,7 +488,7 @@ export async function prepareSlackMessage(params: {
         return resolvedSenderName;
       }
     }
-    resolvedSenderName = message.user ?? message.bot_id ?? "unknown";
+    resolvedSenderName = message.user ?? botSenderId ?? "unknown";
     return resolvedSenderName;
   };
   const senderNameForAuth = ctx.allowNameMatching ? await resolveSenderName() : undefined;
@@ -469,9 +555,11 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const shouldRequireMention = isRoom
+  const shouldRequireMentionByConfig = isRoom
     ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
     : false;
+  // Bound thread sessions bypass mention gating — all messages go to the bound session.
+  const shouldRequireMention = isBoundThreadSession ? false : shouldRequireMentionByConfig;
 
   // Allow "control commands" to bypass mention gating if sender is authorized.
   const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
@@ -705,6 +793,8 @@ export async function prepareSlackMessage(params: {
     ReplyToId: threadContext.replyToId,
     // Preserve thread context for routed tool notifications.
     MessageThreadId: threadContext.messageThreadId,
+    // Slack thread parent is always the channel id (including DM channels).
+    ThreadParentId: isThreadReply ? message.channel : undefined,
     ParentSessionKey: threadKeys.parentSessionKey,
     // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
     ThreadStarterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
@@ -729,6 +819,7 @@ export async function prepareSlackMessage(params: {
     OriginatingChannel: "slack" as const,
     OriginatingTo: slackTo,
     NativeChannelId: message.channel,
+    OriginatingConversationId: message.channel,
   }) satisfies FinalizedMsgContext;
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
@@ -778,6 +869,12 @@ export async function prepareSlackMessage(params: {
   const replyTarget = ctxPayload.To ?? undefined;
   if (!replyTarget) {
     return null;
+  }
+
+  // Touch bound thread binding for activity tracking only after all auth checks pass,
+  // so unauthorized/bot traffic doesn't keep bindings alive.
+  if (boundThreadBindingId) {
+    getSessionBindingService().touch(boundThreadBindingId);
   }
 
   if (shouldLogVerbose()) {

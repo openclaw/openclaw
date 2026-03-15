@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 
 export const DISCORD_THREAD_BINDING_CHANNEL = "discord";
+export const SLACK_THREAD_BINDING_CHANNEL = "slack";
 const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
 const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;
 
@@ -127,8 +128,10 @@ export function resolveThreadBindingSpawnPolicy(params: {
   const spawnFlagKey = resolveSpawnFlagKey(params.kind);
   const spawnEnabledRaw =
     normalizeBoolean(account?.[spawnFlagKey]) ?? normalizeBoolean(root?.[spawnFlagKey]);
-  // Non-Discord channels currently have no dedicated spawn gate config keys.
-  const spawnEnabled = spawnEnabledRaw ?? channel !== DISCORD_THREAD_BINDING_CHANNEL;
+  // Discord and Slack require explicit opt-in for ACP/subagent thread spawning.
+  const requiresOptIn =
+    channel === DISCORD_THREAD_BINDING_CHANNEL || channel === SLACK_THREAD_BINDING_CHANNEL;
+  const spawnEnabled = spawnEnabledRaw ?? !requiresOptIn;
   return {
     channel,
     accountId,
@@ -183,6 +186,9 @@ export function formatThreadBindingDisabledError(params: {
   if (params.channel === DISCORD_THREAD_BINDING_CHANNEL) {
     return "Discord thread bindings are disabled (set channels.discord.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).";
   }
+  if (params.channel === SLACK_THREAD_BINDING_CHANNEL) {
+    return "Slack thread bindings are disabled (set channels.slack.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).";
+  }
   return `Thread bindings are disabled for ${params.channel} (set session.threadBindings.enabled=true to enable).`;
 }
 
@@ -196,6 +202,12 @@ export function formatThreadBindingSpawnDisabledError(params: {
   }
   if (params.channel === DISCORD_THREAD_BINDING_CHANNEL && params.kind === "subagent") {
     return "Discord thread-bound subagent spawns are disabled for this account (set channels.discord.threadBindings.spawnSubagentSessions=true to enable).";
+  }
+  if (params.channel === SLACK_THREAD_BINDING_CHANNEL && params.kind === "acp") {
+    return "Slack thread-bound ACP spawns are disabled for this account (set channels.slack.threadBindings.spawnAcpSessions=true to enable).";
+  }
+  if (params.channel === SLACK_THREAD_BINDING_CHANNEL && params.kind === "subagent") {
+    return "Slack thread-bound subagent spawns are disabled for this account (set channels.slack.threadBindings.spawnSubagentSessions=true to enable).";
   }
   return `Thread-bound ${params.kind} spawns are disabled for ${params.channel}.`;
 }

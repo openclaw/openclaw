@@ -9,6 +9,11 @@ import {
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "../../../../src/channels/allowlists/resolve-utils.js";
+import {
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
+  resolveThreadBindingsEnabled,
+} from "../../../../src/channels/thread-bindings-policy.js";
 import { loadConfig } from "../../../../src/config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
 import {
@@ -44,6 +49,10 @@ import {
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
+import {
+  createNoopSlackThreadBindingManager,
+  createSlackThreadBindingManager,
+} from "./thread-bindings.manager.js";
 import type { MonitorSlackOpts } from "./types.js";
 
 const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
@@ -285,6 +294,31 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     removeAckAfterReply,
   });
 
+  // Create thread binding manager for ACP/subagent session spawning into Slack threads.
+  const slackThreadBindings = slackCfg.threadBindings;
+  const threadBindingsEnabled = resolveThreadBindingsEnabled({
+    channelEnabledRaw: slackThreadBindings?.enabled,
+    sessionEnabledRaw: cfg.session?.threadBindings?.enabled,
+  });
+  const threadBindingManager = threadBindingsEnabled
+    ? createSlackThreadBindingManager({
+        accountId: account.accountId,
+        token: botToken,
+        persist: true,
+        enableSweeper: true,
+        idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
+          cfg,
+          channel: "slack",
+          accountId: account.accountId,
+        }),
+        maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
+          cfg,
+          channel: "slack",
+          accountId: account.accountId,
+        }),
+      })
+    : createNoopSlackThreadBindingManager(account.accountId);
+
   // Wire up event liveness tracking: update lastEventAt on every inbound event
   // so the health monitor can detect "half-dead" sockets that pass health checks
   // but silently stop delivering events.
@@ -502,6 +536,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     }
   } finally {
+    threadBindingManager.stop();
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
     await app.stop().catch(() => undefined);
