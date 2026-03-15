@@ -1,6 +1,8 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import {
+  isLocalGatewayAddress,
   isLocalishHost,
   isPrivateOrLoopbackAddress,
   isPrivateOrLoopbackHost,
@@ -11,6 +13,15 @@ import {
   resolveGatewayListenHosts,
   resolveHostName,
 } from "./net.js";
+
+vi.mock("../infra/tailnet.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/tailnet.js")>();
+  return {
+    ...actual,
+    pickPrimaryTailnetIPv4: vi.fn(actual.pickPrimaryTailnetIPv4),
+    pickPrimaryTailnetIPv6: vi.fn(actual.pickPrimaryTailnetIPv6),
+  };
+});
 
 describe("resolveHostName", () => {
   it("normalizes IPv4/hostname and IPv6 host forms", () => {
@@ -516,5 +527,47 @@ describe("isSecureWebSocketUrl", () => {
     for (const input of disallowedWhenOptedIn) {
       expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
     }
+  });
+});
+
+describe("isLocalGatewayAddress", () => {
+  afterEach(() => {
+    vi.mocked(pickPrimaryTailnetIPv4).mockReset();
+    vi.mocked(pickPrimaryTailnetIPv6).mockReset();
+  });
+
+  it("matches tailnet IPv6 regardless of canonical form", () => {
+    // Simulate a tailnet IPv6 address returned by the OS in short form
+    vi.mocked(pickPrimaryTailnetIPv4).mockReturnValue(undefined);
+    vi.mocked(pickPrimaryTailnetIPv6).mockReturnValue("fd7a:115c:a1e0::1");
+
+    // Non-canonical (expanded) form of the same address must match
+    expect(isLocalGatewayAddress("fd7a:115c:a1e0:0:0:0:0:1")).toBe(true);
+    // Canonical short form must also match
+    expect(isLocalGatewayAddress("fd7a:115c:a1e0::1")).toBe(true);
+    // Uppercase must match
+    expect(isLocalGatewayAddress("FD7A:115C:A1E0::1")).toBe(true);
+    // Unrelated address must not match
+    expect(isLocalGatewayAddress("fd7a:115c:a1e0::2")).toBe(false);
+  });
+
+  it("matches tailnet IPv4 via normalized comparison", () => {
+    vi.mocked(pickPrimaryTailnetIPv4).mockReturnValue("100.100.100.100");
+    vi.mocked(pickPrimaryTailnetIPv6).mockReturnValue(undefined);
+
+    expect(isLocalGatewayAddress("100.100.100.100")).toBe(true);
+    // IPv4-mapped IPv6 form of the same address must match
+    expect(isLocalGatewayAddress("::ffff:100.100.100.100")).toBe(true);
+    expect(isLocalGatewayAddress("100.100.100.101")).toBe(false);
+  });
+
+  it("accepts loopback addresses", () => {
+    expect(isLocalGatewayAddress("127.0.0.1")).toBe(true);
+    expect(isLocalGatewayAddress("::1")).toBe(true);
+  });
+
+  it("rejects undefined and empty", () => {
+    expect(isLocalGatewayAddress(undefined)).toBe(false);
+    expect(isLocalGatewayAddress("")).toBe(false);
   });
 });
