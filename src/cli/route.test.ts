@@ -81,4 +81,22 @@ describe("tryRouteCli", () => {
       commandPath: ["status"],
     });
   });
+
+  it("rejects --version so Commander can display it", async () => {
+    const result = await tryRouteCli(["node", "openclaw", "--version"]);
+    expect(result).toBe(false);
+    expect(findRoutedCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects subcommand --version so Commander can display it", async () => {
+    const result = await tryRouteCli(["node", "openclaw", "status", "--version"]);
+    expect(result).toBe(false);
+    expect(findRoutedCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("still rejects --help to let Commander handle it", async () => {
+    const result = await tryRouteCli(["node", "openclaw", "--help"]);
+    expect(result).toBe(false);
+    expect(findRoutedCommandMock).not.toHaveBeenCalled();
+  });
 });
