@@ -25,6 +25,7 @@ import {
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { sanitizeForPromptLiteral, wrapUntrustedPromptDataBlock } from "./sanitize-for-prompt.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -47,9 +48,105 @@ const ADAPTIVE_READ_CONTEXT_SHARE = 0.2;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_ADAPTIVE_READ_PAGES = 8;
 
+/**
+ * Path segment that identifies user-sent inbound media files staged into the sandbox.
+ * Files under this directory are untrusted external content and must be wrapped
+ * with prompt-injection guards before being returned to the LLM.
+ */
+const INBOUND_MEDIA_PATH_SEGMENT = "media/inbound";
+
+/**
+ * Returns true if the given file path is inside the inbound media staging directory.
+ * These files originate from external senders (WhatsApp, Telegram, Slack, etc.)
+ * and must be treated as untrusted data.
+ *
+ * The path is POSIX-normalised before the check so that non-canonical forms
+ * such as `media//inbound/file.txt` or `./media/inbound/file.txt` are
+ * correctly classified as inbound (see #11207 P1 review).
+ *
+ * @param containerWorkdir - Optional configured container working directory
+ *   (e.g. "/work"). When provided, `file://` URLs whose pathname starts with
+ *   this directory are resolved in addition to the default "/workspace" prefix.
+ *   This ensures that non-default containerWorkdir configurations are handled
+ *   correctly (see #11207 P1 review — generalize file URL inbound detection).
+ */
+export function isInboundMediaPath(filePath: string, containerWorkdir?: string): boolean {
+  // Strip path aliases that the read pipeline resolves to workspace paths
+  // before the inbound check so that alias forms like
+  //   @/workspace/media/inbound/payload.txt
+  //   file:///workspace/media/inbound/payload.txt
+  // are classified identically to their canonical equivalents.
+  // This mirrors the alias-stripping done in sandbox-paths.ts
+  // (normalizeAtPrefix / mapContainerWorkspaceFileUrl).
+  let candidate = filePath;
+  // Strip leading "@" prefix (e.g. @/workspace/... → /workspace/...)
+  if (candidate.startsWith("@")) {
+    candidate = candidate.slice(1);
+  }
+  // Strip file:// URL scheme for sandbox container paths.
+  // Accept both the default "/workspace" prefix and the configured
+  // containerWorkdir (if provided) so that non-default workdir setups like
+  // "/work" are handled correctly.  Arbitrary file:// URLs pointing outside
+  // a known container root are not reclassified.
+  if (/^file:\/\//i.test(candidate)) {
+    try {
+      const parsed = new URL(candidate);
+      const pathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+      // Build the set of accepted container roots: always include /workspace;
+      // also include the caller-supplied containerWorkdir when it is a
+      // non-empty absolute POSIX path.
+      const containerRoots = ["/workspace"];
+      if (containerWorkdir) {
+        const normalizedWorkdir = containerWorkdir.replace(/\\/g, "/").replace(/\/+$/, "");
+        if (normalizedWorkdir.startsWith("/") && normalizedWorkdir !== "/workspace") {
+          containerRoots.push(normalizedWorkdir);
+        }
+      }
+      for (const root of containerRoots) {
+        if (pathname === root || pathname.startsWith(`${root}/`)) {
+          candidate = pathname;
+          break;
+        }
+      }
+    } catch {
+      // Malformed URL — fall through with the original string.
+    }
+  }
+  // Normalise: convert backslashes, then collapse redundant separators /
+  // and resolve . / .. segments so that equivalent paths are treated
+  // identically regardless of how the caller constructed the string.
+  // Case-fold after normalisation so that mixed-case paths like
+  // MEDIA/INBOUND/file.txt are correctly classified on case-insensitive
+  // filesystems (macOS, Windows) where they resolve to the same file.
+  const posix = candidate.replace(/\\/g, "/");
+  const normalized = path.posix.normalize(posix).toLowerCase();
+  // Relative path: media/inbound is the first directory segment.
+  if (
+    normalized.startsWith(`${INBOUND_MEDIA_PATH_SEGMENT}/`) ||
+    normalized === INBOUND_MEDIA_PATH_SEGMENT
+  ) {
+    return true;
+  }
+  // Absolute path (POSIX or Windows drive): the staging directory may sit
+  // at any depth below the filesystem root / drive root, i.e.
+  //   /workspace/media/inbound/...              (true)
+  //   C:/workspace/media/inbound/...            (true)
+  //   /Users/alice/openclaw/media/inbound/...   (true - multi-segment host path)
+  //   C:/Users/alice/openclaw/media/inbound/... (true - multi-segment Windows path)
+  //   /workspace/media/inbound                  (false - exact dir, no file)
+  // We require at least one path segment before media/inbound and a trailing
+  // slash (i.e. the path must point to a file inside the directory, not the
+  // directory itself).
+  return new RegExp(`^(?:[A-Za-z]:)?/(?:[^/]+/)+${INBOUND_MEDIA_PATH_SEGMENT}/`).test(normalized);
+}
+
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  /** Optional configured container working directory (e.g. "/work"). Passed to
+   * `isInboundMediaPath` so that file:// URLs using a non-default workdir are
+   * correctly classified as inbound. */
+  containerWorkdir?: string;
 };
 
 type ReadTruncationDetails = {
@@ -595,6 +692,10 @@ type SandboxToolParams = {
   bridge: SandboxFsBridge;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  /** Optional configured container working directory (e.g. "/work"). Forwarded
+   * to `createOpenClawReadTool` so that `isInboundMediaPath` can correctly
+   * classify file:// URLs that use a non-default workdir. */
+  containerWorkdir?: string;
 };
 
 export function createSandboxedReadTool(params: SandboxToolParams) {
@@ -604,6 +705,7 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
+    containerWorkdir: params.containerWorkdir,
   });
 }
 
@@ -659,12 +761,50 @@ export function createOpenClawReadTool(
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
-      return sanitizeToolResultImages(
+      const sanitizedResult = await sanitizeToolResultImages(
         normalizedResult,
         `read:${filePath}`,
         options?.imageSanitization,
       );
+      // Wrap inbound media file content to prevent prompt injection.
+      // Files staged under media/inbound/ originate from external senders and
+      // must be treated as untrusted data, not as agent instructions.
+      if (isInboundMediaPath(filePath, options?.containerWorkdir)) {
+        return wrapInboundFileResult(sanitizedResult, filePath);
+      }
+      return sanitizedResult;
     },
+  };
+}
+
+/**
+ * Wraps the text content of a tool result with untrusted-data markers to
+ * prevent prompt injection from inbound media files.
+ */
+function wrapInboundFileResult(
+  result: AgentToolResult<unknown>,
+  filePath: string,
+): AgentToolResult<unknown> {
+  const content = Array.isArray(result.content) ? result.content : [];
+  const wrappedContent = content.map((block) => {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      const text = (block as { text: string }).text;
+      const wrapped = wrapUntrustedPromptDataBlock({
+        label: `File: ${sanitizeForPromptLiteral(filePath)}`,
+        text,
+      });
+      return { ...(block as object), text: wrapped || text };
+    }
+    return block;
+  });
+  return {
+    ...result,
+    content: wrappedContent as unknown as AgentToolResult<unknown>["content"],
   };
 }
 
