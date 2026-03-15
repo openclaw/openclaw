@@ -2,7 +2,7 @@ import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
-import { resolveModel } from "../agents/pi-embedded-runner/model.js";
+import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
@@ -20,22 +20,27 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(async () => null),
 }));
 
+const mockResolvedModel = (provider: string, modelId: string) => ({
+  model: {
+    provider,
+    id: modelId,
+    name: modelId,
+    api: "openai-completions",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+  },
+  authStorage: { profiles: {} },
+  modelRegistry: { find: vi.fn() },
+});
+
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModel: vi.fn((provider: string, modelId: string) => ({
-    model: {
-      provider,
-      id: modelId,
-      name: modelId,
-      api: "openai-completions",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 8192,
-    },
-    authStorage: { profiles: {} },
-    modelRegistry: { find: vi.fn() },
-  })),
+  resolveModel: vi.fn((provider: string, modelId: string) => mockResolvedModel(provider, modelId)),
+  resolveModelAsync: vi.fn(async (provider: string, modelId: string) =>
+    mockResolvedModel(provider, modelId),
+  ),
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -411,11 +416,11 @@ describe("tts", () => {
         timeoutMs: 30_000,
       });
 
-      expect(resolveModel).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
+      expect(resolveModelAsync).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
     });
 
     it("registers the Ollama api before direct summarization", async () => {
-      vi.mocked(resolveModel).mockReturnValue({
+      vi.mocked(resolveModelAsync).mockResolvedValue({
         model: {
           provider: "ollama",
           id: "qwen3:8b",
