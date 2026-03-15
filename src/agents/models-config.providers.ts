@@ -12,6 +12,7 @@ import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import { buildModelHubProviderWithDiscovery } from "./model-hub-models.js";
 import {
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,
@@ -710,6 +711,9 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("kilocode", async ({ apiKey }) => ({
     ...(await buildKilocodeProviderWithDiscovery()),
     apiKey,
+  })),
+  withApiKey("model-hub", async ({ discoveryApiKey }) => ({
+    ...(await buildModelHubProviderWithDiscovery(discoveryApiKey)),
   })),
 ];
 

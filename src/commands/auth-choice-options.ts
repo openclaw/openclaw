@@ -182,6 +182,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["cloudflare-ai-gateway-api-key"],
   },
   {
+    value: "model-hub",
+    label: "Model Hub(中国大陆代理聚合)",
+    hint: "API key(Aggregated)",
+    choices: ["model-hub-api-key"],
+  },
+  {
     value: "custom",
     label: "Custom Provider",
     hint: "Any OpenAI or Anthropic compatible endpoint",

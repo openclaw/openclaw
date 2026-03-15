@@ -43,6 +43,8 @@ export {
   applyModelStudioConfigCn,
   applyModelStudioProviderConfig,
   applyModelStudioProviderConfigCn,
+  applyModelHubConfig,
+  applyModelHubProviderConfig,
   KILOCODE_BASE_URL,
 } from "./onboard-auth.config-core.js";
 export {
@@ -90,6 +92,8 @@ export {
   setZaiApiKey,
   setXaiApiKey,
   setModelStudioApiKey,
+  setModelHubApiKey,
+  MODEL_HUB_DEFAULT_MODEL_REF,
   writeOAuthCredentials,
   HUGGINGFACE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,

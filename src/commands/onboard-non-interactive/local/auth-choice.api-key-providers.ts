@@ -12,6 +12,7 @@ import {
   applyMistralConfig,
   applyModelStudioConfig,
   applyModelStudioConfigCn,
+  applyModelHubConfig,
   applyMoonshotConfig,
   applyMoonshotConfigCn,
   applyOpencodeGoConfig,
@@ -32,6 +33,7 @@ import {
   setLitellmApiKey,
   setMistralApiKey,
   setModelStudioApiKey,
+  setModelHubApiKey,
   setMoonshotApiKey,
   setOpenaiApiKey,
   setOpencodeGoApiKey,
@@ -487,6 +489,23 @@ function buildSimpleApiKeyAuthChoices(params: { opts: OnboardOptions }): SimpleA
           applyAuthProfileConfig(cfg, {
             profileId: "huggingface:default",
             provider: "huggingface",
+            mode: "api_key",
+          }),
+        ),
+    },
+    {
+      authChoices: ["model-hub-api-key"],
+      provider: "model-hub",
+      flagValue: params.opts.modelHubApiKey,
+      flagName: "--model-hub-api-key",
+      envVar: "MODEL_HUB_API_KEY",
+      profileId: "model-hub:default",
+      setCredential: withStorage(setModelHubApiKey),
+      applyConfig: (cfg) =>
+        applyModelHubConfig(
+          applyAuthProfileConfig(cfg, {
+            profileId: "model-hub:default",
+            provider: "model-hub",
             mode: "api_key",
           }),
         ),

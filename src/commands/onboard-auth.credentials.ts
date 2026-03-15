@@ -11,6 +11,7 @@ import {
   type SecretRef,
 } from "../config/types.secrets.js";
 import { KILOCODE_DEFAULT_MODEL_REF } from "../providers/kilocode-shared.js";
+import { MODEL_HUB_DEFAULT_MODEL_ID } from "../providers/model-hub-shared.js";
 import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./onboard-types.js";
@@ -21,6 +22,7 @@ export {
   MODELSTUDIO_DEFAULT_MODEL_REF,
 } from "./onboard-auth.models.js";
 export { KILOCODE_DEFAULT_MODEL_REF };
+export const MODEL_HUB_DEFAULT_MODEL_REF = `model-hub/${MODEL_HUB_DEFAULT_MODEL_ID}`;
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
 
@@ -535,6 +537,18 @@ export async function setKilocodeApiKey(
   upsertAuthProfile({
     profileId: "kilocode:default",
     credential: buildApiKeyCredential("kilocode", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setModelHubApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "model-hub:default",
+    credential: buildApiKeyCredential("model-hub", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }

@@ -35,6 +35,7 @@ import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
+  MODEL_HUB_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
@@ -670,4 +671,21 @@ export function applyModelStudioConfig(cfg: OpenClawConfig): OpenClawConfig {
 export function applyModelStudioConfigCn(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyModelStudioProviderConfigCn(cfg);
   return applyAgentDefaultModelPrimary(next, MODELSTUDIO_DEFAULT_MODEL_REF);
+}
+
+// Model Hub
+
+export function applyModelHubProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: {},
+    providerId: "model-hub",
+    baseUrl: "https://api.model-hub.cn/v1",
+    api: "openai-completions",
+    catalogModels: [],
+  });
+}
+
+export function applyModelHubConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyModelHubProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, MODEL_HUB_DEFAULT_MODEL_REF);
 }

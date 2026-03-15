@@ -80,6 +80,7 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   "github-copilot": {
     dropThinkingBlockModelHints: ["claude"],
   },
+  "model-hub": {},
 };
 
 export function resolveProviderCapabilities(provider?: string | null): ProviderCapabilities {
