@@ -35,6 +35,12 @@ export async function runGatewayLoop(params: {
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
 
+  // Grace window: ignore SIGTERM during the first seconds after process start
+  // to avoid tearing down a half-initialised server when a CLI process that
+  // shares the systemd cgroup exits immediately after connecting.  (#47133)
+  const STARTUP_GRACE_MS = 10_000;
+  const processStartedAt = Date.now();
+
   const cleanupSignals = () => {
     process.removeListener("SIGTERM", onSigterm);
     process.removeListener("SIGINT", onSigint);
@@ -176,7 +182,18 @@ export async function runGatewayLoop(params: {
   };
 
   const onSigterm = () => {
-    gatewayLog.info("signal SIGTERM received");
+    const uptimeMs = Date.now() - processStartedAt;
+    // During the startup grace window, a SIGTERM is almost certainly a
+    // side-effect of a CLI process exiting from the same cgroup rather than
+    // an intentional service stop.  Log and ignore to prevent the restart
+    // loop described in #47133 / #29827.
+    if (uptimeMs < STARTUP_GRACE_MS && !shuttingDown) {
+      gatewayLog.warn(
+        `signal SIGTERM received ${uptimeMs}ms after start (< ${STARTUP_GRACE_MS}ms grace); ignoring spurious signal`,
+      );
+      return;
+    }
+    gatewayLog.info(`signal SIGTERM received (uptime ${uptimeMs}ms)`);
     request("stop", "SIGTERM");
   };
   const onSigint = () => {
