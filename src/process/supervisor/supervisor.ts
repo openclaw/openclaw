@@ -40,9 +40,11 @@ export function createProcessSupervisor(): ProcessSupervisor {
     if (!current) {
       return;
     }
-    registry.updateState(runId, "exiting", {
-      terminationReason: reason,
-    });
+    // Registry state is updated inside setForcedReason (called via
+    // requestCancel), which is guarded by the per-run `settled` flag.
+    // Calling registry.updateState directly here would bypass that guard
+    // and allow a cancel arriving during the post-settle I/O drain yield
+    // to overwrite a successful exit with "manual-cancel".  #30711
     current.run.cancel(reason);
   };
 
@@ -89,7 +91,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
     const noOutputTimeoutMs = clampTimeout(input.noOutputTimeoutMs);
 
     const setForcedReason = (reason: TerminationReason) => {
-      if (forcedReason) {
+      if (settled || forcedReason) {
         return;
       }
       forcedReason = reason;
@@ -207,10 +209,30 @@ export function createProcessSupervisor(): ProcessSupervisor {
         settled = true;
         clearTimers();
         adapter.dispose();
-        active.delete(runId);
 
+        // Finalize the registry record and remove from the active map
+        // *before* yielding.  reason/exitCode/exitSignal are already
+        // known and stable (forcedReason is guarded by settled).  Doing
+        // this before the yield prevents a second spawn() with the same
+        // explicit runId from overwriting the registry entry during the
+        // I/O drain window.  #30711
         const reason: TerminationReason =
           forcedReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
+        registry.finalize(runId, {
+          reason,
+          exitCode: result.code,
+          exitSignal: result.signal,
+        });
+        active.delete(runId);
+
+        // Yield to the event loop so that any stdout/stderr data events
+        // still queued in the I/O phase are delivered before we snapshot
+        // stdout/stderr.  This closes a race where block-buffered child
+        // output (e.g. bun on a pipe inside Docker) is flushed at exit
+        // and the data callback fires in the same libuv poll cycle as
+        // the 'close' event.  #30711
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
         const exit: RunExit = {
           reason,
           exitCode: result.code,
@@ -221,11 +243,6 @@ export function createProcessSupervisor(): ProcessSupervisor {
           timedOut: isTimeoutReason(forcedReason ?? reason),
           noOutputTimedOut: forcedReason === "no-output-timeout",
         };
-        registry.finalize(runId, {
-          reason: exit.reason,
-          exitCode: exit.exitCode,
-          exitSignal: exit.exitSignal,
-        });
         return exit;
       })().catch((err) => {
         if (!settled) {
