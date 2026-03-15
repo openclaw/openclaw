@@ -225,6 +225,36 @@ describe("loadPluginManifestRegistry", () => {
     ).toBe(true);
   });
 
+  it("reports bundled plugins as the duplicate winner for workspace duplicates", () => {
+    const bundledDir = makeTempDir();
+    const workspaceDir = makeTempDir();
+    const manifest = { id: "shadowed", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(workspaceDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      candidates: [
+        createPluginCandidate({
+          idHint: "shadowed",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "shadowed",
+          rootDir: workspaceDir,
+          origin: "workspace",
+        }),
+      ],
+    });
+
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("workspace plugin will be overridden by bundled plugin"),
+      ),
+    ).toBe(true);
+  });
+
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
     const realDir = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };
