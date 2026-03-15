@@ -24,6 +24,12 @@ function createExitedProcess(code: number | null, signal: string | null = null) 
   };
 }
 
+function expectedBuildSpawn(platform: NodeJS.Platform = process.platform) {
+  return platform === "win32"
+    ? ["cmd.exe", "/d", "/s", "/c", "pnpm", "exec", "tsdown", "--no-clean"]
+    : ["pnpm", "exec", "tsdown", "--no-clean"];
+}
+
 describe("run-node script", () => {
   it.runIf(process.platform !== "win32")(
     "preserves control-ui assets by building with tsdown --no-clean",
@@ -159,6 +165,362 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(23);
+    });
+  });
+
+  it("rebuilds when extension sources are newer than the build stamp", async () => {
+    await withTempDir(async (tmp) => {
+      const extensionPath = path.join(tmp, "extensions", "demo", "src", "index.ts");
+      const distEntryPath = path.join(tmp, "dist", "entry.js");
+      const buildStampPath = path.join(tmp, "dist", ".buildstamp");
+      const tsconfigPath = path.join(tmp, "tsconfig.json");
+      const packageJsonPath = path.join(tmp, "package.json");
+      await fs.mkdir(path.dirname(extensionPath), { recursive: true });
+      await fs.mkdir(path.dirname(distEntryPath), { recursive: true });
+      await fs.writeFile(extensionPath, "export const extensionValue = 1;\n", "utf-8");
+      await fs.writeFile(tsconfigPath, "{}\n", "utf-8");
+      await fs.writeFile(packageJsonPath, '{"name":"openclaw-test"}\n', "utf-8");
+      await fs.writeFile(distEntryPath, "console.log('built');\n", "utf-8");
+      await fs.writeFile(buildStampPath, '{"head":"abc123"}\n', "utf-8");
+
+      const stampTime = new Date("2026-03-13T12:00:00.000Z");
+      const newTime = new Date("2026-03-13T12:00:01.000Z");
+      await fs.utimes(tsconfigPath, stampTime, stampTime);
+      await fs.utimes(packageJsonPath, stampTime, stampTime);
+      await fs.utimes(distEntryPath, stampTime, stampTime);
+      await fs.utimes(buildStampPath, stampTime, stampTime);
+      await fs.utimes(extensionPath, newTime, newTime);
+
+      const spawnCalls: string[][] = [];
+      const spawn = (cmd: string, args: string[]) => {
+        spawnCalls.push([cmd, ...args]);
+        return createExitedProcess(0);
+      };
+      const spawnSync = () => ({ status: 1, stdout: "" });
+
+      const { runNodeMain } = await import("../../scripts/run-node.mjs");
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([
+        expectedBuildSpawn(),
+        [process.execPath, "openclaw.mjs", "status"],
+      ]);
+    });
+  });
+
+  it("skips rebuilding when extension package metadata is newer than the build stamp", async () => {
+    await withTempDir(async (tmp) => {
+      const packagePath = path.join(tmp, "extensions", "demo", "package.json");
+      const distEntryPath = path.join(tmp, "dist", "entry.js");
+      const buildStampPath = path.join(tmp, "dist", ".buildstamp");
+      const tsconfigPath = path.join(tmp, "tsconfig.json");
+      const packageJsonPath = path.join(tmp, "package.json");
+      const tsdownConfigPath = path.join(tmp, "tsdown.config.ts");
+      await fs.mkdir(path.dirname(packagePath), { recursive: true });
+      await fs.mkdir(path.dirname(distEntryPath), { recursive: true });
+      await fs.writeFile(
+        packagePath,
+        '{"name":"demo","openclaw":{"extensions":["./index.ts"]}}\n',
+        "utf-8",
+      );
+      await fs.writeFile(tsconfigPath, "{}\n", "utf-8");
+      await fs.writeFile(packageJsonPath, '{"name":"openclaw-test"}\n', "utf-8");
+      await fs.writeFile(tsdownConfigPath, "export default {};\n", "utf-8");
+      await fs.writeFile(distEntryPath, "console.log('built');\n", "utf-8");
+      await fs.writeFile(buildStampPath, '{"head":"abc123"}\n', "utf-8");
+
+      const oldTime = new Date("2026-03-13T10:00:00.000Z");
+      const stampTime = new Date("2026-03-13T12:00:00.000Z");
+      const newTime = new Date("2026-03-13T12:00:01.000Z");
+      await fs.utimes(tsconfigPath, oldTime, oldTime);
+      await fs.utimes(packageJsonPath, oldTime, oldTime);
+      await fs.utimes(tsdownConfigPath, oldTime, oldTime);
+      await fs.utimes(distEntryPath, stampTime, stampTime);
+      await fs.utimes(buildStampPath, stampTime, stampTime);
+      await fs.utimes(packagePath, newTime, newTime);
+
+      const spawnCalls: string[][] = [];
+      const spawn = (cmd: string, args: string[]) => {
+        spawnCalls.push([cmd, ...args]);
+        return createExitedProcess(0);
+      };
+      const spawnSync = () => ({ status: 1, stdout: "" });
+
+      const { runNodeMain } = await import("../../scripts/run-node.mjs");
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
+    });
+  });
+
+  it("skips rebuilding for dirty non-source files under extensions", async () => {
+    await withTempDir(async (tmp) => {
+      const srcPath = path.join(tmp, "src", "index.ts");
+      const readmePath = path.join(tmp, "extensions", "demo", "README.md");
+      const distEntryPath = path.join(tmp, "dist", "entry.js");
+      const buildStampPath = path.join(tmp, "dist", ".buildstamp");
+      const tsconfigPath = path.join(tmp, "tsconfig.json");
+      const packageJsonPath = path.join(tmp, "package.json");
+      const tsdownConfigPath = path.join(tmp, "tsdown.config.ts");
+      await fs.mkdir(path.dirname(srcPath), { recursive: true });
+      await fs.mkdir(path.dirname(readmePath), { recursive: true });
+      await fs.mkdir(path.dirname(distEntryPath), { recursive: true });
+      await fs.writeFile(srcPath, "export const value = 1;\n", "utf-8");
+      await fs.writeFile(readmePath, "# demo\n", "utf-8");
+      await fs.writeFile(tsconfigPath, "{}\n", "utf-8");
+      await fs.writeFile(packageJsonPath, '{"name":"openclaw-test"}\n', "utf-8");
+      await fs.writeFile(tsdownConfigPath, "export default {};\n", "utf-8");
+      await fs.writeFile(distEntryPath, "console.log('built');\n", "utf-8");
+      await fs.writeFile(buildStampPath, '{"head":"abc123"}\n', "utf-8");
+
+      const stampTime = new Date("2026-03-13T12:00:00.000Z");
+      await fs.utimes(srcPath, stampTime, stampTime);
+      await fs.utimes(readmePath, stampTime, stampTime);
+      await fs.utimes(tsconfigPath, stampTime, stampTime);
+      await fs.utimes(packageJsonPath, stampTime, stampTime);
+      await fs.utimes(tsdownConfigPath, stampTime, stampTime);
+      await fs.utimes(distEntryPath, stampTime, stampTime);
+      await fs.utimes(buildStampPath, stampTime, stampTime);
+
+      const spawnCalls: string[][] = [];
+      const spawn = (cmd: string, args: string[]) => {
+        spawnCalls.push([cmd, ...args]);
+        return createExitedProcess(0);
+      };
+      const spawnSync = (cmd: string, args: string[]) => {
+        if (cmd === "git" && args[0] === "rev-parse") {
+          return { status: 0, stdout: "abc123\n" };
+        }
+        if (cmd === "git" && args[0] === "status") {
+          return { status: 0, stdout: " M extensions/demo/README.md\n" };
+        }
+        return { status: 1, stdout: "" };
+      };
+
+      const { runNodeMain } = await import("../../scripts/run-node.mjs");
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
+    });
+  });
+
+  it("skips rebuilding for dirty extension manifests that only affect runtime reload", async () => {
+    await withTempDir(async (tmp) => {
+      const srcPath = path.join(tmp, "src", "index.ts");
+      const manifestPath = path.join(tmp, "extensions", "demo", "openclaw.plugin.json");
+      const distEntryPath = path.join(tmp, "dist", "entry.js");
+      const buildStampPath = path.join(tmp, "dist", ".buildstamp");
+      const tsconfigPath = path.join(tmp, "tsconfig.json");
+      const packageJsonPath = path.join(tmp, "package.json");
+      const tsdownConfigPath = path.join(tmp, "tsdown.config.ts");
+      await fs.mkdir(path.dirname(srcPath), { recursive: true });
+      await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+      await fs.mkdir(path.dirname(distEntryPath), { recursive: true });
+      await fs.writeFile(srcPath, "export const value = 1;\n", "utf-8");
+      await fs.writeFile(manifestPath, '{"id":"demo"}\n', "utf-8");
+      await fs.writeFile(tsconfigPath, "{}\n", "utf-8");
+      await fs.writeFile(packageJsonPath, '{"name":"openclaw-test"}\n', "utf-8");
+      await fs.writeFile(tsdownConfigPath, "export default {};\n", "utf-8");
+      await fs.writeFile(distEntryPath, "console.log('built');\n", "utf-8");
+      await fs.writeFile(buildStampPath, '{"head":"abc123"}\n', "utf-8");
+
+      const stampTime = new Date("2026-03-13T12:00:00.000Z");
+      await fs.utimes(srcPath, stampTime, stampTime);
+      await fs.utimes(manifestPath, stampTime, stampTime);
+      await fs.utimes(tsconfigPath, stampTime, stampTime);
+      await fs.utimes(packageJsonPath, stampTime, stampTime);
+      await fs.utimes(tsdownConfigPath, stampTime, stampTime);
+      await fs.utimes(distEntryPath, stampTime, stampTime);
+      await fs.utimes(buildStampPath, stampTime, stampTime);
+
+      const spawnCalls: string[][] = [];
+      const spawn = (cmd: string, args: string[]) => {
+        spawnCalls.push([cmd, ...args]);
+        return createExitedProcess(0);
+      };
+      const spawnSync = (cmd: string, args: string[]) => {
+        if (cmd === "git" && args[0] === "rev-parse") {
+          return { status: 0, stdout: "abc123\n" };
+        }
+        if (cmd === "git" && args[0] === "status") {
+          return { status: 0, stdout: " M extensions/demo/openclaw.plugin.json\n" };
+        }
+        return { status: 1, stdout: "" };
+      };
+
+      const { runNodeMain } = await import("../../scripts/run-node.mjs");
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
+    });
+  });
+
+  it("skips rebuilding when only non-source extension files are newer than the build stamp", async () => {
+    await withTempDir(async (tmp) => {
+      const srcPath = path.join(tmp, "src", "index.ts");
+      const readmePath = path.join(tmp, "extensions", "demo", "README.md");
+      const distEntryPath = path.join(tmp, "dist", "entry.js");
+      const buildStampPath = path.join(tmp, "dist", ".buildstamp");
+      const tsconfigPath = path.join(tmp, "tsconfig.json");
+      const packageJsonPath = path.join(tmp, "package.json");
+      const tsdownConfigPath = path.join(tmp, "tsdown.config.ts");
+      await fs.mkdir(path.dirname(srcPath), { recursive: true });
+      await fs.mkdir(path.dirname(readmePath), { recursive: true });
+      await fs.mkdir(path.dirname(distEntryPath), { recursive: true });
+      await fs.writeFile(srcPath, "export const value = 1;\n", "utf-8");
+      await fs.writeFile(readmePath, "# demo\n", "utf-8");
+      await fs.writeFile(tsconfigPath, "{}\n", "utf-8");
+      await fs.writeFile(packageJsonPath, '{"name":"openclaw-test"}\n', "utf-8");
+      await fs.writeFile(tsdownConfigPath, "export default {};\n", "utf-8");
+      await fs.writeFile(distEntryPath, "console.log('built');\n", "utf-8");
+      await fs.writeFile(buildStampPath, '{"head":"abc123"}\n', "utf-8");
+
+      const oldTime = new Date("2026-03-13T10:00:00.000Z");
+      const stampTime = new Date("2026-03-13T12:00:00.000Z");
+      const newTime = new Date("2026-03-13T12:00:01.000Z");
+      await fs.utimes(srcPath, oldTime, oldTime);
+      await fs.utimes(tsconfigPath, oldTime, oldTime);
+      await fs.utimes(packageJsonPath, oldTime, oldTime);
+      await fs.utimes(tsdownConfigPath, oldTime, oldTime);
+      await fs.utimes(distEntryPath, stampTime, stampTime);
+      await fs.utimes(buildStampPath, stampTime, stampTime);
+      await fs.utimes(readmePath, newTime, newTime);
+
+      const spawnCalls: string[][] = [];
+      const spawn = (cmd: string, args: string[]) => {
+        spawnCalls.push([cmd, ...args]);
+        return createExitedProcess(0);
+      };
+      const spawnSync = () => ({ status: 1, stdout: "" });
+
+      const { runNodeMain } = await import("../../scripts/run-node.mjs");
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
+    });
+  });
+
+  it("rebuilds when tsdown config is newer than the build stamp", async () => {
+    await withTempDir(async (tmp) => {
+      const srcPath = path.join(tmp, "src", "index.ts");
+      const distEntryPath = path.join(tmp, "dist", "entry.js");
+      const buildStampPath = path.join(tmp, "dist", ".buildstamp");
+      const tsconfigPath = path.join(tmp, "tsconfig.json");
+      const packageJsonPath = path.join(tmp, "package.json");
+      const tsdownConfigPath = path.join(tmp, "tsdown.config.ts");
+      await fs.mkdir(path.dirname(srcPath), { recursive: true });
+      await fs.mkdir(path.dirname(distEntryPath), { recursive: true });
+      await fs.writeFile(srcPath, "export const value = 1;\n", "utf-8");
+      await fs.writeFile(tsconfigPath, "{}\n", "utf-8");
+      await fs.writeFile(packageJsonPath, '{"name":"openclaw-test"}\n', "utf-8");
+      await fs.writeFile(tsdownConfigPath, "export default {};\n", "utf-8");
+      await fs.writeFile(distEntryPath, "console.log('built');\n", "utf-8");
+      await fs.writeFile(buildStampPath, '{"head":"abc123"}\n', "utf-8");
+
+      const oldTime = new Date("2026-03-13T10:00:00.000Z");
+      const stampTime = new Date("2026-03-13T12:00:00.000Z");
+      const newTime = new Date("2026-03-13T12:00:01.000Z");
+      await fs.utimes(srcPath, oldTime, oldTime);
+      await fs.utimes(tsconfigPath, oldTime, oldTime);
+      await fs.utimes(packageJsonPath, oldTime, oldTime);
+      await fs.utimes(distEntryPath, stampTime, stampTime);
+      await fs.utimes(buildStampPath, stampTime, stampTime);
+      await fs.utimes(tsdownConfigPath, newTime, newTime);
+
+      const spawnCalls: string[][] = [];
+      const spawn = (cmd: string, args: string[]) => {
+        spawnCalls.push([cmd, ...args]);
+        return createExitedProcess(0);
+      };
+      const spawnSync = (cmd: string, args: string[]) => {
+        if (cmd === "git" && args[0] === "rev-parse") {
+          return { status: 0, stdout: "abc123\n" };
+        }
+        if (cmd === "git" && args[0] === "status") {
+          return { status: 0, stdout: "" };
+        }
+        return { status: 1, stdout: "" };
+      };
+
+      const { runNodeMain } = await import("../../scripts/run-node.mjs");
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([
+        expectedBuildSpawn(),
+        [process.execPath, "openclaw.mjs", "status"],
+      ]);
     });
   });
 });
