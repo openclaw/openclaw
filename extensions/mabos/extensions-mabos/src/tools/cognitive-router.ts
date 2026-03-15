@@ -95,7 +95,10 @@ async function callLlm(
   opts: { maxTokens?: number; temperature?: number } = {},
 ): Promise<string | null> {
   // Guard: runtime may not have modelAuth
-  if (!api?.runtime?.modelAuth) return null;
+  if (!api?.runtime?.modelAuth) {
+    console.log("[callLlm] DIAG: No runtime.modelAuth available");
+    return null;
+  }
 
   // Try Anthropic first
   try {
@@ -103,6 +106,9 @@ async function callLlm(
       provider: "anthropic",
       cfg: api.config,
     });
+    console.log(
+      `[callLlm] DIAG: Anthropic auth: hasKey=${!!auth?.apiKey}, source=${(auth as any)?.source}`,
+    );
     if (auth?.apiKey) {
       const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -119,13 +125,20 @@ async function callLlm(
           messages: [{ role: "user", content: userPrompt }],
         }),
       });
+      console.log(`[callLlm] DIAG: Anthropic resp status=${resp.status}`);
       if (resp.ok) {
         const data = (await resp.json()) as { content?: Array<{ text?: string }> };
-        return data.content?.[0]?.text ?? null;
+        const text = data.content?.[0]?.text ?? null;
+        console.log(`[callLlm] DIAG: Anthropic success: ${text ? text.length + " chars" : "null"}`);
+        return text;
       }
+      const errBody = await resp.text().catch(() => "");
+      console.log(`[callLlm] DIAG: Anthropic non-ok: ${resp.status} ${errBody.slice(0, 200)}`);
     }
-  } catch {
-    /* fall through */
+  } catch (err) {
+    console.log(
+      `[callLlm] DIAG: Anthropic error: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   // Fallback: OpenAI
@@ -134,6 +147,9 @@ async function callLlm(
       provider: "openai",
       cfg: api.config,
     });
+    console.log(
+      `[callLlm] DIAG: OpenAI auth: hasKey=${!!auth?.apiKey}, source=${(auth as any)?.source}`,
+    );
     if (auth?.apiKey) {
       const resp = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
@@ -151,6 +167,7 @@ async function callLlm(
           ],
         }),
       });
+      console.log(`[callLlm] DIAG: OpenAI resp status=${resp.status}`);
       if (resp.ok) {
         const data = (await resp.json()) as {
           choices?: Array<{ message?: { content?: string } }>;
@@ -158,10 +175,13 @@ async function callLlm(
         return data.choices?.[0]?.message?.content ?? null;
       }
     }
-  } catch {
-    /* fall through */
+  } catch (err) {
+    console.log(
+      `[callLlm] DIAG: OpenAI error: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
+  console.log("[callLlm] DIAG: All providers failed");
   return null; // Graceful degradation — callers use structured fallback
 }
 
