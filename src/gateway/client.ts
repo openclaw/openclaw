@@ -121,6 +121,15 @@ export function describeGatewayCloseCode(code: number): string | undefined {
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 
+/** Returns true when the host falls inside the CGNAT range (100.64.0.0/10, includes Tailscale). */
+function isCgnatAddress(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4) return false;
+  const a = Number(parts[0]);
+  const b = Number(parts[1]);
+  return a === 100 && b >= 64 && b <= 127;
+}
+
 export class GatewayClient {
   private ws: WebSocket | null = null;
   private opts: GatewayClientOptions;
@@ -216,6 +225,24 @@ export class GatewayClient {
         return undefined;
         // oxlint-disable-next-line typescript/no-explicit-any
       }) as any;
+    } else if (url.startsWith("wss://")) {
+      // Accept self-signed certs only for local TLS connections where the gateway
+      // auto-generates a self-signed cert. Remote connections keep default CA validation.
+      try {
+        const host = new URL(url).hostname.toLowerCase();
+        if (
+          host === "localhost" ||
+          host === "127.0.0.1" ||
+          host === "::1" ||
+          host === "[::1]" ||
+          host === "0.0.0.0" ||
+          isCgnatAddress(host)
+        ) {
+          wsOptions.rejectUnauthorized = false;
+        }
+      } catch {
+        // Invalid URL — leave default TLS verification intact
+      }
     }
     this.ws = new WebSocket(url, wsOptions);
 
