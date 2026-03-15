@@ -95,6 +95,8 @@ export function buildAgentSessionKey(params: {
   peer?: RoutePeer | null;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  /** Group/channel session scope. When "main", group messages route to the main session. */
+  groupScope?: "main" | "per-channel";
   identityLinks?: Record<string, string[]>;
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
@@ -107,6 +109,7 @@ export function buildAgentSessionKey(params: {
     peerKind: peer?.kind ?? "direct",
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
+    groupScope: params.groupScope,
     identityLinks: params.identityLinks,
   });
 }
@@ -658,7 +661,11 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
   const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(input.cfg, channel, accountId);
 
-  const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
+  const choose = (
+    agentId: string,
+    matchedBy: ResolvedAgentRoute["matchedBy"],
+    bindingGroupScope?: "main" | "per-channel",
+  ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
@@ -666,6 +673,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       accountId,
       peer,
       dmScope,
+      groupScope: bindingGroupScope ?? "per-channel",
       identityLinks,
     }).toLowerCase();
     const mainSessionKey = buildAgentMainSessionKey({
@@ -796,7 +804,8 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       if (shouldLogDebug) {
         logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
       }
-      return choose(matched.binding.agentId, tier.matchedBy);
+      const routeBinding = matched.binding as { groupScope?: "main" | "per-channel" };
+      return choose(matched.binding.agentId, tier.matchedBy, routeBinding.groupScope);
     }
   }
 
