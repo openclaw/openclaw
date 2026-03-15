@@ -1,7 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleSendChat, refreshChatAvatar, type ChatHost } from "./app-chat.ts";
+import {
+  flushChatQueueForEvent,
+  handleSendChat,
+  refreshChatAvatar,
+  type ChatHost,
+} from "./app-chat.ts";
 import type { ChatAutoScrollMode } from "./app-scroll.ts";
 
 type TestChatHost = ChatHost & {
@@ -177,5 +182,44 @@ describe("handleSendChat", () => {
     expect(host.chatAutoScrollMode).toBe("bottom");
     expect(host.chatSuppressedBlockId).toBeNull();
     expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("preserves manual scroll state when draining a queued send", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "queued hello",
+      chatSending: true,
+      chatUserNearBottom: false,
+      chatAutoScrollMode: "clamp",
+      chatSuppressedBlockId: "stream:1",
+      chatNewMessagesBelow: true,
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatAutoScrollMode).toBe("clamp");
+    expect(host.chatSuppressedBlockId).toBe("stream:1");
+    expect(host.chatNewMessagesBelow).toBe(true);
+
+    host.chatSending = false;
+    await flushChatQueueForEvent(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message: "queued hello" }),
+    );
+    expect(host.chatQueue).toHaveLength(0);
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatAutoScrollMode).toBe("clamp");
+    expect(host.chatSuppressedBlockId).toBe("stream:1");
+    expect(host.chatNewMessagesBelow).toBe(true);
   });
 });
