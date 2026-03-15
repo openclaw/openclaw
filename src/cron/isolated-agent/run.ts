@@ -387,11 +387,14 @@ export async function runCronIsolatedAgentTurn(params: {
     if (sessionModelOverride) {
       const sessionProviderOverride =
         cronSession.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
+      // Pass the raw override without manually prepending the provider so
+      // that alias resolution inside resolveAllowedModelRef is not bypassed
+      // (aliases are only checked when the raw string has no '/').  #18556
       const resolvedSessionOverride = resolveAllowedModelRef({
         cfg: cfgWithAgentDefaults,
         catalog: await loadCatalog(),
-        raw: `${sessionProviderOverride}/${sessionModelOverride}`,
-        defaultProvider: resolvedDefault.provider,
+        raw: sessionModelOverride,
+        defaultProvider: sessionProviderOverride,
         defaultModel: resolvedDefault.model,
       });
       if (!("error" in resolvedSessionOverride)) {
