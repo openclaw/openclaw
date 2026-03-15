@@ -362,6 +362,40 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, "invalid execHost");
   });
 
+  test("accepts xhigh for proxy providers carrying upstream xhigh-capable refs", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess-proxy-xhigh",
+        updatedAt: 1,
+        providerOverride: "vercel-ai-gateway",
+        modelOverride: "openai/gpt-5.4",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, thinkingLevel: "xhigh" },
+      }),
+    );
+    expect(entry.thinkingLevel).toBe("xhigh");
+  });
+
+  test("rejects xhigh for proxy providers carrying unsupported upstream refs", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess-proxy-no-xhigh",
+        updatedAt: 1,
+        providerOverride: "vercel-ai-gateway",
+        modelOverride: "openai/gpt-4.1-mini",
+      } as SessionEntry,
+    };
+    const result = await runPatch({
+      store,
+      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "xhigh" },
+    });
+    expectPatchError(result, 'thinkingLevel "xhigh" is only supported');
+  });
+
   test("rejects invalid sendPolicy values", async () => {
     const result = await runPatch({
       patch: { key: MAIN_SESSION_KEY, sendPolicy: "ask" as unknown as "allow" },

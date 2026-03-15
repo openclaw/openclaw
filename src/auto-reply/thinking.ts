@@ -51,6 +51,34 @@ const XHIGH_MODEL_IDS = new Set(
   ),
 );
 
+function buildXHighLookupCandidates(
+  provider?: string | null,
+  model?: string | null,
+): {
+  refs: Set<string>;
+  ids: Set<string>;
+} {
+  const refs = new Set<string>();
+  const ids = new Set<string>();
+  const normalizedModel = model?.trim().toLowerCase();
+  if (!normalizedModel) {
+    return { refs, ids };
+  }
+
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider) {
+    refs.add(`${normalizedProvider}/${normalizedModel}`);
+  }
+
+  if (normalizedModel.includes("/")) {
+    refs.add(normalizedModel);
+  } else {
+    ids.add(normalizedModel);
+  }
+
+  return { refs, ids };
+}
+
 // Normalize user-provided thinking level strings to the canonical enum.
 export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
   if (!raw) {
@@ -91,15 +119,18 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
 }
 
 export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
-  const modelKey = model?.trim().toLowerCase();
-  if (!modelKey) {
-    return false;
+  const candidates = buildXHighLookupCandidates(provider, model);
+  for (const ref of candidates.refs) {
+    if (XHIGH_MODEL_SET.has(ref)) {
+      return true;
+    }
   }
-  const providerKey = provider?.trim().toLowerCase();
-  if (providerKey) {
-    return XHIGH_MODEL_SET.has(`${providerKey}/${modelKey}`);
+  for (const id of candidates.ids) {
+    if (XHIGH_MODEL_IDS.has(id)) {
+      return true;
+    }
   }
-  return XHIGH_MODEL_IDS.has(modelKey);
+  return false;
 }
 
 export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {

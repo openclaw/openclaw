@@ -5,6 +5,7 @@ import {
   normalizeReasoningLevel,
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
+  supportsXHighThinking,
 } from "./thinking.js";
 
 describe("normalizeThinkLevel", () => {
@@ -64,6 +65,14 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("github-copilot", "gpt-5.2-codex")).toContain("xhigh");
   });
 
+  it("includes xhigh for provider aliases when the model id matches", () => {
+    expect(listThinkingLevels("openai-compatible", "gpt-5.3-codex-spark")).toContain("xhigh");
+  });
+
+  it("includes xhigh for proxy providers with upstream provider-prefixed model refs", () => {
+    expect(listThinkingLevels("vercel-ai-gateway", "openai/gpt-5.4")).toContain("xhigh");
+  });
+
   it("excludes xhigh for non-codex models", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("xhigh");
   });
@@ -82,6 +91,24 @@ describe("listThinkingLevelLabels", () => {
   it("returns full levels for non-ZAI", () => {
     expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).toContain("low");
     expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).not.toContain("on");
+  });
+});
+
+describe("supportsXHighThinking", () => {
+  it("matches embedded upstream refs before falling back to the model id", () => {
+    expect(supportsXHighThinking("vercel-ai-gateway", "openai/gpt-5.4")).toBe(true);
+  });
+
+  it("does not treat arbitrary namespaced refs as allowlisted by trailing model id", () => {
+    expect(supportsXHighThinking("vercel-ai-gateway", "acme/gpt-5.4")).toBe(false);
+  });
+
+  it("enables xhigh for provider aliases whose model id is in the allowlist", () => {
+    expect(supportsXHighThinking("openai-compatible", "gpt-5.3-codex-spark")).toBe(true);
+  });
+
+  it("does not enable xhigh for unrelated proxy model ids", () => {
+    expect(supportsXHighThinking("vercel-ai-gateway", "openai/gpt-4.1-mini")).toBe(false);
   });
 });
 
