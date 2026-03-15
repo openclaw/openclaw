@@ -49,14 +49,13 @@ export function updateCache(
     contextTools,
     totalTurnsProcessed: totalTurns,
     lastSummarizedTurnCount: existing?.lastSummarizedTurnCount ?? 0,
-    // Preserve isSystemTrigger when currentPrompt is empty (agent loop continuation).
-    // During a heartbeat cycle, llm_input fires multiple times: first with the
-    // heartbeat prompt (isSystemTrigger=true), then without a prompt as the agent
-    // loop continues after tool results. Without preservation, the flag resets to
-    // false and heartbeat tool calls reach the guardian unnecessarily.
-    isSystemTrigger: currentPrompt
-      ? isSystemTriggerPrompt(currentPrompt)
-      : (existing?.isSystemTrigger ?? false),
+    // Detect system triggers from both currentPrompt AND the last user message
+    // in historyMessages. Heartbeats may arrive via either path depending on
+    // the agent loop stage (currentPrompt on first llm_input, historyMessages
+    // on subsequent continuations after tool results).
+    isSystemTrigger:
+      isSystemTriggerPrompt(currentPrompt) ||
+      isSystemTriggerPrompt(getLastUserMessageText(historyMessages)),
     agentSystemPrompt: existing?.agentSystemPrompt,
     updatedAt: Date.now(),
   });
@@ -277,6 +276,17 @@ function filterSystemTurns(turns: ConversationTurn[]): ConversationTurn[] {
     if (/heartbeat_ok/i.test(text) || /heartbeat\.md/i.test(text)) return false;
     return true;
   });
+}
+
+/** Extract text from the last user message in the history array. */
+function getLastUserMessageText(historyMessages: unknown[]): string | undefined {
+  for (let i = historyMessages.length - 1; i >= 0; i--) {
+    const msg = historyMessages[i];
+    if (isMessageLike(msg) && msg.role === "user") {
+      return extractTextContent(msg.content) || undefined;
+    }
+  }
+  return undefined;
 }
 
 /** Count user messages in the history array. */

@@ -556,12 +556,12 @@ describe("message-cache", () => {
       expect(isSystemTrigger("nonexistent")).toBe(false);
     });
 
-    it("preserves isSystemTrigger when subsequent llm_input has no prompt", () => {
+    it("stays true when heartbeat is in historyMessages on subsequent llm_input", () => {
       // Heartbeat fires with prompt → isSystemTrigger=true
       updateCache("s1", [], "heartbeat", 3, NO_FILTER);
       expect(isSystemTrigger("s1")).toBe(true);
 
-      // Agent loop continues without prompt (tool result processed) → should preserve true
+      // Agent loop continues — heartbeat is now in historyMessages
       updateCache("s1", [{ role: "user", content: "heartbeat" }], undefined, 3, NO_FILTER);
       expect(isSystemTrigger("s1")).toBe(true);
     });
@@ -570,11 +570,15 @@ describe("message-cache", () => {
       updateCache("s1", [], "heartbeat", 3, NO_FILTER);
       expect(isSystemTrigger("s1")).toBe(true);
 
-      // Real user message arrives → should reset to false
+      // Real user message arrives — now the last user message in history is the real one
       updateCache(
         "s1",
-        [{ role: "user", content: "heartbeat" }],
-        "Deploy my project",
+        [
+          { role: "user", content: "heartbeat" },
+          { role: "assistant", content: "HEARTBEAT_OK" },
+          { role: "user", content: "Deploy my project" },
+        ],
+        undefined,
         3,
         NO_FILTER,
       );
@@ -584,6 +588,27 @@ describe("message-cache", () => {
     it("does not inherit system trigger from a different session's history", () => {
       // Fresh session with no prompt → should be false (not inherited)
       updateCache("s1", [], undefined, 3, NO_FILTER);
+      expect(isSystemTrigger("s1")).toBe(false);
+    });
+
+    it("detects heartbeat from last user message in historyMessages when currentPrompt is undefined", () => {
+      // Heartbeat prompt arrives via historyMessages, not currentPrompt
+      const heartbeatPrompt =
+        "Read HEARTBEAT.md if it exists (workspace context). If nothing needs attention, reply HEARTBEAT_OK.";
+      updateCache("s1", [{ role: "user", content: heartbeatPrompt }], undefined, 3, NO_FILTER);
+      expect(isSystemTrigger("s1")).toBe(true);
+    });
+
+    it("detects heartbeat from historyMessages even on first llm_input (no existing entry)", () => {
+      updateCache("s1", [{ role: "user", content: "heartbeat" }], undefined, 3, NO_FILTER);
+      expect(isSystemTrigger("s1")).toBe(true);
+    });
+
+    it("resets when historyMessages last user message is not a system trigger", () => {
+      updateCache("s1", [{ role: "user", content: "heartbeat" }], undefined, 3, NO_FILTER);
+      expect(isSystemTrigger("s1")).toBe(true);
+
+      updateCache("s1", [{ role: "user", content: "Deploy my project" }], undefined, 3, NO_FILTER);
       expect(isSystemTrigger("s1")).toBe(false);
     });
   });
