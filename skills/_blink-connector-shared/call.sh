@@ -18,5 +18,5 @@ curl -sf -X POST \
   -H "Authorization: Bearer ${BLINK_API_KEY}" \
   -H "x-blink-agent-id: ${BLINK_AGENT_ID}" \
   -H "Content-Type: application/json" \
-  "${BLINK_APIS_URL:-https://api.blink.new}/v1/connectors/${PROVIDER}/execute" \
+  "${BLINK_APIS_URL:-https://core.blink.new}/v1/connectors/${PROVIDER}/execute" \
   -d "$BODY"
