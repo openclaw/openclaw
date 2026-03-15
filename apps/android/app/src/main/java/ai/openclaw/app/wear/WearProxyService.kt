@@ -6,6 +6,7 @@ import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import ai.openclaw.app.NodeApp
+import ai.openclaw.android.gateway.ProxyPaths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,11 +23,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 
 private const val TAG = "WearProxy"
-private const val RPC_PATH = "/openclaw/rpc"
-private const val RPC_RESPONSE_PATH = "/openclaw/rpc-response"
-private const val EVENT_PATH = "/openclaw/event"
-private const val PING_PATH = "/openclaw/ping"
-private const val PONG_PATH = "/openclaw/pong"
 
 /**
  * Runs on the PHONE. Receives RPC requests from the watch via Data Layer,
@@ -44,8 +40,8 @@ class WearProxyService : WearableListenerService() {
   override fun onMessageReceived(event: MessageEvent) {
     Log.i(TAG, "onMessageReceived: path=${event.path} from=${event.sourceNodeId}")
     when (event.path) {
-      PING_PATH -> handlePing(event.sourceNodeId)
-      RPC_PATH -> handleRpcRequest(event.sourceNodeId, event.data)
+      ProxyPaths.PING -> handlePing(event.sourceNodeId)
+      ProxyPaths.RPC -> handleRpcRequest(event.sourceNodeId, event.data)
       else -> Log.w(TAG, "Unknown path: ${event.path}")
     }
   }
@@ -55,7 +51,7 @@ class WearProxyService : WearableListenerService() {
     scope.launch {
       try {
         val handshakePayload = runtime.wearProxyHandshakePayload().toByteArray(Charsets.UTF_8)
-        messageClient.sendMessage(sourceNodeId, PONG_PATH, handshakePayload).await()
+        messageClient.sendMessage(sourceNodeId, ProxyPaths.PONG, handshakePayload).await()
         Log.i(TAG, "Pong sent successfully to $sourceNodeId")
         if (runtime.isConnected.value) {
           startEventForwarding(sourceNodeId)
@@ -88,7 +84,7 @@ class WearProxyService : WearableListenerService() {
             put("ok", JsonPrimitive(true))
             put("payload", json.parseToJsonElement(result))
           }
-          messageClient.sendMessage(sourceNodeId, RPC_RESPONSE_PATH, response.toString().toByteArray(Charsets.UTF_8)).await()
+          messageClient.sendMessage(sourceNodeId, ProxyPaths.RPC_RESPONSE, response.toString().toByteArray(Charsets.UTF_8)).await()
           Log.i(TAG, "RPC response sent for $method id=$id")
         } catch (e: Throwable) {
           Log.e(TAG, "RPC failed: method=$method error=${e.message}", e)
@@ -100,7 +96,7 @@ class WearProxyService : WearableListenerService() {
               put("message", JsonPrimitive(e.message ?: "Unknown error"))
             })
           }
-          messageClient.sendMessage(sourceNodeId, RPC_RESPONSE_PATH, response.toString().toByteArray(Charsets.UTF_8)).await()
+          messageClient.sendMessage(sourceNodeId, ProxyPaths.RPC_RESPONSE, response.toString().toByteArray(Charsets.UTF_8)).await()
         }
       } catch (e: Throwable) {
         Log.e(TAG, "Failed to handle RPC: ${e.message}", e)
@@ -133,7 +129,7 @@ class WearProxyService : WearableListenerService() {
         put("payload", payload)
       }
     }
-    messageClient.sendMessage(nodeId, EVENT_PATH, msg.toString().toByteArray(Charsets.UTF_8)).await()
+    messageClient.sendMessage(nodeId, ProxyPaths.EVENT, msg.toString().toByteArray(Charsets.UTF_8)).await()
   }
 
   override fun onDestroy() {

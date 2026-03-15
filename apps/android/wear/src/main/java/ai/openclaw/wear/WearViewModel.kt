@@ -4,7 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import ai.openclaw.wear.chat.WearChatMessage
 import ai.openclaw.wear.chat.WearChatController
-import ai.openclaw.wear.chat.WearSessionEntry
+import ai.openclaw.android.gateway.GatewaySessionEntry
 import ai.openclaw.wear.gateway.WearGatewayConfig
 import ai.openclaw.wear.gateway.WearGatewayConfigStore
 import kotlinx.coroutines.flow.SharedFlow
@@ -30,7 +30,7 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
   val errorText: StateFlow<String?> = chat.errorText
   val isLoading: StateFlow<Boolean> = chat.isLoading
   val isSending: StateFlow<Boolean> = chat.isSending
-  val sessions: StateFlow<List<WearSessionEntry>> = chat.sessions
+  val sessions: StateFlow<List<GatewaySessionEntry>> = chat.sessions
   val assistantReplies: SharedFlow<String> = chat.assistantReplies
 
   fun sendMessage(text: String) = chat.sendMessage(text)

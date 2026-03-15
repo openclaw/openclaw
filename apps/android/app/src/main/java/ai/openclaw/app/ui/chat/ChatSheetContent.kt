@@ -33,7 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.android.gateway.GatewaySessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentBorderStrong
@@ -156,7 +156,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
 @Composable
 private fun ChatThreadSelector(
   sessionKey: String,
-  sessions: List<ChatSessionEntry>,
+  sessions: List<GatewaySessionEntry>,
   mainSessionKey: String,
   onSelectSession: (String) -> Unit,
 ) {

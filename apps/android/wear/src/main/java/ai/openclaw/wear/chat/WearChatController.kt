@@ -1,8 +1,12 @@
 package ai.openclaw.wear.chat
 
 import ai.openclaw.wear.R
+import ai.openclaw.android.gateway.GatewayEvent
+import ai.openclaw.android.gateway.GatewaySessionEntry
+import ai.openclaw.android.gateway.asObjectOrNull
+import ai.openclaw.android.gateway.asStringOrNull
+import ai.openclaw.android.gateway.parseSessionsList
 import ai.openclaw.wear.gateway.GatewayClientInterface
-import ai.openclaw.wear.gateway.GatewayEvent
 import java.util.UUID
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
@@ -84,8 +88,8 @@ class WearChatController(
   private val _isSending = MutableStateFlow(false)
   val isSending: StateFlow<Boolean> = _isSending.asStateFlow()
 
-  private val _sessions = MutableStateFlow<List<WearSessionEntry>>(emptyList())
-  val sessions: StateFlow<List<WearSessionEntry>> = _sessions.asStateFlow()
+  private val _sessions = MutableStateFlow<List<GatewaySessionEntry>>(emptyList())
+  val sessions: StateFlow<List<GatewaySessionEntry>> = _sessions.asStateFlow()
 
   private val _assistantReplies = MutableSharedFlow<String>(extraBufferCapacity = 4)
   val assistantReplies: SharedFlow<String> = _assistantReplies.asSharedFlow()
@@ -164,7 +168,7 @@ class WearChatController(
           put("limit", JsonPrimitive(50))
         }
         val result = client.request("sessions.list", params.toString())
-        _sessions.value = parseSessions(result)
+        _sessions.value = parseSessionsList(result)
       } catch (_: Throwable) {
         // best-effort
       }
@@ -371,8 +375,8 @@ class WearChatController(
     when (payload.str("state")) {
       "delta" -> {
         if (runId != null && !isPendingRun(runId)) return
-        val message = payload["message"].asObj()
-        if (message?.str("role") == "assistant") {
+        val message = payload["message"].asObjectOrNull()
+        if (message?.get("role").asStringOrNull() == "assistant") {
           val content = (message["content"] as? JsonArray) ?: return
           for (item in content) {
             val obj = item.asObj() ?: continue
@@ -565,20 +569,7 @@ class WearChatController(
     }
   }
 
-  private fun parseSessions(resultJson: String): List<WearSessionEntry> {
-    val root = parseObject(resultJson) ?: return emptyList()
-    val sessions = (root["sessions"] as? JsonArray) ?: return emptyList()
-    return sessions.mapNotNull { item ->
-      val obj = item.asObj() ?: return@mapNotNull null
-      val key = obj.str("key")?.trim().orEmpty()
-      if (key.isEmpty()) return@mapNotNull null
-      WearSessionEntry(
-        key = key,
-        updatedAtMs = (obj["updatedAt"] as? JsonPrimitive)?.content?.toLongOrNull(),
-        displayName = obj.str("displayName")?.trim(),
-      )
-    }
-  }
+
 
   private fun parseObject(s: String): JsonObject? {
     return try {
