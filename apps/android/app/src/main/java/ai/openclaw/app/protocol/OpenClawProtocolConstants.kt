@@ -3,18 +3,17 @@ package ai.openclaw.app.protocol
 enum class OpenClawCapability(val rawValue: String) {
   Canvas("canvas"),
   Camera("camera"),
-  Screen("screen"),
   Sms("sms"),
   VoiceWake("voiceWake"),
   Location("location"),
   Device("device"),
   Notifications("notifications"),
   System("system"),
-  AppUpdate("appUpdate"),
   Photos("photos"),
   Contacts("contacts"),
   Calendar("calendar"),
   Motion("motion"),
+  CallLog("callLog"),
 }
 
 enum class OpenClawCanvasCommand(val rawValue: String) {
@@ -49,15 +48,6 @@ enum class OpenClawCameraCommand(val rawValue: String) {
 
   companion object {
     const val NamespacePrefix: String = "camera."
-  }
-}
-
-enum class OpenClawScreenCommand(val rawValue: String) {
-  Record("screen.record"),
-  ;
-
-  companion object {
-    const val NamespacePrefix: String = "screen."
   }
 }
 
@@ -146,5 +136,14 @@ enum class OpenClawMotionCommand(val rawValue: String) {
 
   companion object {
     const val NamespacePrefix: String = "motion."
+  }
+}
+
+enum class OpenClawCallLogCommand(val rawValue: String) {
+  Search("callLog.search"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "callLog."
   }
 }

@@ -51,7 +51,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
     - Workspace default (or existing workspace)
     - Gateway port **18789**
     - Gateway auth **Token** (auto‑generated, even on loopback)
-    - Tool policy default for new local setups: `tools.profile: "messaging"` (existing explicit profile is preserved)
+    - Tool policy default for new local setups: `tools.profile: "coding"` (existing explicit profile is preserved)
     - DM isolation default: local onboarding writes `session.dmScope: "per-channel-peer"` when unset. Details: [CLI Onboarding Reference](/start/wizard-cli-reference#outputs-and-internals)
     - Tailscale exposure **Off**
     - Telegram + WhatsApp DMs default to **allowlist** (you'll be prompted for your phone number)
@@ -111,8 +111,10 @@ Notes:
 
 ## Full reference
 
-For detailed step-by-step breakdowns, non-interactive scripting, Signal setup,
-RPC API, and a full list of config fields the wizard writes, see the
+For detailed step-by-step breakdowns and config outputs, see
+[CLI Onboarding Reference](/start/wizard-cli-reference).
+For non-interactive examples, see [CLI Automation](/start/wizard-cli-automation).
+For the deeper technical reference, including RPC details, see
 [Wizard Reference](/reference/wizard).
 
 ## Related docs

@@ -18,6 +18,31 @@ describe("resolveAllowAlwaysPatterns", () => {
     return exe;
   }
 
+  function resolvePersistedPatterns(params: {
+    command: string;
+    dir: string;
+    env: Record<string, string | undefined>;
+    safeBins: ReturnType<typeof resolveSafeBins>;
+  }) {
+    const analysis = evaluateShellAllowlist({
+      command: params.command,
+      allowlist: [],
+      safeBins: params.safeBins,
+      cwd: params.dir,
+      env: params.env,
+      platform: process.platform,
+    });
+    return {
+      analysis,
+      persisted: resolveAllowAlwaysPatterns({
+        segments: analysis.segments,
+        cwd: params.dir,
+        env: params.env,
+        platform: process.platform,
+      }),
+    };
+  }
+
   function expectAllowAlwaysBypassBlocked(params: {
     dir: string;
     firstCommand: string;
@@ -26,19 +51,11 @@ describe("resolveAllowAlwaysPatterns", () => {
     persistedPattern: string;
   }) {
     const safeBins = resolveSafeBins(undefined);
-    const first = evaluateShellAllowlist({
+    const { persisted } = resolvePersistedPatterns({
       command: params.firstCommand,
-      allowlist: [],
+      dir: params.dir,
+      env: params.env,
       safeBins,
-      cwd: params.dir,
-      env: params.env,
-      platform: process.platform,
-    });
-    const persisted = resolveAllowAlwaysPatterns({
-      segments: first.segments,
-      cwd: params.dir,
-      env: params.env,
-      platform: process.platform,
     });
     expect(persisted).toEqual([params.persistedPattern]);
 
@@ -59,6 +76,43 @@ describe("resolveAllowAlwaysPatterns", () => {
         allowlistSatisfied: second.allowlistSatisfied,
       }),
     ).toBe(true);
+  }
+
+  function createShellScriptFixture() {
+    const dir = makeTempDir();
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const script = path.join(scriptsDir, "save_crystal.sh");
+    fs.writeFileSync(script, "echo ok\n");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const safeBins = resolveSafeBins(undefined);
+    return { dir, scriptsDir, script, env, safeBins };
+  }
+
+  function expectPersistedShellScriptMatch(params: {
+    command: string;
+    script: string;
+    dir: string;
+    env: Record<string, string | undefined>;
+    safeBins: ReturnType<typeof resolveSafeBins>;
+  }) {
+    const { persisted } = resolvePersistedPatterns({
+      command: params.command,
+      dir: params.dir,
+      env: params.env,
+      safeBins: params.safeBins,
+    });
+    expect(persisted).toEqual([params.script]);
+
+    const second = evaluateShellAllowlist({
+      command: params.command,
+      allowlist: [{ pattern: params.script }],
+      safeBins: params.safeBins,
+      cwd: params.dir,
+      env: params.env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
   }
 
   it("returns direct executable paths for non-shell segments", () => {
@@ -125,6 +179,74 @@ describe("resolveAllowAlwaysPatterns", () => {
       platform: process.platform,
     });
     expect(new Set(patterns)).toEqual(new Set([whoami, ls]));
+  });
+
+  it("persists shell script paths for wrapper invocations without inline commands", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, scriptsDir, script, env, safeBins } = createShellScriptFixture();
+    expectPersistedShellScriptMatch({
+      command: "bash scripts/save_crystal.sh",
+      script,
+      dir,
+      env,
+      safeBins,
+    });
+
+    const other = path.join(scriptsDir, "other.sh");
+    fs.writeFileSync(other, "echo other\n");
+    const third = evaluateShellAllowlist({
+      command: "bash scripts/other.sh",
+      allowlist: [{ pattern: script }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(third.allowlistSatisfied).toBe(false);
+  });
+
+  it("matches persisted shell script paths through dispatch wrappers", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, script, env, safeBins } = createShellScriptFixture();
+    expectPersistedShellScriptMatch({
+      command: "/usr/bin/nice bash scripts/save_crystal.sh",
+      script,
+      dir,
+      env,
+      safeBins,
+    });
+  });
+
+  it("does not treat inline shell commands as persisted script paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, script, env } = createShellScriptFixture();
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "bash scripts/save_crystal.sh",
+      secondCommand: "bash -lc 'scripts/save_crystal.sh'",
+      env,
+      persistedPattern: script,
+    });
+  });
+
+  it("does not treat stdin shell mode as a persisted script path", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, script, env } = createShellScriptFixture();
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "bash scripts/save_crystal.sh",
+      secondCommand: "bash -s scripts/save_crystal.sh",
+      env,
+      persistedPattern: script,
+    });
   });
 
   it("does not persist broad shell binaries when no inner command can be derived", () => {
@@ -300,6 +422,23 @@ describe("resolveAllowAlwaysPatterns", () => {
       secondCommand: "/usr/bin/nice /bin/zsh -lc 'id > marker'",
       env,
       persistedPattern: echo,
+    });
+  });
+
+  it("does not persist comment-tailed payload paths that never execute", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const benign = makeExecutable(dir, "benign");
+    makeExecutable(dir, "payload");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: `${benign} warmup # && payload`,
+      secondCommand: "payload",
+      env,
+      persistedPattern: benign,
     });
   });
 });

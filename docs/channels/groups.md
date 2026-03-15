@@ -243,7 +243,7 @@ Replying to a bot message counts as an implicit mention (when the channel suppor
 
 Notes:
 
-- `mentionPatterns` are case-insensitive regexes.
+- `mentionPatterns` are case-insensitive safe regex patterns; invalid patterns and unsafe nested-repetition forms are ignored.
 - Surfaces that provide explicit mentions still pass; patterns are a fallback.
 - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
 - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).

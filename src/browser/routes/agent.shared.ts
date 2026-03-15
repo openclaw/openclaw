@@ -1,3 +1,4 @@
+import { toBrowserErrorResponse } from "../errors.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
@@ -36,6 +37,10 @@ export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse,
   const mapped = ctx.mapTabError(err);
   if (mapped) {
     return jsonError(res, mapped.status, mapped.message);
+  }
+  const browserMapped = toBrowserErrorResponse(err);
+  if (browserMapped) {
+    return jsonError(res, browserMapped.status, browserMapped.message);
   }
   jsonError(res, 500, String(err));
 }

@@ -48,6 +48,19 @@ async function withTempWorkspacePng(
   }
 }
 
+function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string[]) {
+  beforeEach(() => {
+    for (const key of keys) {
+      vi.stubEnv(key, "");
+    }
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+}
+
 function stubMinimaxOkFetch() {
   const fetch = vi.fn().mockResolvedValue({
     ok: true,
@@ -229,24 +242,18 @@ function findSchemaUnionKeywords(schema: unknown, path = "root"): string[] {
 
 describe("image tool implicit imageModel config", () => {
   const priorFetch = global.fetch;
-
-  beforeEach(() => {
-    vi.stubEnv("OPENAI_API_KEY", "");
-    vi.stubEnv("ANTHROPIC_API_KEY", "");
-    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
-    vi.stubEnv("MINIMAX_API_KEY", "");
-    vi.stubEnv("ZAI_API_KEY", "");
-    vi.stubEnv("Z_AI_API_KEY", "");
+  registerImageToolEnvReset(priorFetch, [
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_OAUTH_TOKEN",
+    "MINIMAX_API_KEY",
+    "ZAI_API_KEY",
+    "Z_AI_API_KEY",
     // Avoid implicit Copilot provider discovery hitting the network in tests.
-    vi.stubEnv("COPILOT_GITHUB_TOKEN", "");
-    vi.stubEnv("GH_TOKEN", "");
-    vi.stubEnv("GITHUB_TOKEN", "");
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    global.fetch = priorFetch;
-  });
+    "COPILOT_GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+  ]);
 
   it("stays disabled without auth when no pairing is possible", async () => {
     await withTempAgentDir(async (agentDir) => {
@@ -268,6 +275,32 @@ describe("image tool implicit imageModel config", () => {
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
+      );
+      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+    });
+  });
+
+  it("pairs minimax-portal primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "minimax-portal:default": {
+            type: "oauth",
+            provider: "minimax-portal",
+            access: "oauth-test",
+            refresh: "refresh-test",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+      vi.stubEnv("OPENAI_API_KEY", "openai-test");
+      vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "minimax-portal/MiniMax-M2.5" } } },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
+        createDefaultImageFallbackExpectation("minimax-portal/MiniMax-VL-01"),
       );
       expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
     });
@@ -657,18 +690,12 @@ describe("image tool MiniMax VLM routing", () => {
   const pngB64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
   const priorFetch = global.fetch;
-
-  beforeEach(() => {
-    vi.stubEnv("MINIMAX_API_KEY", "");
-    vi.stubEnv("COPILOT_GITHUB_TOKEN", "");
-    vi.stubEnv("GH_TOKEN", "");
-    vi.stubEnv("GITHUB_TOKEN", "");
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    global.fetch = priorFetch;
-  });
+  registerImageToolEnvReset(priorFetch, [
+    "MINIMAX_API_KEY",
+    "COPILOT_GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+  ]);
 
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
     const fetch = stubMinimaxFetch(baseResp, baseResp.status_code === 0 ? "ok" : "");

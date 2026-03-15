@@ -7,9 +7,9 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
-export type { InspectedTelegramAccount } from "../telegram/account-inspect.js";
-export type { ResolvedTelegramAccount } from "../telegram/accounts.js";
-export type { TelegramProbe } from "../telegram/probe.js";
+export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
+export type { ResolvedTelegramAccount } from "../../extensions/telegram/src/accounts.js";
+export type { TelegramProbe } from "../../extensions/telegram/src/probe.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 
@@ -34,8 +34,8 @@ export {
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
-} from "../telegram/accounts.js";
-export { inspectTelegramAccount } from "../telegram/account-inspect.js";
+} from "../../extensions/telegram/src/accounts.js";
+export { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
@@ -51,8 +51,9 @@ export {
 export {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
-} from "../telegram/outbound-params.js";
+} from "../../extensions/telegram/src/outbound-params.js";
 export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
+export { sendTelegramPayloadMessages } from "../channels/plugins/outbound/telegram.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,

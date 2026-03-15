@@ -144,6 +144,7 @@ export async function runUpdateStep(params: {
   cwd?: string;
   timeoutMs: number;
   progress?: UpdateStepProgress;
+  env?: NodeJS.ProcessEnv;
 }): Promise<UpdateStepResult> {
   const command = params.argv.join(" ");
   params.progress?.onStepStart?.({
@@ -156,6 +157,7 @@ export async function runUpdateStep(params: {
   const started = Date.now();
   const res = await runCommandWithTimeout(params.argv, {
     cwd: params.cwd,
+    env: params.env,
     timeoutMs: params.timeoutMs,
   });
   const durationMs = Date.now() - started;

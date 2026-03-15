@@ -16,6 +16,8 @@ import {
   applyMistralProviderConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
+  applyOpencodeGoConfig,
+  applyOpencodeGoProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
@@ -420,7 +422,7 @@ describe("applyMinimaxApiConfig", () => {
         providers: {
           anthropic: {
             baseUrl: "https://api.anthropic.com",
-            apiKey: "anthropic-key",
+            apiKey: "anthropic-key", // pragma: allowlist secret
             api: "anthropic-messages",
             models: [
               {
@@ -471,6 +473,7 @@ describe("applyZaiConfig", () => {
     });
     const ids = cfg.models?.providers?.zai?.models?.map((m) => m.id);
     expect(ids).toContain("glm-5");
+    expect(ids).toContain("glm-5-turbo");
     expect(ids).toContain("glm-4.7");
     expect(ids).toContain("glm-4.7-flash");
     expect(ids).toContain("glm-4.7-flashx");
@@ -676,6 +679,11 @@ describe("allowlist provider helpers", () => {
         alias: "My Opus",
       },
       {
+        applyConfig: applyOpencodeGoProviderConfig,
+        modelRef: "opencode-go/kimi-k2.5",
+        alias: "Kimi",
+      },
+      {
         applyConfig: applyOpenrouterProviderConfig,
         modelRef: OPENROUTER_DEFAULT_MODEL_REF,
         alias: "Router",
@@ -728,6 +736,10 @@ describe("default-model config helpers", () => {
       {
         applyConfig: applyOpencodeZenConfig,
         primaryModel: "opencode/claude-opus-4-6",
+      },
+      {
+        applyConfig: applyOpencodeGoConfig,
+        primaryModel: "opencode-go/kimi-k2.5",
       },
       {
         applyConfig: applyOpenrouterConfig,

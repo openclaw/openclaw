@@ -92,3 +92,40 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
 - These commands require `operator.pairing` (or `operator.admin`) scope.
 - `devices clear` is intentionally gated by `--yes`.
 - If pairing scope is unavailable on local loopback (and no explicit `--url` is passed), list/approve can use a local pairing fallback.
+
+## Token drift recovery checklist
+
+Use this when Control UI or other clients keep failing with `AUTH_TOKEN_MISMATCH` or `AUTH_DEVICE_TOKEN_MISMATCH`.
+
+1. Confirm current gateway token source:
+
+```bash
+openclaw config get gateway.auth.token
+```
+
+2. List paired devices and identify the affected device id:
+
+```bash
+openclaw devices list
+```
+
+3. Rotate operator token for the affected device:
+
+```bash
+openclaw devices rotate --device <deviceId> --role operator
+```
+
+4. If rotation is not enough, remove stale pairing and approve again:
+
+```bash
+openclaw devices remove <deviceId>
+openclaw devices list
+openclaw devices approve <requestId>
+```
+
+5. Retry client connection with the current shared token/password.
+
+Related:
+
+- [Dashboard auth troubleshooting](/web/dashboard#if-you-see-unauthorized-1008)
+- [Gateway troubleshooting](/gateway/troubleshooting#dashboard-control-ui-connectivity)

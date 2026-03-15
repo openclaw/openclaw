@@ -130,6 +130,13 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for wrapped Discord upstream-connect parse failures", () => {
+    const error = new Error(
+      `Failed to get gateway information from Discord: Unexpected token 'u', "upstream connect error or disconnect/reset before headers. reset reason: overflow" is not valid JSON`,
+    );
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns false for non-network fetch-failed wrappers from tools", () => {
     const error = new Error("Web fetch failed (404): Not Found");
     expect(isTransientNetworkError(error)).toBe(false);

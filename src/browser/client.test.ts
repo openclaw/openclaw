@@ -101,6 +101,21 @@ describe("browser client", () => {
     expect(parsed.searchParams.get("refs")).toBe("aria");
   });
 
+  it("omits format when the caller wants server-side snapshot capability defaults", async () => {
+    const calls: string[] = [];
+    stubSnapshotFetch(calls);
+
+    await browserSnapshot("http://127.0.0.1:18791", {
+      profile: "chrome",
+    });
+
+    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
+    expect(snapshotCall).toBeTruthy();
+    const parsed = new URL(snapshotCall as string);
+    expect(parsed.searchParams.get("format")).toBeNull();
+    expect(parsed.searchParams.get("profile")).toBe("chrome");
+  });
+
   it("uses the expected endpoints + methods for common calls", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
 
@@ -145,6 +160,7 @@ describe("browser client", () => {
               targetId: "t1",
               url: "https://x",
               result: 1,
+              results: [{ ok: true }],
             }),
           } as unknown as Response;
         }
@@ -243,7 +259,7 @@ describe("browser client", () => {
     ).resolves.toMatchObject({ ok: true, targetId: "t1" });
     await expect(
       browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" }),
-    ).resolves.toMatchObject({ ok: true, targetId: "t1" });
+    ).resolves.toMatchObject({ ok: true, targetId: "t1", results: [{ ok: true }] });
     await expect(
       browserArmFileChooser("http://127.0.0.1:18791", {
         paths: ["/tmp/a.txt"],

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import * as chromeModule from "./chrome.js";
+import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import * as pwAiModule from "./pw-ai-module.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import {
@@ -139,7 +140,7 @@ describe("browser server-context remote profile tab operations", () => {
     expect(second.targetId).toBe("A");
   });
 
-  it("falls back to the only tab for remote profiles when targetId is stale", async () => {
+  it("rejects stale targetId for remote profiles even when only one tab remains", async () => {
     const responses = [
       [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
       [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
@@ -151,8 +152,7 @@ describe("browser server-context remote profile tab operations", () => {
     } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
 
     const { remote } = createRemoteRouteHarness();
-    const chosen = await remote.ensureTabAvailable("STALE_TARGET");
-    expect(chosen.targetId).toBe("T1");
+    await expect(remote.ensureTabAvailable("STALE_TARGET")).rejects.toThrow(/tab not found/i);
   });
 
   it("keeps rejecting stale targetId for remote profiles when multiple tabs exist", async () => {
@@ -229,6 +229,17 @@ describe("browser server-context remote profile tab operations", () => {
 
     const tabs = await remote.listTabs();
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
+  });
+
+  it("fails closed for remote tab opens in strict mode without Playwright", async () => {
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    const { state, remote, fetchMock } = createRemoteRouteHarness();
+    state.resolved.ssrfPolicy = {};
+
+    await expect(remote.openTab("https://example.com")).rejects.toBeInstanceOf(
+      InvalidBrowserNavigationUrlError,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("does not enforce managed tab cap for remote openclaw profiles", async () => {

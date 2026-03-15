@@ -112,7 +112,9 @@ describe("createProfileResetOps", () => {
     });
     expect(isHttpReachable).toHaveBeenCalledWith(300);
     expect(stopRunningBrowser).toHaveBeenCalledTimes(1);
-    expect(pwAiMocks.closePlaywrightBrowserConnection).toHaveBeenCalledTimes(1);
+    expect(pwAiMocks.closePlaywrightBrowserConnection).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
+    });
     expect(trashMocks.movePathToTrash).toHaveBeenCalledWith(profileDir);
   });
 
@@ -132,5 +134,11 @@ describe("createProfileResetOps", () => {
     await ops.resetProfile();
     expect(stopRunningBrowser).not.toHaveBeenCalled();
     expect(pwAiMocks.closePlaywrightBrowserConnection).toHaveBeenCalledTimes(2);
+    expect(pwAiMocks.closePlaywrightBrowserConnection).toHaveBeenNthCalledWith(1, {
+      cdpUrl: "http://127.0.0.1:18800",
+    });
+    expect(pwAiMocks.closePlaywrightBrowserConnection).toHaveBeenNthCalledWith(2, {
+      cdpUrl: "http://127.0.0.1:18800",
+    });
   });
 });

@@ -24,6 +24,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
+  isPackageProvenControlUiRootSync,
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
@@ -106,6 +107,7 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
+import { resolveHookClientIpConfig } from "./server/hooks.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import {
@@ -510,6 +512,7 @@ export async function startGatewayServer(
     tailscaleMode,
   } = runtimeConfig;
   let hooksConfig = runtimeConfig.hooksConfig;
+  let hookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
 
   // Create auth rate limiters used by connect/auth flows.
@@ -545,7 +548,16 @@ export async function startGatewayServer(
       });
     }
     controlUiRootState = resolvedRoot
-      ? { kind: "resolved", path: resolvedRoot }
+      ? {
+          kind: isPackageProvenControlUiRootSync(resolvedRoot, {
+            moduleUrl: import.meta.url,
+            argv1: process.argv[1],
+            cwd: process.cwd(),
+          })
+            ? "bundled"
+            : "resolved",
+          path: resolvedRoot,
+        }
       : { kind: "missing" };
   }
 
@@ -603,6 +615,7 @@ export async function startGatewayServer(
     rateLimiter: authRateLimiter,
     gatewayTls,
     hooksConfig: () => hooksConfig,
+    getHookClientIpConfig: () => hookClientIpConfig,
     pluginRegistry,
     deps,
     canvasRuntime,
@@ -744,11 +757,17 @@ export async function startGatewayServer(
 
   const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
   const healthCheckDisabled = healthCheckMinutes === 0;
+  const staleEventThresholdMinutes = cfgAtStart.gateway?.channelStaleEventThresholdMinutes;
+  const maxRestartsPerHour = cfgAtStart.gateway?.channelMaxRestartsPerHour;
   let channelHealthMonitor = healthCheckDisabled
     ? null
     : startChannelHealthMonitor({
         channelManager,
         checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
+        ...(staleEventThresholdMinutes != null && {
+          staleEventThresholdMs: staleEventThresholdMinutes * 60_000,
+        }),
+        ...(maxRestartsPerHour != null && { maxRestartsPerHour }),
       });
 
   if (!minimalTestGateway) {
@@ -944,6 +963,7 @@ export async function startGatewayServer(
           broadcast,
           getState: () => ({
             hooksConfig,
+            hookClientIpConfig,
             heartbeatRunner,
             cronState,
             browserControl,
@@ -951,6 +971,7 @@ export async function startGatewayServer(
           }),
           setState: (nextState) => {
             hooksConfig = nextState.hooksConfig;
+            hookClientIpConfig = nextState.hookClientIpConfig;
             heartbeatRunner = nextState.heartbeatRunner;
             cronState = nextState.cronState;
             cron = cronState.cron;
@@ -965,8 +986,21 @@ export async function startGatewayServer(
           logChannels,
           logCron,
           logReload,
-          createHealthMonitor: (checkIntervalMs: number) =>
-            startChannelHealthMonitor({ channelManager, checkIntervalMs }),
+          createHealthMonitor: (opts: {
+            checkIntervalMs: number;
+            staleEventThresholdMs?: number;
+            maxRestartsPerHour?: number;
+          }) =>
+            startChannelHealthMonitor({
+              channelManager,
+              checkIntervalMs: opts.checkIntervalMs,
+              ...(opts.staleEventThresholdMs != null && {
+                staleEventThresholdMs: opts.staleEventThresholdMs,
+              }),
+              ...(opts.maxRestartsPerHour != null && {
+                maxRestartsPerHour: opts.maxRestartsPerHour,
+              }),
+            }),
         });
 
         return startGatewayConfigReloader({

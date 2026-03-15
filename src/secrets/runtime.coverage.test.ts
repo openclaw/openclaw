@@ -27,7 +27,7 @@ function toConcretePathSegments(pathPattern: string): string[] {
 function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string): OpenClawConfig {
   const config = {} as OpenClawConfig;
   const refTargetPath =
-    entry.secretShape === "sibling_ref" && entry.refPathPattern
+    entry.secretShape === "sibling_ref" && entry.refPathPattern // pragma: allowlist secret
       ? entry.refPathPattern
       : entry.pathPattern;
   setPathCreateStrict(config, toConcretePathSegments(refTargetPath), {
@@ -71,7 +71,17 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id === "channels.feishu.verificationToken") {
     setPathCreateStrict(config, ["channels", "feishu", "connectionMode"], "webhook");
   }
+  if (entry.id === "channels.feishu.encryptKey") {
+    setPathCreateStrict(config, ["channels", "feishu", "connectionMode"], "webhook");
+  }
   if (entry.id === "channels.feishu.accounts.*.verificationToken") {
+    setPathCreateStrict(
+      config,
+      ["channels", "feishu", "accounts", "sample", "connectionMode"],
+      "webhook",
+    );
+  }
+  if (entry.id === "channels.feishu.accounts.*.encryptKey") {
     setPathCreateStrict(
       config,
       ["channels", "feishu", "accounts", "sample", "connectionMode"],

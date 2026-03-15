@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { appendCdpPath, getHeadersWithAuth } from "./cdp.helpers.js";
+import {
+  appendCdpPath,
+  getHeadersWithAuth,
+  normalizeCdpHttpBaseForJsonEndpoints,
+} from "./cdp.helpers.js";
 import { __test } from "./client-fetch.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { shouldRejectBrowserMutation } from "./csrf.js";
@@ -155,6 +159,30 @@ describe("cdp.helpers", () => {
     expect(url).toBe("https://example.com/chrome/json/list?token=abc");
   });
 
+  it("normalizes direct WebSocket CDP URLs to an HTTP base for /json endpoints", () => {
+    const url = normalizeCdpHttpBaseForJsonEndpoints(
+      "wss://connect.example.com/devtools/browser/ABC?token=abc",
+    );
+    expect(url).toBe("https://connect.example.com/?token=abc");
+  });
+
+  it("preserves auth and query params when normalizing secure loopback WebSocket CDP URLs", () => {
+    const url = normalizeCdpHttpBaseForJsonEndpoints(
+      "wss://user:pass@127.0.0.1:9222/devtools/browser/ABC?token=abc",
+    );
+    expect(url).toBe("https://user:pass@127.0.0.1:9222/?token=abc");
+  });
+
+  it("strips a trailing /cdp suffix when normalizing HTTP bases", () => {
+    const url = normalizeCdpHttpBaseForJsonEndpoints("ws://127.0.0.1:9222/cdp?token=abc");
+    expect(url).toBe("http://127.0.0.1:9222/?token=abc");
+  });
+
+  it("preserves base prefixes when stripping a trailing /cdp suffix", () => {
+    const url = normalizeCdpHttpBaseForJsonEndpoints("ws://127.0.0.1:9222/browser/cdp?token=abc");
+    expect(url).toBe("http://127.0.0.1:9222/browser?token=abc");
+  });
+
   it("adds basic auth headers when credentials are present", () => {
     const headers = getHeadersWithAuth("https://user:pass@example.com");
     expect(headers.Authorization).toBe(`Basic ${Buffer.from("user:pass").toString("base64")}`);
@@ -238,10 +266,6 @@ describe("browser server-context listKnownProfileNames", () => {
       ]),
     };
 
-    expect(listKnownProfileNames(state).toSorted()).toEqual([
-      "chrome",
-      "openclaw",
-      "stale-removed",
-    ]);
+    expect(listKnownProfileNames(state).toSorted()).toEqual(["openclaw", "stale-removed", "user"]);
   });
 });

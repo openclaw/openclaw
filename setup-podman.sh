@@ -80,12 +80,17 @@ run_root() {
 }
 
 run_as_user() {
+  # When switching users, the caller's cwd may be inaccessible to the target
+  # user (e.g. a private home dir). Wrap in a subshell that cd's to a
+  # world-traversable directory so sudo/runuser don't fail with "cannot chdir".
+  # TODO: replace with fully rootless podman build to eliminate the need for
+  # user-switching entirely.
   local user="$1"
   shift
   if command -v sudo >/dev/null 2>&1; then
-    sudo -u "$user" "$@"
+    ( cd /tmp 2>/dev/null || cd /; sudo -u "$user" "$@" )
   elif is_root && command -v runuser >/dev/null 2>&1; then
-    runuser -u "$user" -- "$@"
+    ( cd /tmp 2>/dev/null || cd /; runuser -u "$user" -- "$@" )
   else
     echo "Need sudo (or root+runuser) to run commands as $user." >&2
     exit 1

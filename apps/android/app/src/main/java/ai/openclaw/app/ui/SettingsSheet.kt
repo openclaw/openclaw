@@ -62,7 +62,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -115,7 +114,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       viewModel.setCameraEnabled(cameraOk)
     }
 
-  var pendingLocationMode by remember { mutableStateOf<LocationMode?>(null) }
+  var pendingLocationRequest by remember { mutableStateOf(false) }
   var pendingPreciseToggle by remember { mutableStateOf(false) }
 
   val locationPermissionLauncher =
@@ -123,8 +122,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
       val fineOk = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true
       val coarseOk = perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
       val granted = fineOk || coarseOk
-      val requestedMode = pendingLocationMode
-      pendingLocationMode = null
 
       if (pendingPreciseToggle) {
         pendingPreciseToggle = false
@@ -132,21 +129,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
         return@rememberLauncherForActivityResult
       }
 
-      if (!granted) {
-        viewModel.setLocationMode(LocationMode.Off)
-        return@rememberLauncherForActivityResult
-      }
-
-      if (requestedMode != null) {
-        viewModel.setLocationMode(requestedMode)
-        if (requestedMode == LocationMode.Always) {
-          val backgroundOk =
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
-              PackageManager.PERMISSION_GRANTED
-          if (!backgroundOk) {
-            openAppSettings(context)
-          }
-        }
+      if (pendingLocationRequest) {
+        pendingLocationRequest = false
+        viewModel.setLocationMode(if (granted) LocationMode.WhileUsing else LocationMode.Off)
       }
     }
 
@@ -233,6 +218,18 @@ fun SettingsSheet(viewModel: MainViewModel) {
       calendarPermissionGranted = readOk && writeOk
     }
 
+  var callLogPermissionGranted by
+    remember {
+      mutableStateOf(
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) ==
+          PackageManager.PERMISSION_GRANTED,
+      )
+    }
+  val callLogPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      callLogPermissionGranted = granted
+    }
+
   var motionPermissionGranted by
     remember {
       mutableStateOf(
@@ -244,11 +241,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val motionPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       motionPermissionGranted = granted
-    }
-
-  var appUpdateInstallEnabled by
-    remember {
-      mutableStateOf(canInstallUnknownApps(context))
     }
 
   var smsPermissionGranted by
@@ -286,11 +278,13 @@ fun SettingsSheet(viewModel: MainViewModel) {
               PackageManager.PERMISSION_GRANTED &&
               ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR) ==
               PackageManager.PERMISSION_GRANTED
+          callLogPermissionGranted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) ==
+              PackageManager.PERMISSION_GRANTED
           motionPermissionGranted =
             !motionPermissionRequired ||
               ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
               PackageManager.PERMISSION_GRANTED
-          appUpdateInstallEnabled = canInstallUnknownApps(context)
           smsPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
               PackageManager.PERMISSION_GRANTED
@@ -316,7 +310,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
   }
 
-  fun requestLocationPermissions(targetMode: LocationMode) {
+  fun requestLocationPermissions() {
     val fineOk =
       ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
@@ -324,17 +318,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
       ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
     if (fineOk || coarseOk) {
-      viewModel.setLocationMode(targetMode)
-      if (targetMode == LocationMode.Always) {
-        val backgroundOk =
-          ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED
-        if (!backgroundOk) {
-          openAppSettings(context)
-        }
-      }
+      viewModel.setLocationMode(LocationMode.WhileUsing)
     } else {
-      pendingLocationMode = targetMode
+      pendingLocationRequest = true
       locationPermissionLauncher.launch(
         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
       )
@@ -374,179 +360,90 @@ fun SettingsSheet(viewModel: MainViewModel) {
       contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      item {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-          Text(
-            "SETTINGS",
-            style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-            color = mobileAccent,
-          )
-          Text("Device Configuration", style = mobileTitle2, color = mobileText)
-          Text(
-            "Manage capabilities, permissions, and diagnostics.",
-            style = mobileCallout,
-            color = mobileTextSecondary,
-          )
-        }
-      }
-      item { HorizontalDivider(color = mobileBorder) }
-
-    // Order parity: Node → Voice → Camera → Messaging → Location → Screen.
+      // ── Node ──
       item {
         Text(
-          "NODE",
-          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-          color = mobileAccent,
-        )
-      }
-    item {
-      OutlinedTextField(
-        value = displayName,
-        onValueChange = viewModel::setDisplayName,
-        label = { Text("Name", style = mobileCaption1, color = mobileTextSecondary) },
-        modifier = Modifier.fillMaxWidth(),
-        textStyle = mobileBody.copy(color = mobileText),
-        colors = settingsTextFieldColors(),
-      )
-    }
-      item { Text("Instance ID: $instanceId", style = mobileCallout.copy(fontFamily = FontFamily.Monospace), color = mobileTextSecondary) }
-      item { Text("Device: $deviceModel", style = mobileCallout, color = mobileTextSecondary) }
-      item { Text("Version: $appVersion", style = mobileCallout, color = mobileTextSecondary) }
-
-      item { HorizontalDivider(color = mobileBorder) }
-
-      // Voice
-      item {
-        Text(
-          "VOICE",
+          "DEVICE",
           style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
           color = mobileAccent,
         )
       }
       item {
-        ListItem(
-          modifier = Modifier.settingsRowModifier(),
-          colors = listItemColors,
-          headlineContent = { Text("Microphone permission", style = mobileHeadline) },
-          supportingContent = {
+        Column(modifier = Modifier.settingsRowModifier()) {
+          OutlinedTextField(
+            value = displayName,
+            onValueChange = viewModel::setDisplayName,
+            label = { Text("Name", style = mobileCaption1, color = mobileTextSecondary) },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            textStyle = mobileBody.copy(color = mobileText),
+            colors = settingsTextFieldColors(),
+          )
+          HorizontalDivider(color = mobileBorder)
+          Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+          ) {
+            Text("$deviceModel · $appVersion", style = mobileCallout, color = mobileTextSecondary)
             Text(
-              if (micPermissionGranted) {
-                "Granted. Use the Voice tab mic button to capture transcript."
-              } else {
-                "Required for Voice tab transcription."
-              },
-              style = mobileCallout,
+              instanceId.take(8) + "…",
+              style = mobileCaption1.copy(fontFamily = FontFamily.Monospace),
+              color = mobileTextTertiary,
             )
-          },
-          trailingContent = {
-            Button(
-              onClick = {
-                if (micPermissionGranted) {
-                  openAppSettings(context)
-                } else {
-                  audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                }
-              },
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text(
-                if (micPermissionGranted) "Manage" else "Grant",
-                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
-              )
-            }
-          },
-        )
-      }
-      item {
-        Text(
-          "Voice wake and talk modes were removed. Voice now uses one mic on/off flow in the Voice tab.",
-          style = mobileCallout,
-          color = mobileTextSecondary,
-        )
-      }
-
-      item { HorizontalDivider(color = mobileBorder) }
-
-    // Camera
-      item {
-        Text(
-          "CAMERA",
-          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-          color = mobileAccent,
-        )
-      }
-    item {
-      ListItem(
-        modifier = Modifier.settingsRowModifier(),
-        colors = listItemColors,
-        headlineContent = { Text("Allow Camera", style = mobileHeadline) },
-        supportingContent = { Text("Allows the gateway to request photos or short video clips (foreground only).", style = mobileCallout) },
-        trailingContent = { Switch(checked = cameraEnabled, onCheckedChange = ::setCameraEnabledChecked) },
-      )
-    }
-    item {
-      Text(
-        "Tip: grant Microphone permission for video clips with audio.",
-        style = mobileCallout,
-        color = mobileTextSecondary,
-      )
-    }
-
-      item { HorizontalDivider(color = mobileBorder) }
-
-    // Messaging
-      item {
-        Text(
-          "MESSAGING",
-          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-          color = mobileAccent,
-        )
-      }
-    item {
-      val buttonLabel =
-        when {
-          !smsPermissionAvailable -> "Unavailable"
-          smsPermissionGranted -> "Manage"
-          else -> "Grant"
+          }
         }
-      ListItem(
-        modifier = Modifier.settingsRowModifier(),
-        colors = listItemColors,
-        headlineContent = { Text("SMS Permission", style = mobileHeadline) },
-        supportingContent = {
-          Text(
-            if (smsPermissionAvailable) {
-              "Allow the gateway to send SMS from this device."
-            } else {
-              "SMS requires a device with telephony hardware."
+      }
+
+      // ── Media ──
+      item {
+        Text(
+          "MEDIA",
+          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+          color = mobileAccent,
+        )
+      }
+      item {
+        Column(modifier = Modifier.settingsRowModifier()) {
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Microphone", style = mobileHeadline) },
+            supportingContent = {
+              Text(
+                if (micPermissionGranted) "Granted" else "Required for voice transcription.",
+                style = mobileCallout,
+              )
             },
-            style = mobileCallout,
-          )
-        },
-        trailingContent = {
-          Button(
-            onClick = {
-              if (!smsPermissionAvailable) return@Button
-              if (smsPermissionGranted) {
-                openAppSettings(context)
-              } else {
-                smsPermissionLauncher.launch(Manifest.permission.SEND_SMS)
+            trailingContent = {
+              Button(
+                onClick = {
+                  if (micPermissionGranted) {
+                    openAppSettings(context)
+                  } else {
+                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                  }
+                },
+                colors = settingsPrimaryButtonColors(),
+                shape = RoundedCornerShape(14.dp),
+              ) {
+                Text(
+                  if (micPermissionGranted) "Manage" else "Grant",
+                  style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+                )
               }
             },
-            enabled = smsPermissionAvailable,
-            colors = settingsPrimaryButtonColors(),
-            shape = RoundedCornerShape(14.dp),
-          ) {
-            Text(buttonLabel, style = mobileCallout.copy(fontWeight = FontWeight.Bold))
-          }
-        },
-      )
-    }
+          )
+          HorizontalDivider(color = mobileBorder)
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Camera", style = mobileHeadline) },
+            supportingContent = { Text("Photos and video clips (foreground only).", style = mobileCallout) },
+            trailingContent = { Switch(checked = cameraEnabled, onCheckedChange = ::setCameraEnabledChecked) },
+          )
+        }
+      }
 
-      item { HorizontalDivider(color = mobileBorder) }
-
-    // Notifications
+      // ── Notifications & Messaging ──
       item {
         Text(
           "NOTIFICATIONS",
@@ -555,67 +452,87 @@ fun SettingsSheet(viewModel: MainViewModel) {
         )
       }
       item {
-        val buttonLabel =
-          if (notificationsPermissionGranted) {
-            "Manage"
-          } else {
-            "Grant"
-          }
-        ListItem(
-          modifier = Modifier.settingsRowModifier(),
-          colors = listItemColors,
-          headlineContent = { Text("System Notifications", style = mobileHeadline) },
-          supportingContent = {
-            Text(
-              "Required for `system.notify` and Android foreground service alerts.",
-              style = mobileCallout,
-            )
-          },
-          trailingContent = {
-            Button(
-              onClick = {
-                if (notificationsPermissionGranted || Build.VERSION.SDK_INT < 33) {
-                  openAppSettings(context)
-                } else {
-                  notificationsPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        Column(modifier = Modifier.settingsRowModifier()) {
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("System Notifications", style = mobileHeadline) },
+            supportingContent = {
+              Text("Alerts and foreground service.", style = mobileCallout)
+            },
+            trailingContent = {
+              Button(
+                onClick = {
+                  if (notificationsPermissionGranted || Build.VERSION.SDK_INT < 33) {
+                    openAppSettings(context)
+                  } else {
+                    notificationsPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                  }
+                },
+                colors = settingsPrimaryButtonColors(),
+                shape = RoundedCornerShape(14.dp),
+              ) {
+                Text(
+                  if (notificationsPermissionGranted) "Manage" else "Grant",
+                  style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+                )
+              }
+            },
+          )
+          HorizontalDivider(color = mobileBorder)
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Notification Listener", style = mobileHeadline) },
+            supportingContent = {
+              Text("Read and interact with notifications.", style = mobileCallout)
+            },
+            trailingContent = {
+              Button(
+                onClick = { openNotificationListenerSettings(context) },
+                colors = settingsPrimaryButtonColors(),
+                shape = RoundedCornerShape(14.dp),
+              ) {
+                Text(
+                  if (notificationListenerEnabled) "Manage" else "Enable",
+                  style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+                )
+              }
+            },
+          )
+          if (smsPermissionAvailable) {
+            HorizontalDivider(color = mobileBorder)
+            ListItem(
+              modifier = Modifier.fillMaxWidth(),
+              colors = listItemColors,
+              headlineContent = { Text("SMS", style = mobileHeadline) },
+              supportingContent = {
+                Text("Send SMS from this device.", style = mobileCallout)
+              },
+              trailingContent = {
+                Button(
+                  onClick = {
+                    if (smsPermissionGranted) {
+                      openAppSettings(context)
+                    } else {
+                      smsPermissionLauncher.launch(Manifest.permission.SEND_SMS)
+                    }
+                  },
+                  colors = settingsPrimaryButtonColors(),
+                  shape = RoundedCornerShape(14.dp),
+                ) {
+                  Text(
+                    if (smsPermissionGranted) "Manage" else "Grant",
+                    style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+                  )
                 }
               },
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text(buttonLabel, style = mobileCallout.copy(fontWeight = FontWeight.Bold))
-            }
-          },
-        )
-      }
-      item {
-        ListItem(
-          modifier = Modifier.settingsRowModifier(),
-          colors = listItemColors,
-          headlineContent = { Text("Notification Listener Access", style = mobileHeadline) },
-          supportingContent = {
-            Text(
-              "Required for `notifications.list` and `notifications.actions`.",
-              style = mobileCallout,
             )
-          },
-          trailingContent = {
-            Button(
-              onClick = { openNotificationListenerSettings(context) },
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text(
-                if (notificationListenerEnabled) "Manage" else "Enable",
-                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
-              )
-            }
-          },
-        )
+          }
+        }
       }
-      item { HorizontalDivider(color = mobileBorder) }
 
-    // Data access
+      // ── Data Access ──
       item {
         Text(
           "DATA ACCESS",
@@ -624,177 +541,140 @@ fun SettingsSheet(viewModel: MainViewModel) {
         )
       }
       item {
-        ListItem(
-          modifier = Modifier.settingsRowModifier(),
-          colors = listItemColors,
-          headlineContent = { Text("Photos Permission", style = mobileHeadline) },
-          supportingContent = {
-            Text(
-              "Required for `photos.latest`.",
-              style = mobileCallout,
-            )
-          },
-          trailingContent = {
-            Button(
-              onClick = {
-                if (photosPermissionGranted) {
-                  openAppSettings(context)
-                } else {
-                  photosPermissionLauncher.launch(photosPermission)
+        Column(modifier = Modifier.settingsRowModifier()) {
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Photos", style = mobileHeadline) },
+            supportingContent = { Text("Access recent photos.", style = mobileCallout) },
+            trailingContent = {
+              Button(
+                onClick = {
+                  if (photosPermissionGranted) {
+                    openAppSettings(context)
+                  } else {
+                    photosPermissionLauncher.launch(photosPermission)
+                  }
+                },
+                colors = settingsPrimaryButtonColors(),
+                shape = RoundedCornerShape(14.dp),
+              ) {
+                Text(
+                  if (photosPermissionGranted) "Manage" else "Grant",
+                  style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+                )
+              }
+            },
+          )
+          HorizontalDivider(color = mobileBorder)
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Contacts", style = mobileHeadline) },
+            supportingContent = { Text("Search and add contacts.", style = mobileCallout) },
+            trailingContent = {
+              Button(
+                onClick = {
+                  if (contactsPermissionGranted) {
+                    openAppSettings(context)
+                  } else {
+                    contactsPermissionLauncher.launch(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS))
+                  }
+                },
+                colors = settingsPrimaryButtonColors(),
+                shape = RoundedCornerShape(14.dp),
+              ) {
+                Text(
+                  if (contactsPermissionGranted) "Manage" else "Grant",
+                  style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+                )
+              }
+            },
+          )
+          HorizontalDivider(color = mobileBorder)
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Calendar", style = mobileHeadline) },
+            supportingContent = { Text("Read and create events.", style = mobileCallout) },
+            trailingContent = {
+              Button(
+                onClick = {
+                  if (calendarPermissionGranted) {
+                    openAppSettings(context)
+                  } else {
+                    calendarPermissionLauncher.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
+                  }
+                },
+                colors = settingsPrimaryButtonColors(),
+                shape = RoundedCornerShape(14.dp),
+              ) {
+                Text(
+                  if (calendarPermissionGranted) "Manage" else "Grant",
+                  style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+                )
+              }
+            },
+          )
+          HorizontalDivider(color = mobileBorder)
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Call Log", style = mobileHeadline) },
+            supportingContent = { Text("Search recent call history.", style = mobileCallout) },
+            trailingContent = {
+              Button(
+                onClick = {
+                  if (callLogPermissionGranted) {
+                    openAppSettings(context)
+                  } else {
+                    callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                  }
+                },
+                colors = settingsPrimaryButtonColors(),
+                shape = RoundedCornerShape(14.dp),
+              ) {
+                Text(
+                  if (callLogPermissionGranted) "Manage" else "Grant",
+                  style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+                )
+              }
+            },
+          )
+          if (motionAvailable) {
+            HorizontalDivider(color = mobileBorder)
+            ListItem(
+              modifier = Modifier.fillMaxWidth(),
+              colors = listItemColors,
+              headlineContent = { Text("Motion", style = mobileHeadline) },
+              supportingContent = { Text("Track steps and activity.", style = mobileCallout) },
+              trailingContent = {
+                val motionButtonLabel =
+                  when {
+                    !motionPermissionRequired -> "Manage"
+                    motionPermissionGranted -> "Manage"
+                    else -> "Grant"
+                  }
+                Button(
+                  onClick = {
+                    if (!motionPermissionRequired || motionPermissionGranted) {
+                      openAppSettings(context)
+                    } else {
+                      motionPermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+                    }
+                  },
+                  colors = settingsPrimaryButtonColors(),
+                  shape = RoundedCornerShape(14.dp),
+                ) {
+                  Text(motionButtonLabel, style = mobileCallout.copy(fontWeight = FontWeight.Bold))
                 }
               },
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text(
-                if (photosPermissionGranted) "Manage" else "Grant",
-                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
-              )
-            }
-          },
-        )
-      }
-      item {
-        ListItem(
-          modifier = Modifier.settingsRowModifier(),
-          colors = listItemColors,
-          headlineContent = { Text("Contacts Permission", style = mobileHeadline) },
-          supportingContent = {
-            Text(
-              "Required for `contacts.search` and `contacts.add`.",
-              style = mobileCallout,
             )
-          },
-          trailingContent = {
-            Button(
-              onClick = {
-                if (contactsPermissionGranted) {
-                  openAppSettings(context)
-                } else {
-                  contactsPermissionLauncher.launch(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS))
-                }
-              },
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text(
-                if (contactsPermissionGranted) "Manage" else "Grant",
-                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
-              )
-            }
-          },
-        )
-      }
-      item {
-        ListItem(
-          modifier = Modifier.settingsRowModifier(),
-          colors = listItemColors,
-          headlineContent = { Text("Calendar Permission", style = mobileHeadline) },
-          supportingContent = {
-            Text(
-              "Required for `calendar.events` and `calendar.add`.",
-              style = mobileCallout,
-            )
-          },
-          trailingContent = {
-            Button(
-              onClick = {
-                if (calendarPermissionGranted) {
-                  openAppSettings(context)
-                } else {
-                  calendarPermissionLauncher.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
-                }
-              },
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text(
-                if (calendarPermissionGranted) "Manage" else "Grant",
-                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
-              )
-            }
-          },
-        )
-      }
-      item {
-        val motionButtonLabel =
-          when {
-            !motionAvailable -> "Unavailable"
-            !motionPermissionRequired -> "Manage"
-            motionPermissionGranted -> "Manage"
-            else -> "Grant"
           }
-        ListItem(
-          modifier = Modifier.settingsRowModifier(),
-          colors = listItemColors,
-          headlineContent = { Text("Motion Permission", style = mobileHeadline) },
-          supportingContent = {
-            Text(
-              if (!motionAvailable) {
-                "This device does not expose accelerometer or step-counter motion sensors."
-              } else {
-                "Required for `motion.activity` and `motion.pedometer`."
-              },
-              style = mobileCallout,
-            )
-          },
-          trailingContent = {
-            Button(
-              onClick = {
-                if (!motionAvailable) return@Button
-                if (!motionPermissionRequired || motionPermissionGranted) {
-                  openAppSettings(context)
-                } else {
-                  motionPermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
-                }
-              },
-              enabled = motionAvailable,
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text(motionButtonLabel, style = mobileCallout.copy(fontWeight = FontWeight.Bold))
-            }
-          },
-        )
+        }
       }
-      item { HorizontalDivider(color = mobileBorder) }
 
-    // System
-      item {
-        Text(
-          "SYSTEM",
-          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-          color = mobileAccent,
-        )
-      }
-      item {
-        ListItem(
-          modifier = Modifier.settingsRowModifier(),
-          colors = listItemColors,
-          headlineContent = { Text("Install App Updates", style = mobileHeadline) },
-          supportingContent = {
-            Text(
-              "Enable install access for `app.update` package installs.",
-              style = mobileCallout,
-            )
-          },
-          trailingContent = {
-            Button(
-              onClick = { openUnknownAppSourcesSettings(context) },
-              colors = settingsPrimaryButtonColors(),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              Text(
-                if (appUpdateInstallEnabled) "Manage" else "Enable",
-                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
-              )
-            }
-          },
-        )
-      }
-      item { HorizontalDivider(color = mobileBorder) }
-
-    // Location
+      // ── Location ──
       item {
         Text(
           "LOCATION",
@@ -803,7 +683,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
         )
       }
       item {
-        Column(modifier = Modifier.settingsRowModifier(), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        Column(modifier = Modifier.settingsRowModifier()) {
           ListItem(
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
@@ -825,20 +705,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
             trailingContent = {
               RadioButton(
                 selected = locationMode == LocationMode.WhileUsing,
-                onClick = { requestLocationPermissions(LocationMode.WhileUsing) },
-              )
-            },
-          )
-          HorizontalDivider(color = mobileBorder)
-          ListItem(
-            modifier = Modifier.fillMaxWidth(),
-            colors = listItemColors,
-            headlineContent = { Text("Always", style = mobileHeadline) },
-            supportingContent = { Text("Allow background location (requires system permission).", style = mobileCallout) },
-            trailingContent = {
-              RadioButton(
-                selected = locationMode == LocationMode.Always,
-                onClick = { requestLocationPermissions(LocationMode.Always) },
+                onClick = { requestLocationPermissions() },
               )
             },
           )
@@ -858,58 +725,39 @@ fun SettingsSheet(viewModel: MainViewModel) {
           )
         }
       }
-    item {
-      Text(
-        "Always may require Android Settings to allow background location.",
-        style = mobileCallout,
-        color = mobileTextSecondary,
-      )
-    }
 
-      item { HorizontalDivider(color = mobileBorder) }
-
-    // Screen
+      // ── Preferences ──
       item {
         Text(
-          "SCREEN",
+          "PREFERENCES",
           style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
           color = mobileAccent,
         )
       }
-    item {
-      ListItem(
-        modifier = Modifier.settingsRowModifier(),
-        colors = listItemColors,
-        headlineContent = { Text("Prevent Sleep", style = mobileHeadline) },
-        supportingContent = { Text("Keeps the screen awake while OpenClaw is open.", style = mobileCallout) },
-        trailingContent = { Switch(checked = preventSleep, onCheckedChange = viewModel::setPreventSleep) },
-      )
-    }
-
-      item { HorizontalDivider(color = mobileBorder) }
-
-    // Debug
       item {
-        Text(
-          "DEBUG",
-          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-          color = mobileAccent,
-        )
-      }
-    item {
-      ListItem(
-        modifier = Modifier.settingsRowModifier(),
-        colors = listItemColors,
-        headlineContent = { Text("Debug Canvas Status", style = mobileHeadline) },
-        supportingContent = { Text("Show status text in the canvas when debug is enabled.", style = mobileCallout) },
-        trailingContent = {
-          Switch(
-            checked = canvasDebugStatusEnabled,
-            onCheckedChange = viewModel::setCanvasDebugStatusEnabled,
+        Column(modifier = Modifier.settingsRowModifier()) {
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Prevent Sleep", style = mobileHeadline) },
+            supportingContent = { Text("Keep screen awake while open.", style = mobileCallout) },
+            trailingContent = { Switch(checked = preventSleep, onCheckedChange = viewModel::setPreventSleep) },
           )
-        },
-      )
-    }
+          HorizontalDivider(color = mobileBorder)
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Debug Canvas", style = mobileHeadline) },
+            supportingContent = { Text("Show status overlay on canvas.", style = mobileCallout) },
+            trailingContent = {
+              Switch(
+                checked = canvasDebugStatusEnabled,
+                onCheckedChange = viewModel::setCanvasDebugStatusEnabled,
+              )
+            },
+          )
+        }
+      }
 
       item { Spacer(modifier = Modifier.height(24.dp)) }
     }
@@ -928,11 +776,12 @@ private fun settingsTextFieldColors() =
     cursorColor = mobileAccent,
   )
 
+@Composable
 private fun Modifier.settingsRowModifier() =
   this
     .fillMaxWidth()
     .border(width = 1.dp, color = mobileBorder, shape = RoundedCornerShape(14.dp))
-    .background(Color.White, RoundedCornerShape(14.dp))
+    .background(mobileCardSurface, RoundedCornerShape(14.dp))
 
 @Composable
 private fun settingsPrimaryButtonColors() =
@@ -970,35 +819,18 @@ private fun openNotificationListenerSettings(context: Context) {
   }
 }
 
-private fun openUnknownAppSourcesSettings(context: Context) {
-  val intent =
-    Intent(
-      Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-      "package:${context.packageName}".toUri(),
-    )
-  runCatching {
-    context.startActivity(intent)
-  }.getOrElse {
-    openAppSettings(context)
-  }
-}
-
 private fun hasNotificationsPermission(context: Context): Boolean {
   if (Build.VERSION.SDK_INT < 33) return true
   return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-    PackageManager.PERMISSION_GRANTED
+          PackageManager.PERMISSION_GRANTED
 }
 
 private fun isNotificationListenerEnabled(context: Context): Boolean {
   return DeviceNotificationListenerService.isAccessEnabled(context)
 }
 
-private fun canInstallUnknownApps(context: Context): Boolean {
-  return context.packageManager.canRequestPackageInstalls()
-}
-
 private fun hasMotionCapabilities(context: Context): Boolean {
   val sensorManager = context.getSystemService(SensorManager::class.java) ?: return false
   return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||
-    sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
+          sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
 }
