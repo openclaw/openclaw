@@ -26,6 +26,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "logging.consoleStyle": "Console Log Style",
   "logging.redactSensitive": "Sensitive Data Redaction Mode",
   "logging.redactPatterns": "Custom Redaction Patterns",
+  "logging.maxFileBytes": "Log File Size Cap (bytes)",
   cli: "CLI",
   "cli.banner": "CLI Banner",
   "cli.banner.taglineMode": "CLI Banner Tagline Mode",
