@@ -520,7 +520,13 @@ export function applyJobResult(
         // backoff regardless of schedule interval. Without this, long-period jobs
         // (hourly, daily) would wait until the next natural schedule time even
         // when the error is self-healing (e.g. a brief network blip).
-        job.state.nextRunAtMs = backoffNext;
+        // Force runs (preserveSchedule) keep the intended cadence instead of
+        // scheduling an immediate backoff retry.
+        if (opts?.preserveSchedule && normalNext !== undefined) {
+          job.state.nextRunAtMs = Math.max(normalNext, backoffNext);
+        } else {
+          job.state.nextRunAtMs = backoffNext;
+        }
       } else {
         // Permanent error: respect natural schedule. Math.max ensures short-interval
         // jobs still observe the backoff cool-down and don't form retry storms.
