@@ -84,6 +84,18 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    contextDedup: z
+      .object({
+        mode: z.enum(["off", "on"]).optional(),
+        lcsMode: z.enum(["off", "on"]).optional(),
+        lcsMinSize: z.number().int().positive().optional(),
+        sizeSimilarityThreshold: z.number().min(0).max(1).optional(),
+        minContentSize: z.number().int().positive().optional(),
+        refTagFormat: z.enum(["unicode", "angle"]).optional(),
+        debugDump: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),

@@ -169,6 +169,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** Opt-in content deduplication to reduce repeated context tokens. */
+  contextDedup?: AgentContextDedupConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
@@ -356,4 +358,21 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+};
+
+export type AgentContextDedupConfig = {
+  /** Deduplication mode: off (default), on */
+  mode?: "off" | "on";
+  /** LCS mode for similar substring deduplication: off (default), on */
+  lcsMode?: "off" | "on";
+  /** Minimum LCS substring length to consider (default: 50 chars) */
+  lcsMinSize?: number;
+  /** Size similarity threshold for comparing messages (0.0-1.0, default: 0.5) */
+  sizeSimilarityThreshold?: number;
+  /** Minimum full-message content length before hash-replacement dedup is considered (default: 100). */
+  minContentSize?: number;
+  /** Reference tag format used in compressed prompts. */
+  refTagFormat?: "unicode" | "angle";
+  /** Dump context to /tmp before/after processing for debugging */
+  debugDump?: boolean;
 };
