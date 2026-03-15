@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter } from "./console.js";
+import * as loggerModule from "./logger.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -143,5 +144,50 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createSubsystemLogger date rollover", () => {
+  it("creates a new file logger when the date changes", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2025-06-01T12:00:00Z"));
+    setLoggerOverride({ level: "debug", consoleLevel: "silent" });
+    const spy = vi.spyOn(loggerModule, "getChildLogger");
+
+    const log = createSubsystemLogger("test-subsystem");
+
+    // First call — logger is created for today's date
+    log.debug("first message");
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // Advance the date by one day
+    vi.setSystemTime(new Date("2025-06-02T00:00:01Z"));
+
+    // Second call — logger should be recreated for the new date
+    log.debug("second message");
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    spy.mockRestore();
+  });
+
+  it("reuses the same file logger within the same date", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2025-06-01T08:00:00Z"));
+    setLoggerOverride({ level: "debug", consoleLevel: "silent" });
+    const spy = vi.spyOn(loggerModule, "getChildLogger");
+
+    const log = createSubsystemLogger("test-subsystem");
+
+    log.debug("morning message");
+    log.debug("afternoon message");
+    log.debug("evening message");
+
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    spy.mockRestore();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 });
