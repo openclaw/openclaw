@@ -134,6 +134,11 @@ export async function statusAllCommand(
       timeoutMs: Math.min(5000, opts?.timeoutMs ?? 10_000),
     }).catch(() => null);
     const gatewayReachable = gatewayProbe?.ok === true;
+    // The gateway is reachable if we connected, even if RPC calls failed due
+    // to scope limitations (e.g. missing operator.read).
+    const gatewayConnected =
+      gatewayReachable ||
+      (gatewayProbe?.connectLatencyMs != null && gatewayProbe.connectLatencyMs >= 0);
     const gatewaySelf = pickGatewaySelfPresence(gatewayProbe?.presence ?? null);
     progress.tick();
 
@@ -253,10 +258,12 @@ export async function statusAllCommand(
     const gatewayTarget = remoteUrlMissing ? `fallback ${connection.url}` : connection.url;
     const gatewayStatus = gatewayReachable
       ? `reachable ${formatDurationPrecise(gatewayProbe?.connectLatencyMs ?? 0)}`
-      : gatewayProbe?.error
-        ? `unreachable (${gatewayProbe.error})`
-        : "unreachable";
-    const gatewayAuth = gatewayReachable ? ` · auth ${formatGatewayAuthUsed(probeAuth)}` : "";
+      : gatewayConnected
+        ? `reachable (limited: ${gatewayProbe?.error ?? "unknown"}) ${formatDurationPrecise(gatewayProbe?.connectLatencyMs ?? 0)}`
+        : gatewayProbe?.error
+          ? `unreachable (${gatewayProbe.error})`
+          : "unreachable";
+    const gatewayAuth = gatewayConnected ? ` · auth ${formatGatewayAuthUsed(probeAuth)}` : "";
     const gatewaySelfLine =
       gatewaySelf?.host || gatewaySelf?.ip || gatewaySelf?.version || gatewaySelf?.platform
         ? [

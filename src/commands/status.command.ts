@@ -121,6 +121,7 @@ export async function statusCommand(
     gatewayProbeAuthWarning,
     gatewayProbe,
     gatewayReachable,
+    gatewayConnected,
     gatewaySelf,
     channelIssues,
     agentStatus,
@@ -261,9 +262,13 @@ export async function statusCommand(
       ? warn("misconfigured (remote.url missing)")
       : gatewayReachable
         ? ok(`reachable ${formatDuration(gatewayProbe?.connectLatencyMs)}`)
-        : warn(gatewayProbe?.error ? `unreachable (${gatewayProbe.error})` : "unreachable");
+        : gatewayConnected
+          ? warn(
+              `reachable (limited: ${gatewayProbe?.error ?? "unknown"}) ${formatDuration(gatewayProbe?.connectLatencyMs)}`,
+            )
+          : warn(gatewayProbe?.error ? `unreachable (${gatewayProbe.error})` : "unreachable");
     const auth =
-      gatewayReachable && !remoteUrlMissing
+      gatewayConnected && !remoteUrlMissing
         ? ` · auth ${formatGatewayAuthUsed(gatewayProbeAuth)}`
         : "";
     const self =
