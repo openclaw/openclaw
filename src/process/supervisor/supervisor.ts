@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { getShellConfig } from "../../agents/shell-utils.js";
+import { getShellConfig, wrapCommandForShell } from "../../agents/shell-utils.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
@@ -130,7 +130,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
               }
               return await createPtyAdapter({
                 shell,
-                args: [...shellArgs, ptyCommand],
+                args: [...shellArgs, wrapCommandForShell(shell, ptyCommand)],
                 cwd: input.cwd,
                 env: input.env,
               });
