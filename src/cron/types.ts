@@ -29,6 +29,15 @@ export type CronDelivery = {
   bestEffort?: boolean;
   /** Separate destination for failure notifications. */
   failureDestination?: CronFailureDestination;
+  /**
+   * Snapshot of the originating session's delivery context at job creation time.
+   * Used as a fallback when `channel` is `"last"` and the isolated cron session
+   * has no `lastChannel` (because fresh isolated sessions clear inherited routing
+   * state).
+   */
+  originChannel?: ChannelId;
+  originTo?: string;
+  originAccountId?: string;
 };
 
 export type CronFailureDestination = {

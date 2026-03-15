@@ -16,6 +16,7 @@ import {
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export type DeliveryTargetResolution =
@@ -46,6 +47,10 @@ export async function resolveDeliveryTarget(
     /** Explicit accountId from job.delivery — overrides session-derived and binding-derived values. */
     accountId?: string;
     sessionKey?: string;
+    /** Snapshot of the originating session's delivery context, captured at job creation time. */
+    originChannel?: string;
+    originTo?: string;
+    originAccountId?: string;
   },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
@@ -72,9 +77,23 @@ export async function resolveDeliveryTarget(
 
   let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
   let channelResolutionError: Error | undefined;
+  // When the session has no lastChannel (e.g. fresh isolated cron sessions clear
+  // delivery state), try the origin snapshot captured at job creation time before
+  // falling back to the default channel selection.  This prevents "last" from
+  // resolving to an unrelated default (like @heartbeat) when the job was created
+  // from a specific channel conversation.
+  let originSnapshotApplied = false;
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {
       fallbackChannel = preliminary.lastChannel;
+    } else if (
+      requestedChannel === "last" &&
+      typeof jobPayload.originChannel === "string" &&
+      jobPayload.originChannel.trim() &&
+      isDeliverableMessageChannel(jobPayload.originChannel.trim())
+    ) {
+      fallbackChannel = jobPayload.originChannel.trim() as Exclude<OutboundChannel, "none">;
+      originSnapshotApplied = true;
     } else {
       try {
         const selection = await resolveMessageChannelSelection({ cfg });
@@ -103,6 +122,16 @@ export async function resolveDeliveryTarget(
   const mode = resolved.mode as "explicit" | "implicit";
   let toCandidate = resolved.to;
 
+  // When the origin snapshot provided the fallback channel and the session had
+  // no usable `to`, fall back to the snapshotted originTo so that isolated cron
+  // jobs deliver to the chat where the job was originally created.
+  if (originSnapshotApplied && !toCandidate && typeof jobPayload.originTo === "string") {
+    const trimmedOriginTo = jobPayload.originTo.trim();
+    if (trimmedOriginTo) {
+      toCandidate = trimmedOriginTo;
+    }
+  }
+
   // Prefer an explicit accountId from the job's delivery config (set via
   // --account on cron add/edit). Fall back to the session's lastAccountId,
   // then to the agent's bound account from bindings config.
@@ -111,6 +140,15 @@ export async function resolveDeliveryTarget(
       ? jobPayload.accountId.trim()
       : undefined;
   let accountId = explicitAccountId ?? resolved.accountId;
+
+  // When the origin snapshot was used and no accountId was resolved from the
+  // session or explicit config, fall back to the snapshotted originAccountId.
+  if (originSnapshotApplied && !accountId && typeof jobPayload.originAccountId === "string") {
+    const trimmedOriginAccountId = jobPayload.originAccountId.trim();
+    if (trimmedOriginAccountId) {
+      accountId = trimmedOriginAccountId;
+    }
+  }
   if (!accountId && channel) {
     const bindings = buildChannelAccountBindings(cfg);
     const byAgent = bindings.get(channel);

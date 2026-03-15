@@ -196,13 +196,24 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   }
 
   let channel: CronMessageChannel | undefined;
+  let accountId: string | undefined;
   if (markerIndex >= 1) {
     channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
+  }
+  // For <channel>:<accountId>:direct:<peerId> keys, extract the accountId.
+  if (markerIndex >= 2) {
+    const candidate = parts[1]?.trim();
+    if (candidate) {
+      accountId = candidate;
+    }
   }
 
   const delivery: CronDelivery = { mode: "announce", to: peerId };
   if (channel) {
     delivery.channel = channel;
+  }
+  if (accountId) {
+    delivery.accountId = accountId;
   }
   return delivery;
 }
@@ -403,6 +414,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               }
             }
 
+            // Infer delivery from session key once (used for both full
+            // inference and origin snapshot below).
+            const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
+
             const hasTarget =
               (typeof delivery?.channel === "string" && delivery.channel.trim()) ||
               (typeof delivery?.to === "string" && delivery.to.trim());
@@ -410,13 +425,44 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               (deliveryValue == null || delivery) &&
               (mode === "" || mode === "announce") &&
               !hasTarget;
-            if (shouldInfer) {
-              const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
-              if (inferred) {
-                (job as { delivery?: unknown }).delivery = {
-                  ...delivery,
-                  ...inferred,
-                } satisfies CronDelivery;
+            if (shouldInfer && inferred) {
+              const inferredImplicitDelivery: CronDelivery = { mode: "announce" };
+              if (inferred.channel) {
+                inferredImplicitDelivery.channel = inferred.channel;
+              }
+              if (inferred.to) {
+                inferredImplicitDelivery.to = inferred.to;
+              }
+              (job as { delivery?: unknown }).delivery = {
+                ...delivery,
+                ...inferredImplicitDelivery,
+              } satisfies CronDelivery;
+            }
+
+            // Snapshot the originating session's delivery context when channel
+            // is explicitly "last". Fresh isolated cron sessions clear inherited
+            // delivery state, so without this snapshot the "last" fallback
+            // resolves to the default channel (e.g. @heartbeat) instead of the
+            // chat where the job was created. (#45806)
+            // Only apply when the agent explicitly set channel to "last" — not
+            // when delivery was fully inferred above (shouldInfer path already
+            // populates concrete channel/to values).
+            if (inferred && !shouldInfer) {
+              const currentDelivery = (job as { delivery?: Record<string, unknown> }).delivery;
+              const currentChannel =
+                typeof currentDelivery?.channel === "string"
+                  ? currentDelivery.channel.trim().toLowerCase()
+                  : "";
+              if (currentDelivery && currentChannel === "last" && !currentDelivery.originChannel) {
+                if (inferred.channel) {
+                  currentDelivery.originChannel = inferred.channel;
+                }
+                if (inferred.to) {
+                  currentDelivery.originTo = inferred.to;
+                }
+                if (inferred.accountId) {
+                  currentDelivery.originAccountId = inferred.accountId;
+                }
               }
             }
           }

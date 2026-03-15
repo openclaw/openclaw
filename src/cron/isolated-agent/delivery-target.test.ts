@@ -368,4 +368,89 @@ describe("resolveDeliveryTarget", () => {
     expect(result.ok).toBe(true);
     expect(result.accountId).toBe("explicit");
   });
+
+  describe("origin snapshot fallback (#45806)", () => {
+    it("uses originChannel/originTo when session has no lastChannel and channel is 'last'", async () => {
+      // Simulate a fresh isolated cron session with cleared delivery state
+      setMainSessionEntry(undefined);
+      const cfg = makeCfg();
+
+      const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+        channel: "last",
+        originChannel: "telegram",
+        originTo: "715441687",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.channel).toBe("telegram");
+      expect(result.to).toBe("715441687");
+    });
+
+    it("uses originAccountId when session has no lastAccountId", async () => {
+      setMainSessionEntry(undefined);
+      const cfg = makeCfg();
+
+      const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+        channel: "last",
+        originChannel: "telegram",
+        originTo: "715441687",
+        originAccountId: "bot-origin",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.accountId).toBe("bot-origin");
+    });
+
+    it("prefers session lastChannel over origin snapshot", async () => {
+      // When the session already has a valid lastChannel, origin snapshot should not be used
+      setLastSessionEntry({
+        sessionId: "sess-active",
+        lastChannel: "telegram",
+        lastTo: "999888777",
+      });
+      const cfg = makeCfg();
+
+      const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+        channel: "last",
+        originChannel: "telegram",
+        originTo: "715441687",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.to).toBe("999888777");
+    });
+
+    it("does not apply origin snapshot when channel is explicitly set (not 'last')", async () => {
+      setMainSessionEntry(undefined);
+      const cfg = makeCfg();
+
+      const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+        channel: "telegram",
+        to: "explicit-target",
+        originChannel: "telegram",
+        originTo: "715441687",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.to).toBe("explicit-target");
+    });
+
+    it("ignores invalid originChannel and falls back to default channel selection", async () => {
+      setMainSessionEntry(undefined);
+      vi.mocked(resolveMessageChannelSelection).mockClear();
+      const cfg = makeCfg();
+
+      const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+        channel: "last",
+        to: "explicit-target",
+        originChannel: "stale-plugin",
+        originTo: "715441687",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.channel).toBe("telegram");
+      expect(result.to).toBe("explicit-target");
+      expect(resolveMessageChannelSelection).toHaveBeenCalledTimes(1);
+    });
+  });
 });

@@ -69,6 +69,26 @@ describe("cron tool", () => {
     return call?.params?.delivery;
   }
 
+  async function executeAddAndReadRawDelivery(params: {
+    callId: string;
+    agentSessionKey: string;
+    delivery?: Record<string, unknown> | null;
+  }) {
+    const tool = createCronTool({ agentSessionKey: params.agentSessionKey });
+    await tool.execute(params.callId, {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        ...(params.delivery !== undefined ? { delivery: params.delivery } : {}),
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { delivery?: Record<string, unknown> };
+    };
+    return call?.params?.delivery;
+  }
+
   async function executeAddAndReadSessionKey(params: {
     callId: string;
     agentSessionKey: string;
@@ -354,6 +374,37 @@ describe("cron tool", () => {
       mode: "announce",
       to: "alice",
     });
+  });
+
+  it("does not pin inferred accountId when delivery is fully inferred", async () => {
+    const delivery = await executeAddAndReadRawDelivery({
+      callId: "call-implicit-account",
+      agentSessionKey: "agent:main:telegram:bot-origin:direct:715441687",
+    });
+
+    expect(delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "715441687",
+    });
+    expect(delivery).not.toHaveProperty("accountId");
+  });
+
+  it("snapshots originAccountId when explicit delivery.channel is last", async () => {
+    const delivery = await executeAddAndReadRawDelivery({
+      callId: "call-origin-account-snapshot",
+      agentSessionKey: "agent:main:telegram:bot-origin:direct:715441687",
+      delivery: { mode: "announce", channel: "last" },
+    });
+
+    expect(delivery).toEqual({
+      mode: "announce",
+      channel: "last",
+      originChannel: "telegram",
+      originTo: "715441687",
+      originAccountId: "bot-origin",
+    });
+    expect(delivery).not.toHaveProperty("accountId");
   });
 
   // ── Flat-params recovery (issue #11310) ──────────────────────────────

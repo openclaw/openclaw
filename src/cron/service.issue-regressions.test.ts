@@ -194,6 +194,55 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
+  it("preserves origin delivery snapshots when merging delivery patches", async () => {
+    const store = makeStorePath();
+    const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
+
+    const created = await cron.add({
+      name: "origin snapshot merge",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: {
+        mode: "announce",
+        channel: "last",
+        originChannel: "telegram",
+        originTo: "715441687",
+        originAccountId: "bot-origin",
+      },
+    });
+
+    const updated = await cron.update(created.id, {
+      delivery: { mode: "announce", bestEffort: true },
+    });
+
+    expect(updated.delivery).toEqual({
+      mode: "announce",
+      channel: "last",
+      originChannel: "telegram",
+      originTo: "715441687",
+      originAccountId: "bot-origin",
+      bestEffort: true,
+    });
+
+    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
+      jobs: Array<{ id: string; delivery?: Record<string, unknown> }>;
+    };
+    const persistedJob = persisted.jobs.find((job) => job.id === created.id);
+    expect(persistedJob?.delivery).toEqual({
+      mode: "announce",
+      channel: "last",
+      originChannel: "telegram",
+      originTo: "715441687",
+      originAccountId: "bot-origin",
+      bestEffort: true,
+    });
+
+    cron.stop();
+  });
+
   it("treats persisted jobs with missing enabled as enabled during update()", async () => {
     const store = makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
