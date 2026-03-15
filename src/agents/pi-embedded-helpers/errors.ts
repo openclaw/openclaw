@@ -698,6 +698,16 @@ export function formatAssistantErrorText(
     }
   }
 
+  // The PI SDK's Anthropic provider maps refusal/sensitive stop_reason to
+  // stopReason="error" and throws a generic "An unknown error occurred".
+  // Replace with a friendlier message that guides the user.
+  if (raw === "An unknown error occurred") {
+    return (
+      "The model could not complete this request. " +
+      "This may be due to content policy restrictions. Try rephrasing your message."
+    );
+  }
+
   if (isContextOverflowError(raw)) {
     return (
       "Context overflow: prompt too large for the model. " +

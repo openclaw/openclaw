@@ -117,6 +117,13 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+
+  it("returns a friendly message for refusal/sensitive stop reasons", () => {
+    const msg = makeAssistantError("An unknown error occurred");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("content policy restrictions");
+    expect(result).not.toBe("An unknown error occurred");
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
