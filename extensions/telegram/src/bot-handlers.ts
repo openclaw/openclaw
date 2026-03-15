@@ -1581,6 +1581,7 @@ export const registerTelegramHandlers = ({
           accountId,
           bot,
           logger,
+          pairingMessage: telegramCfg.pairingMessage,
         });
         if (!dmAuthorized) {
           return;

@@ -18,6 +18,8 @@ import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 
+type TelegramBot = ReturnType<typeof createTelegramBot>;
+
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS = 10_000;
@@ -26,7 +28,7 @@ async function listenHttpServer(params: {
   server: ReturnType<typeof createServer>;
   port: number;
   host: string;
-}) {
+}): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const onError = (err: Error) => {
       params.server.off("error", onError);
@@ -111,7 +113,7 @@ export async function startTelegramWebhook(opts: {
   healthPath?: string;
   publicUrl?: string;
   webhookCertPath?: string;
-}) {
+}): Promise<{ server: ReturnType<typeof createServer>; bot: TelegramBot; stop: () => void }> {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
   const port = opts.port ?? 8787;

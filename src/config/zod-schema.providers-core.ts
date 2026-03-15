@@ -141,6 +141,17 @@ const validateTelegramCustomCommands = (
   }
 };
 
+export const PairingMessageConfigSchema = z
+  .object({
+    header: z.string().optional(),
+    senderIdLabel: z.string().optional(),
+    codeLabel: z.string().optional(),
+    footer: z.string().optional(),
+    showCliHint: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 function normalizeTelegramStreamingConfig(value: { streaming?: unknown; streamMode?: unknown }) {
   value.streaming = resolveTelegramPreviewStreamMode(value);
   delete value.streamMode;
@@ -277,6 +288,7 @@ export const TelegramAccountSchemaBase = z
     healthMonitor: ChannelHealthMonitorSchema,
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
+    pairingMessage: PairingMessageConfigSchema,
     ackReaction: z.string().optional(),
   })
   .strict();
@@ -1283,6 +1295,7 @@ export const IMessageAccountSchemaBase = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     responsePrefix: z.string().optional(),
+    pairingMessage: PairingMessageConfigSchema,
   })
   .strict();
 

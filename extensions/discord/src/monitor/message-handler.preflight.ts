@@ -260,6 +260,7 @@ export async function preflightDiscordMessage(
               buildPairingReply({
                 channel: "discord",
                 idLine: `Your Discord user id: ${author.id}`,
+                senderId: author.id,
                 code,
               }),
               {

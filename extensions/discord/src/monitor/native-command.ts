@@ -1453,6 +1453,7 @@ async function dispatchDiscordCommandInteraction(params: {
             buildPairingReply({
               channel: "discord",
               idLine: `Your Discord user id: ${user.id}`,
+              senderId: user.id,
               code,
             }),
             { ephemeral: true },

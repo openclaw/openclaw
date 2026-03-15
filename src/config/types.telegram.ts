@@ -1,3 +1,4 @@
+import type { PairingMessageConfig } from "../pairing/pairing-messages.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -194,6 +195,9 @@ export type TelegramAccountConfig = {
    * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
    */
   responsePrefix?: string;
+  /** Optional pairing message text overrides. Allows white-label deployments to
+   *  customize or suppress OpenClaw branding in pairing challenge messages. */
+  pairingMessage?: PairingMessageConfig;
   /**
    * Per-channel ack reaction override.
    * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.

@@ -14,7 +14,7 @@ import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 /** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
   BuildTelegramMessageContextParams,
-  "primaryCtx" | "allMedia" | "storeAllowFrom" | "options"
+  "primaryCtx" | "allMedia" | "storeAllowFrom" | "options" | "pairingMessage"
 > & {
   telegramCfg: TelegramAccountConfig;
   runtime: RuntimeEnv;
@@ -75,6 +75,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       resolveGroupRequireMention,
       resolveTelegramGroupConfig,
       sendChatActionHandler,
+      pairingMessage: telegramCfg.pairingMessage,
     });
     if (!context) {
       return;
