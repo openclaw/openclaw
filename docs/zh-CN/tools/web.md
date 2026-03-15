@@ -254,4 +254,4 @@ await web_search({
 - 参见 [Firecrawl](/tools/firecrawl) 了解密钥设置和服务详情。
 - 响应会被缓存（默认 15 分钟）以减少重复获取。
 - 如果你使用工具配置文件/允许列表，添加 `web_search`/`web_fetch` 或 `group:web`。
-- 如果缺少 Brave 密钥，`web_search` 返回一个简短的设置提示和文档链接。
+- 如果缺少 Brave 密钥，`web_search` 返回一个简短的设置提示和文档链接。如果你不想配置搜索 API key，很多场景下可以直接用 `web_fetch`（抓取指定 URL）或 `browser` 工具替代。
