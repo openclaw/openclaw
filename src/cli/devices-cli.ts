@@ -158,8 +158,13 @@ async function approvePairingWithFallback(
       defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
     }
     const approved = await approveDevicePairing(requestId);
-    if (!approved || approved.status !== "approved") {
+    if (!approved) {
       return null;
+    }
+    if (approved.status !== "approved") {
+      throw new Error(`Pairing request denied: missing scope \`${approved.missingScope}\``, {
+        cause: error,
+      });
     }
     return {
       requestId,
