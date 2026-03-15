@@ -79,6 +79,40 @@ openclaw-src/apps/web-control-ui/
 3. 提示词与偏好记忆的 UI 配置
 4. OpenClaw 上游新功能跟踪推荐
 ---
+## 强版本回退系统拆解（2026-03-15）
+### 一、用户视角必须有的能力
+1. **改前可留点**：用户能明确知道本轮改动前有没有 checkpoint
+2. **最近版本可见**：能直接看到最近 checkpoint 列表，而不是只看 hash
+3. **一键回退**：能从 UI 直接恢复到某个 checkpoint
+4. **回退后有验证**：恢复后自动 build / 基本复核，不让用户猜是否恢复成功
+5. **失败时有保底**：当本轮改坏、build 失败或页面明显跑偏时，系统应明确提示恢复路径
+
+### 二、agent 执行规则
+1. 默认把版本回退视为工作流的一部分，而不是事故后的补救
+2. 中高风险改动前默认先建 checkpoint
+3. 改动后默认做 build / 验证
+4. 若 build 失败，优先提示或执行恢复到最近安全 checkpoint
+5. 所有 checkpoint / restore / verify 动作都应通过 OpenClaw 原生链路触发并把结果回显给聊天
+
+### 三、系统自动策略
+1. **safe mode 默认开启**：高风险改动自动要求先 checkpoint
+2. **失败即报警**：build 失败、恢复失败、找不到 ref 时要清晰暴露状态
+3. **恢复后再校验**：restore 不是终点，restore + verify 才算闭环
+4. **减少手工输入**：优先从“最近 checkpoint 列表”选择，而不是让用户手输 ref
+
+### 四、UI 最小露出入口
+1. Rollback First 面板常驻
+2. 创建 checkpoint
+3. 查看最近 checkpoint
+4. 输入 / 选择 ref 后恢复
+5. 显示最近一次 build / restore 状态
+6. 后续可补：checkpoint 历史时间线、按需求轮次展示版本点
+
+### 五、分期理解
+- **P0**：checkpoint / list / restore / restore 后 verify（先保证不崩）
+- **P1**：checkpoint 历史可视化、按需求轮次命名、失败时更明确的自动恢复建议
+- **P2**：更智能的风险分级与自动回退策略
+---
 ## 并行维护内容
 ### marxism-self-positioning 会话归档
 - 状态：✅ 正常运行中
