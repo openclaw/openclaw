@@ -124,6 +124,7 @@ export function renderMessageGroup(
   opts: {
     onOpenSidebar?: (content: string) => void;
     showReasoning: boolean;
+    showToolCalls?: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
     basePath?: string;
@@ -180,6 +181,7 @@ export function renderMessageGroup(
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
+              showToolCalls: opts.showToolCalls ?? true,
             },
             opts.onOpenSidebar,
           ),
@@ -634,7 +636,7 @@ function jsonSummaryLabel(parsed: unknown): string {
 
 function renderGroupedMessage(
   message: unknown,
-  opts: { isStreaming: boolean; showReasoning: boolean },
+  opts: { isStreaming: boolean; showReasoning: boolean; showToolCalls?: boolean },
   onOpenSidebar?: (content: string) => void,
 ) {
   const m = message as Record<string, unknown>;
@@ -647,7 +649,7 @@ function renderGroupedMessage(
     typeof m.toolCallId === "string" ||
     typeof m.tool_call_id === "string";
 
-  const toolCards = extractToolCards(message);
+  const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message) : [];
   const hasToolCards = toolCards.length > 0;
   const images = extractImages(message);
   const hasImages = images.length > 0;
@@ -671,7 +673,9 @@ function renderGroupedMessage(
     return renderCollapsedToolCards(toolCards, onOpenSidebar);
   }
 
-  if (!markdown && !hasToolCards && !hasImages) {
+  // Suppress empty bubbles when tool cards are the only content and toggle is off
+  const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
+  if (!markdown && !visibleToolCards && !hasImages) {
     return nothing;
   }
 

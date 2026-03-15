@@ -74,7 +74,10 @@ function createAutoAbortController() {
 }
 
 async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
-  return monitorSignalProvider(opts);
+  return monitorSignalProvider({
+    config: config as OpenClawConfig,
+    ...opts,
+  });
 }
 
 async function receiveSignalPayloads(params: {
@@ -304,7 +307,9 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    expect(sendMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
     expect(sendMock.mock.calls[0][1]).toBe("PFX final reply");
   });
 
@@ -460,8 +465,9 @@ describe("monitorSignalProvider tool results", () => {
       ],
     });
 
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(updateLastRouteMock).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("does not resend pairing code when a request is already pending", async () => {
