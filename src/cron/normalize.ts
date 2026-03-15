@@ -89,6 +89,8 @@ function coercePayload(payload: UnknownRecord) {
   const kindRaw = typeof next.kind === "string" ? next.kind.trim().toLowerCase() : "";
   if (kindRaw === "agentturn") {
     next.kind = "agentTurn";
+  } else if (kindRaw === "exec") {
+    next.kind = "exec";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
   } else if (kindRaw) {
@@ -97,6 +99,7 @@ function coercePayload(payload: UnknownRecord) {
   if (!next.kind) {
     const hasMessage = typeof next.message === "string" && next.message.trim().length > 0;
     const hasText = typeof next.text === "string" && next.text.trim().length > 0;
+    const hasCommand = typeof next.command === "string" && next.command.trim().length > 0;
     const hasAgentTurnHint =
       typeof next.model === "string" ||
       typeof next.thinking === "string" ||
@@ -104,6 +107,8 @@ function coercePayload(payload: UnknownRecord) {
       typeof next.allowUnsafeExternalContent === "boolean";
     if (hasMessage) {
       next.kind = "agentTurn";
+    } else if (hasCommand) {
+      next.kind = "exec";
     } else if (hasText) {
       next.kind = "systemEvent";
     } else if (hasAgentTurnHint) {
@@ -121,6 +126,12 @@ function coercePayload(payload: UnknownRecord) {
     const trimmed = next.text.trim();
     if (trimmed) {
       next.text = trimmed;
+    }
+  }
+  if (typeof next.command === "string") {
+    const trimmed = next.command.trim();
+    if (trimmed) {
+      next.command = trimmed;
     }
   }
   if ("model" in next) {
@@ -159,6 +170,16 @@ function coercePayload(payload: UnknownRecord) {
     typeof next.allowUnsafeExternalContent !== "boolean"
   ) {
     delete next.allowUnsafeExternalContent;
+  }
+  if ("shell" in next && typeof next.shell !== "boolean") {
+    delete next.shell;
+  }
+  if ("timeout" in next) {
+    if (typeof next.timeout === "number" && Number.isFinite(next.timeout)) {
+      next.timeout = Math.max(0, Math.floor(next.timeout));
+    } else {
+      delete next.timeout;
+    }
   }
   return next;
 }
@@ -299,6 +320,22 @@ function copyTopLevelLegacyDeliveryFields(next: UnknownRecord, payload: UnknownR
   }
 }
 
+function copyTopLevelExecFields(next: UnknownRecord, payload: UnknownRecord) {
+  if (
+    typeof payload.command !== "string" &&
+    typeof next.command === "string" &&
+    next.command.trim()
+  ) {
+    payload.command = next.command.trim();
+  }
+  if (typeof payload.shell !== "boolean" && typeof next.shell === "boolean") {
+    payload.shell = next.shell;
+  }
+  if (typeof payload.timeout !== "number" && typeof next.timeout === "number") {
+    payload.timeout = Math.max(0, Math.floor(next.timeout));
+  }
+}
+
 function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.model;
   delete next.thinking;
@@ -311,6 +348,9 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.to;
   delete next.bestEffortDeliver;
   delete next.provider;
+  delete next.command;
+  delete next.timeout;
+  delete next.shell;
 }
 
 export function normalizeCronJobInput(
@@ -391,8 +431,11 @@ export function normalizeCronJobInput(
   if (!("payload" in next) || !isRecord(next.payload)) {
     const message = typeof next.message === "string" ? next.message.trim() : "";
     const text = typeof next.text === "string" ? next.text.trim() : "";
+    const command = typeof next.command === "string" ? next.command.trim() : "";
     if (message) {
       next.payload = { kind: "agentTurn", message };
+    } else if (command) {
+      next.payload = { kind: "exec", command };
     } else if (text) {
       next.payload = { kind: "systemEvent", text };
     }
@@ -414,6 +457,8 @@ export function normalizeCronJobInput(
   if (payload && payload.kind === "agentTurn") {
     copyTopLevelAgentTurnFields(next, payload);
     copyTopLevelLegacyDeliveryFields(next, payload);
+  } else if (payload && payload.kind === "exec") {
+    copyTopLevelExecFields(next, payload);
   }
   stripLegacyTopLevelFields(next);
 
@@ -443,11 +488,12 @@ export function normalizeCronJobInput(
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
       // Keep default behavior unchanged for backward compatibility:
       // - systemEvent defaults to "main"
+      // - exec defaults to "isolated"
       // - agentTurn defaults to "isolated" (NOT "current", to avoid token accumulation)
       // Users must explicitly specify "current" or "session:xxx" for custom session binding
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
-      } else if (kind === "agentTurn") {
+      } else if (kind === "exec" || kind === "agentTurn") {
         next.sessionTarget = "isolated";
       }
     }
