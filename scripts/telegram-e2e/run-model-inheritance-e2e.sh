@@ -96,6 +96,9 @@ if [[ ! -x "${TG_BIN}" ]]; then
   exit 1
 fi
 
+# Hard gate: ensure this worktree owns Telegram runtime before live assertions.
+"${ROOT_DIR}/scripts/telegram-live-preflight.sh"
+
 EXPECT_MODEL="${EXPECT_MODEL:-${SET_MODEL}}"
 if [[ -n "${USERBOT_SESSION:-}" ]]; then
   USERBOT_SESSION="${USERBOT_SESSION}"
