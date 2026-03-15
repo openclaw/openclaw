@@ -280,33 +280,29 @@ describe("deliverLineAutoReply", () => {
       );
     });
 
-    it("sends error text via push when sticker reply fails and push also fails", async () => {
-      const failReplyMock = vi.fn(async (_token: string, messages: unknown[]) => {
-        const first = (messages as Array<{ type: string }>)[0];
-        if (first?.type === "sticker") {
-          throw new Error("400 Bad Request");
-        }
+    it("does not reject when both sticker reply and error push fail", async () => {
+      const failReplyMock = vi.fn(async () => {
+        throw new Error("400 Bad Request");
       });
-      const pushMessagesMock = vi.fn(async (_to: string, messages: unknown[]) => {
-        const first = (messages as Array<{ type: string }>)[0];
-        if (first?.type === "sticker") {
-          throw new Error("400 Bad Request");
-        }
-        return { messageId: "push", chatId: "u1" };
+      const pushMessagesMock = vi.fn(async () => {
+        throw new Error("push also failed");
       });
       const { deps } = createDeps({
         replyMessageLine: failReplyMock as LineAutoReplyDeps["replyMessageLine"],
         pushMessagesLine: pushMessagesMock as LineAutoReplyDeps["pushMessagesLine"],
       });
 
-      await deliverLineAutoReply({
-        ...baseDeliveryParams,
-        payload: { sticker: { raw: "99999:00000" } },
-        lineData: {},
-        deps,
-      });
+      // Should not throw even when both sticker send and error text push fail
+      await expect(
+        deliverLineAutoReply({
+          ...baseDeliveryParams,
+          payload: { sticker: { raw: "99999:00000" } },
+          lineData: {},
+          deps,
+        }),
+      ).resolves.toEqual({ replyTokenUsed: false });
 
-      expect(pushMessagesMock).toHaveBeenLastCalledWith(
+      expect(pushMessagesMock).toHaveBeenCalledWith(
         "line:user:1",
         [
           expect.objectContaining({

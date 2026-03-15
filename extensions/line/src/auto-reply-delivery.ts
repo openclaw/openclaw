@@ -104,9 +104,13 @@ export async function deliverLineAutoReply(params: {
         await sendLineMessages([stickerMsg], true);
       } catch (err) {
         logVerbose(`line: sticker send failed (${payload.sticker.raw}): ${String(err)}`);
-        await pushLineMessages([
-          { type: "text", text: `[スタンプ送信エラー: ${payload.sticker.raw}]` },
-        ]);
+        try {
+          await pushLineMessages([
+            { type: "text", text: `[スタンプ送信エラー: ${payload.sticker.raw}]` },
+          ]);
+        } catch (pushErr) {
+          logVerbose(`line: sticker error text push also failed: ${String(pushErr)}`);
+        }
       }
       return { replyTokenUsed };
     }
@@ -120,7 +124,11 @@ export async function deliverLineAutoReply(params: {
       await sendLineMessages([stickerMsg], true);
     } catch (err) {
       logVerbose(`line: sticker send failed (channelData): ${String(err)}`);
-      await pushLineMessages([{ type: "text", text: "[スタンプ送信エラー]" }]);
+      try {
+        await pushLineMessages([{ type: "text", text: "[スタンプ送信エラー]" }]);
+      } catch (pushErr) {
+        logVerbose(`line: sticker error text push also failed: ${String(pushErr)}`);
+      }
     }
     return { replyTokenUsed };
   }

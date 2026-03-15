@@ -40,6 +40,18 @@ describe("parseReplyDirectives - sticker directive", () => {
     expect(result.sticker).toEqual({ raw: "CAACAgIAAxkBAAI" });
   });
 
+  it("detects sticker with leading whitespace", () => {
+    const result = parseReplyDirectives("テスト\n  STICKER:446:1988");
+    expect(result.sticker).toEqual({ raw: "446:1988" });
+    expect(result.text).toBe("テスト");
+  });
+
+  it("detects sticker with trailing whitespace (raw is trimmed)", () => {
+    const result = parseReplyDirectives("テスト\nSTICKER:446:1988   ");
+    expect(result.sticker).toEqual({ raw: "446:1988" });
+    expect(result.text).toBe("テスト");
+  });
+
   it("coexists with MEDIA: directive", () => {
     const result = parseReplyDirectives(
       "テスト\nMEDIA:https://example.com/img.png\nSTICKER:446:1988",

@@ -22,7 +22,7 @@ function extractStickerDirective(text: string): { text: string; sticker?: { raw:
   const remaining: string[] = [];
 
   for (const line of lines) {
-    if (/^sticker:/i.test(line.trimEnd())) {
+    if (/^sticker:/i.test(line.trim())) {
       if (!sticker) {
         const raw = line.slice(line.toLowerCase().indexOf("sticker:") + "sticker:".length).trim();
         if (raw) {
