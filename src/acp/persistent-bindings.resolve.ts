@@ -274,8 +274,7 @@ export function resolveConfiguredAcpBindingSpecBySessionKey(params: {
         !targetParsed ||
         (targetParsed.scope !== "group_topic" &&
           targetParsed.scope !== "group_topic_sender" &&
-          !targetParsed.canonicalConversationId.startsWith("ou_") &&
-          !targetParsed.canonicalConversationId.startsWith("on_"))
+          !isSupportedFeishuDirectConversationId(targetParsed.canonicalConversationId))
       ) {
         continue;
       }

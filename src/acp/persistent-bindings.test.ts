@@ -536,6 +536,31 @@ describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
 
     expect(spec?.backend).toBe("exact");
   });
+
+  it("maps a configured Feishu user_id DM binding session key back to its spec", () => {
+    const cfg = createCfgWithBindings([
+      createFeishuBinding({
+        agentId: "codex",
+        conversationId: "user_123",
+        acp: { backend: "acpx" },
+      }),
+    ]);
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "user_123",
+    });
+    const spec = resolveConfiguredAcpBindingSpecBySessionKey({
+      cfg,
+      sessionKey: resolved?.record.targetSessionKey ?? "",
+    });
+
+    expect(spec?.channel).toBe("feishu");
+    expect(spec?.conversationId).toBe("user_123");
+    expect(spec?.agentId).toBe("codex");
+    expect(spec?.backend).toBe("acpx");
+  });
 });
 
 describe("buildConfiguredAcpSessionKey", () => {
