@@ -4,18 +4,7 @@ import ts from "typescript";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
 import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
-const sourceRoots = [
-  "src/telegram",
-  "src/discord",
-  "src/slack",
-  "src/signal",
-  "src/imessage",
-  "src/web",
-  "src/channels",
-  "src/routing",
-  "src/line",
-  "extensions",
-];
+const sourceRoots = ["src/channels", "src/routing", "src/line", "extensions"];
 
 // Temporary allowlist for legacy callsites. New raw fetch callsites in channel/plugin runtime
 // code should be rejected and migrated to fetchWithSsrFGuard/shared channel helpers.
@@ -54,14 +43,14 @@ const allowedRawFetchCallsites = new Set([
   "extensions/voice-call/src/providers/telnyx.ts:61",
   "extensions/voice-call/src/providers/tts-openai.ts:111",
   "extensions/voice-call/src/providers/twilio/api.ts:23",
-  "src/channels/telegram/api.ts:8",
-  "src/discord/send.outbound.ts:347",
-  "src/discord/voice-message.ts:264",
-  "src/discord/voice-message.ts:308",
-  "src/slack/monitor/media.ts:64",
-  "src/slack/monitor/media.ts:68",
-  "src/slack/monitor/media.ts:82",
-  "src/slack/monitor/media.ts:108",
+  "extensions/telegram/src/api-fetch.ts:8",
+  "extensions/discord/src/send.outbound.ts:363",
+  "extensions/discord/src/voice-message.ts:268",
+  "extensions/discord/src/voice-message.ts:312",
+  "extensions/slack/src/monitor/media.ts:55",
+  "extensions/slack/src/monitor/media.ts:59",
+  "extensions/slack/src/monitor/media.ts:73",
+  "extensions/slack/src/monitor/media.ts:99",
 ]);
 
 function isRawFetchCall(expression) {

@@ -4,6 +4,7 @@ export const zh_CN: TranslationMap = {
   common: {
     health: "健康状况",
     ok: "正常",
+    online: "在线",
     offline: "离线",
     connect: "连接",
     refresh: "刷新",
