@@ -10,7 +10,7 @@ import type {
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
-import { registerPluginCommand } from "./commands.js";
+import { registerPluginCommand, validatePluginCommandDefinition } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive.js";
@@ -177,6 +177,9 @@ export type PluginRegistryParams = {
   logger: PluginLogger;
   coreGatewayHandlers?: GatewayRequestHandlers;
   runtime: PluginRuntime;
+  // When true, skip writing to the global plugin command registry during register().
+  // Used by non-activating snapshot loads to avoid leaking commands into the running gateway.
+  suppressGlobalCommands?: boolean;
 };
 
 type PluginTypedHookPolicy = {
@@ -615,19 +618,37 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
 
-    // Register with the plugin command system (validates name and checks for duplicates)
-    const result = registerPluginCommand(record.id, command, {
-      pluginName: record.name,
-      pluginRoot: record.rootDir,
-    });
-    if (!result.ok) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `command registration failed: ${result.error}`,
+    // For snapshot (non-activating) loads, record the command locally without touching the
+    // global plugin command registry so running gateway commands stay intact.
+    // We still validate the command definition so diagnostics match the real activation path.
+    // NOTE: cross-plugin duplicate command detection is intentionally skipped here because
+    // snapshot registries are isolated and never write to the global command table. Conflicts
+    // will surface when the plugin is loaded via the normal activation path at gateway startup.
+    if (registryParams.suppressGlobalCommands) {
+      const validationError = validatePluginCommandDefinition(command);
+      if (validationError) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `command registration failed: ${validationError}`,
+        });
+        return;
+      }
+    } else {
+      const result = registerPluginCommand(record.id, command, {
+        pluginName: record.name,
+        pluginRoot: record.rootDir,
       });
-      return;
+      if (!result.ok) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `command registration failed: ${result.error}`,
+        });
+        return;
+      }
     }
 
     record.commands.push(name);

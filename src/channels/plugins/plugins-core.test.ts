@@ -154,6 +154,50 @@ describe("channel plugin catalog", () => {
     expect(ids).toContain("demo-channel");
   });
 
+  it("preserves plugin ids when they differ from channel ids", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-catalog-state-"));
+    const pluginDir = path.join(stateDir, "extensions", "demo-channel-plugin");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@vendor/demo-channel-plugin",
+        openclaw: {
+          extensions: ["./index.js"],
+          channel: {
+            id: "demo-channel",
+            label: "Demo Channel",
+            selectionLabel: "Demo Channel",
+            docsPath: "/channels/demo-channel",
+            blurb: "Demo channel",
+          },
+          install: {
+            npmSpec: "@vendor/demo-channel-plugin",
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "@vendor/demo-runtime",
+        configSchema: {},
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "module.exports = {}", "utf-8");
+
+    const entry = listChannelPluginCatalogEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+    }).find((item) => item.id === "demo-channel");
+
+    expect(entry?.pluginId).toBe("@vendor/demo-runtime");
+  });
+
   it("uses the provided env for external catalog path resolution", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-home-"));
     const catalogPath = path.join(home, "catalog.json");
