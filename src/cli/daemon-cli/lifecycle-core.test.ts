@@ -175,8 +175,16 @@ describe("runServiceRestart token drift", () => {
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });
 
-  it("invokes the restart completion hook after a successful restart", async () => {
-    const onRestartComplete = vi.fn();
+  it("invokes the restart completion hook before a successful direct restart", async () => {
+    const events: string[] = [];
+    const onRestartComplete = vi.fn(async () => {
+      events.push("hook");
+    });
+    service.restart.mockImplementation(async (...args) => {
+      void args;
+      events.push("restart");
+      return { outcome: "completed" };
+    });
 
     await runServiceRestart({
       ...createServiceRunArgs(true),
@@ -184,6 +192,7 @@ describe("runServiceRestart token drift", () => {
     });
 
     expect(onRestartComplete).toHaveBeenCalledTimes(1);
+    expect(events.slice(0, 2)).toEqual(["hook", "restart"]);
   });
 
   it("invokes the restart completion hook for scheduled restarts", async () => {

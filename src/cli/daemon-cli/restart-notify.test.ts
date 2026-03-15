@@ -34,6 +34,21 @@ describe("writeRestartSentinelFromEnvIfPresent", () => {
     }
   });
 
+  it("returns false instead of throwing when writing the sentinel fails", async () => {
+    const stateFile = path.join(os.tmpdir(), `openclaw-restart-notify-file-${Date.now()}`);
+    await fs.writeFile(stateFile, "occupied", "utf-8");
+    try {
+      await expect(
+        writeRestartSentinelFromEnvIfPresent({
+          OPENCLAW_STATE_DIR: stateFile,
+          OPENCLAW_RESTART_NOTIFY_SESSION_KEY: "agent:main:feishu:direct:ou_123",
+        } as NodeJS.ProcessEnv),
+      ).resolves.toBe(false);
+    } finally {
+      await fs.rm(stateFile, { force: true });
+    }
+  });
+
   it("is a no-op when restart notify env is absent", async () => {
     await expect(writeRestartSentinelFromEnvIfPresent({} as NodeJS.ProcessEnv)).resolves.toBe(
       false,

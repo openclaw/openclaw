@@ -35,36 +35,51 @@ function buildDirectTargetCandidates(channel: string | null, id: string): string
   }
 }
 
+function isAnnounceTargetSessionKind(
+  value: string | undefined,
+): value is "group" | "channel" | "direct" | "dm" {
+  return value === "group" || value === "channel" || value === "direct" || value === "dm";
+}
+
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
   const rawParts = sessionKey.split(":").filter(Boolean);
   const parts = rawParts.length >= 3 && rawParts[0] === "agent" ? rawParts.slice(2) : rawParts;
   if (parts.length < 3) {
     return null;
   }
-  const [channelRaw, kind, ...rest] = parts;
-  if (kind !== "group" && kind !== "channel" && kind !== "direct" && kind !== "dm") {
+
+  const [channelRaw, second, third, ...remaining] = parts;
+  const kind = isAnnounceTargetSessionKind(second)
+    ? second
+    : isAnnounceTargetSessionKind(third)
+      ? third
+      : null;
+  if (!kind || !channelRaw) {
     return null;
   }
 
-  // Extract topic/thread ID from rest (supports both :topic: and :thread:)
-  // Telegram uses :topic:, other platforms use :thread:.
-  let threadId: string | undefined;
-  const restJoined = rest.join(":");
-  const topicMatch = restJoined.match(/:topic:([^:]+)$/);
-  const threadMatch = restJoined.match(/:thread:([^:]+)$/);
-  const match = topicMatch || threadMatch;
-
-  if (match) {
-    threadId = match[1]; // Keep as string to match AgentCommandOpts.threadId
+  const accountId = kind === third ? second?.trim() || undefined : undefined;
+  const rest = kind === third ? remaining : [third, ...remaining].filter(Boolean);
+  const restJoined = rest.join(":").trim();
+  if (!restJoined) {
+    return null;
   }
 
-  // Remove :topic:<id> or :thread:<id> suffix from ID for target.
-  const id = match ? restJoined.replace(/:(topic|thread):[^:]+$/, "") : restJoined.trim();
+  let id = restJoined;
+  let threadId: string | undefined;
+  if (kind === "group" || kind === "channel") {
+    // Extract topic/thread ID from group/channel targets only.
+    // Telegram uses :topic:, other platforms use :thread:.
+    const topicMatch = restJoined.match(/:topic:([^:]+)$/);
+    const threadMatch = restJoined.match(/:thread:([^:]+)$/);
+    const match = topicMatch || threadMatch;
+    if (match) {
+      threadId = match[1]; // Keep as string to match AgentCommandOpts.threadId
+      id = restJoined.replace(/:(topic|thread):[^:]+$/, "");
+    }
+  }
 
   if (!id) {
-    return null;
-  }
-  if (!channelRaw) {
     return null;
   }
   const normalizedChannel = normalizeAnyChannelId(channelRaw) ?? normalizeChatChannelId(channelRaw);
@@ -98,6 +113,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   return {
     channel,
     to: normalized ?? kindTarget,
+    accountId,
     threadId,
   };
 }

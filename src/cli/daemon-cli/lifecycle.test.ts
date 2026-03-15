@@ -292,6 +292,18 @@ describe("runDaemonRestart health checks", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
+  it("writes the restart sentinel before signaling an unmanaged restart", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    mockUnmanagedRestart();
+
+    await runDaemonRestart({ json: true });
+
+    expect(writeRestartSentinelFromEnvIfPresent).toHaveBeenCalledWith(process.env);
+    expect(writeRestartSentinelFromEnvIfPresent.mock.invocationCallOrder[0]).toBeLessThan(
+      signalVerifiedGatewayPidSync.mock.invocationCallOrder[0],
+    );
+  });
+
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4300]);
     mockUnmanagedRestart();

@@ -38,6 +38,10 @@ export async function writeRestartSentinelFromEnvIfPresent(
     },
   };
 
-  await writeRestartSentinel(payload, env);
-  return true;
+  try {
+    await writeRestartSentinel(payload, env);
+    return true;
+  } catch {
+    return false;
+  }
 }

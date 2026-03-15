@@ -346,11 +346,19 @@ export async function runServiceRestart(params: {
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
   const warnings: string[] = [];
   let handledNotLoaded: NotLoadedActionResult | null = null;
+  let restartHookInvoked = false;
+  const invokeRestartComplete = async () => {
+    if (restartHookInvoked) {
+      return;
+    }
+    restartHookInvoked = true;
+    await params.onRestartComplete?.({ json, stdout, warnings });
+  };
   const emitScheduledRestart = async (
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
     serviceLoaded: boolean,
   ) => {
-    await params.onRestartComplete?.({ json, stdout, warnings });
+    await invokeRestartComplete();
     emit({
       ok: true,
       result: restartStatus.daemonActionResult,
@@ -443,6 +451,7 @@ export async function runServiceRestart(params: {
   try {
     let restartResult: GatewayServiceRestartResult = { outcome: "completed" };
     if (loaded) {
+      await invokeRestartComplete();
       restartResult = await params.service.restart({ env: process.env, stdout });
     }
     let restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
@@ -466,7 +475,7 @@ export async function runServiceRestart(params: {
         restarted = true;
       }
     }
-    await params.onRestartComplete?.({ json, stdout, warnings });
+    await invokeRestartComplete();
     emit({
       ok: true,
       result: "restarted",

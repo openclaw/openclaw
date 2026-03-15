@@ -27,4 +27,18 @@ describe("bash-tools exec restart notify", () => {
     expect(env.OPENCLAW_RESTART_NOTIFY_TO).toBe("ou_123");
     expect(env.OPENCLAW_RESTART_NOTIFY_MESSAGE).toBe(RESTART_NOTIFY_MESSAGE);
   });
+
+  it("falls back to the session key account id when delivery context is unavailable", () => {
+    const env: Record<string, string> = {};
+
+    applyExecRestartNotifyEnv({
+      command: "openclaw gateway restart",
+      env,
+      sessionKey: "agent:main:slack:workspace-1:direct:U123",
+    });
+
+    expect(env.OPENCLAW_RESTART_NOTIFY_CHANNEL).toBe("slack");
+    expect(env.OPENCLAW_RESTART_NOTIFY_TO).toBe("user:U123");
+    expect(env.OPENCLAW_RESTART_NOTIFY_ACCOUNT_ID).toBe("workspace-1");
+  });
 });

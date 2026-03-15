@@ -162,6 +162,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     opts,
     checkTokenDrift: true,
     onNotLoaded: async () => {
+      await writeRestartSentinelFromEnvIfPresent(process.env);
       const handled = await restartGatewayWithoutServiceManager(restartPort);
       if (handled) {
         restartedWithoutServiceManager = true;
@@ -169,6 +170,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       return handled;
     },
     onRestartComplete: async () => {
+      if (restartedWithoutServiceManager) {
+        return;
+      }
       await writeRestartSentinelFromEnvIfPresent(process.env);
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {

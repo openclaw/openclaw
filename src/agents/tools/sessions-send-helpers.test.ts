@@ -26,6 +26,25 @@ describe("resolveAnnounceTargetFromKey", () => {
     expect(resolveAnnounceTargetFromKey("agent:main:feishu:direct:ou_123")).toEqual({
       channel: "feishu",
       to: "ou_123",
+      accountId: undefined,
+      threadId: undefined,
+    });
+  });
+
+  it("preserves direct ids that contain :thread: segments", () => {
+    expect(resolveAnnounceTargetFromKey("agent:main:telegram:dm:user:thread:abc")).toEqual({
+      channel: "telegram",
+      to: "user:thread:abc",
+      accountId: undefined,
+      threadId: undefined,
+    });
+  });
+
+  it("includes account ids from per-account direct session keys", () => {
+    expect(resolveAnnounceTargetFromKey("agent:main:slack:workspace-1:direct:U123")).toEqual({
+      channel: "slack",
+      to: "user:U123",
+      accountId: "workspace-1",
       threadId: undefined,
     });
   });
@@ -36,6 +55,7 @@ describe("resolveAnnounceTargetFromKey", () => {
     ).toEqual({
       channel: "slack",
       to: "channel:C0123ABC",
+      accountId: undefined,
       threadId: "1234567890.123456",
     });
   });
@@ -44,6 +64,7 @@ describe("resolveAnnounceTargetFromKey", () => {
     expect(resolveAnnounceTargetFromKey("agent:main:discord:group:dev")).toEqual({
       channel: "discord",
       to: "channel:dev",
+      accountId: undefined,
       threadId: undefined,
     });
   });
