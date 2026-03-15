@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.ui.mobileCardSurface
 
 private enum class ConnectInputMode {
   SetupCode,
@@ -144,7 +145,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(14.dp),
-      color = Color.White,
+      color = mobileCardSurface,
       border = BorderStroke(1.dp, mobileBorder),
     ) {
       Column {
@@ -205,7 +206,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
         shape = RoundedCornerShape(14.dp),
         colors =
           ButtonDefaults.buttonColors(
-            containerColor = Color.White,
+            containerColor = mobileCardSurface,
             contentColor = mobileDanger,
           ),
         border = BorderStroke(1.dp, mobileDanger.copy(alpha = 0.4f)),
@@ -298,7 +299,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
-        color = Color.White,
+        color = mobileCardSurface,
         border = BorderStroke(1.dp, mobileBorder),
       ) {
         Column(
@@ -480,7 +481,7 @@ private fun MethodChip(label: String, active: Boolean, onClick: () -> Unit) {
         containerColor = if (active) mobileAccent else mobileSurface,
         contentColor = if (active) Color.White else mobileText,
       ),
-    border = BorderStroke(1.dp, if (active) Color(0xFF184DAF) else mobileBorderStrong),
+    border = BorderStroke(1.dp, if (active) mobileAccentBorderStrong else mobileBorderStrong),
   ) {
     Text(label, style = mobileCaption1.copy(fontWeight = FontWeight.Bold))
   }
@@ -509,10 +510,10 @@ private fun CommandBlock(command: String) {
     modifier = Modifier.fillMaxWidth(),
     shape = RoundedCornerShape(12.dp),
     color = mobileCodeBg,
-    border = BorderStroke(1.dp, Color(0xFF2B2E35)),
+    border = BorderStroke(1.dp, mobileCodeBorder),
   ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-      Box(modifier = Modifier.width(3.dp).height(42.dp).background(Color(0xFF3FC97A)))
+      Box(modifier = Modifier.width(3.dp).height(42.dp).background(mobileCodeAccent))
       Text(
         text = command,
         modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
