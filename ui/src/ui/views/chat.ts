@@ -315,7 +315,7 @@ function readFilesIntoAttachments(files: File[], props: ChatProps) {
   const getCurrentBase = () => [
     ...((props.attachments?.length ? props.attachments : props.bufferedAttachments) ?? []),
   ];
-  const additions: ChatAttachment[] = [];
+  
   props.onAttachmentReadDelta?.(files.length);
   for (const file of files) {
     const reader = new FileReader();
