@@ -203,8 +203,10 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         host.chatProgrammaticScrollFrom = target.scrollTop;
         host.chatProgrammaticScrollTarget = scrollTop;
       } else {
-        host.chatProgrammaticScrollFrom = null;
-        host.chatProgrammaticScrollTarget = null;
+        // Record the destination even for instant scrolls so handleChatScroll's
+        // isProgrammaticSmoothScrollStep check fires and ignores the synthetic event.
+        host.chatProgrammaticScrollFrom = scrollTop;
+        host.chatProgrammaticScrollTarget = scrollTop;
       }
       if (
         !effectiveForce &&
@@ -236,8 +238,8 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
             ? computeBottomScrollTop(latest)
             : computeChatScrollTop(latest, latestBlockRetry, host.chatAutoScrollMode);
         latest.scrollTop = retryScrollTop;
-        host.chatProgrammaticScrollFrom = null;
-        host.chatProgrammaticScrollTarget = null;
+        host.chatProgrammaticScrollFrom = retryScrollTop;
+        host.chatProgrammaticScrollTarget = retryScrollTop;
         if (
           !effectiveForce &&
           latestBlockRetryId &&
@@ -302,7 +304,9 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
     host.chatBottomFollowPinned = false;
   }
   // Clear the "new messages below" indicator when user scrolls back to bottom.
-  if (distanceFromBottom <= BOTTOM_EPSILON) {
+  // Skip this on programmatic scroll events — scheduleChatScroll moves scrollTop
+  // during streaming and those synthetic events must not reset chatAutoScrollMode.
+  if (distanceFromBottom <= BOTTOM_EPSILON && !programmaticSmoothStep) {
     host.chatAutoScrollBlockId = latestBlockId;
     host.chatAutoScrollMode = "bottom";
     host.chatSuppressedBlockId = null;
