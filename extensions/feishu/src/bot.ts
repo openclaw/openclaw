@@ -9,6 +9,7 @@ import {
   issuePairingChallenge,
   normalizeAgentId,
   recordPendingHistoryEntryIfEnabled,
+  resolveAgentOutboundIdentity,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -1406,15 +1407,25 @@ export async function handleFeishuMessage(params: {
           accountId: account.accountId,
         });
         const senderScoped = groupSession?.groupSessionScope === "group_topic_sender";
-        const relevantMessages = senderScoped
-          ? threadMessages.filter(
-              (msg) => msg.senderType === "app" || msg.senderId === ctx.senderOpenId,
-            )
-          : threadMessages;
+        const senderIds = new Set(
+          [ctx.senderOpenId, senderUserId]
+            .map((id) => id?.trim())
+            .filter((id): id is string => id !== undefined && id.length > 0),
+        );
+        const relevantMessages =
+          (senderScoped
+            ? threadMessages.filter(
+                (msg) =>
+                  msg.senderType === "app" ||
+                  (msg.senderId !== undefined && senderIds.has(msg.senderId.trim())),
+              )
+            : threadMessages) ?? [];
 
         const threadStarterBody = rootMsg?.content ?? relevantMessages[0]?.content;
-        const historyMessages =
-          rootMsg?.content || ctx.rootId ? relevantMessages : relevantMessages.slice(1);
+        const includeStarterInHistory = Boolean(rootMsg?.content || ctx.rootId);
+        const historyMessages = includeStarterInHistory
+          ? relevantMessages
+          : relevantMessages.slice(1);
         const historyParts = historyMessages.map((msg) => {
           const role = msg.senderType === "app" ? "assistant" : "user";
           return core.channel.reply.formatAgentEnvelope({
@@ -1551,6 +1562,7 @@ export async function handleFeishuMessage(params: {
 
         if (agentId === activeAgentId) {
           // Active agent: real Feishu dispatcher (responds on Feishu)
+          const identity = resolveAgentOutboundIdentity(cfg, agentId);
           const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
             cfg,
             agentId,
@@ -1563,6 +1575,7 @@ export async function handleFeishuMessage(params: {
             threadReply,
             mentionTargets: ctx.mentionTargets,
             accountId: account.accountId,
+            identity,
             messageCreateTimeMs,
           });
 
@@ -1650,6 +1663,7 @@ export async function handleFeishuMessage(params: {
         ctx.mentionedBot,
       );
 
+      const identity = resolveAgentOutboundIdentity(cfg, route.agentId);
       const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
         cfg,
         agentId: route.agentId,
@@ -1662,6 +1676,7 @@ export async function handleFeishuMessage(params: {
         threadReply,
         mentionTargets: ctx.mentionTargets,
         accountId: account.accountId,
+        identity,
         messageCreateTimeMs,
       });
 
