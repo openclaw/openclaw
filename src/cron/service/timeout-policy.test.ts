@@ -7,7 +7,8 @@ import {
 } from "./timeout-policy.js";
 
 function makeJob(payload: CronJob["payload"]): CronJob {
-  const sessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
+  const sessionTarget =
+    payload.kind === "agentTurn" || payload.kind === "script" ? "isolated" : "main";
   return {
     id: "job-1",
     name: "job",
@@ -26,6 +27,25 @@ describe("timeout-policy", () => {
   it("uses default timeout for non-agent jobs", () => {
     const timeout = resolveCronJobTimeoutMs(makeJob({ kind: "systemEvent", text: "hello" }));
     expect(timeout).toBe(DEFAULT_JOB_TIMEOUT_MS);
+  });
+
+  it("uses default timeout for script jobs without explicit timeout", () => {
+    const timeout = resolveCronJobTimeoutMs(makeJob({ kind: "script", command: "echo hello" }));
+    expect(timeout).toBe(DEFAULT_JOB_TIMEOUT_MS);
+  });
+
+  it("applies explicit timeoutSeconds for script jobs", () => {
+    const timeout = resolveCronJobTimeoutMs(
+      makeJob({ kind: "script", command: "sleep 60", timeoutSeconds: 5 }),
+    );
+    expect(timeout).toBe(5_000);
+  });
+
+  it("disables timeout for script jobs when timeoutSeconds <= 0", () => {
+    const timeout = resolveCronJobTimeoutMs(
+      makeJob({ kind: "script", command: "echo hello", timeoutSeconds: 0 }),
+    );
+    expect(timeout).toBeUndefined();
   });
 
   it("uses expanded safety timeout for agentTurn jobs without explicit timeout", () => {
