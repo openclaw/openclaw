@@ -340,6 +340,15 @@ describe("failover-error", () => {
     ).toBe("timeout");
   });
 
+  it("infers timeout from generic provider error messages (#45663)", () => {
+    expect(resolveFailoverReasonFromError({ message: "Provider returned error" })).toBe("timeout");
+    // Compound messages with specific error details must NOT be swallowed by
+    // the generic pattern — they should reach the appropriate classifier.
+    expect(
+      resolveFailoverReasonFromError({ message: "Provider returned error: invalid_api_key" }),
+    ).toBe("auth_permanent");
+  });
+
   it("infers timeout from connection/network error messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");

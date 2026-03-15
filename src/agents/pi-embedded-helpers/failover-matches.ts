@@ -47,6 +47,10 @@ const ERROR_PATTERNS = {
     /\benotfound\b/i,
     /\beai_again\b/i,
     /without sending (?:any )?chunks?/i,
+    // OpenRouter generic upstream failure — exact match only so compound
+    // messages like "Provider returned error: invalid_api_key" still reach
+    // the auth classifier (#45663)
+    /^provider returned error$/i,
     /\bstop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\breason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
