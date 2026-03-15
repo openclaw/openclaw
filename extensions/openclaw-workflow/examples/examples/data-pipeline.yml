@@ -1,0 +1,156 @@
+# data-pipeline.yml
+# ETL pipeline: fetch → transform → load → report
+# Demonstrates: data handoffs between steps, parallel fetch + validation,
+# error recovery, and final summary report as an optional step.
+
+name: Data ETL Pipeline
+version: "1.0"
+description: "Extract, Transform, Load pipeline with parallel fetching, validation, and reporting"
+concurrency: 3
+
+steps:
+
+  # ── Stage 1a: Fetch Primary Data ──────────────────────────────────────────
+  # Pull data from the primary source API.
+  - id: fetch-primary
+    name: "Fetch Primary Source"
+    timeout: 180
+    task: |
+      Fetch data from the primary source API.
+
+      1. Call the primary data API with pagination (fetch all pages)
+      2. Write raw response to: data/raw/primary-{date}.json
+      3. Log fetch stats: record_count, pages_fetched, duration_ms
+      4. Write stats to: data/raw/primary-stats-{date}.json
+
+      Handle rate limits with exponential backoff (max 3 retries).
+      If the API is down, write an error manifest and exit with failure.
+    outputs:
+      - "data/raw/primary-{date}.json"
+
+  # ── Stage 1b: Fetch Reference Data ────────────────────────────────────────
+  # Runs in PARALLEL with fetch-primary (no depends_on).
+  # Fetches a smaller reference dataset needed for enrichment.
+  - id: fetch-reference
+    name: "Fetch Reference Data"
+    timeout: 120
+    task: |
+      Fetch the reference lookup table (runs in parallel with primary fetch).
+
+      1. Download the reference data from: https://api.example.com/v1/reference
+      2. Write to: data/raw/reference-{date}.json
+      3. Validate: all required fields present, no null IDs
+
+      This data is used by the transform step for enrichment.
+    outputs:
+      - "data/raw/reference-{date}.json"
+
+  # ── Stage 2: Validate ─────────────────────────────────────────────────────
+  # Validate both fetched datasets before transform.
+  # Runs after BOTH fetches complete.
+  - id: validate
+    name: "Validate Raw Data"
+    depends_on: [fetch-primary, fetch-reference]
+    timeout: 120
+    task: |
+      Both fetch stages are complete. Validate the raw data quality.
+
+      Inputs:
+        - data/raw/primary-{date}.json
+        - data/raw/reference-{date}.json
+
+      Checks to run:
+        1. Primary: no duplicate IDs, all required fields present
+        2. Reference: complete coverage (every primary ID has a reference entry)
+        3. Data freshness: primary data timestamp within 24h
+        4. Schema compliance: validate against expected JSON schema
+
+      Write validation report to: data/validation/report-{date}.json
+      Include: passed, failed_checks, warning_count, record_count
+
+      If validation fails, exit with error — DO NOT proceed to transform.
+    outputs:
+      - "data/validation/report-{date}.json"
+
+  # ── Stage 3: Transform ────────────────────────────────────────────────────
+  # Enrich, normalize, and deduplicate the data.
+  - id: transform
+    name: "Transform & Enrich"
+    depends_on: [validate]
+    timeout: 300
+    task: |
+      Validation passed. Transform the raw data.
+
+      Inputs:
+        - data/raw/primary-{date}.json
+        - data/raw/reference-{date}.json
+
+      Transformations:
+        1. Enrich each primary record with fields from the reference table
+        2. Normalize date formats to ISO 8601
+        3. Deduplicate by ID (keep most recent)
+        4. Filter out records marked as deleted or inactive
+        5. Flatten nested structures as needed
+
+      Write transformed data to: data/transformed/records-{date}.json
+      Write transform log to: data/transformed/transform-log-{date}.json
+        Include: input_count, output_count, enriched, deduplicated, filtered
+    outputs:
+      - "data/transformed/records-{date}.json"
+
+  # ── Stage 4: Load ─────────────────────────────────────────────────────────
+  # Load transformed data to the destination system.
+  - id: load
+    name: "Load to Destination"
+    depends_on: [transform]
+    timeout: 300
+    retry: 2
+    retry_delay: 60
+    task: |
+      Transformation complete. Load data to the destination.
+
+      Input: data/transformed/records-{date}.json
+
+      1. Connect to the destination database
+      2. Use UPSERT semantics (insert new, update existing by ID)
+      3. Load in batches of 500 records
+      4. Write load summary to: data/load/summary-{date}.json
+         Include: records_inserted, records_updated, records_failed, duration_ms
+
+      On batch failure: log the failed batch IDs to data/load/failures-{date}.json
+      and continue with remaining batches. Report partial success.
+
+      Consider the load successful if >= 95% of records were loaded.
+    outputs:
+      - "data/load/summary-{date}.json"
+
+  # ── Stage 5: Report ───────────────────────────────────────────────────────
+  # Generate a pipeline completion report. Optional — if this fails,
+  # the data is still loaded and the pipeline counts as successful.
+  - id: report
+    name: "Generate Pipeline Report"
+    depends_on: [load]
+    timeout: 120
+    optional: true
+    task: |
+      ETL complete. Generate the pipeline summary report.
+
+      Inputs:
+        - data/raw/primary-stats-{date}.json
+        - data/validation/report-{date}.json
+        - data/transformed/transform-log-{date}.json
+        - data/load/summary-{date}.json
+
+      Write a human-readable Markdown report to: reports/etl-report-{date}.md
+
+      Report sections:
+      ## ETL Pipeline Report — {date}
+      ### 📥 Extract
+      ### ✅ Validate
+      ### 🔄 Transform
+      ### 💾 Load
+      ### 📊 Summary
+
+      Include: total runtime, record counts at each stage, any anomalies to investigate.
+    outputs:
+      - "reports/etl-report-{date}.md"

@@ -1,0 +1,17 @@
+name: Retry Workflow
+version: "1.0"
+description: "Tests retry logic — flaky-step will retry up to 2 times"
+
+steps:
+  - id: flaky-step
+    name: "Flaky Step"
+    task: "This step might fail and need retrying"
+    timeout: 30
+    retry: 2
+    retry_delay: 1
+
+  - id: dependent-step
+    name: "Dependent Step"
+    depends_on: [flaky-step]
+    task: "This only runs if flaky-step eventually succeeds"
+    timeout: 30

@@ -1,0 +1,21 @@
+name: Simple Linear Pipeline
+version: "1.0"
+description: "Three steps in strict sequence: A must complete before B, B before C"
+
+steps:
+  - id: step-a
+    name: "Step A"
+    task: "Do the first thing and write results to output-a.txt"
+    timeout: 60
+
+  - id: step-b
+    name: "Step B"
+    depends_on: [step-a]
+    task: "Do the second thing based on step-a results"
+    timeout: 60
+
+  - id: step-c
+    name: "Step C"
+    depends_on: [step-b]
+    task: "Do the third thing and finalize"
+    timeout: 60

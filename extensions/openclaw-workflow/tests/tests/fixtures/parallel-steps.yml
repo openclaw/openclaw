@@ -1,0 +1,21 @@
+name: Parallel Steps Pipeline
+version: "1.0"
+description: "Steps A and B run in parallel, C waits for both"
+concurrency: 2
+
+steps:
+  - id: step-a
+    name: "Step A (parallel)"
+    task: "Run task A concurrently with B"
+    timeout: 120
+
+  - id: step-b
+    name: "Step B (parallel)"
+    task: "Run task B concurrently with A"
+    timeout: 120
+
+  - id: step-c
+    name: "Step C (merge)"
+    depends_on: [step-a, step-b]
+    task: "Merge results from A and B"
+    timeout: 60
