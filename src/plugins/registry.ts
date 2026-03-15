@@ -3,6 +3,10 @@ import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngine } from "../context-engine/registry.js";
 import {
+  applyExtensionHostTypedHookPolicy,
+  bridgeExtensionHostLegacyHooks,
+} from "../extension-host/hook-compat.js";
+import {
   addExtensionChannelRegistration,
   addExtensionCliRegistration,
   addExtensionCommandRegistration,
@@ -37,10 +41,6 @@ import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import {
-  isPromptInjectionHookName,
-  stripPromptMutationFieldsFromLegacyHookResult,
-} from "./types.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
@@ -182,20 +182,6 @@ type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
 };
 
-const constrainLegacyPromptInjectionHook = (
-  handler: PluginHookHandlerMap["before_agent_start"],
-): PluginHookHandlerMap["before_agent_start"] => {
-  return (event, ctx) => {
-    const result = handler(event, ctx);
-    if (result && typeof result === "object" && "then" in result) {
-      return Promise.resolve(result).then((resolved) =>
-        stripPromptMutationFieldsFromLegacyHookResult(resolved),
-      );
-    }
-    return stripPromptMutationFieldsFromLegacyHookResult(result);
-  };
-};
-
 export function createEmptyPluginRegistry(): PluginRegistry {
   return {
     plugins: [],
@@ -266,14 +252,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       events: normalized.events,
     });
 
-    const hookSystemEnabled = config?.hooks?.internal?.enabled === true;
-    if (!hookSystemEnabled || opts?.register === false) {
-      return;
-    }
-
-    for (const event of normalized.events) {
-      registerInternalHook(event, handler);
-    }
+    bridgeExtensionHostLegacyHooks({
+      events: normalized.events,
+      handler,
+      hookSystemEnabled: config?.hooks?.internal?.enabled === true,
+      register: opts?.register,
+      registerHook: registerInternalHook,
+    });
   };
 
   const registerGatewayMethod = (
@@ -493,28 +478,29 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    let effectiveHandler = normalized.entry.handler;
-    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(normalized.hookName)) {
-      if (normalized.hookName === "before_prompt_build") {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: `typed hook "${normalized.hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
-        });
-        return;
-      }
-      if (normalized.hookName === "before_agent_start") {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: `typed hook "${normalized.hookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
-        });
-        effectiveHandler = constrainLegacyPromptInjectionHook(
-          handler as PluginHookHandlerMap["before_agent_start"],
-        ) as PluginHookHandlerMap[K];
-      }
+    const policyResult = applyExtensionHostTypedHookPolicy({
+      hookName: normalized.hookName,
+      handler,
+      policy,
+      blockedMessage: `typed hook "${normalized.hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+      constrainedMessage: `typed hook "${normalized.hookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+    });
+    if (!policyResult.ok) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: policyResult.message,
+      });
+      return;
+    }
+    if (policyResult.warningMessage) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: policyResult.warningMessage,
+      });
     }
     addExtensionTypedHookRegistration({
       registry,
@@ -523,7 +509,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...normalized.entry,
         pluginId: record.id,
         hookName: normalized.hookName,
-        handler: effectiveHandler,
+        handler: policyResult.entryHandler,
       } as TypedPluginHookRegistration,
     });
   };
