@@ -82,6 +82,7 @@ type RenderState = RenderTarget & {
   env: RenderEnv;
   headingStyle: "none" | "bold";
   blockquotePrefix: string;
+  blockquoteDepth: number;
   enableSpoilers: boolean;
   tableMode: MarkdownTableMode;
   table: TableState | null;
@@ -230,6 +231,13 @@ function appendText(state: RenderState, value: string) {
   }
   const target = resolveRenderTarget(state);
   target.text += value;
+}
+
+function appendLineBreak(state: RenderState) {
+  appendText(state, "\n");
+  if (state.blockquoteDepth > 0 && state.blockquotePrefix) {
+    appendText(state, state.blockquotePrefix);
+  }
 }
 
 function openStyle(state: RenderState, style: MarkdownStyle) {
@@ -612,7 +620,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "softbreak":
       case "hardbreak":
-        appendText(state, "\n");
+        appendLineBreak(state);
         break;
       case "paragraph_close":
         appendParagraphSeparator(state);
@@ -630,12 +638,16 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "blockquote_open":
         if (state.blockquotePrefix) {
-          state.text += state.blockquotePrefix;
+          appendText(state, state.blockquotePrefix);
         }
+        state.blockquoteDepth += 1;
         openStyle(state, "blockquote");
         break;
       case "blockquote_close":
         closeStyle(state, "blockquote");
+        if (state.blockquoteDepth > 0) {
+          state.blockquoteDepth -= 1;
+        }
         break;
       case "bullet_list_open":
         // Add newline before nested list starts (so nested items appear on new line)
@@ -904,6 +916,7 @@ export function markdownToIRWithMeta(
     env,
     headingStyle: options.headingStyle ?? "none",
     blockquotePrefix: options.blockquotePrefix ?? "",
+    blockquoteDepth: 0,
     enableSpoilers: options.enableSpoilers ?? false,
     tableMode,
     table: null,

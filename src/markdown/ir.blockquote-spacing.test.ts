@@ -146,6 +146,13 @@ describe("blockquote spacing", () => {
       expect(result.text).toBe("> quote\n\nparagraph");
       expect(result.text).not.toContain("\n\n\n");
     });
+
+    it("prefixes continuation lines inside a blockquote", () => {
+      const input = "> Line 1\n> Line 2";
+      const result = markdownToIR(input, { blockquotePrefix: "> " });
+
+      expect(result.text).toBe("> Line 1\n> Line 2");
+    });
   });
 
   describe("edge cases", () => {
