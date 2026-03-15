@@ -1,10 +1,13 @@
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { formatAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../../acp/runtime/errors.js";
-import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import { loadSessionStore } from "../../../config/sessions.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import {
+  getExtensionHostAcpRuntimeBackend,
+  requireExtensionHostAcpRuntimeBackend,
+} from "../../../extension-host/acp-runtime-backend-registry.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
@@ -29,7 +32,7 @@ export async function handleAcpDoctorAction(
 
   const backendId = resolveConfiguredAcpBackendId(params.cfg);
   const installHint = resolveAcpInstallCommandHint(params.cfg);
-  const registeredBackend = getAcpRuntimeBackend(backendId);
+  const registeredBackend = getExtensionHostAcpRuntimeBackend(backendId);
   const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot(params.cfg);
   const lines = ["ACP doctor:", "-----", `configuredBackend: ${backendId}`];
   lines.push(`activeRuntimeSessions: ${managerSnapshot.runtimeCache.activeSessions}`);
@@ -81,7 +84,7 @@ export async function handleAcpDoctorAction(
   }
 
   try {
-    const backend = requireAcpRuntimeBackend(backendId);
+    const backend = requireExtensionHostAcpRuntimeBackend(backendId);
     const capabilities = backend.runtime.getCapabilities
       ? await backend.runtime.getCapabilities({})
       : { controls: [] as string[], configOptionKeys: [] as string[] };

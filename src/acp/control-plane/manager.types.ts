@@ -5,8 +5,8 @@ import type {
   SessionAcpMeta,
   SessionEntry,
 } from "../../config/sessions/types.js";
+import { requireExtensionHostAcpRuntimeBackend } from "../../extension-host/acp-runtime-backend-registry.js";
 import type { AcpRuntimeError } from "../runtime/errors.js";
-import { requireAcpRuntimeBackend } from "../runtime/registry.js";
 import {
   listAcpSessionEntries,
   readAcpSessionEntry,
@@ -135,14 +135,14 @@ export type AcpSessionManagerDeps = {
   listAcpSessions: typeof listAcpSessionEntries;
   readSessionEntry: typeof readAcpSessionEntry;
   upsertSessionMeta: typeof upsertAcpSessionMeta;
-  requireRuntimeBackend: typeof requireAcpRuntimeBackend;
+  requireRuntimeBackend: typeof requireExtensionHostAcpRuntimeBackend;
 };
 
 export const DEFAULT_DEPS: AcpSessionManagerDeps = {
   listAcpSessions: listAcpSessionEntries,
   readSessionEntry: readAcpSessionEntry,
   upsertSessionMeta: upsertAcpSessionMeta,
-  requireRuntimeBackend: requireAcpRuntimeBackend,
+  requireRuntimeBackend: requireExtensionHostAcpRuntimeBackend,
 };
 
 export type { AcpSessionRuntimeOptions, SessionAcpMeta, SessionEntry };
