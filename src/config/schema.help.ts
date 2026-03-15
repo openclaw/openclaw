@@ -212,8 +212,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Agent runtime configuration root covering defaults and explicit agent entries used for routing and execution context. Keep this section explicit so model/tool behavior stays predictable across multi-agent workflows.",
   "agents.defaults":
     "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
+  "agents.defaults.subagents":
+    "Shared defaults for spawned subagents such as model, thinking, depth, concurrency, timeout, and archive behavior. This block does not define which target agent ids a caller may spawn; put target permissions on agents.list[].subagents.allowAgents.",
   "agents.list":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
+  "agents.list[].subagents.allowAgents":
+    'Allowlist of target agent ids this agent may spawn via sessions_spawn. Use allowAgents here; "allow" and "allowlist" are not valid keys under agents.list[].subagents.',
   "agents.list[].runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.list[].runtime.type":

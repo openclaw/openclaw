@@ -1317,6 +1317,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
+- `subagents.allowAgents` is valid only on `agents.list[]` entries. Do not use `subagents.allow` or `subagents.allowlist` here, and do not put target-agent allowlists under `agents.defaults.subagents`.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 
 ---

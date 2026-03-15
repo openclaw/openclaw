@@ -224,4 +224,80 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it.each([
+    { key: "allow", expectedPath: "agents.list.0.subagents.allow" },
+    { key: "allowlist", expectedPath: "agents.list.0.subagents.allowlist" },
+  ])("explains invalid per-agent subagent key $key", ({ key, expectedPath }) => {
+    const res = validateConfigObject({
+      agents: {
+        list: [{ id: "main", subagents: { [key]: ["*"] } }],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe(expectedPath);
+      expect(res.issues[0]?.message).toContain("allowAgents");
+      expect(res.issues[0]?.message).toContain("not valid under subagents");
+    }
+  });
+
+  it("reports invalid subagent aliases and other unsupported keys in one pass", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [{ id: "main", subagents: { allow: ["*"], someBadField: true } }],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("agents.list.0.subagents");
+      expect(res.issues[0]?.message).toContain("allowAgents");
+      expect(res.issues[0]?.message).toContain('"allow"');
+      expect(res.issues[0]?.message).toContain('"someBadField"');
+      expect(res.issues[0]?.message).toContain("unsupported key");
+    }
+  });
+
+  it.each([
+    { key: "allowAgents", expectedPath: "agents.defaults.subagents.allowAgents" },
+    { key: "allowlist", expectedPath: "agents.defaults.subagents.allowlist" },
+  ])("explains invalid agents.defaults.subagents key $key", ({ key, expectedPath }) => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: { subagents: { [key]: ["research"] } },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe(expectedPath);
+      expect(res.issues[0]?.message).toContain("agents.list[].subagents.allowAgents");
+      expect(res.issues[0]?.message).toContain("agents.defaults.subagents");
+    }
+  });
+
+  it("explains that agents.defaults cannot contain per-agent fields", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          id: "main",
+          name: "Main",
+          tools: { allow: ["read"] },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("agents.defaults");
+      expect(res.issues[0]?.message).toContain("shared defaults only");
+      expect(res.issues[0]?.message).toContain('"id"');
+      expect(res.issues[0]?.message).toContain('"name"');
+      expect(res.issues[0]?.message).toContain('"tools"');
+      expect(res.issues[0]?.message).toContain("agents.list[]");
+      expect(res.issues[0]?.message).toContain("top-level tools.*");
+    }
+  });
 });
