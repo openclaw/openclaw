@@ -77,6 +77,7 @@ export async function sendTextMediaPayload(params: {
           ...params.ctx,
           text,
           mediaUrl,
+          filename: params.ctx.payload.filename,
         }),
     });
     return lastResult ?? { channel: params.channel, messageId: "" };

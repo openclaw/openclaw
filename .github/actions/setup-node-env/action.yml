@@ -1,16 +1,12 @@
 name: Setup Node environment
 description: >
-  Initialize submodules with retry, install Node 24 by default, pnpm, optionally Bun,
+  Initialize submodules with retry, install Node 22, pnpm, optionally Bun,
   and optionally run pnpm install. Requires actions/checkout to run first.
 inputs:
   node-version:
     description: Node.js version to install.
     required: false
-    default: "24.x"
-  cache-key-suffix:
-    description: Suffix appended to the pnpm store cache key.
-    required: false
-    default: "node24"
+    default: "22.x"
   pnpm-version:
     description: pnpm version for corepack.
     required: false
@@ -20,7 +16,7 @@ inputs:
     required: false
     default: "true"
   use-sticky-disk:
-    description: Request Blacksmith sticky-disk pnpm caching on trusted runs; pull_request runs fall back to actions/cache.
+    description: Use Blacksmith sticky disks for pnpm store caching.
     required: false
     default: "false"
   install-deps:
@@ -49,7 +45,7 @@ runs:
         exit 1
 
     - name: Setup Node.js
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
         node-version: ${{ inputs.node-version }}
         check-latest: false
@@ -58,12 +54,12 @@ runs:
       uses: ./.github/actions/setup-pnpm-store-cache
       with:
         pnpm-version: ${{ inputs.pnpm-version }}
-        cache-key-suffix: ${{ inputs.cache-key-suffix }}
+        cache-key-suffix: "node22"
         use-sticky-disk: ${{ inputs.use-sticky-disk }}
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
-      uses: oven-sh/setup-bun@v2.1.3
+      uses: oven-sh/setup-bun@v2
       with:
         bun-version: "1.3.9"
 

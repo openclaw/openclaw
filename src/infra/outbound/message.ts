@@ -38,6 +38,7 @@ type MessageSendParams = {
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  filename?: string;
   gifPlayback?: boolean;
   forceDocument?: boolean;
   accountId?: string;
@@ -196,6 +197,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       text: params.content,
       mediaUrl: params.mediaUrl,
       mediaUrls: params.mediaUrls,
+      filename: params.filename,
     },
   ]);
   const mirrorText = normalizedPayloads

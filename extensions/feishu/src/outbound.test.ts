@@ -7,9 +7,15 @@ const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
+const uploadFileFeishuMock = vi.hoisted(() => vi.fn());
+const sendFileFeishuMock = vi.hoisted(() => vi.fn());
+const detectFileTypeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
+  uploadFileFeishu: uploadFileFeishuMock,
+  sendFileFeishu: sendFileFeishuMock,
+  detectFileType: detectFileTypeMock,
 }));
 
 vi.mock("./send.js", () => ({
@@ -30,6 +36,7 @@ vi.mock("./runtime.js", () => ({
 
 import { feishuOutbound } from "./outbound.js";
 const sendText = feishuOutbound.sendText!;
+const sendPayload = feishuOutbound.sendPayload!;
 
 function resetOutboundMocks() {
   vi.clearAllMocks();
@@ -254,6 +261,9 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
 describe("feishuOutbound.sendMedia replyToId forwarding", () => {
   beforeEach(() => {
     resetOutboundMocks();
+    uploadFileFeishuMock.mockResolvedValue({ fileKey: "file_key_1" });
+    sendFileFeishuMock.mockResolvedValue({ messageId: "file_msg" });
+    detectFileTypeMock.mockReturnValue("stream");
   });
 
   it("forwards replyToId to sendMediaFeishu", async () => {
@@ -271,6 +281,68 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
         replyToMessageId: "om_reply_target",
       }),
     );
+  });
+
+  it("forwards raw payload filename before upload-layer sanitization", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "",
+      mediaUrl: "https://example.com/report.md",
+      accountId: "main",
+      payload: {
+        filename: "测试文件.md",
+      } as any,
+    } as any);
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fileName: "测试文件.md",
+      }),
+    );
+  });
+
+  it("forwards raw payload filename on sendPayload attachment path", async () => {
+    await sendPayload({
+      cfg: {} as any,
+      to: "chat_1",
+      payload: {
+        text: "",
+        mediaUrl: "https://example.com/report.md",
+        filename: "测试文件.md",
+      } as any,
+      accountId: "main",
+    } as any);
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fileName: "测试文件.md",
+      }),
+    );
+  });
+
+  it("uses direct local-file upload path for local non-image media", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "",
+      mediaUrl: "/tmp/测试文件.md",
+      filename: "测试文件.md",
+      accountId: "main",
+    } as any);
+
+    expect(uploadFileFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file: "/tmp/测试文件.md",
+        fileName: "测试文件.md",
+      }),
+    );
+    expect(sendFileFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fileKey: "file_key_1",
+      }),
+    );
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
   it("forwards replyToId to text caption send", async () => {

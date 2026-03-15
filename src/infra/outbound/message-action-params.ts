@@ -358,7 +358,11 @@ export async function hydrateAttachmentParamsForAction(params: {
   dryRun?: boolean;
   mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
-  if (params.action !== "sendAttachment" && params.action !== "setGroupIcon") {
+  if (
+    params.action !== "send" &&
+    params.action !== "sendAttachment" &&
+    params.action !== "setGroupIcon"
+  ) {
     return;
   }
   await hydrateAttachmentActionPayload({

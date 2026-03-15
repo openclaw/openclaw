@@ -83,6 +83,7 @@ export async function executeSendAction(params: {
   message: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  filename?: string;
   gifPlayback?: boolean;
   forceDocument?: boolean;
   bestEffort?: boolean;
@@ -128,6 +129,7 @@ export async function executeSendAction(params: {
     agentId: params.ctx.agentId,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
+    filename: params.filename,
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,
     replyToId: params.replyToId,

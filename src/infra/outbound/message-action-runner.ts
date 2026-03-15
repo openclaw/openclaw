@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
@@ -547,6 +548,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     message,
     mediaUrl: mediaUrl || undefined,
     mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
+    filename: readStringParam(params, "filename") ?? undefined,
     gifPlayback,
     forceDocument,
     bestEffort: bestEffort ?? undefined,
@@ -752,6 +754,16 @@ export async function runMessageAction(
     dryRun,
     mediaPolicy,
   });
+
+  if (action === "send" && !readStringParam(params, "filename")) {
+    const localMediaHint =
+      readStringParam(params, "filePath", { trim: false }) ??
+      readStringParam(params, "path", { trim: false }) ??
+      readStringParam(params, "media", { trim: false });
+    if (localMediaHint && !/^(https?:\/\/|data:|file:\/\/)/i.test(localMediaHint)) {
+      params.filename = path.basename(localMediaHint);
+    }
+  }
 
   const resolvedTarget = await resolveActionTarget({
     cfg,
