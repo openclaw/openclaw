@@ -56,6 +56,7 @@ Docs: https://docs.openclaw.ai
 - CLI: avoid loading provider discovery during startup model normalization. (#46522) Thanks @ItsAditya-xyz and @vincentkoc.
 - Tlon: honor explicit empty allowlists and defer cite expansion. (#46788) Thanks @zpbrent and @vincentkoc.
 - ACP: require admin scope for mutating internal actions. (#46789) Thanks @tdjackey and @vincentkoc.
+- Gateway/config validation: stop treating the implicit default memory slot as a required explicit plugin config, so startup no longer fails with `plugins.slots.memory: plugin not found: memory-core` when `memory-core` was only inferred. (#47494) Thanks @ngutman.
 
 ## 2026.3.13
 
