@@ -8,6 +8,29 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 const PRUNED_CONTEXT_IMAGE_MARKER = "[image removed during context pruning]";
 
+// Matches CJK Unified Ideographs, CJK Extension A/B, CJK Compatibility Ideographs,
+// Hangul Syllables, Hiragana, Katakana, and other non-Latin scripts that typically
+// use ~1 token per character. Since we estimate tokens as chars/4, each such character
+// should be counted as CHARS_PER_TOKEN_ESTIMATE chars to avoid underestimation.
+const NON_LATIN_RE = /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\u{20000}-\u{2FA1F}]/gu;
+
+/**
+ * Returns an adjusted character length that accounts for non-Latin (CJK, etc.) characters.
+ * Each non-Latin character is counted as CHARS_PER_TOKEN_ESTIMATE chars so that the
+ * downstream `chars / CHARS_PER_TOKEN_ESTIMATE` token estimate remains accurate.
+ */
+export function estimateStringChars(text: string): number {
+  const matches = text.match(NON_LATIN_RE) ?? [];
+  // Astral-plane characters (e.g. CJK Extension B, U+20000+) are surrogate pairs
+  // in JS strings, so each match may contribute 1 or 2 to text.length. Subtract
+  // each match's actual string length and add the target weight instead.
+  let stringUnits = 0;
+  for (const m of matches) {
+    stringUnits += m.length;
+  }
+  return text.length - stringUnits + matches.length * CHARS_PER_TOKEN_ESTIMATE;
+}
+
 function asText(text: string): TextContent {
   return { type: "text", text };
 }
@@ -44,7 +67,7 @@ function estimateJoinedTextLength(parts: string[]): number {
   }
   let len = 0;
   for (const p of parts) {
-    len += p.length;
+    len += estimateStringChars(p);
   }
   // Joined with "\n" separators between blocks.
   len += Math.max(0, parts.length - 1);
@@ -115,7 +138,7 @@ function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageCon
   let chars = 0;
   for (const block of content) {
     if (block.type === "text") {
-      chars += block.text.length;
+      chars += estimateStringChars(block.text);
     }
     if (block.type === "image") {
       chars += IMAGE_CHAR_ESTIMATE;
@@ -128,7 +151,7 @@ function estimateMessageChars(message: AgentMessage): number {
   if (message.role === "user") {
     const content = message.content;
     if (typeof content === "string") {
-      return content.length;
+      return estimateStringChars(content);
     }
     return estimateTextAndImageChars(content);
   }
@@ -140,14 +163,14 @@ function estimateMessageChars(message: AgentMessage): number {
         continue;
       }
       if (b.type === "text" && typeof b.text === "string") {
-        chars += b.text.length;
+        chars += estimateStringChars(b.text);
       }
       if (b.type === "thinking" && typeof b.thinking === "string") {
-        chars += b.thinking.length;
+        chars += estimateStringChars(b.thinking);
       }
       if (b.type === "toolCall") {
         try {
-          chars += JSON.stringify(b.arguments ?? {}).length;
+          chars += estimateStringChars(JSON.stringify(b.arguments ?? {}));
         } catch {
           chars += 128;
         }
