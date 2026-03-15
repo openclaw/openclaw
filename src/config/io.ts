@@ -41,7 +41,7 @@ import {
   readConfigIncludeFileWithGuards,
   resolveConfigIncludes,
 } from "./includes.js";
-import { findLegacyConfigIssues } from "./legacy.js";
+import { applyLegacyMigrations, findLegacyConfigIssues } from "./legacy.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
@@ -762,14 +762,29 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
         return {};
       }
-      const preValidationDuplicates = findDuplicateAgentDirs(resolvedConfig as OpenClawConfig, {
-        env: deps.env,
-        homedir: deps.homedir,
-      });
+      // Auto-migrate legacy config keys (e.g. ttlHours → idleHours) before
+      // validation so the gateway can start without requiring manual `doctor --fix`.
+      const legacyResult = applyLegacyMigrations(resolvedConfig);
+      const configForValidation = legacyResult.next ?? resolvedConfig;
+      if (legacyResult.changes.length > 0) {
+        for (const change of legacyResult.changes) {
+          deps.logger.warn(`Config auto-migrated: ${change}`);
+        }
+        deps.logger.warn(
+          `Run 'openclaw doctor --fix' to persist these migrations to ${configPath}.`,
+        );
+      }
+      const preValidationDuplicates = findDuplicateAgentDirs(
+        configForValidation as OpenClawConfig,
+        {
+          env: deps.env,
+          homedir: deps.homedir,
+        },
+      );
       if (preValidationDuplicates.length > 0) {
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
-      const validated = validateConfigObjectWithPlugins(resolvedConfig);
+      const validated = validateConfigObjectWithPlugins(configForValidation);
       if (!validated.ok) {
         const details = validated.issues
           .map(
