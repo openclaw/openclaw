@@ -456,6 +456,23 @@ describe("monitorDiscordProvider", () => {
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("fails startup when bot identity fetch fails instead of continuing with undefined botUserId", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    clientFetchUserMock.mockRejectedValueOnce(new Error("fetch user boom"));
+
+    await expect(
+      monitorDiscordProvider({
+        config: baseConfig(),
+        runtime: baseRuntime(),
+      }),
+    ).rejects.toThrow("fetch user boom");
+
+    expect(createDiscordMessageHandlerMock).not.toHaveBeenCalled();
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    expect(createdBindingManagers).toHaveLength(1);
+    expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+  });
+
   it("does not double-stop thread bindings when lifecycle performs cleanup", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 

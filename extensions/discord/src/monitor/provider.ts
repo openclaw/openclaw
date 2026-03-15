@@ -864,6 +864,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         gateway: lifecycleGateway,
         details: String(err),
       });
+      throw err;
+    }
+
+    if (!botUserId) {
+      throw new Error("discord: failed to resolve bot identity");
     }
 
     if (voiceEnabled) {
