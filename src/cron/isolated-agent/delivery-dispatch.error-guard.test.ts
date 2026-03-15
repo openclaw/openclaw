@@ -270,6 +270,40 @@ describe("dispatchCronDelivery — error output guard", () => {
     expect(state.delivered).toBe(false);
   });
 
+  it("skips delivery when deliveryPayloads contain raw error text", async () => {
+    const errorJson = JSON.stringify({
+      type: "error",
+      error: { type: "server_error", message: "fail" },
+    });
+    const params = makeBaseParams({ synthesizedText: undefined });
+    // Override deliveryPayloads directly with error text
+    params.deliveryPayloads = [{ text: errorJson }];
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(false);
+    expect(state.deliveryAttempted).toBe(false);
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("suppressed announce delivery of raw error output"),
+    );
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("deliveryPayloads"));
+  });
+
+  it("allows delivery when only some payloads match error patterns", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "Here is your daily report.",
+    });
+    params.deliveryPayloads = [
+      { text: "Here is your daily report." },
+      { text: "Error: something went wrong" },
+    ];
+    const state = await dispatchCronDelivery(params);
+
+    // Mixed payloads should NOT be suppressed — only when ALL payloads are errors
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
   it("guard fires even when delivery is not explicitly requested", async () => {
     const errorJson = JSON.stringify({
       type: "error",
