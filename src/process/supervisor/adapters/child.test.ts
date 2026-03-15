@@ -45,7 +45,7 @@ async function createAdapterHarness(params?: {
     env: params?.env,
     stdinMode: "pipe-open",
   });
-  return { adapter, killMock };
+  return { adapter, killMock, child };
 }
 
 describe("createChildAdapter", () => {
@@ -112,6 +112,15 @@ describe("createChildAdapter", () => {
     };
     expect(spawnArgs.options?.detached).toBe(false);
     expect(spawnArgs.fallbacks ?? []).toEqual([]);
+  });
+
+  it("resolves wait on exit even if close is never emitted", async () => {
+    const { adapter, child } = await createAdapterHarness({ pid: 5555 });
+
+    const waitPromise = adapter.wait();
+    child.emit("exit", 0, null);
+
+    await expect(waitPromise).resolves.toEqual({ code: 0, signal: null });
   });
 
   it("keeps inherited env when no override env is provided", async () => {
