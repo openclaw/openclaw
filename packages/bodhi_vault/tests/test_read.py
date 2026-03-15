@@ -1,7 +1,7 @@
 """Tests for bodhi_vault.read module."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from bodhi_vault.read import get_node, get_recent_nodes, query_nodes
@@ -87,3 +87,127 @@ def test_get_recent_nodes_ordered_by_created_at(vault_path, schema_path):
     results = get_recent_nodes(vault_path, n=2)
     assert results[0]["content"] == "late"
     assert results[1]["content"] == "early"
+
+
+# --- domain filter (new) ---
+
+def _make_node_with_domain(content, domain, created_at=None):
+    n = _make_node(content, created_at=created_at)
+    n["domain"] = domain
+    return n
+
+
+def test_query_nodes_filter_by_domain(vault_path, schema_path):
+    write_node(_make_node_with_domain("morning run", "fitness"), vault_path, schema_path)
+    write_node(_make_node_with_domain("sleep quality", "health"), vault_path, schema_path)
+    write_node(_make_node_with_domain("focus session", "cognitive"), vault_path, schema_path)
+    results = query_nodes(vault_path, domain="fitness")
+    assert len(results) == 1
+    assert results[0]["domain"] == "fitness"
+
+
+def test_query_nodes_domain_returns_all_matching(vault_path, schema_path):
+    for i in range(4):
+        write_node(_make_node_with_domain(f"wellness {i}", "wellness"), vault_path, schema_path)
+    write_node(_make_node_with_domain("fitness one", "fitness"), vault_path, schema_path)
+    results = query_nodes(vault_path, domain="wellness")
+    assert len(results) == 4
+
+
+def test_query_nodes_domain_no_match_returns_empty(vault_path, schema_path):
+    write_node(_make_node_with_domain("strength training", "fitness"), vault_path, schema_path)
+    results = query_nodes(vault_path, domain="mental-health")
+    assert results == []
+
+
+def test_query_nodes_domain_none_returns_all(vault_path, schema_path):
+    write_node(_make_node_with_domain("a", "fitness"), vault_path, schema_path)
+    write_node(_make_node_with_domain("b", "health"), vault_path, schema_path)
+    results = query_nodes(vault_path, domain=None)
+    assert len(results) == 2
+
+
+# --- date-range filter (new) ---
+
+def test_query_nodes_since_filters_earlier(vault_path, schema_path):
+    old = _make_node("old thought", created_at="2026-01-01T08:00:00")
+    new = _make_node("new thought", created_at="2026-03-15T08:00:00")
+    write_node(old, vault_path, schema_path)
+    write_node(new, vault_path, schema_path)
+    since = datetime(2026, 3, 1)
+    results = query_nodes(vault_path, since=since)
+    assert len(results) == 1
+    assert results[0]["content"] == "new thought"
+
+
+def test_query_nodes_until_filters_later(vault_path, schema_path):
+    old = _make_node("old thought", created_at="2026-01-15T08:00:00")
+    new = _make_node("new thought", created_at="2026-03-15T08:00:00")
+    write_node(old, vault_path, schema_path)
+    write_node(new, vault_path, schema_path)
+    until = datetime(2026, 2, 1)
+    results = query_nodes(vault_path, until=until)
+    assert len(results) == 1
+    assert results[0]["content"] == "old thought"
+
+
+def test_query_nodes_since_and_until_window(vault_path, schema_path):
+    dates = [
+        ("2026-01-01T08:00:00", "before"),
+        ("2026-03-10T08:00:00", "in-window"),
+        ("2026-03-12T08:00:00", "in-window-2"),
+        ("2026-03-20T08:00:00", "after"),
+    ]
+    for ts, content in dates:
+        write_node(_make_node(content, created_at=ts), vault_path, schema_path)
+    since = datetime(2026, 3, 9)
+    until = datetime(2026, 3, 14)
+    results = query_nodes(vault_path, since=since, until=until)
+    assert len(results) == 2
+    contents = {r["content"] for r in results}
+    assert contents == {"in-window", "in-window-2"}
+
+
+def test_query_nodes_since_inclusive_boundary(vault_path, schema_path):
+    """Nodes at exactly `since` timestamp should be included."""
+    boundary = "2026-03-15T00:00:00"
+    node = _make_node("boundary node", created_at=boundary)
+    write_node(node, vault_path, schema_path)
+    since = datetime(2026, 3, 15, 0, 0, 0)
+    results = query_nodes(vault_path, since=since)
+    assert len(results) == 1
+
+
+def test_query_nodes_domain_and_since_combined(vault_path, schema_path):
+    """domain + date-range filters compose correctly."""
+    write_node(
+        _make_node_with_domain("old fitness", "fitness", "2026-01-01T00:00:00"),
+        vault_path, schema_path
+    )
+    write_node(
+        _make_node_with_domain("new fitness", "fitness", "2026-03-15T00:00:00"),
+        vault_path, schema_path
+    )
+    write_node(
+        _make_node_with_domain("new health", "health", "2026-03-15T00:00:00"),
+        vault_path, schema_path
+    )
+    results = query_nodes(vault_path, domain="fitness", since=datetime(2026, 3, 1))
+    assert len(results) == 1
+    assert results[0]["content"] == "new fitness"
+
+
+def test_query_nodes_node_missing_created_at_excluded_when_date_filter_set(vault_path, schema_path):
+    """Nodes without created_at are skipped when a date filter is active."""
+    good = _make_node("has timestamp", created_at="2026-03-15T00:00:00")
+    bad = _make_node("no timestamp")
+    bad.pop("created_at")
+    write_node(good, vault_path, schema_path)
+    # Write bad node directly to bypass schema validation
+    import json
+    node_dir = vault_path / "nodes" / "2026-03"
+    node_dir.mkdir(parents=True, exist_ok=True)
+    (node_dir / f"{bad['id']}.json").write_text(json.dumps(bad))
+    results = query_nodes(vault_path, since=datetime(2026, 3, 1))
+    assert len(results) == 1
+    assert results[0]["content"] == "has timestamp"

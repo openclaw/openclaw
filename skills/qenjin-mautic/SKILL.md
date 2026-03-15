@@ -90,32 +90,36 @@ else:
 Add contact to Mautic and to the Outreach segment.
 
 ```bash
-python3 -c "
-import json, subprocess, os, sys
+MAUTIC_EMAIL='<email>' MAUTIC_FNAME='<firstname>' MAUTIC_LNAME='<lastname>' python3 -c "
+import json, subprocess, os, re
 
 TOKEN = os.environ.get('MAUTIC_BEARER_TOKEN', '')
 BASE = 'https://panel.hudafilm.com'
 
-if len(sys.argv) < 2:
-    print('Usage: /mautic add <email> [firstname] [lastname]')
+email = os.environ.get('MAUTIC_EMAIL', '').strip()
+fname = os.environ.get('MAUTIC_FNAME', '').strip()
+lname = os.environ.get('MAUTIC_LNAME', '').strip()
+
+# Validate email: must contain @ + domain + TLD, no whitespace or special chars
+if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]{2,}', email):
+    print('INVALID_EMAIL — must be a valid email address (e.g. name@domain.com)')
     exit()
 
-email = sys.argv[1]
-fname = sys.argv[2] if len(sys.argv) > 2 else ''
-lname = sys.argv[3] if len(sys.argv) > 3 else ''
-
 payload = json.dumps({'email': email, 'firstname': fname, 'lastname': lname})
-r = subprocess.run([
-    'curl', '-s', '-X', 'POST',
-    '-H', f'Authorization: Bearer {TOKEN}',
-    '-H', 'Content-Type: application/json',
-    '-d', payload,
-    f'{BASE}/api/contacts/new'
-], capture_output=True, text=True)
-result = json.loads(r.stdout)
-cid = result.get('contact', {}).get('id', 'unknown')
-print(f'Created: {email} (id: {cid})')
-" <email> <firstname> <lastname>
+try:
+    r = subprocess.run([
+        'curl', '-s', '-X', 'POST',
+        '-H', f'Authorization: Bearer {TOKEN}',
+        '-H', 'Content-Type: application/json',
+        '-d', payload,
+        f'{BASE}/api/contacts/new'
+    ], capture_output=True, text=True)
+    result = json.loads(r.stdout)
+    cid = result.get('contact', {}).get('id', 'unknown')
+    print(f'Created: {email} (id: {cid})')
+except (json.JSONDecodeError, Exception):
+    print('Mautic API error — check MAUTIC_BEARER_TOKEN and server.')
+"
 ```
 
 Reply: `Created: <email> (id: <id>)`

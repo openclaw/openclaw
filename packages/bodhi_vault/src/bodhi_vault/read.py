@@ -24,6 +24,7 @@ compatibility, JSON files are also supported during migration.
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -118,6 +119,9 @@ def query_nodes(
     source: Optional[str] = None,
     min_energy: Optional[int] = None,
     tag: Optional[str] = None,
+    domain: Optional[str] = None,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
 ) -> list[dict[str, Any]]:
     """
     Query all nodes with optional filters.
@@ -128,6 +132,9 @@ def query_nodes(
         source: Filter by source field (e.g. "telegram").
         min_energy: Filter to nodes with energy_level >= min_energy.
         tag: Filter to nodes containing this tag.
+        domain: Filter by wellness domain (e.g. "fitness", "health", "cognitive").
+        since: Return only nodes created at or after this datetime (inclusive).
+        until: Return only nodes created before or at this datetime (inclusive).
 
     Returns:
         List of matching node dicts. Order is filesystem traversal order.
@@ -143,6 +150,38 @@ def query_nodes(
         data = _read_node_file(node_file)
         if data is None:
             continue
+
+        if node_type is not None and data.get("type") != node_type:
+            continue
+        if source is not None and data.get("source") != source:
+            continue
+        if min_energy is not None and data.get("energy_level", 0) < min_energy:
+            continue
+        if tag is not None and tag not in data.get("tags", []):
+            continue
+        if domain is not None and data.get("domain") != domain:
+            continue
+
+        if since is not None or until is not None:
+            raw_ts = data.get("created_at")
+            if raw_ts is None:
+                continue
+            try:
+                node_ts = datetime.fromisoformat(raw_ts)
+                # Strip timezone info for naive comparison if needed
+                if since is not None:
+                    cmp_since = since.replace(tzinfo=None) if since.tzinfo else since
+                    node_naive = node_ts.replace(tzinfo=None) if node_ts.tzinfo else node_ts
+                    if node_naive < cmp_since:
+                        continue
+                if until is not None:
+                    cmp_until = until.replace(tzinfo=None) if until.tzinfo else until
+                    node_naive = node_ts.replace(tzinfo=None) if node_ts.tzinfo else node_ts
+                    if node_naive > cmp_until:
+                        continue
+            except (ValueError, TypeError):
+                continue
+
         results.append(data)
 
     # Also include any remaining .json files (migration in progress)

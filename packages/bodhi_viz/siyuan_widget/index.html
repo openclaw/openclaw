@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bodhi Graph</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #060b18;
+    --text: #e2e8f0;
+    --muted: #475569;
+    --green: #4ade80;
+    --surface: rgba(255,255,255,0.05);
+    --border: rgba(255,255,255,0.08);
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Mono', 'Courier New', monospace;
+    overflow: hidden;
+  }
+
+  /* ── Toolbar ── */
+  #toolbar {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 20;
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px;
+    background: linear-gradient(to bottom, rgba(6,11,24,0.95), transparent);
+  }
+
+  #status {
+    font-size: 9px; letter-spacing: 3px; text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  #live-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.4s;
+    flex-shrink: 0;
+  }
+  #live-dot.live { background: var(--green); }
+
+  #open-btn {
+    margin-left: auto;
+    font-family: inherit;
+    font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  #open-btn:hover { color: var(--text); border-color: rgba(255,255,255,0.2); }
+
+  /* ── Loading / error state ── */
+  #overlay {
+    position: absolute; inset: 0; z-index: 10;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px;
+  }
+  #overlay .icon { font-size: 28px; }
+  #overlay .msg {
+    font-size: 10px; letter-spacing: 3px; text-transform: uppercase;
+    color: var(--muted); text-align: center; max-width: 240px;
+    line-height: 1.8;
+  }
+  #overlay .hint {
+    font-size: 9px; color: rgba(71,85,105,0.7);
+    max-width: 220px; text-align: center; line-height: 1.6;
+  }
+  #overlay input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 10px;
+    padding: 6px 10px;
+    width: 260px;
+    text-align: center;
+    outline: none;
+  }
+  #overlay input:focus { border-color: rgba(255,255,255,0.25); }
+  #overlay button {
+    font-family: inherit; font-size: 9px;
+    letter-spacing: 2px; text-transform: uppercase;
+    background: var(--green); color: #060b18;
+    border: none; border-radius: 4px;
+    padding: 6px 16px; cursor: pointer;
+    font-weight: bold;
+  }
+
+  /* ── Mini stats bar ── */
+  #stats {
+    position: absolute; bottom: 8px; left: 14px; z-index: 10;
+    font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  iframe {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    border: none;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <div id="live-dot"></div>
+  <div id="status">connecting…</div>
+  <button id="open-btn" onclick="openFullView()">open full ↗</button>
+</div>
+
+<div id="overlay">
+  <div class="icon">🪷</div>
+  <div class="msg" id="msg">Looking for bodhi1<br>on your Tailscale network</div>
+  <div class="hint" id="hint"></div>
+  <input type="text" id="host-input" placeholder="http://100.108.108.113:8085"
+         style="display:none" />
+  <button id="connect-btn" style="display:none" onclick="tryConnect()">connect</button>
+</div>
+
+<div id="stats"></div>
+<iframe id="frame" allow="fullscreen"></iframe>
+
+<script>
+// ── Config ─────────────────────────────────────────────────────────────────
+// Stored in localStorage so the widget remembers the host across reloads
+const STORAGE_KEY = 'bodhi_viz_host';
+const DEFAULT_HOST = 'http://100.108.108.113:8085';
+const PROBE_TIMEOUT_MS = 4000;
+
+let vizHost = localStorage.getItem(STORAGE_KEY) || DEFAULT_HOST;
+let probeTimer = null;
+let liveEs = null;
+
+const overlay = document.getElementById('overlay');
+const frame = document.getElementById('frame');
+const statusEl = document.getElementById('status');
+const liveDot = document.getElementById('live-dot');
+const statsEl = document.getElementById('stats');
+const msgEl = document.getElementById('msg');
+const hintEl = document.getElementById('hint');
+const hostInput = document.getElementById('host-input');
+const connectBtn = document.getElementById('connect-btn');
+
+// ── Probe ──────────────────────────────────────────────────────────────────
+async function probe(host) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const resp = await fetch(host + '/ping', {
+      signal: controller.signal,
+      mode: 'cors',
+    });
+    clearTimeout(timer);
+    return resp.ok;
+  } catch {
+    clearTimeout(timer);
+    return false;
+  }
+}
+
+async function loadStats(host) {
+  try {
+    const resp = await fetch(host + '/graph.json', { mode: 'cors' });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    statsEl.textContent =
+      `${data.nodes?.length || 0} nodes · ${data.links?.length || 0} links`;
+  } catch { /* silent */ }
+}
+
+// ── Connect flow ───────────────────────────────────────────────────────────
+async function connect() {
+  setStatus('connecting…', false);
+  const ok = await probe(vizHost);
+  if (ok) {
+    showGraph();
+  } else {
+    showError();
+  }
+}
+
+function showGraph() {
+  localStorage.setItem(STORAGE_KEY, vizHost);
+  overlay.style.display = 'none';
+  frame.src = vizHost + '/graph.html';
+  frame.style.display = 'block';
+  setStatus('live', true);
+  loadStats(vizHost);
+  startLiveMonitor();
+}
+
+function showError() {
+  overlay.style.display = 'flex';
+  frame.style.display = 'none';
+  frame.src = '';
+  setStatus('offline', false);
+  msgEl.textContent = 'bodhi1 not reachable';
+  hintEl.textContent =
+    'Make sure Tailscale is connected and bodhi1 is running.\n' +
+    'Or enter a custom host below.';
+  hostInput.value = vizHost;
+  hostInput.style.display = 'block';
+  connectBtn.style.display = 'block';
+  // Retry every 20s
+  clearTimeout(probeTimer);
+  probeTimer = setTimeout(connect, 20000);
+}
+
+function setStatus(text, live) {
+  statusEl.textContent = text;
+  liveDot.classList.toggle('live', live);
+}
+
+function tryConnect() {
+  const val = hostInput.value.trim().replace(/\/$/, '');
+  if (val) vizHost = val;
+  connect();
+}
+
+// ── SSE monitor (detect when bodhi1 drops) ────────────────────────────────
+function startLiveMonitor() {
+  if (liveEs) liveEs.close();
+  try {
+    liveEs = new EventSource(vizHost + '/events');
+    liveEs.addEventListener('refresh', () => {
+      loadStats(vizHost);
+      // Tell the iframe to reload its data
+      try {
+        frame.contentWindow.postMessage({ type: 'refresh' }, '*');
+      } catch { /* cross-origin blocked, iframe reloads via its own SSE */ }
+    });
+    liveEs.addEventListener('error', () => {
+      setStatus('reconnecting…', false);
+      liveEs.close();
+      setTimeout(connect, 10000);
+    });
+  } catch { /* SSE not available */ }
+}
+
+// ── Open full view in new tab ─────────────────────────────────────────────
+function openFullView() {
+  window.open(vizHost + '/graph.html', '_blank');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+connect();
+</script>
+</body>
+</html>

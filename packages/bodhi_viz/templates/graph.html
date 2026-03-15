@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bodhi — Knowledge Graph</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@300;400;500;600&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #060b18;
+    --surface: rgba(255,255,255,0.04);
+    --surface-hover: rgba(255,255,255,0.07);
+    --border: rgba(255,255,255,0.08);
+    --text: #e2e8f0;
+    --text-muted: #64748b;
+    --accent: #6366f1;
+
+    --c-wellness: #4ade80;
+    --c-fitness: #60a5fa;
+    --c-health: #f97316;
+    --c-mental: #c084fc;
+    --c-cognitive: #facc15;
+    --c-unknown: #94a3b8;
+  }
+
+  html, body { width: 100%; height: 100%; background: var(--bg); overflow: hidden; }
+
+  #graph-container { position: fixed; inset: 0; }
+
+  /* ── Top bar ── */
+  #topbar {
+    position: fixed; top: 0; left: 0; right: 0; height: 52px;
+    display: flex; align-items: center; gap: 12px; padding: 0 16px;
+    background: linear-gradient(180deg, rgba(6,11,24,0.95) 0%, transparent 100%);
+    z-index: 100; pointer-events: none;
+  }
+  #topbar > * { pointer-events: all; }
+
+  .logo {
+    font-family: 'Space Mono', monospace;
+    font-size: 13px; font-weight: 700;
+    color: var(--c-wellness);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    opacity: 0.9;
+  }
+
+  #search-wrap {
+    position: relative; flex: 0 0 220px;
+  }
+  #search {
+    width: 100%; padding: 6px 12px 6px 30px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; color: var(--text);
+    font-family: 'Inter', sans-serif; font-size: 12px;
+    outline: none; transition: border-color 0.2s;
+  }
+  #search:focus { border-color: var(--accent); }
+  #search::placeholder { color: var(--text-muted); }
+  .search-icon {
+    position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    color: var(--text-muted); font-size: 11px; pointer-events: none;
+  }
+
+  #stats-bar {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px; color: var(--text-muted);
+    letter-spacing: 1px;
+  }
+
+  /* ── Controls ── */
+  .btn {
+    padding: 5px 10px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text-muted);
+    font-family: 'Inter', sans-serif; font-size: 11px;
+    cursor: pointer; transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .btn:hover { background: var(--surface-hover); color: var(--text); }
+  .btn.active { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Legend ── */
+  #legend {
+    position: fixed; bottom: 80px; left: 16px;
+    background: rgba(6,11,24,0.85); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px;
+    font-family: 'Inter', sans-serif;
+    z-index: 100; min-width: 140px;
+    backdrop-filter: blur(8px);
+  }
+  .legend-title {
+    font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 8px;
+    font-family: 'Space Mono', monospace;
+  }
+  .legend-item {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 5px; cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .legend-item:hover { opacity: 0.8; }
+  .legend-item.dimmed { opacity: 0.3; }
+  .legend-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    flex-shrink: 0; box-shadow: 0 0 6px currentColor;
+  }
+  .legend-label { font-size: 11px; color: var(--text); }
+  .legend-count { font-size: 10px; color: var(--text-muted); margin-left: auto; }
+
+  /* ── Timeline scrubber ── */
+  #timeline-wrap {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    width: min(600px, 90vw);
+    background: rgba(6,11,24,0.85); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 16px;
+    z-index: 100; backdrop-filter: blur(8px);
+  }
+  #timeline-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 8px;
+  }
+  .tl-label {
+    font-family: 'Space Mono', monospace; font-size: 9px;
+    letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-muted);
+  }
+  #timeline-range-label {
+    font-family: 'Space Mono', monospace; font-size: 10px;
+    color: var(--c-cognitive);
+  }
+  #timeline-slider {
+    width: 100%; height: 3px;
+    -webkit-appearance: none; appearance: none;
+    background: var(--border); border-radius: 2px; outline: none;
+    cursor: pointer;
+  }
+  #timeline-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--accent);
+    box-shadow: 0 0 8px var(--accent); cursor: pointer;
+  }
+  #timeline-ticks {
+    display: flex; justify-content: space-between; margin-top: 4px;
+  }
+  .tl-tick {
+    font-family: 'Space Mono', monospace; font-size: 8px;
+    color: var(--text-muted);
+  }
+
+  /* ── Document panel ── */
+  #doc-panel {
+    position: fixed; top: 60px; right: -380px; bottom: 80px;
+    width: 360px;
+    background: rgba(8,14,26,0.95); border: 1px solid var(--border);
+    border-radius: 12px 0 0 12px;
+    padding: 0; z-index: 200;
+    transition: right 0.3s cubic-bezier(0.4,0,0.2,1);
+    display: flex; flex-direction: column;
+    backdrop-filter: blur(16px);
+    overflow: hidden;
+  }
+  #doc-panel.open { right: 0; }
+
+  #doc-header {
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: flex-start; gap: 10px;
+  }
+  #doc-domain-badge {
+    flex-shrink: 0; width: 8px; height: 8px;
+    border-radius: 50%; margin-top: 4px;
+    box-shadow: 0 0 8px currentColor;
+  }
+  #doc-close {
+    margin-left: auto; cursor: pointer;
+    color: var(--text-muted); font-size: 16px;
+    background: none; border: none; padding: 0 0 0 8px;
+    transition: color 0.15s; flex-shrink: 0;
+  }
+  #doc-close:hover { color: var(--text); }
+  #doc-meta {
+    font-family: 'Space Mono', monospace; font-size: 9px;
+    color: var(--text-muted); letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  #doc-title {
+    font-family: 'Inter', sans-serif; font-size: 13px;
+    color: var(--text); font-weight: 500; line-height: 1.4;
+    margin-top: 4px;
+  }
+  #doc-body { flex: 1; overflow-y: auto; padding: 14px 16px; }
+  #doc-body::-webkit-scrollbar { width: 3px; }
+  #doc-body::-webkit-scrollbar-track { background: transparent; }
+  #doc-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  #doc-content {
+    font-family: 'Inter', sans-serif; font-size: 13px;
+    color: #94a3b8; line-height: 1.65;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  #doc-enriched {
+    font-family: 'Inter', sans-serif; font-size: 12px;
+    color: #475569; line-height: 1.6; margin-top: 12px;
+    padding-top: 12px; border-top: 1px solid var(--border);
+    white-space: pre-wrap;
+  }
+  #doc-tags {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    margin-top: 12px; padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .tag-pill {
+    padding: 2px 8px;
+    background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.3);
+    border-radius: 10px; font-size: 10px; color: #818cf8;
+    font-family: 'Space Mono', monospace;
+  }
+  .person-pill {
+    padding: 2px 8px;
+    background: rgba(250,204,21,0.1); border: 1px solid rgba(250,204,21,0.25);
+    border-radius: 10px; font-size: 10px; color: #fbbf24;
+    font-family: 'Space Mono', monospace;
+  }
+  .energy-bar {
+    display: flex; gap: 3px; margin-top: 10px;
+  }
+  .energy-pip {
+    width: 16px; height: 4px; border-radius: 2px;
+    background: var(--border);
+  }
+  .energy-pip.filled { background: currentColor; }
+
+  /* ── Loading overlay ── */
+  #loading {
+    position: fixed; inset: 0; display: flex;
+    align-items: center; justify-content: center;
+    background: var(--bg); z-index: 1000;
+    flex-direction: column; gap: 16px;
+    font-family: 'Space Mono', monospace;
+  }
+  .loader-ring {
+    width: 40px; height: 40px;
+    border: 2px solid var(--border);
+    border-top-color: var(--c-wellness);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading-text { font-size: 11px; color: var(--text-muted); letter-spacing: 2px; }
+
+  /* ── Empty state ── */
+  #empty-state {
+    position: fixed; inset: 0; display: none;
+    align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px;
+    font-family: 'Space Mono', monospace; color: var(--text-muted);
+  }
+  #empty-state .empty-icon { font-size: 40px; opacity: 0.3; }
+  #empty-state .empty-text { font-size: 11px; letter-spacing: 2px; }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="loader-ring"></div>
+  <div id="loading-text">LOADING VAULT</div>
+</div>
+
+<div id="empty-state">
+  <div class="empty-icon">🪷</div>
+  <div class="empty-text">NO NODES IN VAULT YET</div>
+</div>
+
+<div id="graph-container"></div>
+
+<!-- Top bar -->
+<div id="topbar">
+  <div class="logo">🪷 Bodhi</div>
+  <div id="search-wrap">
+    <span class="search-icon">⌕</span>
+    <input id="search" type="text" placeholder="Search nodes...">
+  </div>
+  <div id="stats-bar">— nodes</div>
+  <button class="btn" id="btn-2d">2D</button>
+  <button class="btn" id="btn-reset">Reset View</button>
+</div>
+
+<!-- Legend -->
+<div id="legend">
+  <div class="legend-title">Domain</div>
+  <div class="legend-item" data-domain="wellness">
+    <div class="legend-dot" style="background:var(--c-wellness);color:var(--c-wellness)"></div>
+    <div class="legend-label">Wellness</div>
+    <div class="legend-count" id="cnt-wellness">0</div>
+  </div>
+  <div class="legend-item" data-domain="fitness">
+    <div class="legend-dot" style="background:var(--c-fitness);color:var(--c-fitness)"></div>
+    <div class="legend-label">Fitness</div>
+    <div class="legend-count" id="cnt-fitness">0</div>
+  </div>
+  <div class="legend-item" data-domain="health">
+    <div class="legend-dot" style="background:var(--c-health);color:var(--c-health)"></div>
+    <div class="legend-label">Health</div>
+    <div class="legend-count" id="cnt-health">0</div>
+  </div>
+  <div class="legend-item" data-domain="mental-health">
+    <div class="legend-dot" style="background:var(--c-mental);color:var(--c-mental)"></div>
+    <div class="legend-label">Mental</div>
+    <div class="legend-count" id="cnt-mental-health">0</div>
+  </div>
+  <div class="legend-item" data-domain="cognitive">
+    <div class="legend-dot" style="background:var(--c-cognitive);color:var(--c-cognitive)"></div>
+    <div class="legend-label">Cognitive</div>
+    <div class="legend-count" id="cnt-cognitive">0</div>
+  </div>
+</div>
+
+<!-- Timeline scrubber -->
+<div id="timeline-wrap">
+  <div id="timeline-header">
+    <span class="tl-label">Timeline filter</span>
+    <span id="timeline-range-label">All time</span>
+  </div>
+  <input type="range" id="timeline-slider" min="0" max="100" value="100">
+  <div id="timeline-ticks"></div>
+</div>
+
+<!-- Document panel -->
+<div id="doc-panel">
+  <div id="doc-header">
+    <div id="doc-domain-badge"></div>
+    <div style="flex:1; min-width:0;">
+      <div id="doc-meta"></div>
+      <div id="doc-title"></div>
+    </div>
+    <button id="doc-close">✕</button>
+  </div>
+  <div id="doc-body">
+    <div id="doc-content"></div>
+    <div id="doc-enriched"></div>
+    <div id="doc-tags"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/three@0.154.0/build/three.min.js"></script>
+<script src="https://unpkg.com/3d-force-graph@1.73.0/dist/3d-force-graph.min.js"></script>
+<script>
+const DOMAIN_COLORS = {
+  wellness: '#4ade80',
+  fitness:  '#60a5fa',
+  health:   '#f97316',
+  'mental-health': '#c084fc',
+  cognitive: '#facc15',
+  unknown:  '#94a3b8',
+};
+
+let graphData = { nodes: [], links: [] };
+let Graph;
+let is3D = true;
+let activeDomains = new Set(Object.keys(DOMAIN_COLORS));
+let timelineMax = 100;
+let allDates = [];
+let highlightNodes = new Set();
+let highlightLinks = new Set();
+let selectedNode = null;
+
+// ── Fetch data ──────────────────────────────────────────────────
+fetch('graph.json')
+  .then(r => r.json())
+  .then(data => {
+    graphData = data;
+    document.getElementById('loading').style.display = 'none';
+
+    if (!data.nodes.length) {
+      document.getElementById('empty-state').style.display = 'flex';
+      return;
+    }
+
+    initGraph();
+    setupTimeline();
+    updateLegendCounts();
+  })
+  .catch(err => {
+    document.getElementById('loading-text').textContent = 'ERROR: ' + err.message;
+  });
+
+// ── Graph init ──────────────────────────────────────────────────
+function initGraph() {
+  const container = document.getElementById('graph-container');
+
+  Graph = ForceGraph3D({ controlType: 'orbit' })(container)
+    .backgroundColor('#060b18')
+    .nodeId('id')
+    .nodeLabel(() => '')
+    .nodeVal(n => n.val || 2)
+    .nodeColor(n => getNodeColor(n))
+    .nodeOpacity(0.95)
+    .nodeResolution(12)
+    .linkColor(l => l.color || 'rgba(148,163,184,0.2)')
+    .linkWidth(l => l.type === 'person' ? 1.5 : 0.5)
+    .linkOpacity(0.6)
+    .linkDirectionalParticles(l => l.type === 'person' ? 2 : 0)
+    .linkDirectionalParticleWidth(1.5)
+    .linkDirectionalParticleColor(l => l.color || 'rgba(250,204,21,0.5)')
+    .onNodeClick(onNodeClick)
+    .onNodeHover(onNodeHover)
+    .graphData(graphData);
+
+  // Custom node rendering — glowing spheres
+  Graph.nodeThreeObject(node => {
+    const color = DOMAIN_COLORS[node.group] || DOMAIN_COLORS.unknown;
+    const size = Math.max(2, (node.energy_level || 1) * 2.5);
+
+    const geometry = new THREE.SphereGeometry(size, 12, 8);
+    const material = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(color),
+      transparent: true,
+      opacity: 0.9,
+    });
+    const sphere = new THREE.Mesh(geometry, material);
+
+    // Outer glow
+    const glowGeom = new THREE.SphereGeometry(size * 1.8, 12, 8);
+    const glowMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(color),
+      transparent: true,
+      opacity: 0.08,
+      side: THREE.BackSide,
+    });
+    const glow = new THREE.Mesh(glowGeom, glowMat);
+    sphere.add(glow);
+
+    return sphere;
+  });
+
+  document.getElementById('stats-bar').textContent =
+    `${graphData.nodes.length} nodes · ${graphData.links.length} links`;
+}
+
+function getNodeColor(node) {
+  if (highlightNodes.size > 0) {
+    return highlightNodes.has(node)
+      ? (DOMAIN_COLORS[node.group] || DOMAIN_COLORS.unknown)
+      : 'rgba(30,40,60,0.5)';
+  }
+  return DOMAIN_COLORS[node.group] || DOMAIN_COLORS.unknown;
+}
+
+// ── Node interaction ────────────────────────────────────────────
+function onNodeHover(node) {
+  if (!node) {
+    highlightNodes.clear();
+    highlightLinks.clear();
+    Graph.nodeColor(n => getNodeColor(n));
+    return;
+  }
+  highlightNodes.clear();
+  highlightLinks.clear();
+  highlightNodes.add(node);
+
+  // Highlight connected nodes
+  (graphData.links || []).forEach(link => {
+    const src = typeof link.source === 'object' ? link.source : graphData.nodes.find(n => n.id === link.source);
+    const tgt = typeof link.target === 'object' ? link.target : graphData.nodes.find(n => n.id === link.target);
+    if (src === node) { highlightLinks.add(link); if (tgt) highlightNodes.add(tgt); }
+    if (tgt === node) { highlightLinks.add(link); if (src) highlightNodes.add(src); }
+  });
+
+  Graph.nodeColor(n => getNodeColor(n));
+}
+
+function onNodeClick(node) {
+  selectedNode = node;
+  openDocPanel(node);
+
+  // Zoom to node
+  const dist = 60;
+  const distRatio = 1 + dist / Math.hypot(node.x || 0, node.y || 0, node.z || 0);
+  Graph.cameraPosition(
+    { x: (node.x || 0) * distRatio, y: (node.y || 0) * distRatio, z: (node.z || 0) * distRatio },
+    node,
+    1000
+  );
+}
+
+// ── Document panel ──────────────────────────────────────────────
+const DOMAIN_COLORS_CSS = {
+  wellness: 'var(--c-wellness)',
+  fitness: 'var(--c-fitness)',
+  health: 'var(--c-health)',
+  'mental-health': 'var(--c-mental)',
+  cognitive: 'var(--c-cognitive)',
+  unknown: 'var(--c-unknown)',
+};
+
+function openDocPanel(node) {
+  const color = DOMAIN_COLORS_CSS[node.group] || DOMAIN_COLORS_CSS.unknown;
+  document.getElementById('doc-domain-badge').style.color = color;
+  document.getElementById('doc-domain-badge').style.background = color;
+
+  const date = node.created_at ? new Date(node.created_at).toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+  }) : '';
+  document.getElementById('doc-meta').textContent =
+    [node.domain?.toUpperCase(), node.type, date].filter(Boolean).join(' · ');
+
+  document.getElementById('doc-title').textContent = node.label || '';
+  document.getElementById('doc-content').textContent = node.content || '';
+
+  const enriched = node.content_enriched || '';
+  const enrichedEl = document.getElementById('doc-enriched');
+  if (enriched && enriched !== node.content) {
+    enrichedEl.textContent = enriched;
+    enrichedEl.style.display = 'block';
+  } else {
+    enrichedEl.style.display = 'none';
+  }
+
+  // Energy pips
+  const energy = node.energy_level || 1;
+  const energyEl = document.createElement('div');
+  energyEl.className = 'energy-bar';
+  energyEl.style.color = color;
+  for (let i = 1; i <= 5; i++) {
+    const pip = document.createElement('div');
+    pip.className = 'energy-pip' + (i <= energy ? ' filled' : '');
+    energyEl.appendChild(pip);
+  }
+
+  // Tags + people
+  const tagsEl = document.getElementById('doc-tags');
+  tagsEl.innerHTML = '';
+  tagsEl.appendChild(energyEl);
+
+  (node.tags || []).forEach(t => {
+    const pill = document.createElement('span');
+    pill.className = 'tag-pill';
+    pill.textContent = '#' + t;
+    tagsEl.appendChild(pill);
+  });
+  (node.people || []).forEach(p => {
+    const pill = document.createElement('span');
+    pill.className = 'person-pill';
+    pill.textContent = '@ ' + p;
+    tagsEl.appendChild(pill);
+  });
+
+  document.getElementById('doc-panel').classList.add('open');
+}
+
+document.getElementById('doc-close').onclick = () => {
+  document.getElementById('doc-panel').classList.remove('open');
+  selectedNode = null;
+};
+
+// ── Search ──────────────────────────────────────────────────────
+document.getElementById('search').addEventListener('input', e => {
+  const q = e.target.value.toLowerCase().trim();
+  if (!q) {
+    highlightNodes.clear();
+    highlightLinks.clear();
+    Graph.nodeColor(n => getNodeColor(n));
+    return;
+  }
+  highlightNodes.clear();
+  highlightLinks.clear();
+  graphData.nodes.forEach(n => {
+    const searchable = [n.content, n.label, ...(n.tags || []), ...(n.people || [])]
+      .join(' ').toLowerCase();
+    if (searchable.includes(q)) highlightNodes.add(n);
+  });
+  Graph.nodeColor(n => getNodeColor(n));
+});
+
+// ── Legend filter ───────────────────────────────────────────────
+document.querySelectorAll('.legend-item').forEach(item => {
+  item.addEventListener('click', () => {
+    const domain = item.dataset.domain;
+    if (activeDomains.has(domain)) {
+      activeDomains.delete(domain);
+      item.classList.add('dimmed');
+    } else {
+      activeDomains.add(domain);
+      item.classList.remove('dimmed');
+    }
+    applyDomainFilter();
+  });
+});
+
+function applyDomainFilter() {
+  const filtered = {
+    nodes: graphData.nodes.filter(n => activeDomains.has(n.group || 'unknown')),
+    links: graphData.links.filter(l => {
+      const src = typeof l.source === 'object' ? l.source : graphData.nodes.find(n => n.id === l.source);
+      const tgt = typeof l.target === 'object' ? l.target : graphData.nodes.find(n => n.id === l.target);
+      return activeDomains.has(src?.group || 'unknown') && activeDomains.has(tgt?.group || 'unknown');
+    }),
+  };
+  Graph.graphData(filtered);
+}
+
+function updateLegendCounts() {
+  const counts = {};
+  (graphData.nodes || []).forEach(n => {
+    counts[n.group] = (counts[n.group] || 0) + 1;
+  });
+  Object.entries(counts).forEach(([domain, count]) => {
+    const el = document.getElementById('cnt-' + domain);
+    if (el) el.textContent = count;
+  });
+}
+
+// ── Timeline ────────────────────────────────────────────────────
+function setupTimeline() {
+  const dates = graphData.nodes
+    .map(n => n.created_at)
+    .filter(Boolean)
+    .sort();
+
+  if (!dates.length) return;
+
+  allDates = dates;
+  const minDate = new Date(dates[0]);
+  const maxDate = new Date(dates[dates.length - 1]);
+
+  const months = [];
+  let cur = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+  while (cur <= maxDate) {
+    months.push(new Date(cur));
+    cur.setMonth(cur.getMonth() + 1);
+  }
+
+  const ticksEl = document.getElementById('timeline-ticks');
+  if (months.length <= 8) {
+    months.forEach(m => {
+      const tick = document.createElement('span');
+      tick.className = 'tl-tick';
+      tick.textContent = m.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+      ticksEl.appendChild(tick);
+    });
+  }
+
+  const slider = document.getElementById('timeline-slider');
+  const rangeLabel = document.getElementById('timeline-range-label');
+
+  slider.addEventListener('input', e => {
+    const pct = parseInt(e.target.value) / 100;
+    if (pct >= 0.99) {
+      rangeLabel.textContent = 'All time';
+      Graph.graphData(graphData);
+      return;
+    }
+
+    const cutoffMs = minDate.getTime() + pct * (maxDate.getTime() - minDate.getTime());
+    const cutoff = new Date(cutoffMs);
+    rangeLabel.textContent = '≤ ' + cutoff.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+
+    const visible = new Set(
+      graphData.nodes
+        .filter(n => !n.created_at || new Date(n.created_at) <= cutoff)
+        .map(n => n.id)
+    );
+
+    Graph.graphData({
+      nodes: graphData.nodes.filter(n => visible.has(n.id)),
+      links: graphData.links.filter(l => {
+        const srcId = typeof l.source === 'object' ? l.source.id : l.source;
+        const tgtId = typeof l.target === 'object' ? l.target.id : l.target;
+        return visible.has(srcId) && visible.has(tgtId);
+      }),
+    });
+  });
+}
+
+// ── 2D toggle ───────────────────────────────────────────────────
+let Graph2D;
+document.getElementById('btn-2d').addEventListener('click', () => {
+  // Simple: just set camera to top-down view for "2D feel"
+  if (Graph) {
+    const pos = Graph.cameraPosition();
+    Graph.cameraPosition({ x: 0, y: 0, z: 400 }, { x: 0, y: 0, z: 0 }, 800);
+    const btn = document.getElementById('btn-2d');
+    btn.classList.toggle('active');
+  }
+});
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+  if (Graph) {
+    Graph.zoomToFit(600, 40);
+    highlightNodes.clear();
+    highlightLinks.clear();
+    Graph.nodeColor(n => getNodeColor(n));
+    document.getElementById('search').value = '';
+    activeDomains = new Set(Object.keys(DOMAIN_COLORS));
+    document.querySelectorAll('.legend-item').forEach(i => i.classList.remove('dimmed'));
+    Graph.graphData(graphData);
+    document.getElementById('timeline-slider').value = '100';
+    document.getElementById('timeline-range-label').textContent = 'All time';
+  }
+});
+
+// ── Live update via SSE ──────────────────────────────────────────────────────
+(function initLiveUpdate() {
+  if (!window.EventSource) return;
+
+  const indicator = document.createElement('div');
+  indicator.id = 'live-dot';
+  indicator.title = 'Live updates';
+  Object.assign(indicator.style, {
+    position: 'fixed', bottom: '18px', right: '18px',
+    width: '8px', height: '8px', borderRadius: '50%',
+    background: '#334155', transition: 'background 0.4s',
+    zIndex: '100',
+  });
+  document.body.appendChild(indicator);
+
+  function flash() {
+    indicator.style.background = '#4ade80';
+    setTimeout(() => { indicator.style.background = '#334155'; }, 1200);
+  }
+
+  let es;
+  function connect() {
+    es = new EventSource('/events');
+    es.addEventListener('open', () => { indicator.style.background = '#334155'; });
+    es.addEventListener('refresh', () => {
+      flash();
+      // Re-fetch graph.json and hot-swap ForceGraph data (no full reload)
+      fetch('graph.json?t=' + Date.now())
+        .then(r => r.json())
+        .then(data => {
+          graphData = data;
+          // Preserve current filter state
+          const sliderVal = parseInt(document.getElementById('timeline-slider').value, 10);
+          if (sliderVal >= 100) {
+            Graph.graphData(graphData);
+          } else {
+            // Let timeline filter re-apply
+            document.getElementById('timeline-slider').dispatchEvent(new Event('input'));
+          }
+          document.getElementById('node-count').textContent =
+            graphData.nodes.length + ' nodes';
+        })
+        .catch(() => {});
+    });
+    es.addEventListener('error', () => {
+      es.close();
+      setTimeout(connect, 10000); // reconnect after 10s
+    });
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

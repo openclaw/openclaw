@@ -33,6 +33,7 @@ class EdgeType(str, Enum):
     RELATES = "relates"
     PRECEDES = "precedes"
     SOCIAL_BRIDGE = "social_bridge"  # nodes sharing people or social context across domains
+    FOLLOWS_UP = "follows_up"  # Integration node following up on a Practice commitment
 
 
 @dataclass

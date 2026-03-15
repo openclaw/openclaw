@@ -21,6 +21,9 @@ ui/test-results/
 packages/dashboard-next/.next/
 packages/dashboard-next/out/
 
+# OpenClaw workspace state (auto-created in soul dirs on bodhi1)
+souls/**/.openclaw/
+
 # Mise configuration files
 mise.toml
 

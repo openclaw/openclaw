@@ -25,6 +25,7 @@
         "id": "bodhi",
         "name": "Bodhi",
         "default": true,
+        "workspace": "~/openbodhi/souls/bodhi",
         "identity": {
           "name": "Bodhi",
           "avatar": "🪷",
@@ -40,6 +41,7 @@
       {
         "id": "bo",
         "name": "Bo",
+        "workspace": "~/openbodhi/souls/bo",
         "identity": {
           "name": "Bo",
           "avatar": "🧘",
@@ -53,12 +55,18 @@
           "bodhi-janitor",
           "bodhi-nudge",
           "bodhi-substack",
+          "bodhi-viz",
+          "bodhi-checkin",
+          "bodhi-tasks",
+          "bodhi-calendar",
+          "bodhi-accountability",
           "bodhi-switch"
         ]
       },
       {
         "id": "qenjin",
         "name": "Qenjin",
+        "workspace": "~/openbodhi/souls/qenjin",
         "identity": {
           "name": "Qenjin",
           "avatar": "⚙️",
@@ -80,6 +88,7 @@
       {
         "id": "moonman",
         "name": "Moonman",
+        "workspace": "~/openbodhi/souls/moonman",
         "identity": {
           "name": "Moonman",
           "avatar": "🌙",
@@ -101,18 +110,10 @@
     ]
   },
 
-  "budget": {
-    "dailyDollars": 0.85,
-    "weeklyDollars": 5.75,
-    "alertAt": 0.80,
-    "hardStop": true,
-    "persistPath": "~/.openclaw/budget-state.json"
-  },
-
   "channels": {
     "telegram": {
       "dmPolicy": "allowlist",
-      "allowFrom": ["$BODHI_TELEGRAM_USER_ID"]
+      "allowFrom": ["${BODHI_TELEGRAM_USER_ID}"]
     }
   },
 
@@ -129,6 +130,7 @@
         "skills/bodhi-model-switch",
         "skills/bodhi-nudge",
         "skills/bodhi-substack",
+        "skills/bodhi-viz",
         "skills/bodhi-switch",
         "skills/qenjin-crm",
         "skills/qenjin-content",
@@ -147,7 +149,11 @@
         "skills/trader-signals",
         "skills/trader-cron",
         "skills/trader-risk",
-        "skills/trader-dashboard"
+        "skills/trader-dashboard",
+        "skills/bodhi-checkin",
+        "skills/bodhi-tasks",
+        "skills/bodhi-calendar",
+        "skills/bodhi-accountability"
       ],
       "watch": false
     }

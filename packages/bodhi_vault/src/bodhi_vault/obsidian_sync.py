@@ -140,19 +140,23 @@ def _node_to_obsidian_md(node: dict[str, Any]) -> str:
         for p in people:
             lines.append(f"  - \"{p}\"")
 
-    # Optional metadata
+    # Optional metadata — values are double-quoted to prevent YAML frontmatter injection
+    # via embedded newlines or special characters.
+    def _yaml_str(val: str) -> str:
+        return '"' + val.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+
     if node.get("social_context"):
-        lines.append(f"social_context: {node['social_context']}")
+        lines.append(f"social_context: {_yaml_str(node['social_context'])}")
     if node.get("cluster_id"):
-        lines.append(f"cluster_id: {node['cluster_id']}")
+        lines.append(f"cluster_id: {_yaml_str(node['cluster_id'])}")
     if node.get("promoted_from"):
-        lines.append(f"promoted_from: {node['promoted_from']}")
+        lines.append(f"promoted_from: {_yaml_str(node['promoted_from'])}")
     if node.get("media_ref"):
         # Never write Telegram file_ids to Obsidian — they're ephemeral and expose nothing useful
         # Write only if it's a URL (e.g. for links)
         ref = node["media_ref"]
         if ref.startswith("http"):
-            lines.append(f"media_ref: {ref}")
+            lines.append(f"media_ref: {_yaml_str(ref)}")
 
     lines.append("---")
     lines.append("")

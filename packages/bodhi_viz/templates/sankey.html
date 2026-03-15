@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bodhi — Attention Flow</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Playfair+Display:wght@400;600;700&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0c0c10;
+    --surface: rgba(255,255,255,0.04);
+    --border: rgba(255,255,255,0.07);
+    --text: #e2e8f0;
+    --text-muted: #475569;
+
+    --c-wellness: #4ade80;
+    --c-fitness: #60a5fa;
+    --c-health: #f97316;
+    --c-mental: #c084fc;
+    --c-cognitive: #facc15;
+    --c-unknown: #94a3b8;
+
+    --c-high: #f59e0b;
+    --c-medium: #818cf8;
+    --c-low: #475569;
+  }
+
+  html, body {
+    width: 100%; min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    overflow-x: hidden;
+  }
+
+  /* ── Header ── */
+  header {
+    padding: 40px 48px 0;
+    display: flex; align-items: flex-end; justify-content: space-between;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .header-left {}
+  .eyebrow {
+    font-size: 9px; letter-spacing: 4px; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 6px;
+  }
+  h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(28px, 5vw, 52px);
+    font-weight: 700; line-height: 1.1;
+    color: #f8fafc;
+    letter-spacing: -0.5px;
+  }
+  h1 em {
+    font-style: italic;
+    background: linear-gradient(135deg, var(--c-wellness), var(--c-cognitive));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .subtitle {
+    margin-top: 8px; font-size: 11px;
+    color: var(--text-muted); letter-spacing: 1.5px;
+    text-transform: uppercase;
+  }
+  #total-nodes {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(48px, 8vw, 88px); font-weight: 700;
+    line-height: 1; color: rgba(255,255,255,0.06);
+    letter-spacing: -3px;
+  }
+
+  /* ── Column labels ── */
+  #col-labels {
+    display: flex; justify-content: space-between;
+    padding: 28px 48px 8px;
+    font-size: 9px; letter-spacing: 3px;
+    text-transform: uppercase; color: var(--text-muted);
+  }
+  .col-label { flex: 1; text-align: center; }
+
+  /* ── Sankey container ── */
+  #sankey-container {
+    width: 100%; padding: 0 48px;
+    overflow-x: auto;
+  }
+  #sankey-svg {
+    width: 100%; display: block;
+    min-width: 480px;
+  }
+
+  /* ── Tooltip ── */
+  #tooltip {
+    position: fixed; pointer-events: none;
+    background: rgba(12,12,16,0.95);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px; padding: 10px 14px;
+    font-size: 12px; color: var(--text);
+    z-index: 1000; max-width: 200px;
+    opacity: 0; transition: opacity 0.15s;
+    backdrop-filter: blur(8px);
+  }
+  #tooltip strong { display: block; margin-bottom: 4px; color: #f8fafc; }
+  #tooltip .tt-sub { color: var(--text-muted); font-size: 10px; margin-top: 2px; }
+
+  /* ── Domain key ── */
+  #domain-key {
+    display: flex; flex-wrap: wrap; gap: 20px;
+    padding: 24px 48px 40px;
+  }
+  .key-item {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .key-swatch {
+    width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0;
+  }
+  .key-label {
+    font-size: 10px; letter-spacing: 1px;
+    text-transform: uppercase; color: var(--text-muted);
+  }
+
+  /* ── Loading ── */
+  #loading {
+    height: 400px; display: flex;
+    align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px;
+  }
+  .loader-dot { font-size: 24px; animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
+  .load-text { font-size: 10px; letter-spacing: 3px; color: var(--text-muted); }
+
+  /* ── Node + link SVG styles (set by JS) ── */
+  .sankey-node rect {
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  .sankey-node rect:hover { opacity: 0.85; }
+  .sankey-node text { pointer-events: none; }
+  .sankey-link { fill: none; mix-blend-mode: screen; }
+  .sankey-link:hover { opacity: 0.8 !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <div class="eyebrow">🪷 bodhi · attention flow</div>
+    <h1>Where your mind<br><em>actually</em> goes</h1>
+    <div class="subtitle">domain → type → energy tier</div>
+  </div>
+  <div id="total-nodes">—</div>
+</header>
+
+<div id="col-labels">
+  <span class="col-label">Wellness Domain</span>
+  <span class="col-label">Thought Type</span>
+  <span class="col-label">Energy Tier</span>
+</div>
+
+<div id="sankey-container">
+  <div id="loading">
+    <div class="loader-dot">🪷</div>
+    <div class="load-text">READING VAULT</div>
+  </div>
+  <svg id="sankey-svg" style="display:none"></svg>
+</div>
+
+<div id="domain-key"></div>
+<div id="tooltip"></div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://unpkg.com/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
+<script>
+const DOMAIN_COLORS = {
+  'wellness': '#4ade80',
+  'fitness':  '#60a5fa',
+  'health':   '#f97316',
+  'mental health': '#c084fc',
+  'mental-health': '#c084fc',
+  'cognitive': '#facc15',
+  'unknown':  '#94a3b8',
+};
+const TIER_COLORS = {
+  'High Energy':   '#f59e0b',
+  'Medium Energy': '#818cf8',
+  'Low Energy':    '#475569',
+};
+
+const tooltip = document.getElementById('tooltip');
+
+function showTooltip(x, y, html) {
+  tooltip.innerHTML = html;
+  tooltip.style.opacity = '1';
+  tooltip.style.left = (x + 14) + 'px';
+  tooltip.style.top = (y - 10) + 'px';
+}
+function hideTooltip() { tooltip.style.opacity = '0'; }
+
+fetch('sankey.json')
+  .then(r => r.json())
+  .then(data => {
+    document.getElementById('loading').remove();
+    const svg = document.getElementById('sankey-svg');
+    svg.style.display = 'block';
+
+    const totalNodes = data.nodes.reduce((acc, n) => {
+      if (n.layer === 'domain') {
+        // Sum incoming flow
+        const incoming = data.links.filter(l => l.target === n.id)
+                                    .reduce((s, l) => s + l.value, 0);
+        const outgoing = data.links.filter(l => l.source === n.id)
+                                    .reduce((s, l) => s + l.value, 0);
+        return acc + Math.max(incoming, outgoing);
+      }
+      return acc;
+    }, 0);
+
+    // Count from domain nodes
+    const domainTotal = data.links
+      .filter(l => {
+        const srcNode = data.nodes.find(n => n.id === l.source);
+        return srcNode && srcNode.layer === 'domain';
+      })
+      .reduce((s, l) => s + l.value, 0);
+
+    document.getElementById('total-nodes').textContent = domainTotal;
+
+    drawSankey(data, svg);
+    drawKey(data);
+  })
+  .catch(err => {
+    document.getElementById('loading').innerHTML =
+      `<div class="load-text" style="color:#ef4444">Error: ${err.message}</div>`;
+  });
+
+function drawSankey(data, svgEl) {
+  const container = document.getElementById('sankey-container');
+  const W = Math.max(container.clientWidth - 96, 480);
+  const H = Math.max(500, data.nodes.filter(n => n.layer === 'domain').length * 90);
+
+  svgEl.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svgEl.setAttribute('height', H);
+
+  const svg = d3.select(svgEl);
+
+  // Define gradients
+  const defs = svg.append('defs');
+
+  // Build sankey
+  const { sankey, SankeyLinkHorizontal } = window.d3Sankey || d3;
+
+  const sankeyLayout = d3.sankey()
+    .nodeId(d => d.id)
+    .nodeWidth(18)
+    .nodePadding(14)
+    .extent([[24, 16], [W - 24, H - 16]]);
+
+  const { nodes, links } = sankeyLayout({
+    nodes: data.nodes.map(d => Object.assign({}, d)),
+    links: data.links.map(d => Object.assign({}, d)),
+  });
+
+  // Create gradient defs for each link
+  links.forEach((link, i) => {
+    const srcColor = getNodeColor(link.source) || '#4ade80';
+    const tgtColor = getNodeColor(link.target) || '#94a3b8';
+    const gradId = `grad-${i}`;
+
+    const grad = defs.append('linearGradient')
+      .attr('id', gradId)
+      .attr('gradientUnits', 'userSpaceOnUse')
+      .attr('x1', link.source.x1).attr('x2', link.target.x0);
+
+    grad.append('stop').attr('offset', '0%').attr('stop-color', srcColor).attr('stop-opacity', 0.7);
+    grad.append('stop').attr('offset', '100%').attr('stop-color', tgtColor).attr('stop-opacity', 0.5);
+
+    link._gradId = gradId;
+  });
+
+  // Draw links
+  const linkG = svg.append('g').attr('class', 'links');
+
+  linkG.selectAll('path')
+    .data(links)
+    .join('path')
+    .attr('class', 'sankey-link')
+    .attr('d', d3.sankeyLinkHorizontal())
+    .attr('stroke', (d, i) => `url(#grad-${i})`)
+    .attr('stroke-width', d => Math.max(1.5, d.width))
+    .attr('opacity', 0.55)
+    .on('mousemove', (evt, d) => {
+      d3.select(evt.currentTarget).attr('opacity', 0.85);
+      showTooltip(evt.clientX, evt.clientY,
+        `<strong>${d.source.name} → ${d.target.name}</strong>
+         <div class="tt-sub">${d.value} node${d.value !== 1 ? 's' : ''}</div>`
+      );
+    })
+    .on('mouseleave', (evt, d) => {
+      d3.select(evt.currentTarget).attr('opacity', 0.55);
+      hideTooltip();
+    });
+
+  // Draw nodes
+  const nodeG = svg.append('g').attr('class', 'nodes');
+
+  const nodeGroups = nodeG.selectAll('g')
+    .data(nodes)
+    .join('g')
+    .attr('class', 'sankey-node')
+    .attr('transform', d => `translate(${d.x0},${d.y0})`);
+
+  nodeGroups.append('rect')
+    .attr('height', d => Math.max(4, d.y1 - d.y0))
+    .attr('width', d => d.x1 - d.x0)
+    .attr('fill', d => getNodeColor(d))
+    .attr('rx', 3)
+    .on('mousemove', (evt, d) => {
+      const flowIn = links
+        .filter(l => l.target.id === d.id)
+        .reduce((s, l) => s + l.value, 0);
+      const flowOut = links
+        .filter(l => l.source.id === d.id)
+        .reduce((s, l) => s + l.value, 0);
+      const count = Math.max(flowIn, flowOut, d.value || 0);
+      showTooltip(evt.clientX, evt.clientY,
+        `<strong>${d.name}</strong>
+         <div class="tt-sub">${count} thought${count !== 1 ? 's' : ''}</div>
+         <div class="tt-sub">${d.layer?.toUpperCase() || ''}</div>`
+      );
+    })
+    .on('mouseleave', () => hideTooltip());
+
+  // Labels — place left for domain layer, right for tier layer, center for type
+  nodeGroups.append('text')
+    .attr('x', d => d.layer === 'domain' ? -6 : d.layer === 'tier' ? (d.x1 - d.x0) + 6 : (d.x1 - d.x0) / 2)
+    .attr('y', d => (d.y1 - d.y0) / 2)
+    .attr('dy', '0.35em')
+    .attr('text-anchor', d => d.layer === 'domain' ? 'end' : d.layer === 'tier' ? 'start' : 'middle')
+    .attr('font-family', 'Space Mono, monospace')
+    .attr('font-size', '11px')
+    .attr('fill', d => d.layer === 'type' ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.85)')
+    .attr('letter-spacing', '0.5px')
+    .text(d => d.name);
+
+  // Value badge on nodes
+  nodeGroups.append('text')
+    .attr('x', d => (d.x1 - d.x0) / 2)
+    .attr('y', d => (d.y1 - d.y0) / 2)
+    .attr('dy', '0.35em')
+    .attr('text-anchor', 'middle')
+    .attr('font-family', 'Space Mono, monospace')
+    .attr('font-size', '9px')
+    .attr('fill', 'rgba(0,0,0,0.5)')
+    .attr('font-weight', 'bold')
+    .text(d => {
+      const h = Math.max(4, d.y1 - d.y0);
+      const flowOut = links.filter(l => l.source.id === d.id).reduce((s, l) => s + l.value, 0);
+      const flowIn = links.filter(l => l.target.id === d.id).reduce((s, l) => s + l.value, 0);
+      const count = Math.max(flowIn, flowOut);
+      return h > 20 ? count : '';
+    });
+}
+
+function getNodeColor(node) {
+  if (node.layer === 'domain') {
+    const key = (node.name || '').toLowerCase().replace(' ', '-');
+    return DOMAIN_COLORS[key] || DOMAIN_COLORS[node.name?.toLowerCase()] || '#94a3b8';
+  }
+  if (node.layer === 'tier') {
+    return TIER_COLORS[node.name] || '#64748b';
+  }
+  return '#334155';
+}
+
+function drawKey(data) {
+  const keyEl = document.getElementById('domain-key');
+  const domains = data.nodes.filter(n => n.layer === 'domain');
+
+  domains.forEach(n => {
+    const item = document.createElement('div');
+    item.className = 'key-item';
+
+    const swatch = document.createElement('div');
+    swatch.className = 'key-swatch';
+    swatch.style.background = getNodeColor(n);
+
+    const label = document.createElement('span');
+    label.className = 'key-label';
+    label.textContent = n.name;
+
+    item.appendChild(swatch);
+    item.appendChild(label);
+    keyEl.appendChild(item);
+  });
+
+  // Tier key
+  ['High Energy', 'Medium Energy', 'Low Energy'].forEach(tier => {
+    const item = document.createElement('div');
+    item.className = 'key-item';
+
+    const swatch = document.createElement('div');
+    swatch.className = 'key-swatch';
+    swatch.style.background = TIER_COLORS[tier];
+
+    const label = document.createElement('span');
+    label.className = 'key-label';
+    label.textContent = tier;
+
+    item.appendChild(swatch);
+    item.appendChild(label);
+    keyEl.appendChild(item);
+  });
+}
+</script>
+</body>
+</html>
