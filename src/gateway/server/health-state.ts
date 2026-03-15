@@ -7,12 +7,48 @@ import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { Snapshot } from "../protocol/index.js";
+import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 
 let presenceVersion = 1;
 let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
+let healthRuntimeSnapshotProvider: (() => ChannelRuntimeSnapshot) | null = null;
+
+function hasNewerRuntimeState(cache: HealthSummary): boolean {
+  const runtimeSnapshot = healthRuntimeSnapshotProvider?.();
+  if (!runtimeSnapshot) {
+    return false;
+  }
+  for (const [channelId, runtime] of Object.entries(runtimeSnapshot.channels)) {
+    if (!runtime) {
+      continue;
+    }
+    const cached = cache.channels?.[channelId];
+    if (!cached) {
+      return true;
+    }
+    const runtimeRunning = runtime.running === true;
+    const cachedRunning = cached.running === true;
+    if (runtimeRunning && !cachedRunning) {
+      return true;
+    }
+    const runtimeLastStartAt = typeof runtime.lastStartAt === "number" ? runtime.lastStartAt : null;
+    const cachedLastStartAt = typeof cached.lastStartAt === "number" ? cached.lastStartAt : null;
+    // Only compare lastStartAt when the cached summary actually carries it.
+    // Channels like WhatsApp omit lastStartAt, so cached is always null while
+    // runtime always has a number, which would force a rebuild every time.
+    if (
+      runtimeLastStartAt !== null &&
+      cachedLastStartAt !== null &&
+      runtimeLastStartAt !== cachedLastStartAt
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
@@ -54,6 +90,13 @@ export function getHealthVersion(): number {
   return healthVersion;
 }
 
+export function isGatewayHealthCacheStale(cache: HealthSummary | null): boolean {
+  if (!cache) {
+    return true;
+  }
+  return hasNewerRuntimeState(cache);
+}
+
 export function incrementPresenceVersion(): number {
   presenceVersion += 1;
   return presenceVersion;
@@ -67,10 +110,18 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
   broadcastHealthUpdate = fn;
 }
 
+export function setHealthRuntimeSnapshotProvider(fn: (() => ChannelRuntimeSnapshot) | null) {
+  healthRuntimeSnapshotProvider = fn;
+}
+
 export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
-      const snap = await getHealthSnapshot({ probe: opts?.probe });
+      const runtimeSnapshot = healthRuntimeSnapshotProvider?.();
+      const snap = await getHealthSnapshot({
+        probe: opts?.probe,
+        runtimeSnapshot,
+      });
       healthCache = snap;
       healthVersion += 1;
       if (broadcastHealthUpdate) {

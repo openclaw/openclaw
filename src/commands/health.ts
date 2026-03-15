@@ -1,12 +1,14 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import { buildChannelAccountSnapshot } from "../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import { withProgress } from "../cli/progress.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, readBestEffortConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import type { ChannelRuntimeSnapshot } from "../gateway/server-channels.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -348,6 +350,7 @@ export const formatHealthChannelLines = (
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
+  runtimeSnapshot?: ChannelRuntimeSnapshot;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = loadConfig();
@@ -380,6 +383,22 @@ export async function getHealthSnapshot(params?: {
   const channels: Record<string, ChannelHealthSummary> = {};
   const channelOrder = listChannelPlugins().map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
+  const resolveRuntimeSnapshot = (
+    channelId: string,
+    accountId: string,
+    defaultAccountId: string,
+  ): ChannelAccountSnapshot | undefined => {
+    const runtime = params?.runtimeSnapshot;
+    if (!runtime) {
+      return undefined;
+    }
+    const channelAccounts =
+      runtime.channelAccounts[channelId as keyof typeof runtime.channelAccounts];
+    const defaultRuntime = runtime.channels[channelId as keyof typeof runtime.channels];
+    return (
+      channelAccounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntime : undefined)
+    );
+  };
 
   for (const plugin of listChannelPlugins()) {
     channelLabels[plugin.id] = plugin.meta.label ?? plugin.id;
@@ -450,12 +469,21 @@ export async function getHealthSnapshot(params?: {
         debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
       }
 
-      const snapshot: ChannelAccountSnapshot = {
+      const runtimeSnapshot = resolveRuntimeSnapshot(plugin.id, accountId, defaultAccountId);
+      const snapshot = await buildChannelAccountSnapshot({
+        plugin,
+        cfg,
         accountId,
-        enabled,
-        configured,
-      };
-      if (probe !== undefined) {
+        runtime: runtimeSnapshot,
+        probe,
+      });
+      if (snapshot.enabled === undefined) {
+        snapshot.enabled = enabled;
+      }
+      if (snapshot.configured === undefined) {
+        snapshot.configured = configured;
+      }
+      if (snapshot.probe === undefined && probe !== undefined) {
         snapshot.probe = probe;
       }
       if (lastProbeAt) {
