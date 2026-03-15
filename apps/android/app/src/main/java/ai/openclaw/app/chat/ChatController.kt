@@ -1,7 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySession
-import ai.openclaw.android.gateway.GatewaySessionEntry
+import ai.openclaw.android.gateway.ChatSessionEntry
 import ai.openclaw.android.gateway.asArrayOrNull
 import ai.openclaw.android.gateway.asLongOrNull
 import ai.openclaw.android.gateway.asObjectOrNull
@@ -58,8 +58,8 @@ class ChatController(
   private val _pendingToolCalls = MutableStateFlow<List<ChatPendingToolCall>>(emptyList())
   val pendingToolCalls: StateFlow<List<ChatPendingToolCall>> = _pendingToolCalls.asStateFlow()
 
-  private val _sessions = MutableStateFlow<List<GatewaySessionEntry>>(emptyList())
-  val sessions: StateFlow<List<GatewaySessionEntry>> = _sessions.asStateFlow()
+  private val _sessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
+  val sessions: StateFlow<List<ChatSessionEntry>> = _sessions.asStateFlow()
 
   private val pendingRuns = mutableSetOf<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
@@ -323,7 +323,7 @@ class ChatController(
           if (limit != null && limit > 0) put("limit", JsonPrimitive(limit))
         }
       val res = session.request("sessions.list", params.toString())
-      _sessions.value = GatewaySessionEntry.parseList(res)
+      _sessions.value = ChatSessionEntry.parseList(res)
     } catch (_: Throwable) {
       // best-effort
     }

@@ -209,7 +209,7 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0")
     implementation("androidx.exifinterface:exifinterface:1.4.2")
     implementation("com.squareup.okhttp3:okhttp:5.3.2")
-    implementation(project(":gatewayshared"))
+    implementation(project(":shared"))
     implementation("org.bouncycastle:bcprov-jdk18on:1.84")
     implementation("org.commonmark:commonmark:0.28.0")
     implementation("org.commonmark:commonmark-ext-autolink:0.28.0")

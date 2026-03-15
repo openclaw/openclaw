@@ -2,7 +2,7 @@ package ai.openclaw.wear.chat
 
 import ai.openclaw.wear.R
 import ai.openclaw.wear.gateway.GatewayEvent
-import ai.openclaw.android.gateway.GatewaySessionEntry
+import ai.openclaw.android.gateway.ChatSessionEntry
 import ai.openclaw.android.gateway.asObjectOrNull
 import ai.openclaw.android.gateway.asLongOrNull
 import ai.openclaw.android.gateway.asStringOrNull
@@ -88,8 +88,8 @@ class WearChatController(
   private val _isSending = MutableStateFlow(false)
   val isSending: StateFlow<Boolean> = _isSending.asStateFlow()
 
-  private val _sessions = MutableStateFlow<List<GatewaySessionEntry>>(emptyList())
-  val sessions: StateFlow<List<GatewaySessionEntry>> = _sessions.asStateFlow()
+  private val _sessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
+  val sessions: StateFlow<List<ChatSessionEntry>> = _sessions.asStateFlow()
 
   private val _assistantReplies = MutableSharedFlow<String>(extraBufferCapacity = 4)
   val assistantReplies: SharedFlow<String> = _assistantReplies.asSharedFlow()
@@ -170,7 +170,7 @@ class WearChatController(
           put("limit", JsonPrimitive(50))
         }
         val result = client.request("sessions.list", params.toString())
-        _sessions.value = GatewaySessionEntry.parseList(result)
+        _sessions.value = ChatSessionEntry.parseList(result)
       } catch (_: Throwable) {
         // best-effort
       }
