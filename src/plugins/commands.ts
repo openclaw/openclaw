@@ -103,6 +103,29 @@ export type CommandRegistrationResult = {
 };
 
 /**
+ * Validate a plugin command definition without registering it.
+ * Returns an error message if invalid, or null if valid.
+ * Shared by both the global registration path and snapshot (non-activating) loads.
+ */
+export function validatePluginCommandDefinition(
+  command: OpenClawPluginCommandDefinition,
+): string | null {
+  if (typeof command.handler !== "function") {
+    return "Command handler must be a function";
+  }
+  if (typeof command.name !== "string") {
+    return "Command name must be a string";
+  }
+  if (typeof command.description !== "string") {
+    return "Command description must be a string";
+  }
+  if (!command.description.trim()) {
+    return "Command description cannot be empty";
+  }
+  return validateCommandName(command.name.trim());
+}
+
+/**
  * Register a plugin command.
  * Returns an error if the command name is invalid or reserved.
  */
@@ -115,28 +138,13 @@ export function registerPluginCommand(
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
 
-  // Validate handler is a function
-  if (typeof command.handler !== "function") {
-    return { ok: false, error: "Command handler must be a function" };
-  }
-
-  if (typeof command.name !== "string") {
-    return { ok: false, error: "Command name must be a string" };
-  }
-  if (typeof command.description !== "string") {
-    return { ok: false, error: "Command description must be a string" };
+  const definitionError = validatePluginCommandDefinition(command);
+  if (definitionError) {
+    return { ok: false, error: definitionError };
   }
 
   const name = command.name.trim();
   const description = command.description.trim();
-  if (!description) {
-    return { ok: false, error: "Command description cannot be empty" };
-  }
-
-  const validationError = validateCommandName(name);
-  if (validationError) {
-    return { ok: false, error: validationError };
-  }
 
   const key = `/${name.toLowerCase()}`;
 
