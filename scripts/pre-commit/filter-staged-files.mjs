@@ -7,6 +7,7 @@ import path from "node:path";
  * Usage:
  *   node scripts/pre-commit/filter-staged-files.mjs lint -- <files...>
  *   node scripts/pre-commit/filter-staged-files.mjs format -- <files...>
+ *   node scripts/pre-commit/filter-staged-files.mjs format-json -- <files...>
  *
  * Keep this dependency-free: the pre-commit hook runs in many environments.
  */
@@ -15,18 +16,22 @@ const mode = process.argv[2];
 const rawArgs = process.argv.slice(3);
 const files = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
 
-if (mode !== "lint" && mode !== "format") {
-  process.stderr.write("usage: filter-staged-files.mjs <lint|format> -- <files...>\n");
+if (mode !== "lint" && mode !== "format" && mode !== "format-json") {
+  process.stderr.write("usage: filter-staged-files.mjs <lint|format|format-json> -- <files...>\n");
   process.exit(2);
 }
 
 const lintExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
-const formatExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
+const formatExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".md", ".mdx"]);
+const jsonExts = new Set([".json"]);
 
 const shouldSelect = (filePath) => {
   const ext = path.extname(filePath).toLowerCase();
   if (mode === "lint") {
     return lintExts.has(ext);
+  }
+  if (mode === "format-json") {
+    return jsonExts.has(ext);
   }
   return formatExts.has(ext);
 };
