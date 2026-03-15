@@ -986,6 +986,61 @@ describe("Cron issue regressions", () => {
     expect(job!.state.nextRunAtMs).toBeGreaterThanOrEqual(minNext);
   });
 
+  it("forwards isolated agentTurn payload.model to the isolated runner (#47592)", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const configuredModel = "openrouter/anthropic/claude-haiku-4-5";
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "isolated-model-override-47592",
+      name: "isolated model override",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: {
+        kind: "agentTurn",
+        message: "lightweight nudge",
+        model: configuredModel,
+      },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    let observedModelParam: string | undefined;
+    const events: CronEvent[] = [];
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      onEvent: (evt) => {
+        events.push(evt);
+      },
+      runIsolatedAgentJob: vi.fn(async ({ job, model }) => {
+        observedModelParam = model;
+        expect(job.payload.kind).toBe("agentTurn");
+        if (job.payload.kind === "agentTurn") {
+          expect(job.payload.model).toBe(configuredModel);
+        }
+        now += 5;
+        return {
+          status: "ok" as const,
+          summary: "done",
+          model: configuredModel,
+          provider: "openrouter",
+        };
+      }),
+    });
+
+    await onTimer(state);
+
+    expect(observedModelParam).toBe(configuredModel);
+    const finished = events.find((evt) => evt.action === "finished");
+    expect(finished?.model).toBe(configuredModel);
+  });
+
   it("treats timeoutSeconds=0 as no timeout for isolated agentTurn jobs", async () => {
     const store = makeStorePath();
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");

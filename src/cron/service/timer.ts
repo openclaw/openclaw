@@ -1133,6 +1133,7 @@ export async function executeJobCore(
   const res = await state.deps.runIsolatedAgentJob({
     job,
     message: job.payload.message,
+    model: job.payload.model,
     abortSignal,
   });
 

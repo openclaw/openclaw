@@ -282,7 +282,7 @@ export function buildGatewayCronService(params: {
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
-    runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
+    runIsolatedAgentJob: async ({ job, message, model, abortSignal }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       let sessionKey = `cron:${job.id}`;
       if (job.sessionTarget.startsWith("session:")) {
@@ -291,10 +291,18 @@ export function buildGatewayCronService(params: {
           sessionKey = customSessionId;
         }
       }
+      const modelOverride = typeof model === "string" ? model.trim() : "";
+      const jobForRun =
+        job.payload.kind === "agentTurn" && modelOverride
+          ? {
+              ...job,
+              payload: { ...job.payload, model: modelOverride },
+            }
+          : job;
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
-        job,
+        job: jobForRun,
         message,
         abortSignal,
         agentId,

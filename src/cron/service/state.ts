@@ -83,6 +83,8 @@ export type CronServiceDeps = {
   runIsolatedAgentJob: (params: {
     job: CronJob;
     message: string;
+    /** Explicit cron payload model override for isolated agentTurn runs. */
+    model?: string;
     abortSignal?: AbortSignal;
   }) => Promise<
     {
