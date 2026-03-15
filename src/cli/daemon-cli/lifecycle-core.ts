@@ -31,6 +31,12 @@ type RestartPostCheckContext = {
   fail: (message: string, hints?: string[]) => void;
 };
 
+type RestartCompleteContext = {
+  json: boolean;
+  stdout: Writable;
+  warnings: string[];
+};
+
 type NotLoadedActionResult = {
   result: "stopped" | "restarted";
   message?: string;
@@ -334,15 +340,20 @@ export async function runServiceRestart(params: {
   checkTokenDrift?: boolean;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<GatewayServiceRestartResult | void>;
   onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
+  onBeforeRestart?: (ctx: RestartCompleteContext) => Promise<void> | void;
+  onRestartFailed?: (ctx: RestartCompleteContext) => Promise<void> | void;
+  onRestartComplete?: (ctx: RestartCompleteContext) => Promise<void> | void;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
   const warnings: string[] = [];
   let handledNotLoaded: NotLoadedActionResult | null = null;
-  const emitScheduledRestart = (
+  let cleanupPreparedRestart = false;
+  const emitScheduledRestart = async (
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
     serviceLoaded: boolean,
   ) => {
+    await params.onRestartComplete?.({ json, stdout, warnings });
     emit({
       ok: true,
       result: restartStatus.daemonActionResult,
@@ -398,6 +409,7 @@ export async function runServiceRestart(params: {
     if (handledNotLoaded.warnings?.length) {
       warnings.push(...handledNotLoaded.warnings);
     }
+    cleanupPreparedRestart = handledNotLoaded.result === "restarted";
   }
 
   if (loaded && params.checkTokenDrift) {
@@ -435,18 +447,22 @@ export async function runServiceRestart(params: {
   try {
     let restartResult: GatewayServiceRestartResult = { outcome: "completed" };
     if (loaded) {
+      await params.onBeforeRestart?.({ json, stdout, warnings });
+      cleanupPreparedRestart = true;
       restartResult = await params.service.restart({ env: process.env, stdout });
     }
     let restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
     if (restartStatus.scheduled) {
-      return emitScheduledRestart(restartStatus, loaded);
+      cleanupPreparedRestart = false;
+      return await emitScheduledRestart(restartStatus, loaded);
     }
     if (params.postRestartCheck) {
       const postRestartResult = await params.postRestartCheck({ json, stdout, warnings, fail });
       if (postRestartResult) {
         restartStatus = describeGatewayServiceRestart(params.serviceNoun, postRestartResult);
         if (restartStatus.scheduled) {
-          return emitScheduledRestart(restartStatus, loaded);
+          cleanupPreparedRestart = false;
+          return await emitScheduledRestart(restartStatus, loaded);
         }
       }
     }
@@ -458,6 +474,8 @@ export async function runServiceRestart(params: {
         restarted = true;
       }
     }
+    cleanupPreparedRestart = false;
+    await params.onRestartComplete?.({ json, stdout, warnings });
     emit({
       ok: true,
       result: "restarted",
@@ -470,6 +488,9 @@ export async function runServiceRestart(params: {
     }
     return true;
   } catch (err) {
+    if (cleanupPreparedRestart) {
+      await params.onRestartFailed?.({ json, stdout, warnings });
+    }
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} restart failed: ${String(err)}`, hints);
     return false;

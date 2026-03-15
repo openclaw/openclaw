@@ -25,6 +25,10 @@ import {
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
+import {
+  clearRestartSentinelFromEnvIfPresent,
+  writeRestartSentinelFromEnvIfPresent,
+} from "./restart-notify.js";
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -89,7 +93,7 @@ async function stopGatewayWithoutServiceManager(port: number) {
   };
 }
 
-async function restartGatewayWithoutServiceManager(port: number) {
+async function prepareUnmanagedGatewayRestart(port: number): Promise<number | null> {
   await assertUnmanagedGatewayRestartEnabled(port);
   const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {
@@ -100,10 +104,14 @@ async function restartGatewayWithoutServiceManager(port: number) {
       `multiple gateway processes are listening on port ${port}: ${formatGatewayPidList(pids)}; use "openclaw gateway status --deep" before retrying restart`,
     );
   }
-  signalVerifiedGatewayPidSync(pids[0], "SIGUSR1");
+  return pids[0];
+}
+
+function restartGatewayWithoutServiceManager(port: number, pid: number) {
+  signalVerifiedGatewayPidSync(pid, "SIGUSR1");
   return {
     result: "restarted" as const,
-    message: `Gateway restart signal sent to unmanaged process on port ${port}: ${pids[0]}.`,
+    message: `Gateway restart signal sent to unmanaged process on port ${port}: ${pid}.`,
   };
 }
 
@@ -161,11 +169,25 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     opts,
     checkTokenDrift: true,
     onNotLoaded: async () => {
-      const handled = await restartGatewayWithoutServiceManager(restartPort);
-      if (handled) {
-        restartedWithoutServiceManager = true;
+      const pid = await prepareUnmanagedGatewayRestart(restartPort);
+      if (pid == null) {
+        return null;
       }
-      return handled;
+      await writeRestartSentinelFromEnvIfPresent(process.env);
+      try {
+        const handled = restartGatewayWithoutServiceManager(restartPort, pid);
+        restartedWithoutServiceManager = true;
+        return handled;
+      } catch (err) {
+        await clearRestartSentinelFromEnvIfPresent(process.env);
+        throw err;
+      }
+    },
+    onBeforeRestart: async () => {
+      await writeRestartSentinelFromEnvIfPresent(process.env);
+    },
+    onRestartFailed: async () => {
+      await clearRestartSentinelFromEnvIfPresent(process.env);
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       if (restartedWithoutServiceManager) {

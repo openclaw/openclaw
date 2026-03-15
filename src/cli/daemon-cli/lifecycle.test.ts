@@ -17,6 +17,8 @@ type RestartPostCheckContext = {
 type RestartParams = {
   opts?: { json?: boolean };
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
+  onBeforeRestart?: () => Promise<unknown>;
+  onRestartFailed?: () => Promise<unknown>;
 };
 
 const service = {
@@ -47,6 +49,12 @@ const probeGateway = vi.fn<
 >();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.fn(() => ({}));
+const writeRestartSentinelFromEnvIfPresent = vi.fn<(env?: NodeJS.ProcessEnv) => Promise<boolean>>(
+  async () => true,
+);
+const clearRestartSentinelFromEnvIfPresent = vi.fn<(env?: NodeJS.ProcessEnv) => Promise<boolean>>(
+  async () => true,
+);
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -72,6 +80,13 @@ vi.mock("../../gateway/probe.js", () => ({
 
 vi.mock("../../config/commands.js", () => ({
   isRestartEnabled: (config?: { commands?: unknown }) => isRestartEnabled(config),
+}));
+
+vi.mock("./restart-notify.js", () => ({
+  writeRestartSentinelFromEnvIfPresent: (env?: NodeJS.ProcessEnv) =>
+    writeRestartSentinelFromEnvIfPresent(env),
+  clearRestartSentinelFromEnvIfPresent: (env?: NodeJS.ProcessEnv) =>
+    clearRestartSentinelFromEnvIfPresent(env),
 }));
 
 vi.mock("../../daemon/service.js", () => ({
@@ -143,6 +158,8 @@ describe("runDaemonRestart health checks", () => {
     probeGateway.mockReset();
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
+    writeRestartSentinelFromEnvIfPresent.mockReset();
+    clearRestartSentinelFromEnvIfPresent.mockReset();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -165,6 +182,8 @@ describe("runDaemonRestart health checks", () => {
       return true;
     });
     runServiceStop.mockResolvedValue(undefined);
+    writeRestartSentinelFromEnvIfPresent.mockResolvedValue(true);
+    clearRestartSentinelFromEnvIfPresent.mockResolvedValue(true);
     waitForGatewayHealthyListener.mockResolvedValue({
       healthy: true,
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
@@ -242,6 +261,19 @@ describe("runDaemonRestart health checks", () => {
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
   });
 
+  it("writes restart notify sentinels through the lifecycle-core before-restart hook", async () => {
+    runServiceRestart.mockImplementation(
+      async (params: RestartParams & { onBeforeRestart?: () => Promise<void> }) => {
+        await params.onBeforeRestart?.();
+        return true;
+      },
+    );
+
+    await runDaemonRestart({ json: true });
+
+    expect(writeRestartSentinelFromEnvIfPresent).toHaveBeenCalledWith(process.env);
+  });
+
   it("signals an unmanaged gateway process on stop", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4200, 4300]);
     runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
@@ -270,6 +302,59 @@ describe("runDaemonRestart health checks", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
+  it("writes the restart sentinel before signaling an unmanaged restart", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    mockUnmanagedRestart();
+
+    await runDaemonRestart({ json: true });
+
+    expect(writeRestartSentinelFromEnvIfPresent).toHaveBeenCalledWith(process.env);
+    expect(writeRestartSentinelFromEnvIfPresent.mock.invocationCallOrder[0]).toBeLessThan(
+      signalVerifiedGatewayPidSync.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("clears the restart sentinel when unmanaged restart health checks fail", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    runServiceRestart.mockImplementation(
+      async (
+        params: RestartParams & {
+          onNotLoaded?: () => Promise<unknown>;
+          onRestartFailed?: () => Promise<unknown>;
+        },
+      ) => {
+        await params.onNotLoaded?.();
+        try {
+          await params.postRestartCheck?.({
+            json: Boolean(params.opts?.json),
+            stdout: process.stdout,
+            warnings: [],
+            fail: (message: string) => {
+              throw new Error(message);
+            },
+          });
+        } catch (err) {
+          await params.onRestartFailed?.();
+          throw err;
+        }
+        return true;
+      },
+    );
+    waitForGatewayHealthyListener.mockResolvedValue({
+      healthy: false,
+      staleGatewayPids: [],
+      runtime: { status: "stopped" },
+      portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+    });
+
+    await expect(runDaemonRestart({ json: true })).rejects.toThrow(
+      "Gateway restart timed out after 60s waiting for health checks.",
+    );
+
+    expect(writeRestartSentinelFromEnvIfPresent).toHaveBeenCalledWith(process.env);
+    expect(clearRestartSentinelFromEnvIfPresent).toHaveBeenCalledWith(process.env);
+  });
+
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4300]);
     mockUnmanagedRestart();
@@ -277,6 +362,7 @@ describe("runDaemonRestart health checks", () => {
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(
       "multiple gateway processes are listening on port 18789",
     );
+    expect(writeRestartSentinelFromEnvIfPresent).not.toHaveBeenCalled();
   });
 
   it("fails unmanaged restart when the running gateway has commands.restart disabled", async () => {

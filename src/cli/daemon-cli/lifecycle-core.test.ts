@@ -156,6 +156,30 @@ describe("runServiceRestart token drift", () => {
     expect(payload.message).toContain("unmanaged process");
   });
 
+  it("invokes the restart-failed hook when unmanaged restart checks fail", async () => {
+    const onRestartFailed = vi.fn();
+    service.isLoaded.mockResolvedValue(false);
+
+    await expect(
+      runServiceRestart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => [],
+        opts: { json: true },
+        onNotLoaded: async () => ({
+          result: "restarted",
+          message: "Gateway restart signal sent to unmanaged process on port 18789: 4200.",
+        }),
+        postRestartCheck: async ({ fail }) => {
+          fail("unmanaged restart health check failed");
+        },
+        onRestartFailed,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(onRestartFailed).toHaveBeenCalledTimes(1);
+  });
+
   it("skips restart health checks when restart is only scheduled", async () => {
     const postRestartCheck = vi.fn(async () => {});
     service.restart.mockResolvedValue({ outcome: "scheduled" });
@@ -173,6 +197,55 @@ describe("runServiceRestart token drift", () => {
     const payload = readJsonLog<{ result?: string; message?: string }>();
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
+  });
+
+  it("invokes the before-restart hook before a successful direct restart", async () => {
+    const events: string[] = [];
+    const onBeforeRestart = vi.fn(async () => {
+      events.push("before");
+    });
+    service.restart.mockImplementation(async (...args) => {
+      void args;
+      events.push("restart");
+      return { outcome: "completed" };
+    });
+
+    await runServiceRestart({
+      ...createServiceRunArgs(true),
+      onBeforeRestart,
+    });
+
+    expect(onBeforeRestart).toHaveBeenCalledTimes(1);
+    expect(events.slice(0, 2)).toEqual(["before", "restart"]);
+  });
+
+  it("invokes the restart completion hook for scheduled restarts", async () => {
+    const onRestartComplete = vi.fn();
+    service.restart.mockResolvedValue({ outcome: "scheduled" });
+
+    await runServiceRestart({
+      ...createServiceRunArgs(),
+      onRestartComplete,
+    });
+
+    expect(onRestartComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("invokes the restart-failed hook when a prepared direct restart throws", async () => {
+    const onBeforeRestart = vi.fn();
+    const onRestartFailed = vi.fn();
+    service.restart.mockRejectedValue(new Error("boom"));
+
+    await expect(
+      runServiceRestart({
+        ...createServiceRunArgs(),
+        onBeforeRestart,
+        onRestartFailed,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(onBeforeRestart).toHaveBeenCalledTimes(1);
+    expect(onRestartFailed).toHaveBeenCalledTimes(1);
   });
 
   it("emits scheduled when service start routes through a scheduled restart", async () => {

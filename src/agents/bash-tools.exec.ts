@@ -12,6 +12,7 @@ import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/s
 import { markBackgrounded } from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
+import { applyExecRestartNotifyEnv } from "./bash-tools.exec-restart-notify.js";
 import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PATH,
@@ -398,6 +399,12 @@ export function createExecTool(
       } else {
         applyPathPrepend(env, defaultPathPrepend);
       }
+
+      applyExecRestartNotifyEnv({
+        command: params.command,
+        env,
+        sessionKey: notifySessionKey,
+      });
 
       if (host === "node") {
         return executeNodeHostCommand({
