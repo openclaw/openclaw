@@ -24,6 +24,13 @@ export function resolveRunTimeoutDuringCompaction(params: {
   return params.graceAlreadyUsed ? "abort" : "extend";
 }
 
+export function resolveRunTimeoutWithCompactionGraceMs(params: {
+  runTimeoutMs: number;
+  compactionTimeoutMs: number;
+}): number {
+  return params.runTimeoutMs + params.compactionTimeoutMs;
+}
+
 export type SnapshotSelectionParams = {
   timedOutDuringCompaction: boolean;
   preCompactionSnapshot: AgentMessage[] | null;
