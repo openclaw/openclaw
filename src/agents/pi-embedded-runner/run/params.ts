@@ -125,4 +125,6 @@ export type RunEmbeddedPiAgentParams = {
    * where transient service pressure is often model-scoped.
    */
   allowTransientCooldownProbe?: boolean;
+  /** Called once both session and global lanes are acquired (before agent loop). */
+  onLaneAcquired?: () => void;
 };
