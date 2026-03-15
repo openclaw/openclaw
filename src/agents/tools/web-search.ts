@@ -255,6 +255,7 @@ function createWebSearchSchema(params: {
         Type.Array(Type.String(), {
           description:
             "Native Perplexity Search API only. Domain filter (max 20). Allowlist: ['nature.com'] or denylist: ['-reddit.com']. Cannot mix.",
+          maxItems: 20,
         }),
       ),
       max_tokens: Type.Optional(
@@ -268,8 +269,9 @@ function createWebSearchSchema(params: {
       max_tokens_per_page: Type.Optional(
         Type.Number({
           description:
-            "Native Perplexity Search API only. Max tokens extracted per page (default: 2048).",
+            "Native Perplexity Search API only. Max tokens extracted per page (default: 2048). Max: 50000.",
           minimum: 1,
+          maximum: 50_000,
         }),
       ),
     });
