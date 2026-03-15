@@ -851,6 +851,7 @@ export function listSessionsFromStore(params: {
 }): SessionsListResult {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
+  const canonicalMainSessionKey = resolveMainSessionKey(cfg);
 
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
@@ -908,7 +909,9 @@ export function listSessionsFromStore(params: {
       const total = resolveFreshSessionTotalTokens(entry);
       const totalTokensFresh =
         typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
+      const canonicalSessionKey = resolveSessionStoreKey({ cfg, sessionKey: key });
       const parsed = parseGroupKey(key);
+      const parsedAgentSessionKey = parseAgentSessionKey(key);
       const channel = entry?.channel ?? parsed?.channel;
       const subject = entry?.subject;
       const groupChannel = entry?.groupChannel;
@@ -916,23 +919,27 @@ export function listSessionsFromStore(params: {
       const id = parsed?.id;
       const origin = entry?.origin;
       const originLabel = origin?.label;
-      const displayName =
-        entry?.displayName ??
-        (channel
-          ? buildGroupDisplayName({
-              provider: channel,
-              subject,
-              groupChannel,
-              space,
-              id,
-              key,
-            })
-          : undefined) ??
-        entry?.label ??
-        originLabel;
+      const sessionLabel = entry?.label?.trim();
+      const isMainSession = canonicalSessionKey === canonicalMainSessionKey;
+      const displayName = isMainSession
+        ? sessionLabel || originLabel || "Main Session"
+        : (entry?.displayName ??
+          (channel
+            ? buildGroupDisplayName({
+                provider: channel,
+                subject,
+                groupChannel,
+                space,
+                id,
+                key,
+              })
+            : undefined) ??
+          entry?.label ??
+          originLabel);
       const deliveryFields = normalizeSessionDeliveryFields(entry);
-      const parsedAgent = parseAgentSessionKey(key);
-      const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
+      const sessionAgentId = normalizeAgentId(
+        parsedAgentSessionKey?.agentId ?? resolveDefaultAgentId(cfg),
+      );
       const resolvedModel = resolveSessionModelIdentityRef(cfg, entry, sessionAgentId);
       const modelProvider = resolvedModel.provider;
       const model = resolvedModel.model ?? DEFAULT_MODEL;
