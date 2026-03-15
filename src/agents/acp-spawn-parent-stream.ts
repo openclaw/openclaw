@@ -118,18 +118,31 @@ export function startAcpSpawnParentStreamRelay(params: {
   const relayLabel = truncate(compactWhitespace(params.agentId), 40) || "ACP child";
   const contextPrefix = `acp-spawn:${runId}`;
   const logPath = toTrimmedString(params.logPath);
-  const { cfg, entry } = loadSessionEntry(parentSessionKey);
-  const parentDeliveryContext = deliveryContextFromSession(entry);
-  const directReplyTarget =
-    parentDeliveryContext?.channel &&
-    parentDeliveryContext?.to &&
-    parentDeliveryContext?.threadId == null
-      ? {
-          channel: parentDeliveryContext.channel,
-          to: parentDeliveryContext.to,
-          accountId: parentDeliveryContext.accountId,
-        }
-      : undefined;
+  let cfg: ReturnType<typeof loadSessionEntry>["cfg"] | undefined;
+  let directReplyTarget:
+    | {
+        channel: string;
+        to: string;
+        accountId?: string;
+      }
+    | undefined;
+  try {
+    const loaded = loadSessionEntry(parentSessionKey);
+    cfg = loaded.cfg;
+    const parentDeliveryContext = deliveryContextFromSession(loaded.entry);
+    directReplyTarget =
+      parentDeliveryContext?.channel &&
+      parentDeliveryContext?.to &&
+      parentDeliveryContext?.threadId == null
+        ? {
+            channel: parentDeliveryContext.channel,
+            to: parentDeliveryContext.to,
+            accountId: parentDeliveryContext.accountId,
+          }
+        : undefined;
+  } catch {
+    // Best-effort delivery context; never break relay initialization.
+  }
   let logDirReady = false;
   let pendingLogLines = "";
   let logFlushScheduled = false;
@@ -411,8 +424,6 @@ export function startAcpSpawnParentStreamRelay(params: {
       const errorText = toTrimmedString((event.data as { error?: unknown } | undefined)?.error);
       if (errorText) {
         sendDirectReply(errorText);
-      }
-      if (errorText) {
         emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
       } else {
         emit(`${relayLabel} run failed.`, `${contextPrefix}:error`);

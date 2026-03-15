@@ -297,6 +297,36 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("keeps the relay alive when parent session delivery context lookup fails", () => {
+    loadSessionEntryMock.mockImplementation(() => {
+      throw new Error("bad config");
+    });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-4d",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-4d",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-4d",
+      stream: "assistant",
+      data: {
+        delta: "still relays progress",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    const texts = collectedTexts();
+    expect(texts.some((text) => text.includes("Started codex session"))).toBe(true);
+    expect(texts.some((text) => text.includes("codex: still relays progress"))).toBe(true);
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+
   it("preserves delta whitespace boundaries in progress relays", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-5",
