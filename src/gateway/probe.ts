@@ -32,6 +32,8 @@ export type GatewayProbeResult = {
 export async function probeGateway(opts: {
   url: string;
   auth?: GatewayProbeAuth;
+  tlsFingerprint?: string;
+  headers?: Record<string, string>;
   timeoutMs: number;
   includeDetails?: boolean;
 }): Promise<GatewayProbeResult> {
@@ -65,6 +67,8 @@ export async function probeGateway(opts: {
       url: opts.url,
       token: opts.auth?.token,
       password: opts.auth?.password,
+      tlsFingerprint: opts.tlsFingerprint,
+      headers: opts.headers,
       scopes: [READ_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",

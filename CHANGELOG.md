@@ -138,6 +138,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/startup: exit 0 on EADDRINUSE when a healthy OpenClaw gateway is already running; probe the bind/TLS-aware URL with auth before deciding so supervised restarts no longer loop on an already-healthy listener. (thanks @BlueBirdBack for identifying the issue in #29499)
 - Security/device pairing: switch `/pair` and `openclaw qr` setup codes to short-lived bootstrap tokens so the next release no longer embeds shared gateway credentials in chat or QR pairing payloads. Thanks @lintsinghua.
 - Security/plugins: disable implicit workspace plugin auto-load so cloned repositories cannot execute workspace plugin code without an explicit trust decision. (`GHSA-99qw-6mr3-36qr`)(#44174) Thanks @lintsinghua and @vincentkoc.
 - Models/Kimi Coding: send `anthropic-messages` tools in native Anthropic format again so `kimi-coding` stops degrading tool calls into XML/plain-text pseudo invocations instead of real `tool_use` blocks. (#38669, #39907, #40552) Thanks @opriz.

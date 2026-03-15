@@ -81,4 +81,16 @@ describe("probeGateway", () => {
     expect(result.ok).toBe(true);
     expect(gatewayClientState.requests).toEqual([]);
   });
+
+  it("forwards TLS fingerprint and handshake headers to GatewayClient", async () => {
+    await probeGateway({
+      url: "wss://127.0.0.1:18789",
+      tlsFingerprint: "sha256:11:22:33:44",
+      headers: { "x-auth-user": "alice" },
+      timeoutMs: 1_000,
+    });
+
+    expect(gatewayClientState.options?.tlsFingerprint).toBe("sha256:11:22:33:44");
+    expect(gatewayClientState.options?.headers).toEqual({ "x-auth-user": "alice" });
+  });
 });

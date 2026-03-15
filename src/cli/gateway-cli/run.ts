@@ -11,7 +11,9 @@ import {
   resolveGatewayPort,
 } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
-import { resolveGatewayAuth } from "../../gateway/auth.js";
+import { resolveGatewayAuth, type ResolvedGatewayAuth } from "../../gateway/auth.js";
+import { isSecureWebSocketUrl, pickPrimaryLanIPv4 } from "../../gateway/net.js";
+import { probeGateway } from "../../gateway/probe.js";
 import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -19,9 +21,12 @@ import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
+import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
+import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveGatewayBindUrl } from "../../shared/gateway-bind-url.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
@@ -134,6 +139,106 @@ function formatModeErrorList<T extends string>(modes: readonly T[]): string {
     return `${quoted[0]} or ${quoted[1]}`;
   }
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
+}
+
+function resolveGatewayLockProbeUrls(params: {
+  bind: "loopback" | "lan" | "auto" | "custom" | "tailnet";
+  port: number;
+  tlsEnabled: boolean;
+  customBindHost?: string;
+}): string[] {
+  const scheme = params.tlsEnabled ? "wss" : "ws";
+  const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
+  const urls = new Set<string>();
+  const addProbeUrl = (url: string | null | undefined) => {
+    // Keep startup probes aligned with GatewayClient's plaintext ws:// policy.
+    if (!url || !isSecureWebSocketUrl(url, { allowPrivateWs })) {
+      return;
+    }
+    urls.add(url);
+  };
+  const bindUrl = resolveGatewayBindUrl({
+    bind: params.bind,
+    customBindHost: params.customBindHost,
+    scheme,
+    port: params.port,
+    pickTailnetHost: () => pickPrimaryTailnetIPv4() ?? null,
+    pickLanHost: () => pickPrimaryLanIPv4() ?? null,
+  });
+  if (bindUrl && "url" in bindUrl) {
+    addProbeUrl(bindUrl.url);
+  }
+  if (params.bind === "auto") {
+    const lanHost = pickPrimaryLanIPv4();
+    if (lanHost) {
+      addProbeUrl(`${scheme}://${lanHost}:${params.port}`);
+    }
+  }
+  addProbeUrl(`${scheme}://127.0.0.1:${params.port}`);
+  return [...urls];
+}
+
+async function probeHealthyExistingGateway(params: {
+  bind: "loopback" | "lan" | "auto" | "custom" | "tailnet";
+  port: number;
+  tlsEnabled: boolean;
+  customBindHost?: string;
+  token?: string;
+  password?: string;
+  tlsFingerprint?: string;
+  headers?: Record<string, string>;
+}): Promise<string | null> {
+  for (const url of resolveGatewayLockProbeUrls(params)) {
+    try {
+      const probe = await probeGateway({
+        url,
+        auth: {
+          token: params.token,
+          password: params.password,
+        },
+        tlsFingerprint: params.tlsFingerprint,
+        headers: params.headers,
+        timeoutMs: 3000,
+      });
+      if (probe.ok) {
+        return probe.url;
+      }
+    } catch {
+      // Try the next candidate before treating the port as unhealthy.
+    }
+  }
+  return null;
+}
+
+function resolveTrustedProxyProbeHeaders(
+  auth: ResolvedGatewayAuth,
+): Record<string, string> | undefined {
+  if (auth.mode !== "trusted-proxy" || !auth.trustedProxy) {
+    return undefined;
+  }
+
+  const headers: Record<string, string> = {};
+  for (const header of auth.trustedProxy.requiredHeaders ?? []) {
+    const name = header.trim();
+    if (name) {
+      headers[name] = "openclaw-self-probe";
+    }
+  }
+
+  const allowedUser = auth.trustedProxy.allowUsers?.find((value) => value.trim().length > 0);
+  headers[auth.trustedProxy.userHeader] = allowedUser ?? "openclaw-self-probe";
+  return headers;
+}
+
+async function resolveGatewayLockProbeTlsFingerprint(params: {
+  tlsEnabled: boolean;
+  cfg: ReturnType<typeof loadConfig>;
+}): Promise<string | undefined> {
+  if (!params.tlsEnabled) {
+    return undefined;
+  }
+  const tlsRuntime = await loadGatewayTlsRuntime(params.cfg.gateway?.tls);
+  return tlsRuntime.enabled ? tlsRuntime.fingerprintSha256 : undefined;
 }
 
 function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): GatewayRunOpts {
@@ -434,6 +539,36 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       err instanceof GatewayLockError ||
       (err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
     ) {
+      // Only exit 0 when the port is held by an already-running OpenClaw
+      // gateway instance (confirmed by a live probe).  If an unrelated process
+      // is on the port, startup genuinely failed and we must exit non-zero so
+      // supervisors with Restart=on-failure keep retrying instead of silently
+      // accepting a downed gateway.
+      const lockCause = (err as GatewayLockError).cause;
+      const isPortConflict =
+        lockCause != null &&
+        typeof lockCause === "object" &&
+        (lockCause as NodeJS.ErrnoException).code === "EADDRINUSE";
+      if (isPortConflict) {
+        const tlsEnabled = cfg.gateway?.tls?.enabled === true;
+        const healthyGatewayUrl = await probeHealthyExistingGateway({
+          bind,
+          port,
+          tlsEnabled,
+          customBindHost: cfg.gateway?.customBindHost,
+          token: resolvedAuthMode === "trusted-proxy" ? undefined : tokenValue,
+          password: resolvedAuthMode === "trusted-proxy" ? undefined : passwordValue,
+          tlsFingerprint: await resolveGatewayLockProbeTlsFingerprint({ cfg, tlsEnabled }),
+          headers: resolveTrustedProxyProbeHeaders(resolvedAuth),
+        });
+        if (healthyGatewayUrl) {
+          defaultRuntime.log(
+            `Gateway already running at ${healthyGatewayUrl}; exiting successfully because the existing listener is healthy.`,
+          );
+          defaultRuntime.exit(0);
+          return;
+        }
+      }
       const errMessage = describeUnknownError(err);
       defaultRuntime.error(
         `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,

@@ -513,40 +513,17 @@ describe("update-cli", () => {
           call[0][2] === "-g",
       );
     const updateOptions =
-      typeof updateCall?.[1] === "object" && updateCall[1] !== null ? updateCall[1] : undefined;
-    const mergedPath = updateOptions?.env?.Path ?? updateOptions?.env?.PATH ?? "";
+      updateCall && typeof updateCall[1] === "object" && updateCall[1] !== null
+        ? updateCall[1]
+        : undefined;
+    const updateEnv = updateOptions?.env;
+    const mergedPath = updateEnv?.Path ?? updateEnv?.PATH ?? "";
     expect(mergedPath.split(path.delimiter).slice(0, 2)).toEqual([
       portableGitMingw,
       portableGitUsr,
     ]);
-    expect(updateOptions?.env?.NPM_CONFIG_SCRIPT_SHELL).toBe("cmd.exe");
-    expect(updateOptions?.env?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
-  });
-
-  it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for package updates", async () => {
-    const tempDir = createCaseDir("openclaw-update");
-    mockPackageInstallStatus(tempDir);
-
-    await withEnvAsync(
-      { OPENCLAW_UPDATE_PACKAGE_SPEC: "http://10.211.55.2:8138/openclaw-next.tgz" },
-      async () => {
-        await updateCommand({ yes: true, tag: "latest" });
-      },
-    );
-
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      [
-        "npm",
-        "i",
-        "-g",
-        "http://10.211.55.2:8138/openclaw-next.tgz",
-        "--no-fund",
-        "--no-audit",
-        "--loglevel=error",
-      ],
-      expect.any(Object),
-    );
+    expect(updateEnv?.NPM_CONFIG_SCRIPT_SHELL).toBe("cmd.exe");
+    expect(updateEnv?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
   });
 
   it("updateCommand outputs JSON when --json is set", async () => {

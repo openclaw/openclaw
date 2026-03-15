@@ -77,6 +77,7 @@ class GatewayClientRequestError extends Error {
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
+  headers?: Record<string, string>;
   connectDelayMs?: number;
   tickWatchMinIntervalMs?: number;
   requestTimeoutMs?: number;
@@ -191,6 +192,7 @@ export class GatewayClient {
     }
     // Allow node screen snapshots and other large responses.
     const wsOptions: ClientOptions = {
+      ...(this.opts.headers ? { headers: this.opts.headers } : {}),
       maxPayload: 25 * 1024 * 1024,
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
