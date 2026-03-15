@@ -71,7 +71,7 @@ import {
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
   compactWithSafetyTimeout,
-  EMBEDDED_COMPACTION_TIMEOUT_MS,
+  resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import {
@@ -116,6 +116,8 @@ export type CompactEmbeddedPiSessionParams = {
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   sessionFile: string;
+  /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
+  currentTokenCount?: number;
   workspaceDir: string;
   agentDir?: string;
   config?: OpenClawConfig;
@@ -140,6 +142,7 @@ export type CompactEmbeddedPiSessionParams = {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  abortSignal?: AbortSignal;
 };
 
 type CompactionMessageMetrics = {
@@ -160,6 +163,12 @@ function hasRealConversationContent(
 
 function createCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
+}
+
+function normalizeObservedTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 function getMessageTextChars(msg: AgentMessage): number {
@@ -660,10 +669,11 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 
+    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: EMBEDDED_COMPACTION_TIMEOUT_MS,
+        timeoutMs: compactionTimeoutMs,
       }),
     });
     try {
@@ -823,8 +833,30 @@ export async function compactEmbeddedPiSessionDirect(
         }
 
         const compactStartedAt = Date.now();
-        const result = await compactWithSafetyTimeout(() =>
-          session.compact(params.customInstructions),
+        const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);
+        // Measure compactedCount from the original pre-limiting transcript so compaction
+        // lifecycle metrics represent total reduction through the compaction pipeline.
+        const messageCountCompactionInput = preCompactionMessages.length;
+        // Estimate full session tokens BEFORE compaction (including system prompt,
+        // bootstrap context, workspace files, and all history). This is needed for
+        // a correct sanity check — result.tokensBefore only covers the summarizable
+        // history subset, not the full session.
+        let fullSessionTokensBefore = 0;
+        try {
+          fullSessionTokensBefore = limited.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+        } catch {
+          // If token estimation throws on a malformed message, fall back to 0 so
+          // the sanity check below becomes a no-op instead of crashing compaction.
+        }
+        const result = await compactWithSafetyTimeout(
+          () => session.compact(params.customInstructions),
+          compactionTimeoutMs,
+          {
+            abortSignal: params.abortSignal,
+            onCancel: () => {
+              session.abortCompaction();
+            },
+          },
         );
         await runPostCompactionSideEffects({
           config: params.config,
@@ -839,14 +871,23 @@ export async function compactEmbeddedPiSessionDirect(
           for (const message of session.messages) {
             tokensAfter += estimateTokens(message);
           }
-          // Sanity check: tokensAfter should be less than tokensBefore
-          if (tokensAfter > result.tokensBefore) {
+          // Sanity check: compare against the best full-session pre-compaction baseline.
+          // Prefer the provider-observed live count when available; otherwise use the
+          // heuristic full-session estimate with a 10% margin for counter jitter.
+          const sanityCheckBaseline = observedTokenCount ?? fullSessionTokensBefore;
+          if (
+            sanityCheckBaseline > 0 &&
+            tokensAfter >
+              (observedTokenCount !== undefined ? sanityCheckBaseline : sanityCheckBaseline * 1.1)
+          ) {
             tokensAfter = undefined; // Don't trust the estimate
           }
         } catch {
           // If estimation fails, leave tokensAfter undefined
           tokensAfter = undefined;
         }
+        const messageCountAfter = session.messages.length;
+        const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
         // Run after_compaction hooks (fire-and-forget).
         // Also includes sessionFile for plugins that only need to act after
         // compaction completes (e.g. analytics, cleanup).
