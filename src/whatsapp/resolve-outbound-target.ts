@@ -31,9 +31,8 @@ export function resolveWhatsAppOutboundTarget(params: {
     if (isWhatsAppGroupJid(normalizedTo)) {
       return { ok: true, to: normalizedTo };
     }
-    // Enforce allowFrom for all direct-message send modes (including explicit).
-    // Group destinations are handled by group policy and are allowed above.
-    if (hasWildcard || allowList.length === 0) {
+    // Explicit outbound targets are user-chosen destinations, not allowlist-derived routing.
+    if (params.mode === "explicit" || hasWildcard || allowList.length === 0) {
       return { ok: true, to: normalizedTo };
     }
     if (allowList.includes(normalizedTo)) {

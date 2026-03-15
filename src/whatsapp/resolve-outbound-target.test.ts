@@ -179,6 +179,14 @@ describe("resolveWhatsAppOutboundTarget", () => {
   });
 
   describe("explicit/custom modes", () => {
+    it("allows explicit targets even when not present in allowList", () => {
+      vi.mocked(normalize.normalizeWhatsAppTarget)
+        .mockReturnValueOnce(SECONDARY_TARGET)
+        .mockReturnValueOnce(PRIMARY_TARGET);
+      vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
+      expectAllowedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "explicit" });
+    });
+
     it("allows message in null mode when allowList is not set", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET);
       expectAllowedForTarget({ allowFrom: undefined, mode: null });
