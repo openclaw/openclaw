@@ -90,16 +90,21 @@ export function resolveLastChannelRaw(params: {
   sessionKey?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+  const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   // WebChat should own reply routing for direct-session UI turns, even when the
   // session previously replied through an external channel like iMessage.
+  // Also covers channel-agnostic session keys (e.g. "global") that don't encode
+  // an explicit external channel target — internal clients should never inherit
+  // stale external delivery routes on those sessions.
   if (
     originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
-    (isMainSessionKey(params.sessionKey) || isDirectSessionKey(params.sessionKey))
+    (isMainSessionKey(params.sessionKey) ||
+      isDirectSessionKey(params.sessionKey) ||
+      !isExternalRoutingChannel(sessionKeyChannelHint))
   ) {
     return params.originatingChannelRaw;
   }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
-  const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   let resolved = params.originatingChannelRaw || params.persistedLastChannel;
   // Internal/non-deliverable sources should not overwrite previously known
   // external delivery routes (or explicit channel hints from the session key).
@@ -122,14 +127,16 @@ export function resolveLastToRaw(params: {
   sessionKey?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+  const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   if (
     originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
-    (isMainSessionKey(params.sessionKey) || isDirectSessionKey(params.sessionKey))
+    (isMainSessionKey(params.sessionKey) ||
+      isDirectSessionKey(params.sessionKey) ||
+      !isExternalRoutingChannel(sessionKeyChannelHint))
   ) {
     return params.originatingToRaw || params.toRaw;
   }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
-  const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
 
   // When the turn originates from an internal/non-deliverable source, do not
   // replace an established external destination with internal routing ids
