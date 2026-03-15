@@ -84,6 +84,7 @@ vi.mock("../../utils/delivery-context.js", async () => {
 const makeContext = (): GatewayRequestContext =>
   ({
     dedupe: new Map(),
+    chatAbortControllers: new Map(),
     addChatRun: vi.fn(),
     logGateway: { info: vi.fn(), error: vi.fn() },
   }) as unknown as GatewayRequestContext;
