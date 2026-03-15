@@ -1,0 +1,37 @@
+{
+  "gateway": {
+    "controlUi": {
+      "dangerouslyAllowHostHeaderOriginFallback": true
+    },
+    "bindAddress": "0.0.0.0",
+    "port": 18789,
+    "allowUnconfigured": true
+  },
+  "models": {
+    "default": "nvidia/minimaxai/minimax-m2.1",
+    "disabledProviders": ["anthropic"],
+    "vision": "nvidia/meta/llama-3.2-11b-vision-instruct",
+    "fallback": [
+      "nvidia/meta/llama-3.3-70b-instruct",
+      "nvidia/meta/llama-3.2-3b-instruct",
+      "nvidia/google/gemma-2-9b-it",
+      "nvidia/mistralai/mixtral-8x7b-instruct-v0.1"
+    ]
+  },
+  "websocket": {
+    "maxPayload": 10485760,
+    "pingInterval": 30000,
+    "pingTimeout": 10000
+  },
+  "envOverrides": {
+    "GATEWAY_CONTROLUI_ALLOW_HOST_ORIGIN": "true",
+    "GATEWAY_BIND_ADDRESS": "0.0.0.0",
+    "GATEWAY_PORT": "18789",
+    "GATEWAY_ALLOW_UNCONFIGURED": "true",
+    "MODELS_DEFAULT": "nvidia/minimaxai/minimax-m2.1",
+    "MODELS_DISABLED_PROVIDERS": "[\"anthropic\"]",
+    "WEBSOCKET_MAX_PAYLOAD": "10485760",
+    "WEBSOCKET_PING_INTERVAL": "30000",
+    "WEBSOCKET_PING_TIMEOUT": "10000"
+  }
+}
