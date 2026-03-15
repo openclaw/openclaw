@@ -2,7 +2,11 @@ import "./test-helpers.js";
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
+import {
+  installWebAutoReplyUnitTestHooks,
+  makeSessionStore,
+  setLoadConfigMock,
+} from "./auto-reply.test-harness.js";
 import { buildMentionConfig } from "./auto-reply/mentions.js";
 import { createEchoTracker } from "./auto-reply/monitor/echo.js";
 import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
@@ -27,7 +31,6 @@ function makeReplyLogger() {
 function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknown }) {
   const backgroundTasks = new Set<Promise<unknown>>();
   const handler = createWebOnMessageHandler({
-    cfg: opts.cfg,
     verbose: false,
     connectionId: "test",
     maxMediaBytes: 1024,
@@ -50,6 +53,7 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
 function createLastRouteHarness(storePath: string) {
   const replyResolver = vi.fn().mockResolvedValue(undefined);
   const cfg = makeCfg(storePath);
+  setLoadConfigMock(cfg);
   return createHandlerForTest({ cfg, replyResolver });
 }
 
@@ -92,6 +96,81 @@ async function readStoredRoutes(storePath: string) {
     { lastChannel?: string; lastTo?: string; lastAccountId?: string }
   >;
 }
+
+describe("web auto-reply dynamic config", () => {
+  installWebAutoReplyUnitTestHooks();
+
+  it("picks up runtime config changes for group gating (requireMention toggle)", async () => {
+    const now = Date.now();
+    const groupId = "testgroup@g.us";
+    const groupSessionKey = `agent:main:whatsapp:group:${groupId}`;
+    const store = await makeSessionStore({
+      [groupSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
+    });
+    const replyResolver = vi.fn().mockResolvedValue(undefined);
+
+    // Config A: group listed with requireMention: false — message passes without mention.
+    const cfgA: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          groups: { [groupId]: { requireMention: false } },
+        },
+      },
+      session: { store: store.storePath },
+    };
+    setLoadConfigMock(cfgA);
+    const { handler } = createHandlerForTest({ cfg: cfgA, replyResolver });
+
+    await handler(
+      buildInboundMessage({
+        id: "g1",
+        from: groupId,
+        conversationId: groupId,
+        chatType: "group",
+        chatId: groupId,
+        timestamp: now,
+        senderE164: "+1000",
+        senderName: "Alice",
+        selfE164: "+2000",
+      }),
+    );
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+
+    // Config B: toggle requireMention to true at runtime.
+    // Because loadConfig() is called per-message (not captured at handler
+    // creation), the handler sees the updated config and blocks the message.
+    const cfgB: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          groups: { [groupId]: { requireMention: true } },
+        },
+      },
+      session: { store: store.storePath },
+    };
+    setLoadConfigMock(cfgB);
+
+    replyResolver.mockClear();
+    await handler(
+      buildInboundMessage({
+        id: "g2",
+        from: groupId,
+        conversationId: groupId,
+        chatType: "group",
+        chatId: groupId,
+        timestamp: now + 1,
+        senderE164: "+1000",
+        senderName: "Alice",
+        selfE164: "+2000",
+      }),
+    );
+    // Group message without mention is now blocked by the updated config.
+    expect(replyResolver).not.toHaveBeenCalled();
+
+    await store.cleanup();
+  });
+});
 
 describe("web auto-reply last-route", () => {
   installWebAutoReplyUnitTestHooks();
