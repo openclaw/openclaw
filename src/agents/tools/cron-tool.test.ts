@@ -343,6 +343,19 @@ describe("cron tool", () => {
     });
   });
 
+  it("converts scoped telegram dm thread suffixes into topic delivery targets", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-dm-topic",
+        agentSessionKey: "agent:velizar:telegram:direct:834275911:thread:834275911:197918",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "834275911:topic:197918",
+    });
+  });
+
   it("infers delivery when delivery is null", async () => {
     expect(
       await executeAddAndReadDelivery({

@@ -144,14 +144,35 @@ async function buildReminderContextLines(params: {
   }
 }
 
-function stripThreadSuffixFromSessionKey(sessionKey: string): string {
+function splitThreadSuffixFromSessionKey(sessionKey: string): {
+  parentSessionKey: string;
+  threadSuffix?: string;
+} {
   const normalized = sessionKey.toLowerCase();
   const idx = normalized.lastIndexOf(":thread:");
   if (idx <= 0) {
-    return sessionKey;
+    return { parentSessionKey: sessionKey };
   }
-  const parent = sessionKey.slice(0, idx).trim();
-  return parent ? parent : sessionKey;
+  const parentSessionKey = sessionKey.slice(0, idx).trim();
+  const threadSuffix = sessionKey.slice(idx + ":thread:".length).trim();
+  if (!parentSessionKey) {
+    return { parentSessionKey: sessionKey };
+  }
+  return {
+    parentSessionKey,
+    threadSuffix: threadSuffix || undefined,
+  };
+}
+
+function resolveTelegramDmTopicTarget(peerId: string, threadSuffix?: string): string {
+  const trimmedPeerId = peerId.trim();
+  const trimmedThreadSuffix = threadSuffix?.trim();
+  if (!trimmedPeerId || !trimmedThreadSuffix) {
+    return trimmedPeerId;
+  }
+  const scopedMatch = /^-?\d+:(-?\d+)$/.exec(trimmedThreadSuffix);
+  const threadId = scopedMatch?.[1] ?? trimmedThreadSuffix;
+  return `${trimmedPeerId}:topic:${threadId}`;
 }
 
 function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
@@ -159,7 +180,8 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   if (!rawSessionKey) {
     return null;
   }
-  const parsed = parseAgentSessionKey(stripThreadSuffixFromSessionKey(rawSessionKey));
+  const { parentSessionKey, threadSuffix } = splitThreadSuffixFromSessionKey(rawSessionKey);
+  const parsed = parseAgentSessionKey(parentSessionKey);
   if (!parsed || !parsed.rest) {
     return null;
   }
@@ -179,8 +201,10 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   // - <channel>:group:<peerId>
   // - <channel>:channel:<peerId>
   // Note: legacy keys may use "dm" instead of "direct".
-  // Threaded sessions append :thread:<id>, which we strip so delivery targets the parent peer.
-  // NOTE: Telegram forum topics encode as <chatId>:topic:<topicId> and should be preserved.
+  // Threaded sessions append :thread:<id>. Most channels should deliver to the
+  // parent peer, but Telegram DM topics need the thread converted into the
+  // delivery-target form <chatId>:topic:<topicId>.
+  // NOTE: Telegram forum topics already encode as <chatId>:topic:<topicId>.
   const markerIndex = parts.findIndex(
     (part) => part === "direct" || part === "dm" || part === "group" || part === "channel",
   );
@@ -200,7 +224,13 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
     channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
   }
 
-  const delivery: CronDelivery = { mode: "announce", to: peerId };
+  const peerKind = parts[markerIndex];
+  const normalizedPeerId =
+    channel === "telegram" && (peerKind === "direct" || peerKind === "dm")
+      ? resolveTelegramDmTopicTarget(peerId, threadSuffix)
+      : peerId;
+
+  const delivery: CronDelivery = { mode: "announce", to: normalizedPeerId };
   if (channel) {
     delivery.channel = channel;
   }
