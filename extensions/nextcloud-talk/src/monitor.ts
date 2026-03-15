@@ -25,6 +25,8 @@ const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
 const DEFAULT_WEBHOOK_PATH = "/nextcloud-talk-webhook";
 const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
+const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
 const WEBHOOK_ERRORS = {
   missingSignatureHeaders: "Missing signature headers",
@@ -171,8 +173,10 @@ export function readNextcloudTalkWebhookBody(
   maxBodyBytes: number,
 ): Promise<string> {
   return readRequestBodyWithLimit(req, {
-    maxBytes: maxBodyBytes,
-    timeoutMs: DEFAULT_WEBHOOK_BODY_TIMEOUT_MS,
+    // This read happens before signature verification, so keep the unauthenticated
+    // body budget bounded even if the operator-configured post-parse limit is larger.
+    maxBytes: Math.min(maxBodyBytes, PREAUTH_WEBHOOK_MAX_BODY_BYTES),
+    timeoutMs: PREAUTH_WEBHOOK_BODY_TIMEOUT_MS,
   });
 }
 

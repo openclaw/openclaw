@@ -48,6 +48,15 @@ export type DeviceAuthTokenSummary = {
   lastUsedAtMs?: number;
 };
 
+export type RotateDeviceTokenDenyReason =
+  | "unknown-device-or-role"
+  | "missing-approved-scope-baseline"
+  | "scope-outside-approved-baseline";
+
+export type RotateDeviceTokenResult =
+  | { ok: true; entry: DeviceAuthToken }
+  | { ok: false; reason: RotateDeviceTokenDenyReason };
+
 export type PairedDevice = {
   deviceId: string;
   publicKey: string;
@@ -635,7 +644,7 @@ export async function rotateDeviceToken(params: {
   role: string;
   scopes?: string[];
   baseDir?: string;
-}): Promise<DeviceAuthToken | null> {
+}): Promise<RotateDeviceTokenResult> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const context = resolveDeviceTokenUpdateContext({
@@ -644,13 +653,16 @@ export async function rotateDeviceToken(params: {
       role: params.role,
     });
     if (!context) {
-      return null;
+      return { ok: false, reason: "unknown-device-or-role" };
     }
     const { device, role, tokens, existing } = context;
     const requestedScopes = normalizeDeviceAuthScopes(
       params.scopes ?? existing?.scopes ?? device.scopes,
     );
     const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
+    if (!approvedScopes) {
+      return { ok: false, reason: "missing-approved-scope-baseline" };
+    }
     if (
       !scopesWithinApprovedDeviceBaseline({
         role,
@@ -658,7 +670,7 @@ export async function rotateDeviceToken(params: {
         approvedScopes,
       })
     ) {
-      return null;
+      return { ok: false, reason: "scope-outside-approved-baseline" };
     }
     const now = Date.now();
     const next = buildDeviceAuthToken({
@@ -672,7 +684,7 @@ export async function rotateDeviceToken(params: {
     device.tokens = tokens;
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, params.baseDir);
-    return next;
+    return { ok: true, entry: next };
   });
 }
 

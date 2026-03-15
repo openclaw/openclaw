@@ -11,6 +11,7 @@ import { installPackageDir } from "../infra/install-package-dir.js";
 import {
   resolveSafeInstallDir,
   safeDirName,
+  safePathSegmentHashed,
   unscopedPackageName,
 } from "../infra/install-safe-path.js";
 import {
@@ -84,17 +85,66 @@ function safeFileName(input: string): string {
   return safeDirName(input);
 }
 
+function encodePluginInstallDirName(pluginId: string): string {
+  const trimmed = pluginId.trim();
+  if (!trimmed.includes("/")) {
+    return safeDirName(trimmed);
+  }
+  // Scoped plugin ids need a reserved on-disk namespace so they cannot collide
+  // with valid unscoped ids that happen to match the hashed slug.
+  return `@${safePathSegmentHashed(trimmed)}`;
+}
+
 function validatePluginId(pluginId: string): string | null {
-  if (!pluginId) {
+  const trimmed = pluginId.trim();
+  if (!trimmed) {
     return "invalid plugin name: missing";
   }
-  if (pluginId === "." || pluginId === "..") {
-    return "invalid plugin name: reserved path segment";
-  }
-  if (pluginId.includes("/") || pluginId.includes("\\")) {
+  if (trimmed.includes("\\")) {
     return "invalid plugin name: path separators not allowed";
   }
+  const segments = trimmed.split("/");
+  if (segments.some((segment) => !segment)) {
+    return "invalid plugin name: malformed scope";
+  }
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    return "invalid plugin name: reserved path segment";
+  }
+  if (segments.length === 1) {
+    if (trimmed.startsWith("@")) {
+      return "invalid plugin name: scoped ids must use @scope/name format";
+    }
+    return null;
+  }
+  if (segments.length !== 2) {
+    return "invalid plugin name: path separators not allowed";
+  }
+  if (!segments[0]?.startsWith("@") || segments[0].length < 2) {
+    return "invalid plugin name: scoped ids must use @scope/name format";
+  }
   return null;
+}
+
+function matchesExpectedPluginId(params: {
+  expectedPluginId?: string;
+  pluginId: string;
+  manifestPluginId?: string;
+  npmPluginId: string;
+}): boolean {
+  if (!params.expectedPluginId) {
+    return true;
+  }
+  if (params.expectedPluginId === params.pluginId) {
+    return true;
+  }
+  // Backward compatibility: older install records keyed scoped npm packages by
+  // their unscoped package name. Preserve update-in-place for those records
+  // unless the package declares an explicit manifest id override.
+  return (
+    !params.manifestPluginId &&
+    params.pluginId === params.npmPluginId &&
+    params.expectedPluginId === unscopedPackageName(params.npmPluginId)
+  );
 }
 
 function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
@@ -195,6 +245,7 @@ export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string
     baseDir: extensionsBase,
     id: pluginId,
     invalidNameMessage: "invalid plugin name: path traversal detected",
+    nameEncoder: encodePluginInstallDirName,
   });
   if (!targetDirResult.ok) {
     throw new Error(targetDirResult.error);
@@ -233,8 +284,8 @@ async function installPluginFromPackageDir(
   }
   const extensions = extensionsResult.entries;
 
-  const pkgName = typeof manifest.name === "string" ? manifest.name : "";
-  const npmPluginId = pkgName ? unscopedPackageName(pkgName) : "plugin";
+  const pkgName = typeof manifest.name === "string" ? manifest.name.trim() : "";
+  const npmPluginId = pkgName || "plugin";
 
   // Prefer the canonical `id` from openclaw.plugin.json over the npm package name.
   // This avoids a latent key-mismatch bug: if the manifest id (e.g. "memory-cognee")
@@ -243,7 +294,7 @@ async function installPluginFromPackageDir(
   const ocManifestResult = loadPluginManifest(params.packageDir);
   const manifestPluginId =
     ocManifestResult.ok && ocManifestResult.manifest.id
-      ? unscopedPackageName(ocManifestResult.manifest.id)
+      ? ocManifestResult.manifest.id.trim()
       : undefined;
 
   const pluginId = manifestPluginId ?? npmPluginId;
@@ -251,7 +302,14 @@ async function installPluginFromPackageDir(
   if (pluginIdError) {
     return { ok: false, error: pluginIdError };
   }
-  if (params.expectedPluginId && params.expectedPluginId !== pluginId) {
+  if (
+    !matchesExpectedPluginId({
+      expectedPluginId: params.expectedPluginId,
+      pluginId,
+      manifestPluginId,
+      npmPluginId,
+    })
+  ) {
     return {
       ok: false,
       error: `plugin id mismatch: expected ${params.expectedPluginId}, got ${pluginId}`,
@@ -313,6 +371,7 @@ async function installPluginFromPackageDir(
     id: pluginId,
     invalidNameMessage: "invalid plugin name: path traversal detected",
     boundaryLabel: "extensions directory",
+    nameEncoder: encodePluginInstallDirName,
   });
   if (!targetDirResult.ok) {
     return { ok: false, error: targetDirResult.error };
