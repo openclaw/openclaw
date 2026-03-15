@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -1003,14 +1003,19 @@ export const chatHandlers: GatewayRequestHandlers = {
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
       const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
-      const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
-      const catalog = await context.loadGatewayModelCatalog();
-      thinkingLevel = resolveThinkingDefault({
-        cfg,
-        provider,
-        model,
-        catalog,
-      });
+      const perAgent = resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault;
+      if (perAgent) {
+        thinkingLevel = perAgent;
+      } else {
+        const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
+        const catalog = await context.loadGatewayModelCatalog();
+        thinkingLevel = resolveThinkingDefault({
+          cfg,
+          provider,
+          model,
+          catalog,
+        });
+      }
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     respond(true, {

@@ -578,6 +578,68 @@ describe("model-selection", () => {
     });
   });
 
+  describe("resolveThinkingDefault", () => {
+    it("prefers per-model thinking default over global", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            thinkingDefault: "high",
+            models: {
+              "openai-codex/gpt-5.3-codex": {
+                params: { thinking: "xhigh" },
+              },
+            },
+          },
+        },
+      };
+
+      const resolved = resolveThinkingDefault({
+        cfg: cfg as OpenClawConfig,
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+      });
+
+      expect(resolved).toBe("xhigh");
+    });
+
+    it("uses global thinking default when per-model is not set", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            thinkingDefault: "high",
+          },
+        },
+      };
+
+      const resolved = resolveThinkingDefault({
+        cfg: cfg as OpenClawConfig,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+
+      expect(resolved).toBe("high");
+    });
+
+    it("falls back to low for reasoning-capable models when config is absent", () => {
+      const cfg: Partial<OpenClawConfig> = {};
+      const resolved = resolveThinkingDefault({
+        cfg: cfg as OpenClawConfig,
+        provider: "openai",
+        model: "o3-mini",
+        catalog: [
+          {
+            id: "o3-mini",
+            provider: "openai",
+            name: "o3-mini",
+            reasoning: true,
+          },
+        ],
+      });
+
+      expect(resolved).toBe("low");
+    });
+  });
+
   describe("resolveConfiguredModelRef", () => {
     it("should fall back to anthropic and warn if provider is missing for non-alias", () => {
       setLoggerOverride({ level: "silent", consoleLevel: "warn" });
