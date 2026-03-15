@@ -680,6 +680,10 @@
       "destination": "/reference/templates/USER"
     },
     {
+      "source": "/templates/knowledge/models",
+      "destination": "/reference/templates/knowledge/models"
+    },
+    {
       "source": "/test",
       "destination": "/reference/test"
     },
@@ -1321,7 +1325,8 @@
                   "reference/templates/IDENTITY",
                   "reference/templates/SOUL",
                   "reference/templates/TOOLS",
-                  "reference/templates/USER"
+                  "reference/templates/USER",
+                  "reference/templates/knowledge/models"
                 ]
               },
               {

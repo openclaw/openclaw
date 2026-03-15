@@ -120,6 +120,16 @@ Reactions are lightweight social signals. Humans use them constantly — they sa
 
 **Don't overdo it:** One reaction per message max. Pick the one that fits best.
 
+## Subagents & model selection
+
+When spawning subagents (`sessions_spawn`), choose the model by task type instead of using a single default:
+
+1. **Read the model catalog** — If `knowledge/models.md` exists in your workspace, read it before spawning.
+2. **Match model to task** — Use cheaper/faster models for mechanical work (parsing, classification, triage) and stronger models for complex reasoning.
+3. **Pass the model** — Set `sessions_spawn.model` to the chosen provider/model (e.g. `anthropic/claude-haiku-4.5` for structured extraction, `google/gemini-2.5-flash` for high-volume triage).
+
+If no catalog exists, subagents inherit the caller's model.
+
 ## Tools
 
 Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.
