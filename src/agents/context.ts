@@ -66,15 +66,16 @@ export function applyDiscoveredContextWindows(params: {
     if (!contextWindow || contextWindow <= 0) {
       continue;
     }
-    const existing = params.cache.get(model.id);
-    // When the same bare model id appears under multiple providers with different
-    // limits, keep the smaller window. This cache feeds both display paths and
-    // runtime paths (flush thresholds, session context-token persistence), so
-    // overestimating the limit could delay compaction and cause context overflow.
-    // Callers that know the active provider should use resolveContextTokensForModel,
-    // which tries the provider-qualified key first and falls back here.
-    if (existing === undefined || contextWindow < existing) {
-      params.cache.set(model.id, contextWindow);
+
+    // Bare-id fallback remains fail-safe: keep the smallest value when duplicate
+    // ids appear across providers.
+    setSmallerContextWindow(params.cache, modelId, contextWindow);
+
+    // When discovery provides a separate provider field, also store the
+    // provider-qualified key so provider-aware lookups can keep limits distinct.
+    const qualifiedKey = toProviderQualifiedModelKey(model);
+    if (qualifiedKey) {
+      setSmallerContextWindow(params.cache, qualifiedKey, contextWindow);
     }
   }
 }
@@ -87,11 +88,10 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const [providerNameRaw, provider] of Object.entries(providers)) {
+  for (const provider of Object.values(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
-    const providerName = providerNameRaw.trim().toLowerCase();
     for (const model of provider.models) {
       const modelId = typeof model?.id === "string" ? model.id.trim() : undefined;
       const contextWindow =
@@ -100,13 +100,6 @@ export function applyConfiguredContextWindows(params: {
         continue;
       }
       params.cache.set(modelId, contextWindow);
-
-      // Config entries are often declared as bare ids under models.providers.<provider>.
-      // Mirror those onto provider-qualified keys so provider-aware lookups still
-      // honor explicit config overrides ahead of discovered defaults.
-      if (providerName && !modelId.includes("/")) {
-        params.cache.set(`${providerName}/${modelId}`, contextWindow);
-      }
     }
   }
 }
