@@ -10,7 +10,7 @@ import { loadConfig } from "../../../src/config/config.js";
 import type { TelegramDirectConfig, TelegramGroupConfig } from "../../../src/config/types.js";
 import { logVerbose } from "../../../src/globals.js";
 import { recordChannelActivity } from "../../../src/infra/channel-activity.js";
-import { buildAgentSessionKey, deriveLastRoutePolicy } from "../../../src/routing/resolve-route.js";
+import { deriveLastRoutePolicy } from "../../../src/routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, normalizeAllowFrom, normalizeDmAllowFromWithStore } from "./bot-access.js";
@@ -96,10 +96,7 @@ export const buildTelegramMessageContext = async ({
   const requiresExplicitAccountBinding = (
     candidate: ReturnType<typeof resolveTelegramConversationRoute>["route"],
   ): boolean => candidate.accountId !== DEFAULT_ACCOUNT_ID && candidate.matchedBy === "default";
-  const isNamedAccountFallback = requiresExplicitAccountBinding(route);
-  // Named-account groups require an explicit binding; DMs get a
-  // per-account fallback session key below to preserve isolation.
-  if (isNamedAccountFallback && isGroup) {
+  if (requiresExplicitAccountBinding(route)) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
@@ -226,22 +223,7 @@ export const buildTelegramMessageContext = async ({
     return false;
   };
 
-  const baseSessionKey = isNamedAccountFallback
-    ? buildAgentSessionKey({
-        agentId: route.agentId,
-        channel: "telegram",
-        accountId: route.accountId,
-        peer: {
-          kind: "direct",
-          id: resolveTelegramDirectPeerId({
-            chatId,
-            senderId,
-          }),
-        },
-        dmScope: "per-account-channel-peer",
-        identityLinks: freshCfg.session?.identityLinks,
-      }).toLowerCase()
-    : route.sessionKey;
+  const baseSessionKey = route.sessionKey;
   // DMs: use thread suffix for session isolation (works regardless of dmScope)
   const threadKeys =
     dmThreadId != null
