@@ -41,7 +41,9 @@ const SessionsSpawnToolSchema = Type.Object({
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
-  streamTo: optionalStringEnum(ACP_SPAWN_STREAM_TARGETS),
+  streamTo: optionalStringEnum(ACP_SPAWN_STREAM_TARGETS, {
+    description: 'ACP-only. Ignored when runtime != "acp".',
+  }),
 
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -105,7 +107,8 @@ export function createSessionsSpawnTool(
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
-      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      // Only relevant for ACP. For runtime=subagent, ignore it (schema-following models may still send it).
+      const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -127,12 +130,8 @@ export function createSessionsSpawnTool(
           }>)
         : undefined;
 
-      if (streamTo && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
-        });
-      }
+      // NOTE: streamTo is ACP-only. For runtime=subagent we intentionally ignore it,
+      // because schema-following models may include it if it is present in the tool schema.
 
       if (resumeSessionId && runtime !== "acp") {
         return jsonResult({
