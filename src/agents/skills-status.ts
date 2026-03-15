@@ -46,6 +46,8 @@ export type SkillStatusEntry = {
   missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
   install: SkillInstallOption[];
+  /** Error encountered while reading or parsing the SKILL.md file. */
+  parseError?: string;
 };
 
 export type SkillStatusReport = {
@@ -200,7 +202,7 @@ function buildSkillStatus(
       isEnvSatisfied,
       isConfigSatisfied,
     });
-  const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
+  const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied && !entry.parseError;
 
   return {
     name: entry.skill.name,
@@ -221,6 +223,7 @@ function buildSkillStatus(
     missing,
     configChecks,
     install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),
+    parseError: entry.parseError,
   };
 }
 
