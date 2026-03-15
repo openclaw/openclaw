@@ -148,6 +148,37 @@ replace logs; they exist to feed metrics, traces, and other exporters.
 Diagnostics events are emitted in-process, but exporters only attach when
 diagnostics + the exporter plugin are enabled.
 
+### Telemetry surface ownership
+
+OpenClaw has separate surfaces for automation, runtime control, and telemetry:
+
+| If you want to...                                                                      | Use...                                  | Why                                                                |
+| -------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------ |
+| Export metrics, traces, or machine-readable health signals                             | Diagnostic events                       | Observability should be append-only telemetry, not a behavior hook |
+| Rewrite prompts, block tools, cancel outbound messages, or add policy/middleware       | Typed plugin hooks via `api.on(...)`    | Runtime hooks can mutate or block behavior                         |
+| Trigger coarse operator automation such as file writes, notifications, or side effects | HOOK.md hooks / `api.registerHook(...)` | Internal hooks are for operator automation, not telemetry schemas  |
+
+Future OTEL work should extend `src/infra/diagnostic-events.ts`, then map those
+events in the `diagnostics-otel` plugin. Do not add telemetry-only proposals by
+growing the hook APIs.
+
+### What diagnostic events are for
+
+Diagnostic events are the observability contract between the gateway runtime and
+telemetry consumers such as the `diagnostics-otel` plugin.
+
+Diagnostic events should be:
+
+- append-only signals for exporters, dashboards, alerts, and troubleshooting
+- safe to ignore without affecting runtime behavior
+- stable enough that exporters can map them into metrics, traces, or logs
+
+Diagnostic events should not be used for:
+
+- blocking, vetoing, or rewriting runtime behavior
+- policy enforcement or middleware ordering
+- side-effect automation that must run for the system to behave correctly
+
 ### OpenTelemetry vs OTLP
 
 - **OpenTelemetry (OTel)**: the data model + SDKs for traces, metrics, and logs.
@@ -183,6 +214,28 @@ Queue + session:
 - `session.stuck`: session stuck warning + age.
 - `run.attempt`: run retry/attempt metadata.
 - `diagnostic.heartbeat`: aggregate counters (webhooks/queue/session).
+
+Tool safety:
+
+- `tool.loop`: repeated-tool-loop warning/block telemetry emitted by the runtime.
+
+### What is still missing
+
+The current event catalog is useful, but still coarse in a few places. New
+observability work should generally extend `src/infra/diagnostic-events.ts`
+instead of asking hooks to carry telemetry-only meaning.
+
+Priority gaps for future telemetry work:
+
+- Run lifecycle: explicit run start, run end, and run error boundaries.
+- Model lifecycle: request/response/error boundaries in addition to aggregate
+  `model.usage`.
+- Tool lifecycle: tool call start/end/error boundaries, plus first-class exporter
+  mapping for existing `tool.loop` events.
+- Outbound delivery lifecycle: delivery attempted/sent/failed boundaries across
+  channels, separate from message processing.
+- Attribute hygiene: clearer redaction and cardinality guidance for exporter-safe
+  fields.
 
 ### Enable diagnostics (no exporter)
 
