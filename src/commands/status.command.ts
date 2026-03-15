@@ -141,22 +141,23 @@ export async function statusCommand(
         async () => await loadProviderUsageSummary({ timeoutMs: opts.timeoutMs }),
       )
     : undefined;
-  const health: HealthSummary | undefined = opts.deep
-    ? await withProgress(
-        {
-          label: "Checking gateway health…",
-          indeterminate: true,
-          enabled: opts.json !== true,
-        },
-        async () =>
-          await callGateway<HealthSummary>({
-            method: "health",
-            params: { probe: true },
-            timeoutMs: opts.timeoutMs,
-            config: scan.cfg,
-          }),
-      )
-    : undefined;
+  const health: HealthSummary | undefined =
+    opts.deep && gatewayReachable
+      ? await withProgress(
+          {
+            label: "Checking gateway health…",
+            indeterminate: true,
+            enabled: opts.json !== true,
+          },
+          async () =>
+            await callGateway<HealthSummary>({
+              method: "health",
+              params: { probe: true },
+              timeoutMs: opts.timeoutMs,
+              config: scan.cfg,
+            }),
+        ).catch(() => undefined)
+      : undefined;
   const lastHeartbeat =
     opts.deep && gatewayReachable
       ? await callGateway<HeartbeatEventPayload | null>({
