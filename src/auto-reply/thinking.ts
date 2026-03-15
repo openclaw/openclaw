@@ -42,6 +42,8 @@ export const XHIGH_MODEL_REFS = [
   "openai-codex/gpt-5.1-codex",
   "github-copilot/gpt-5.2-codex",
   "github-copilot/gpt-5.2",
+  // Anthropic Opus 4.6: xhigh maps to adaptive thinking with effort "max"
+  "anthropic/claude-opus-4-6",
 ] as const;
 
 const XHIGH_MODEL_SET = new Set(XHIGH_MODEL_REFS.map((entry) => entry.toLowerCase()));
@@ -79,10 +81,11 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
     return "medium";
   }
-  if (
-    ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
-  ) {
+  if (["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
     return "high";
+  }
+  if (key === "max") {
+    return "xhigh";
   }
   if (["think"].includes(key)) {
     return "minimal";
