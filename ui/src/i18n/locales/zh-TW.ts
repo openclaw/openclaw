@@ -165,6 +165,21 @@ export const zh_TW: TranslationMap = {
     showCronSessionsHidden: "顯示定時任務會話 (已隱藏 {count} 個)",
     onboardingDisabled: "引導期間禁用",
   },
+  cron: {
+    timeline: {
+      title: "今日日程",
+      zoomAll: "24h",
+      zoomWork: "工作",
+      zoomNow: "現在±3h",
+      alwaysOn: "始終運行",
+      clickHistory: "點擊 → 查看運行歷史",
+      clickDetails: "點擊 → 查看作業詳情",
+      viewDetails: "查看作業詳情",
+      viewHistory: "查看運行歷史",
+      runNow: "立即運行",
+      pending: "待運行",
+    },
+  },
   languages: {
     en: "English",
     zhCN: "简体中文 (簡體中文)",

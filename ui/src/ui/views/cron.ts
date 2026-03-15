@@ -8,6 +8,21 @@ import type {
   CronJobsScheduleKindFilter,
 } from "../controllers/cron.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
+import {
+  getFreqChips,
+  getTimelineMarkers,
+  clusterMarkers,
+  getZoomRange,
+  getNowPct,
+  getNowLabel,
+  getZoomLabel,
+  getGridLineCount,
+  getHourLabels,
+  getTimezoneLabel,
+  getTodayLabel,
+  formatHour,
+  type TimelineZoom,
+} from "../helpers/cron-timeline.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
@@ -349,6 +364,317 @@ function renderFieldLabel(text: string, required = false) {
   </span>`;
 }
 
+// --- Timeline hover helpers ---
+// Each element stores its own debounce timer to avoid cross-element interference
+// and stale DOM references after component unmount.
+
+const HOVER_TIMER_KEY = "__hoverTimer";
+
+function onHoverEnter(e: Event) {
+  const el = e.currentTarget;
+  if (!(el instanceof HTMLElement)) {
+    return;
+  }
+  // Cancel this element's pending leave timer
+  const existing = (el as unknown as Record<string, unknown>)[HOVER_TIMER_KEY];
+  if (typeof existing === "number") {
+    clearTimeout(existing);
+  }
+  // Clear any other hovered items in the same context
+  el.parentElement?.querySelectorAll(".hovered").forEach((m) => m.classList.remove("hovered"));
+  el.classList.add("hovered");
+}
+
+function onHoverLeave(e: Event) {
+  const el = e.currentTarget;
+  if (!(el instanceof HTMLElement)) {
+    return;
+  }
+  (el as unknown as Record<string, unknown>)[HOVER_TIMER_KEY] = setTimeout(() => {
+    if (el.isConnected) {
+      el.classList.remove("hovered");
+    }
+  }, 150);
+}
+
+// --- Freq chips in summary ---
+
+function renderFreqChips(props: CronProps) {
+  const chips = getFreqChips(props.jobs);
+  if (chips.length === 0) {
+    return nothing;
+  }
+
+  return html`
+    <div class="cron-summary-item" style="grid-column: span 4; border: none; background: none; padding: 4px 0; min-height: auto;">
+      <div class="cron-freq-chips">
+        <span class="cron-freq-chips-label">${t("cron.timeline.alwaysOn")}</span>
+        ${chips.map((chip) => {
+          const statusColor =
+            chip.lastStatus === "ok"
+              ? "var(--ok)"
+              : chip.lastStatus === "error"
+                ? "var(--danger)"
+                : "var(--muted)";
+          return html`
+            <div class="cron-freq-chip" @mouseenter=${onHoverEnter} @mouseleave=${onHoverLeave} @click=${() => props.onLoadRuns(chip.jobId)}>
+              <span class="cron-freq-chip-dot" style="background: ${chip.color}; color: ${chip.color}"></span>
+              <span class="cron-freq-chip-name">${chip.jobName}</span>
+              <span class="cron-freq-chip-interval">${chip.schedule}</span>
+              <span class="cron-freq-chip-status" style="color: ${statusColor}">${chip.lastStatus ?? t("cron.timeline.pending")}</span>
+              <div class="cron-freq-chip-actions">
+                <div class="cron-freq-action" @click=${(e: Event) => {
+                  e.stopPropagation();
+                  scrollToJob(chip.jobId);
+                }}>
+                  <span class="cron-freq-action-icon">\u{1F4CB}</span> ${t("cron.timeline.viewDetails")}
+                </div>
+                <div class="cron-freq-action" @click=${(e: Event) => {
+                  e.stopPropagation();
+                  props.onLoadRuns(chip.jobId);
+                }}>
+                  <span class="cron-freq-action-icon">\u{1F4DC}</span> ${t("cron.timeline.viewHistory")}
+                </div>
+                <div class="cron-freq-action" @click=${(e: Event) => {
+                  e.stopPropagation();
+                  const job = props.jobs.find((j) => j.id === chip.jobId);
+                  if (job) {
+                    props.onRun(job);
+                  }
+                }}>
+                  <span class="cron-freq-action-icon">\u25B6</span> ${t("cron.timeline.runNow")}
+                </div>
+              </div>
+            </div>
+          `;
+        })}
+      </div>
+    </div>
+  `;
+}
+
+/** Adjust popup alignment when marker is near the edge of the timeline. */
+function popupAlignStyle(pct: number): string {
+  if (pct < 15) {
+    return "left: 0; transform: none;";
+  }
+  if (pct > 85) {
+    return "left: auto; right: 0; transform: none;";
+  }
+  return "";
+}
+
+function scrollToJob(jobId: string) {
+  const el = document.querySelector(`[data-cron-job-id="${CSS.escape(jobId)}"]`);
+  if (el instanceof HTMLElement) {
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
+
+// --- Timeline zoom state ---
+
+let _timelineZoom: TimelineZoom = "all";
+
+// --- Timeline card ---
+
+// Auto-refresh the NOW marker every 60 seconds
+let _timelineRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+function ensureTimelineTimer() {
+  if (_timelineRefreshTimer) {
+    return;
+  }
+  _timelineRefreshTimer = setInterval(() => {
+    // Stop the interval when the cron timeline is no longer in the DOM
+    // (i.e. the user has navigated away from the Cron page).
+    if (!document.querySelector(".cron-timeline-card")) {
+      clearInterval(_timelineRefreshTimer!);
+      _timelineRefreshTimer = null;
+      return;
+    }
+    const host = document.querySelector("openclaw-app");
+    if (host && "requestUpdate" in host) {
+      (host as unknown as { requestUpdate: () => void }).requestUpdate();
+    }
+  }, 60_000);
+}
+
+function renderTimelineCard(props: CronProps) {
+  if (props.jobs.length === 0) {
+    return nothing;
+  }
+  ensureTimelineTimer();
+
+  const [zoomStart, zoomEnd] = getZoomRange(_timelineZoom);
+  const markers = getTimelineMarkers(props.jobs, zoomStart, zoomEnd);
+  const clusters = clusterMarkers(markers);
+  const nowPct = getNowPct(zoomStart, zoomEnd);
+  const nowLabel = getNowLabel();
+  const zoomLabel = getZoomLabel(zoomStart, zoomEnd);
+  const gridCount = getGridLineCount(zoomStart, zoomEnd);
+  const hourLabels = getHourLabels(zoomStart, zoomEnd);
+  const tz = getTimezoneLabel();
+  const todayLabel = getTodayLabel();
+  // When now is within range, fill to nowPct. When now is past the range end, fill 100%.
+  // When now is before the range start, fill 0%.
+  const nowH = new Date().getHours() + new Date().getMinutes() / 60;
+  const fillPct = nowPct != null ? Math.max(0, Math.min(100, nowPct)) : nowH >= zoomEnd ? 100 : 0;
+
+  const setZoom = (zoom: TimelineZoom) => {
+    _timelineZoom = zoom;
+    // Dispatch a lightweight re-render instead of a full data reload.
+    // The host LitElement listens for this and calls requestUpdate().
+    const host = document.querySelector("openclaw-app");
+    if (host && "requestUpdate" in host) {
+      (host as unknown as { requestUpdate: () => void }).requestUpdate();
+    }
+    // No fallback — avoid triggering a full data reload for a local zoom change.
+  };
+
+  return html`
+    <section class="cron-timeline-card">
+      <div class="cron-timeline-header">
+        <span class="cron-timeline-title">${t("cron.timeline.title")}</span>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div class="cron-timeline-zoom">
+            <button class="btn ${_timelineZoom === "all" ? "active" : ""}" @click=${() => setZoom("all")}>${t("cron.timeline.zoomAll")}</button>
+            <button class="btn ${_timelineZoom === "work" ? "active" : ""}" @click=${() => setZoom("work")}>${t("cron.timeline.zoomWork")}</button>
+            <button class="btn ${_timelineZoom === "now" ? "active" : ""}" @click=${() => setZoom("now")}>${t("cron.timeline.zoomNow")}</button>
+            <span class="cron-timeline-zoom-label">${zoomLabel}</span>
+          </div>
+          <span class="cron-timeline-tz">${tz} \u00b7 ${todayLabel}</span>
+        </div>
+      </div>
+      <div class="cron-timeline">
+        <div class="cron-timeline-track">
+          <div class="cron-timeline-track-fill" style="width: ${fillPct}%"></div>
+          <div class="cron-timeline-grid">
+            ${Array.from(
+              { length: gridCount },
+              () =>
+                html`
+                  <div class="cron-timeline-grid-line"></div>
+                `,
+            )}
+          </div>
+          ${
+            nowPct != null
+              ? html`<div class="cron-timeline-now" style="left: ${nowPct}%"><span class="cron-timeline-now-label">${nowLabel}</span></div>`
+              : nothing
+          }
+          ${clusters.map((cluster) =>
+            cluster.items.length === 1
+              ? renderTimelineMarker(cluster.items[0], props)
+              : renderTimelineCluster(cluster, props),
+          )}
+        </div>
+        <div class="cron-timeline-labels">
+          ${hourLabels.map((label) => html`<span class="cron-timeline-label">${label}</span>`)}
+        </div>
+      </div>
+      <div class="cron-timeline-mobile">
+        ${renderTimelineMobile(markers, props)}
+      </div>
+    </section>
+  `;
+}
+
+function renderTimelineMarker(
+  marker: {
+    jobId: string;
+    jobName: string;
+    schedule: string;
+    pct: number;
+    status: string;
+    color: string;
+  },
+  props: CronProps,
+) {
+  const isPast = marker.status === "ok";
+  const dotClass = isPast ? "cron-timeline-dot-ok" : "cron-timeline-dot-pending";
+  const hintText = isPast ? t("cron.timeline.clickHistory") : t("cron.timeline.clickDetails");
+
+  const onClick = () => {
+    if (isPast) {
+      props.onLoadRuns(marker.jobId);
+    } else {
+      scrollToJob(marker.jobId);
+    }
+  };
+
+  return html`
+    <div class="cron-timeline-marker" style="left: ${marker.pct}%" @mouseenter=${onHoverEnter} @mouseleave=${onHoverLeave} @click=${onClick}>
+      <div class="marker-hitarea"></div>
+      <div class="cron-timeline-dot ${dotClass}" style="border-color: ${marker.color}; background: ${marker.color}; color: ${marker.color}"></div>
+      <div class="cron-timeline-popup" style="${popupAlignStyle(marker.pct)}">
+        <div class="cron-timeline-popup-name">${marker.jobName}</div>
+        <div class="cron-timeline-popup-schedule">${marker.schedule}</div>
+        <div class="cron-timeline-popup-status">
+          <span class="cron-timeline-popup-dot" style="background: ${marker.color}"></span>
+          ${marker.status}
+        </div>
+        <div class="cron-timeline-popup-hint">${hintText}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderTimelineCluster(
+  cluster: {
+    pct: number;
+    items: Array<{ jobId: string; jobName: string; hour: number; color: string; status: string }>;
+  },
+  props: CronProps,
+) {
+  return html`
+    <div class="cron-timeline-cluster" style="left: ${cluster.pct}%" @mouseenter=${onHoverEnter} @mouseleave=${onHoverLeave}>
+      <div class="marker-hitarea"></div>
+      <div class="cron-timeline-cluster-badge">${cluster.items.length}</div>
+      <div class="cron-timeline-cluster-popup" style="${popupAlignStyle(cluster.pct)}">
+        ${cluster.items.map((item) => {
+          const isPast = item.status === "ok";
+          const onClick = (e: Event) => {
+            e.stopPropagation();
+            if (isPast) {
+              props.onLoadRuns(item.jobId);
+            } else {
+              scrollToJob(item.jobId);
+            }
+          };
+          return html`
+            <div class="cron-cluster-item" @click=${onClick}>
+              <span class="cron-cluster-item-dot" style="background: ${item.color}"></span>
+              <span class="cron-cluster-item-name">${item.jobName}</span>
+              <span class="cron-cluster-item-time">${formatHour(item.hour)}</span>
+            </div>
+          `;
+        })}
+      </div>
+    </div>
+  `;
+}
+
+function renderTimelineMobile(
+  markers: Array<{ jobId: string; jobName: string; hour: number; color: string; status: string }>,
+  _props: CronProps,
+) {
+  const upcoming = markers.filter((m) => m.status === "pending").slice(0, 5);
+  if (upcoming.length === 0) {
+    return nothing;
+  }
+
+  return html`
+    ${upcoming.map(
+      (m) => html`
+      <div class="cron-timeline-mobile-item" @click=${() => scrollToJob(m.jobId)}>
+        <span style="color: ${m.color}">\u25CB ${m.jobName}</span>
+        <span>${formatHour(m.hour)}</span>
+      </div>
+    `,
+    )}
+  `;
+}
+
 export function renderCron(props: CronProps) {
   const isEditing = Boolean(props.editingJobId);
   const isAgentTurn = props.form.payloadKind === "agentTurn";
@@ -417,6 +743,7 @@ export function renderCron(props: CronProps) {
           <div class="cron-summary-label">${t("cron.summary.nextWake")}</div>
           <div class="cron-summary-value">${formatNextRun(props.status?.nextWakeAtMs ?? null)}</div>
         </div>
+        ${renderFreqChips(props)}
       </div>
       <div class="cron-summary-strip__actions">
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
@@ -425,6 +752,8 @@ export function renderCron(props: CronProps) {
         ${props.error ? html`<span class="muted">${props.error}</span>` : nothing}
       </div>
     </section>
+
+    ${renderTimelineCard(props)}
 
     <section class="cron-workspace">
       <div class="cron-workspace-main">
@@ -1497,7 +1826,7 @@ function renderJob(job: CronJob, props: CronProps) {
     action();
   };
   return html`
-    <div class=${itemClass} @click=${() => props.onLoadRuns(job.id)}>
+    <div class=${itemClass} data-cron-job-id=${job.id} @click=${() => props.onLoadRuns(job.id)}>
       <div class="list-main">
         <div class="list-title">${job.name}</div>
         <div class="list-sub">${formatCronSchedule(job)}</div>

@@ -168,6 +168,21 @@ export const pt_BR: TranslationMap = {
     showCronSessionsHidden: "Mostrar sessões de cron ({count} ocultas)",
     onboardingDisabled: "Desativado durante a integração",
   },
+  cron: {
+    timeline: {
+      title: "Agenda de hoje",
+      zoomAll: "24h",
+      zoomWork: "Trabalho",
+      zoomNow: "Agora±3h",
+      alwaysOn: "Sempre ativo",
+      clickHistory: "Clique → ver histórico de execuções",
+      clickDetails: "Clique → ver detalhes do trabalho",
+      viewDetails: "Ver detalhes do trabalho",
+      viewHistory: "Ver histórico de execuções",
+      runNow: "Executar agora",
+      pending: "pendente",
+    },
+  },
   languages: {
     en: "English",
     zhCN: "简体中文 (Chinês Simplificado)",

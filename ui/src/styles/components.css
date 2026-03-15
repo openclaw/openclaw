@@ -3774,3 +3774,521 @@
     gap: 4px;
   }
 }
+
+/* ===========================================
+   Cron Timeline
+   =========================================== */
+
+.cron-timeline-card {
+  border: 1px solid var(--border);
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px 20px;
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 1px 0 var(--card-highlight);
+  margin-bottom: 16px;
+  overflow: visible;
+  position: relative;
+  z-index: 2;
+}
+
+.cron-timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.cron-timeline-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.cron-timeline-tz {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.cron-timeline {
+  position: relative;
+  padding: 28px 0 4px 0;
+}
+
+.cron-timeline-track {
+  position: relative;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.cron-timeline-track-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: linear-gradient(90deg, var(--card-highlight), transparent);
+  border-radius: 2px;
+}
+
+.cron-timeline-grid {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100%;
+  display: flex;
+}
+
+.cron-timeline-grid-line {
+  flex: 1;
+  border-right: 1px solid var(--grid-line);
+}
+
+.cron-timeline-grid-line:last-child {
+  border-right: none;
+}
+
+.cron-timeline-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+.cron-timeline-label {
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--muted-strong);
+  width: 0;
+  text-align: center;
+  user-select: none;
+}
+
+.cron-timeline-now {
+  position: absolute;
+  top: -10px;
+  width: 2px;
+  height: 23px;
+  background: var(--accent);
+  border-radius: 1px;
+  z-index: 10;
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+.cron-timeline-now-label {
+  position: absolute;
+  top: -17px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.06em;
+  font-family: var(--mono);
+}
+
+/* Timeline markers */
+
+.cron-timeline-marker {
+  position: absolute;
+  top: -7px;
+  transform: translateX(-50%);
+  z-index: 5;
+  cursor: pointer;
+}
+
+.cron-timeline-marker .marker-hitarea {
+  position: absolute;
+  top: -12px;
+  left: -14px;
+  right: -14px;
+  bottom: -14px;
+}
+
+.cron-timeline-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--card);
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+  position: relative;
+  z-index: 1;
+}
+
+.cron-timeline-marker.hovered .cron-timeline-dot {
+  transform: scale(1.4);
+  box-shadow: 0 0 12px currentColor;
+}
+
+.cron-timeline-dot-ok {
+  background: var(--ok);
+  color: var(--ok);
+}
+
+.cron-timeline-dot-pending {
+  background: var(--info);
+  color: var(--info);
+}
+
+/* Popup */
+
+.cron-timeline-popup {
+  display: none;
+  position: absolute;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  min-width: 230px;
+  max-width: 320px;
+  box-shadow: var(--shadow-md);
+  z-index: 50;
+  font-size: 12px;
+  pointer-events: auto;
+}
+
+.cron-timeline-popup::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border-strong);
+  border-top: 1px solid var(--border-strong);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.cron-timeline-marker.hovered .cron-timeline-popup {
+  display: block;
+}
+
+.cron-timeline-popup-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-strong);
+  margin-bottom: 4px;
+}
+
+.cron-timeline-popup-schedule {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+
+.cron-timeline-popup-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cron-timeline-popup-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cron-timeline-popup-hint {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--accent);
+  border-top: 1px solid var(--border);
+  padding-top: 5px;
+  font-weight: 500;
+}
+
+/* Cluster badge */
+
+.cron-timeline-cluster {
+  position: absolute;
+  top: -10px;
+  transform: translateX(-50%);
+  z-index: 6;
+  cursor: pointer;
+}
+
+.cron-timeline-cluster .marker-hitarea {
+  position: absolute;
+  top: -10px;
+  left: -14px;
+  right: -14px;
+  bottom: -14px;
+}
+
+.cron-timeline-cluster-badge {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  border: 2px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-strong);
+  position: relative;
+  z-index: 1;
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast);
+}
+
+.cron-timeline-cluster.hovered .cron-timeline-cluster-badge {
+  transform: scale(1.2);
+  border-color: var(--accent);
+}
+
+.cron-timeline-cluster-popup {
+  display: none;
+  position: absolute;
+  top: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 8px 0;
+  min-width: 220px;
+  box-shadow: var(--shadow-md);
+  z-index: 50;
+}
+
+.cron-timeline-cluster-popup::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border-strong);
+  border-top: 1px solid var(--border-strong);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.cron-timeline-cluster.hovered .cron-timeline-cluster-popup {
+  display: block;
+}
+
+.cron-cluster-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: background var(--duration-fast);
+  font-size: 12px;
+}
+
+.cron-cluster-item:hover {
+  background: var(--bg-hover);
+}
+
+.cron-cluster-item-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cron-cluster-item-name {
+  font-weight: 500;
+  color: var(--text-strong);
+  flex: 1;
+}
+
+.cron-cluster-item-time {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* Zoom controls */
+
+.cron-timeline-zoom {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.cron-timeline-zoom .btn {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.cron-timeline-zoom-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+/* High-freq chips */
+
+.cron-freq-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.cron-freq-chips-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 4px;
+}
+
+.cron-freq-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  cursor: pointer;
+  transition: all var(--duration-fast) ease;
+  font-size: 12px;
+  position: relative;
+}
+
+.cron-freq-chip:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.cron-freq-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.cron-freq-chip-dot::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  opacity: 0.4;
+  animation: cron-pulse-ring 2s ease-in-out infinite;
+}
+
+@keyframes cron-pulse-ring {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+.cron-freq-chip-name {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.cron-freq-chip-interval {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.cron-freq-chip-status {
+  font-size: 11px;
+}
+
+.cron-freq-chip-actions {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 50;
+  min-width: 160px;
+  padding: 4px 0;
+}
+
+.cron-freq-chip-actions::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 16px;
+  width: 10px;
+  height: 10px;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border-strong);
+  border-top: 1px solid var(--border-strong);
+  transform: rotate(45deg);
+}
+
+.cron-freq-chip.hovered .cron-freq-chip-actions {
+  display: block;
+}
+
+.cron-freq-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background var(--duration-fast);
+}
+
+.cron-freq-action:hover {
+  background: var(--bg-hover);
+}
+
+.cron-freq-action-icon {
+  width: 14px;
+  text-align: center;
+}
+
+/* Mobile timeline fallback */
+
+.cron-timeline-mobile {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .cron-timeline {
+    display: none;
+  }
+
+  .cron-timeline-mobile {
+    display: block;
+    font-size: 12px;
+  }
+
+  .cron-timeline-mobile-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .cron-timeline-mobile-item:last-child {
+    border-bottom: none;
+  }
+}
