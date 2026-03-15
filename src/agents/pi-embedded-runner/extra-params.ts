@@ -65,6 +65,17 @@ export function resolveExtraParams(params: {
 
 type CacheRetention = "none" | "short" | "long";
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
+
+/**
+ * Providers that act as Anthropic API gateways. These forward requests to
+ * Anthropic but use a different base URL, causing pi-ai's URL-based TTL
+ * detection (baseUrl.includes("api.anthropic.com")) to skip the TTL field.
+ */
+const ANTHROPIC_GATEWAY_PROVIDERS = new Set(["cloudflare-ai-gateway"]);
+
+function isAnthropicGatewayProvider(provider: string): boolean {
+  return ANTHROPIC_GATEWAY_PROVIDERS.has(provider);
+}
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
   openaiWsWarmup?: boolean;
@@ -90,11 +101,14 @@ function resolveCacheRetention(
   provider: string,
 ): CacheRetention | undefined {
   const isAnthropicDirect = provider === "anthropic";
-  const hasBedrockOverride =
+  const hasExplicitOverride =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
-  const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
+  const isAnthropicBedrock = provider === "amazon-bedrock" && hasExplicitOverride;
+  // Gateway providers (e.g. Cloudflare AI Gateway) proxy Anthropic's API but
+  // use a different base URL, so they require an explicit override to opt in.
+  const isAnthropicGateway = isAnthropicGatewayProvider(provider) && hasExplicitOverride;
 
-  if (!isAnthropicDirect && !isAnthropicBedrock) {
+  if (!isAnthropicDirect && !isAnthropicBedrock && !isAnthropicGateway) {
     return undefined;
   }
 
@@ -207,6 +221,64 @@ function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): Stream
       ...options,
       cacheRetention: "none",
     });
+}
+
+/**
+ * Recursively patch all `cache_control` objects in an Anthropic API payload
+ * to include a TTL. This is required for gateway providers (e.g. Cloudflare AI
+ * Gateway) where pi-ai skips the TTL because the base URL does not match
+ * `api.anthropic.com`.
+ */
+function patchCacheControlTtl(payload: Record<string, unknown>, ttl: string): void {
+  for (const [key, value] of Object.entries(payload)) {
+    if (key === "cache_control" && value && typeof value === "object" && !Array.isArray(value)) {
+      const ctrl = value as Record<string, unknown>;
+      if (ctrl.type === "ephemeral" && ctrl.ttl === undefined) {
+        ctrl.ttl = ttl;
+      }
+    } else if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item && typeof item === "object" && !Array.isArray(item)) {
+          patchCacheControlTtl(item as Record<string, unknown>, ttl);
+        }
+      }
+    } else if (value && typeof value === "object" && !Array.isArray(value)) {
+      patchCacheControlTtl(value as Record<string, unknown>, ttl);
+    }
+  }
+}
+
+/**
+ * Wrapper that patches `cache_control` TTL for Anthropic gateway providers.
+ *
+ * When `cacheRetention="long"` is configured and routing through a gateway
+ * (e.g. Cloudflare AI Gateway), pi-ai sets `cache_control: { type: "ephemeral" }`
+ * without a TTL because it checks for `api.anthropic.com` in the base URL.
+ * This wrapper adds the TTL so Anthropic uses the intended retention period
+ * instead of defaulting to the 5-minute ephemeral TTL.
+ */
+function createAnthropicGatewayCacheTtlWrapper(
+  baseStreamFn: StreamFn | undefined,
+  cacheRetention: CacheRetention,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  if (cacheRetention !== "long") {
+    // "short" is ephemeral without TTL — no patching needed
+    return underlying;
+  }
+  const TTL = "1h";
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          patchCacheControlTtl(payload as Record<string, unknown>, TTL);
+        }
+        return originalOnPayload?.(payload);
+      },
+    });
+  };
 }
 
 function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
@@ -1270,6 +1342,20 @@ export function applyExtraParamsToAgent(
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
     log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
     agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
+  }
+
+  // Cloudflare AI Gateway and similar Anthropic gateway providers route through
+  // a non-Anthropic base URL. pi-ai's TTL injection checks for "api.anthropic.com"
+  // in the base URL and skips the TTL when routing through a gateway. Patch the
+  // payload here to restore the correct TTL when cacheRetention="long".
+  if (isAnthropicGatewayProvider(provider)) {
+    const gatewayCacheRetention = resolveCacheRetention(merged, provider);
+    if (gatewayCacheRetention && gatewayCacheRetention !== "none") {
+      log.debug(
+        `applying Anthropic gateway cache TTL wrapper (retention=${gatewayCacheRetention}) for ${provider}/${modelId}`,
+      );
+      agent.streamFn = createAnthropicGatewayCacheTtlWrapper(agent.streamFn, gatewayCacheRetention);
+    }
   }
 
   // Enable Z.AI tool_stream for real-time tool call streaming.
