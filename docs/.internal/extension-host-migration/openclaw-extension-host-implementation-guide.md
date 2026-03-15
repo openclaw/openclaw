@@ -104,7 +104,7 @@ What has been implemented so far:
 - provider matching, auth-method selection, config-patch merging, and default-model application now route through `src/extension-host/provider-auth.ts`
 - embedding-provider auto-selection, provider creation, local-setup guidance, and primary and fallback routing now route through `src/extension-host/embedding-runtime-registry.ts` while `src/memory/embeddings.ts` remains the compatibility facade
 - media-provider normalization, built-in registry construction, override merging, and runtime lookup now route through `src/extension-host/media-runtime-registry.ts` while `src/media-understanding/providers/index.ts` remains the compatibility facade
-- TTS provider metadata, provider ordering, API-key resolution, configuration checks, and telephony support now route through `src/extension-host/tts-runtime-registry.ts`, provider execution loops, output-format selection, telephony synthesis, and provider-error shaping now route through `src/extension-host/tts-runtime-execution.ts`, and provider selection plus request setup now route through `src/extension-host/tts-runtime-setup.ts` while `src/tts/tts.ts` remains the compatibility facade and preference-management surface
+- TTS provider metadata, provider ordering, API-key resolution, configuration checks, and telephony support now route through `src/extension-host/tts-runtime-registry.ts`, provider execution loops, output-format selection, telephony synthesis, and provider-error shaping now route through `src/extension-host/tts-runtime-execution.ts`, provider selection plus request setup now route through `src/extension-host/tts-runtime-setup.ts`, and prefs-path resolution, auto-mode policy, and persisted TTS preference reads and writes now route through `src/extension-host/tts-preferences.ts` while `src/tts/tts.ts` remains the compatibility facade plus payload-application and summarization surface
 - provider onboarding option building, model-picker entry building, and provider-method choice resolution now route through `src/extension-host/provider-wizard.ts`
 - loaded-provider auth application, plugin-enable gating, auth-method execution, and post-auth default-model handling now route through `src/extension-host/provider-auth-flow.ts`
 - provider post-selection hook lookup and invocation now route through `src/extension-host/provider-model-selection.ts`
@@ -247,6 +247,7 @@ Committed implementation slices so far:
 - `36711383f6` `TTS: extract runtime registry`
 - `f36f8f9e2d` `TTS: extract runtime execution`
 - `fa4f53896e` `TTS: extract runtime setup`
+- `64353a2b16` `TTS: extract preferences`
 - `89414ed857` `Docs: track extension host migration internally`
 - `d8af1eceaf` `Docs: refresh extension host migration status`
 
@@ -256,7 +257,7 @@ What is still missing for these phases:
 - broader lifecycle ownership beyond the loader state machine, service-lifecycle boundary, CLI-lifecycle boundary, session-owned activation state, and explicit discovery-policy, activation-policy, and finalization-policy outcomes, remaining policy gate ownership, and broad host-owned registries described for Phase 2
 - minimal SDK compatibility work beyond preserving current behavior indirectly through existing loading
 - host-owned conversation binding, interaction routing, ingress claim, and generic interactive control surfaces
-- broader embedding- and media-runtime execution and fallback ownership, plus remaining TTS preference-management and facade cleanup
+- broader embedding- and media-runtime execution and fallback ownership, plus remaining TTS payload-application, summarization, and facade cleanup
 - explicit support for extension-backed search, with a generic split between agent-visible tool publication and optional runtime-internal search backends
 - any pilot migration, event pipeline, canonical catalog, or arbitration implementation
 
@@ -266,7 +267,7 @@ Recent plan refinements:
 - it now explicitly treats interactive callback routing, namespace ownership, dedupe, and fallback behavior as first-class migration surfaces
 - it now explicitly treats inbound claim as a canonical ingress-stage concern rather than a permanent plugin-era hook shape
 - it now explicitly treats Telegram and Discord as the first validated rollout targets for interactive control surfaces while keeping the underlying contracts generic, host-owned, and kernel-agnostic
-- it now explicitly treats embeddings, media understanding, and TTS as in-progress host-owned subsystem runtimes, with embedding selection and fallback now extracted, TTS execution and request setup now partially extracted, and the remaining embedding/media execution plus TTS preference-management cleanup still pending, all with capability routing, typed request envelopes, provider-id normalization, and fallback policy
+- it now explicitly treats embeddings, media understanding, and TTS as in-progress host-owned subsystem runtimes, with embedding selection and fallback now extracted, TTS execution, request setup, and preferences now partially extracted, and the remaining embedding/media execution plus TTS payload-application and summarization cleanup still pending, all with capability routing, typed request envelopes, provider-id normalization, and fallback policy
 - it now explicitly rejects widening the legacy `registerProvider(...)` or `ProviderPlugin` surface into a universal runtime API while retaining capability routing, typed request envelopes, provider-id normalization, and fallback behavior where those are part of the target model
 - it now explicitly treats extension-backed search as either a canonical tool contribution or a host-owned runtime backend depending on whether the search surface is agent-visible
 
