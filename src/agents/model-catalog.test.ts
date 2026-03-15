@@ -252,7 +252,7 @@ describe("loadModelCatalog", () => {
     );
   });
 
-  it("does not merge configured models for providers that are not opted in", async () => {
+  it("merges configured models for custom providers", async () => {
     mockSingleOpenAiCatalogModel();
 
     const result = await loadModelCatalog({
@@ -281,7 +281,7 @@ describe("loadModelCatalog", () => {
 
     expect(
       result.some((entry) => entry.provider === "qianfan" && entry.id === "deepseek-v3.2"),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("does not duplicate opted-in configured models already present in ModelRegistry", async () => {
