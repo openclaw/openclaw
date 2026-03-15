@@ -89,7 +89,9 @@ function encodePluginInstallDirName(pluginId: string): string {
   if (!trimmed.includes("/")) {
     return safeDirName(trimmed);
   }
-  return safePathSegmentHashed(trimmed);
+  // Scoped plugin ids need a reserved on-disk namespace so they cannot collide
+  // with valid unscoped ids that happen to match the hashed slug.
+  return `@${safePathSegmentHashed(trimmed)}`;
 }
 
 function validatePluginId(pluginId: string): string | null {

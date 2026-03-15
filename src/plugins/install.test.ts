@@ -752,9 +752,10 @@ describe("installPluginFromDir", () => {
   it("uses a unique hashed install dir for scoped ids", () => {
     const extensionsDir = path.join(makeTempDir(), "extensions");
     const scopedTarget = resolvePluginInstallDir("@scope/name", extensionsDir);
-    const flatTarget = resolvePluginInstallDir("scope__name", extensionsDir);
+    const hashedFlatId = safePathSegmentHashed("@scope/name");
+    const flatTarget = resolvePluginInstallDir(hashedFlatId, extensionsDir);
 
-    expect(path.basename(scopedTarget)).toBe(safePathSegmentHashed("@scope/name"));
+    expect(path.basename(scopedTarget)).toBe(`@${hashedFlatId}`);
     expect(scopedTarget).not.toBe(flatTarget);
   });
 });
