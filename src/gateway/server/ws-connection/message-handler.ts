@@ -692,6 +692,7 @@ export function attachGatewayWsMessageHandler(params: {
             hasBrowserOriginHeader,
             sharedAuthOk,
             authMethod,
+            authMode: resolvedAuth.mode,
           }) ||
           shouldSkipControlUiPairing(
             controlUiAuthPolicy,

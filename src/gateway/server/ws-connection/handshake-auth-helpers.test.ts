@@ -125,4 +125,85 @@ describe("handshake auth helpers", () => {
       }),
     ).toBe(false);
   });
+
+  it("skips backend self-pairing when authMode is none for local backend clients", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+    } as ConnectParams;
+
+    // Local backend client with authMode "none" should bypass pairing
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams,
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "none",
+        authMode: "none",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects non-backend clients even when authMode is none", () => {
+    const connectParams = {
+      client: {
+        id: "some-other-client",
+        mode: "interactive",
+      },
+    } as unknown as ConnectParams;
+
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams,
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "none",
+        authMode: "none",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects remote backend clients even when authMode is none", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+    } as ConnectParams;
+
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams,
+        isLocalClient: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "none",
+        authMode: "none",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects backend clients with browser origin even when authMode is none", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+    } as ConnectParams;
+
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams,
+        isLocalClient: true,
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: false,
+        authMethod: "none",
+        authMode: "none",
+      }),
+    ).toBe(false);
+  });
 });
