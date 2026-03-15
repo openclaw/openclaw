@@ -1,5 +1,9 @@
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import {
+  extractReasoningTagsFromText,
+  stripReasoningTagsFromText,
+} from "../shared/text/reasoning-tags.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
@@ -239,6 +243,18 @@ function collectSanitizedBlockStrings(params: {
   return parts;
 }
 
+function resolveTaggedStringContentParts(content: string): {
+  thinkingText: string;
+  contentText: string;
+} {
+  return {
+    thinkingText: sanitizeRenderableText(extractReasoningTagsFromText(content)).trim(),
+    contentText: sanitizeRenderableText(
+      stripReasoningTagsFromText(content, { mode: "strict", trim: "both" }),
+    ).trim(),
+  };
+}
+
 /**
  * Extract ONLY thinking blocks from message content.
  * Model-agnostic: returns empty string if no thinking blocks exist.
@@ -250,7 +266,7 @@ export function extractThinkingFromMessage(message: unknown): string {
   }
   const { content } = resolved;
   if (typeof content === "string") {
-    return "";
+    return resolveTaggedStringContentParts(content).thinkingText;
   }
   const parts = collectSanitizedBlockStrings({
     content,
@@ -272,7 +288,7 @@ export function extractContentFromMessage(message: unknown): string {
   const { record, content } = resolved;
 
   if (typeof content === "string") {
-    return sanitizeRenderableText(content).trim();
+    return resolveTaggedStringContentParts(content).contentText;
   }
 
   const parts = collectSanitizedBlockStrings({
@@ -288,7 +304,12 @@ export function extractContentFromMessage(message: unknown): string {
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
   if (typeof content === "string") {
-    return sanitizeRenderableText(content).trim();
+    const parts = resolveTaggedStringContentParts(content);
+    return composeThinkingAndContent({
+      thinkingText: opts?.includeThinking ? parts.thinkingText : "",
+      contentText: parts.contentText,
+      showThinking: opts?.includeThinking ?? false,
+    });
   }
   if (!Array.isArray(content)) {
     return "";
