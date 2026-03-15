@@ -1528,6 +1528,36 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(getApiKeyMock).not.toHaveBeenCalled();
   });
 
+  it("does not cancel compaction when turnPrefixMessages has real conversation messages", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "user" as const, content: [{ type: "text" as const, text: "hello" }] },
+          { role: "assistant" as const, content: [{ type: "text" as const, text: "hi" }] },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        isSplitTurn: true,
+        tokensBefore: 1500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 500, keepRecentTokens: 500 },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test", // pragma: allowlist secret
+    });
+    expect(result?.cancel).not.toBe(true);
+    expect(getApiKeyMock).toHaveBeenCalled();
+  });
+
   it("continues when messages include real conversation content", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();

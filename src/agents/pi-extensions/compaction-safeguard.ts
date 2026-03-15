@@ -702,7 +702,10 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
-    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
+    const hasRealMessages =
+      preparation.messagesToSummarize.some(isRealConversationMessage) ||
+      (preparation.turnPrefixMessages ?? []).some(isRealConversationMessage);
+    if (!hasRealMessages) {
       log.warn(
         "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
       );
