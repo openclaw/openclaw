@@ -48,7 +48,7 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
   }
 
   // mdl_list_{provider}_{page}
-  const listMatch = trimmed.match(/^mdl_list_([a-z0-9_-]+)_(\d+)$/i);
+  const listMatch = trimmed.match(/^mdl_list_(.+)_(\d+)$/);
   if (listMatch) {
     const [, provider, pageStr] = listMatch;
     const page = Number.parseInt(pageStr ?? "1", 10);
@@ -88,9 +88,15 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   let currentRow: ButtonRow = [];
 
   for (const provider of providers) {
+    const callbackData = `mdl_list_${provider.id}_1`;
+    // Skip providers that would exceed Telegram's callback_data limit
+    if (Buffer.byteLength(callbackData, "utf8") > MAX_CALLBACK_DATA_BYTES) {
+      continue;
+    }
+
     const button = {
       text: `${provider.id} (${provider.count})`,
-      callback_data: `mdl_list_${provider.id}_1`,
+      callback_data: callbackData,
     };
 
     currentRow.push(button);
