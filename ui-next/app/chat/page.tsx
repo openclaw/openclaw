@@ -818,6 +818,7 @@ export default function ChatPage() {
   const [showAutocomplete, setShowAutocomplete] = useState(false);
   const [autocompleteIndex, setAutocompleteIndex] = useState(0);
   const [commandPrefix, setCommandPrefix] = useState("");
+  const [specFirstEnabled, setSpecFirstEnabled] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const selectedSessionKeyRef = useRef<string | null>(null);
   selectedSessionKeyRef.current = selectedSessionKey;
@@ -1159,8 +1160,19 @@ export default function ChatPage() {
       return;
     }
 
-    const text = draft.trim();
+    let text = draft.trim();
     setDraft("");
+
+    // Spec-First Mode: Auto-prepend /spec clarify for task requests
+    if (specFirstEnabled && !text.startsWith("/")) {
+      // Check if it looks like a task/build request
+      const taskKeywords = ['build', 'create', 'make', 'develop', 'implement', 'write', 'design', 'plan', 'setup', 'add'];
+      const isTaskRequest = taskKeywords.some(keyword => text.toLowerCase().includes(keyword));
+      
+      if (isTaskRequest) {
+        text = `/spec clarify "${text}"`;
+      }
+    }
 
     // Check if it's a command (starts with /)
     if (text.startsWith("/")) {
@@ -1796,6 +1808,69 @@ export default function ChatPage() {
                 >
                   {sending ? "Sending..." : "Send"}
                 </button>
+              </div>
+
+              {/* Spec-First Mode Toggle */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "8px 12px",
+                  background: "var(--secondary)",
+                  borderRadius: "var(--radius-md)",
+                  borderWidth: 1,
+                  borderStyle: "solid",
+                  borderColor: specFirstEnabled ? "var(--accent)" : "var(--border)",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  id="spec-first-toggle"
+                  checked={specFirstEnabled}
+                  onChange={(e) => setSpecFirstEnabled(e.target.checked)}
+                  style={{
+                    width: 16,
+                    height: 16,
+                    cursor: "pointer",
+                  }}
+                />
+                <label
+                  htmlFor="spec-first-toggle"
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: specFirstEnabled ? "var(--accent)" : "var(--text)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  📋 Spec-First Mode
+                  {specFirstEnabled && (
+                    <span
+                      style={{
+                        fontSize: 10,
+                        padding: "2px 6px",
+                        background: "var(--accent)",
+                        color: "var(--accent-foreground)",
+                        borderRadius: "var(--radius-sm)",
+                      }}
+                    >
+                      Active
+                    </span>
+                  )}
+                </label>
+                <span
+                  style={{
+                    fontSize: 10,
+                    color: "var(--muted)",
+                    marginLeft: "auto",
+                  }}
+                >
+                  Auto-generate specs for tasks
+                </span>
               </div>
             </>
           )}
