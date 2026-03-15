@@ -58,7 +58,7 @@ describe("gateway tailscale bind validation", () => {
         expect.arrayContaining([
           expect.objectContaining({
             path: "gateway.bind",
-            message: expect.stringContaining("gateway.bind must resolve to loopback"),
+            message: expect.stringContaining("gateway.bind must be loopback"),
           }),
         ]),
       );

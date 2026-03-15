@@ -205,6 +205,26 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     requireSourceLiteral: true,
   },
   {
+    path: ["gateway", "bind"],
+    message:
+      "gateway.bind must be loopback when gateway.tailscale.mode is serve or funnel (auto-migrated on load).",
+    match: (value, root) => {
+      if (typeof value !== "string" || value === "loopback" || value === "custom") {
+        return false;
+      }
+      const gateway = root.gateway;
+      if (!gateway || typeof gateway !== "object") {
+        return false;
+      }
+      const tailscale = (gateway as Record<string, unknown>).tailscale;
+      if (!tailscale || typeof tailscale !== "object") {
+        return false;
+      }
+      const mode = (tailscale as Record<string, unknown>).mode;
+      return mode === "serve" || mode === "funnel";
+    },
+  },
+  {
     path: ["heartbeat"],
     message:
       "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",

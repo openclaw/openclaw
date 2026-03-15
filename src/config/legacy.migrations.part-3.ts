@@ -381,4 +381,28 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       delete raw.identity;
     },
   },
+  {
+    id: "gateway.bind-tailscale-loopback",
+    describe: "Set gateway.bind to loopback when gateway.tailscale.mode is serve or funnel",
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway) {
+        return;
+      }
+      const tailscale = getRecord(gateway.tailscale);
+      const mode = typeof tailscale?.mode === "string" ? tailscale.mode : "off";
+      if (mode !== "serve" && mode !== "funnel") {
+        return;
+      }
+      const bind = typeof gateway.bind === "string" ? gateway.bind : "loopback";
+      if (bind === "loopback") {
+        return;
+      }
+      gateway.bind = "loopback";
+      raw.gateway = gateway;
+      changes.push(
+        `Changed gateway.bind from "${bind}" to "loopback" (required when gateway.tailscale.mode=${mode}).`,
+      );
+    },
+  },
 ];
