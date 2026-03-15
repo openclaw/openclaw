@@ -1,7 +1,7 @@
 import type { Writable } from "node:stream";
 import { readBestEffortConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { resolveIsNixMode } from "../../config/paths.js";
+import { resolveIsNixMode, resolveConfigPath } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
 import { describeGatewayServiceRestart } from "../../daemon/service.js";
@@ -218,7 +218,7 @@ export async function runServiceStart(params: {
     const configError = await getConfigValidationError();
     if (configError) {
       fail(
-        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor --fix" to auto-repair.\nIf still blocked, restore the backup: cp ${resolveConfigPath()}.bak ${resolveConfigPath()}`,
       );
       return;
     }
@@ -371,7 +371,7 @@ export async function runServiceRestart(params: {
     const configError = await getConfigValidationError();
     if (configError) {
       fail(
-        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor --fix" to auto-repair.\nIf still blocked, restore the backup: cp ${resolveConfigPath()}.bak ${resolveConfigPath()}`,
       );
       return false;
     }

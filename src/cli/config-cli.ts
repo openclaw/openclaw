@@ -100,7 +100,7 @@ function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
 }
 
 function formatDoctorHint(message: string): string {
-  return `Run \`${formatCliCommand("openclaw doctor")}\` ${message}`;
+  return `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${message}`;
 }
 
 function validatePathSegments(path: PathSegment[]): void {
