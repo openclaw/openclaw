@@ -139,6 +139,105 @@
 }
 
 /* =============================================
+   CODE BLOCKS & COPY BUTTON
+   ============================================= */
+
+.code-block-wrapper {
+  position: relative;
+  margin-top: 0.75em;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+:root[data-theme-mode="light"] .code-block-wrapper {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px 6px 12px;
+  background: rgba(0, 0, 0, 0.15);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+:root[data-theme-mode="light"] .code-block-header {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.code-block-lang {
+  text-transform: lowercase;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+.code-block-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.code-block-copy:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
+}
+
+:root[data-theme-mode="light"] .code-block-copy:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.code-block-copy:active {
+  transform: scale(0.92);
+}
+
+.code-block-copy .code-block-copy__idle {
+  display: flex;
+}
+
+.code-block-copy .code-block-copy__done {
+  display: none;
+  color: var(--ok);
+}
+
+.code-block-copy.copied .code-block-copy__idle {
+  display: none;
+}
+
+.code-block-copy.copied .code-block-copy__done {
+  display: flex;
+  animation: scale-in 0.2s var(--ease-out);
+}
+
+.code-block-wrapper pre {
+  margin-top: 0 !important;
+  background: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 10px 12px !important;
+}
+
+/* RTL Support for code blocks */
+.chat-text[dir="rtl"] .code-block-header {
+  flex-direction: row-reverse;
+}
+
+/* =============================================
    RTL (Right-to-Left) SUPPORT
    ============================================= */
 

@@ -8,6 +8,7 @@ const allowedTags = [
   "blockquote",
   "br",
   "button",
+  "circle",
   "code",
   "del",
   "details",
@@ -20,12 +21,17 @@ const allowedTags = [
   "hr",
   "i",
   "li",
+  "line",
   "ol",
   "p",
+  "path",
+  "polyline",
   "pre",
+  "rect",
   "span",
   "strong",
   "summary",
+  "svg",
   "table",
   "tbody",
   "td",
@@ -37,17 +43,37 @@ const allowedTags = [
 ];
 
 const allowedAttrs = [
+  "aria-label",
+  "alt",
   "class",
+  "cx",
+  "cy",
+  "d",
+  "data-code",
+  "fill",
+  "height",
   "href",
+  "r",
   "rel",
+  "rx",
+  "ry",
+  "src",
+  "start",
+  "stroke",
+  "stroke-linecap",
+  "stroke-linejoin",
+  "stroke-width",
   "target",
   "title",
-  "start",
-  "src",
-  "alt",
-  "data-code",
   "type",
-  "aria-label",
+  "viewBox",
+  "width",
+  "x",
+  "x1",
+  "x2",
+  "y",
+  "y1",
+  "y2",
 ];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
@@ -193,7 +219,9 @@ htmlEscapeRenderer.code = ({
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
+  const copyIcon = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" class="code-block-copy__icon"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>`;
+  const checkIcon = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" class="code-block-copy__icon"><path d="M20 6 9 17l-5-5" /></svg>`;
+  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">${copyIcon}</span><span class="code-block-copy__done">${checkIcon}</span></button>`;
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 
   const trimmed = text.trim();
