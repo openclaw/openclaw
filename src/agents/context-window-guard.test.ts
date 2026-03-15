@@ -142,6 +142,43 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
+  it("does not warn when context window is explicitly configured via modelsConfig", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434/v1",
+            apiKey: "x",
+            models: [
+              {
+                id: "qwen2.5:7b-2k",
+                name: "Qwen 2.5 7B 2k",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 2_048,
+                maxTokens: 2_048,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "ollama",
+      modelId: "qwen2.5:7b-2k",
+      modelContextWindow: undefined,
+      defaultTokens: 200_000,
+    });
+    const guard = evaluateContextWindowGuard({ info });
+    expect(info.source).toBe("modelsConfig");
+    expect(guard.tokens).toBe(2_048);
+    expect(guard.shouldWarn).toBe(false);
+    expect(guard.shouldBlock).toBe(true);
+  });
+
   it("exports thresholds as expected", () => {
     expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(16_000);
     expect(CONTEXT_WINDOW_WARN_BELOW_TOKENS).toBe(32_000);
