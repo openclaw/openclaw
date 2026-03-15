@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
+const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
@@ -14,6 +15,7 @@ vi.mock("./media.js", () => ({
 vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
+  sendStructuredCardFeishu: sendStructuredCardFeishuMock,
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -33,6 +35,7 @@ function resetOutboundMocks() {
   vi.clearAllMocks();
   sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
   sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
+  sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "structured_card_msg" });
   sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
 }
 
@@ -132,7 +135,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       accountId: "main",
     });
 
-    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "chat_1",
         text: "| a | b |\n| - | - |",
@@ -140,7 +143,9 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       }),
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "card_msg" }));
+    expect(result).toEqual(
+      expect.objectContaining({ channel: "feishu", messageId: "structured_card_msg" }),
+    );
   });
 
   it("forwards replyToId as replyToMessageId on sendText", async () => {
@@ -222,7 +227,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
       accountId: "main",
     });
 
-    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_reply_target",
       }),
