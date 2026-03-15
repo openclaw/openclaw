@@ -113,8 +113,21 @@ async function waitForPortFree(port: number, timeoutMs = 5_000): Promise<boolean
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const usage = await inspectPortUsage(port).catch(() => null);
-    if (usage?.status === "free" || usage?.status === "unknown") {
+    if (usage?.status === "free") {
       return true;
+    }
+    if (usage?.status === "unknown") {
+      // Port probe inconclusive — try binding to confirm availability.
+      const { createServer } = await import("node:net");
+      const available = await new Promise<boolean>((resolve) => {
+        const srv = createServer();
+        srv.once("error", () => resolve(false));
+        srv.once("listening", () => srv.close(() => resolve(true)));
+        srv.listen(port);
+      });
+      if (available) {
+        return true;
+      }
     }
     await sleep(250);
   }
@@ -235,6 +248,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           if (!json) {
             defaultRuntime.log(theme.warn(portStillBusyMsg));
           }
+          return {
+            result: "failed" as const,
+            message: `Gateway restart aborted: port ${restartPort} is still occupied.`,
+            warnings,
+          };
         }
 
         const retryRestart = await service.restart({ env: process.env, stdout });
