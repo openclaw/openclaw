@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import ai.openclaw.android.gateway.GatewayClientInfo
 import ai.openclaw.android.gateway.GatewayClientProfiles
+import ai.openclaw.android.gateway.GatewayConnectProfiles
 import ai.openclaw.wear.R
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -169,8 +171,8 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
         // Wait for the connect.challenge nonce, then send connect
         scope.launch {
           try {
-            val nonce = withTimeoutOrNull(5_000) { nonceDeferred.await() } ?: ""
-            sendConnect(webSocket, nonce, epoch)
+            withTimeoutOrNull(5_000) { nonceDeferred.await() }
+            sendConnect(webSocket, epoch)
           } catch (e: Throwable) {
             Log.w(TAG, "Connect handshake failed: ${e.message}")
             handleDisconnect("Connect handshake failed", epoch)
@@ -197,22 +199,8 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
     })
   }
 
-  private fun sendConnect(socket: WebSocket, nonce: String, epoch: Long) {
-    val connectParams = buildJsonObject {
-      put("minProtocol", JsonPrimitive(3))
-      put("maxProtocol", JsonPrimitive(3))
-      put("role", JsonPrimitive("operator"))
-      put("client", buildWearGatewayClientInfoJson(deviceId, resolveWearVersionName(context)))
-      if (config.token.isNotBlank()) {
-        put("auth", buildJsonObject {
-          put("token", JsonPrimitive(config.token))
-        })
-      } else if (config.password.isNotBlank()) {
-        put("auth", buildJsonObject {
-          put("password", JsonPrimitive(config.password))
-        })
-      }
-    }
+  private fun sendConnect(socket: WebSocket, epoch: Long) {
+    val connectParams = buildWearConnectParams(config, deviceId, resolveWearVersionName(context))
 
     val msg = buildJsonObject {
       put("type", JsonPrimitive("req"))
@@ -321,22 +309,46 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
   }
 }
 
-internal fun buildWearGatewayClientInfoJson(
+internal fun buildWearGatewayClientInfo(
+  deviceId: String,
+  versionName: String = "dev",
+): GatewayClientInfo {
+  return GatewayClientInfo(
+    id = GatewayClientProfiles.AndroidClientId,
+    displayName = GatewayClientProfiles.resolveWearDisplayName(),
+    version = versionName,
+    platform = GatewayClientProfiles.WearOsPlatform,
+    mode = GatewayClientProfiles.UiMode,
+    instanceId = deviceId,
+    deviceFamily = GatewayClientProfiles.WatchDeviceFamily,
+    modelIdentifier = GatewayClientProfiles.resolveModelIdentifier(),
+  )
+}
+
+internal fun buildWearConnectParams(
+  config: WearGatewayConfig,
   deviceId: String,
   versionName: String = "dev",
 ): JsonObject {
-  return buildJsonObject {
-    put("id", JsonPrimitive(GatewayClientProfiles.AndroidClientId))
-    put("version", JsonPrimitive(versionName))
-    put("platform", JsonPrimitive(GatewayClientProfiles.WearOsPlatform))
-    put("mode", JsonPrimitive(GatewayClientProfiles.UiMode))
-    put("displayName", JsonPrimitive(GatewayClientProfiles.resolveWearDisplayName()))
-    put("deviceFamily", JsonPrimitive(GatewayClientProfiles.WatchDeviceFamily))
-    put("instanceId", JsonPrimitive(deviceId))
-    GatewayClientProfiles.resolveModelIdentifier()?.let {
-      put("modelIdentifier", JsonPrimitive(it))
+  val authJson =
+    when {
+      config.token.isNotBlank() ->
+        buildJsonObject {
+          put("token", JsonPrimitive(config.token))
+        }
+      config.password.isNotBlank() ->
+        buildJsonObject {
+          put("password", JsonPrimitive(config.password))
+        }
+      else -> null
     }
-  }
+  return GatewayConnectProfiles.buildConnectParamsJson(
+    options =
+      GatewayConnectProfiles.buildOperatorConnectOptions(
+        client = buildWearGatewayClientInfo(deviceId = deviceId, versionName = versionName),
+      ),
+    authJson = authJson,
+  )
 }
 
 internal fun resolveWearVersionName(context: Context): String {

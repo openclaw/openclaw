@@ -1,5 +1,7 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.android.gateway.GatewayClientInfo
+import ai.openclaw.android.gateway.GatewayConnectOptions
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
