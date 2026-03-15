@@ -551,6 +551,33 @@ export async function dispatchCronDelivery(
     // an actual channel send instead of internal announce routing.
     const useDirectDelivery =
       params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
+
+    // Suppress NO_REPLY for direct delivery ONLY when the delivery has no
+    // structured content (e.g. thread-only delivery).  When structured payloads
+    // (media/channelData) are present, proceed with delivery even if the text
+    // field is NO_REPLY — the structured content should still be sent.
+    if (
+      useDirectDelivery &&
+      !params.deliveryPayloadHasStructuredContent &&
+      synthesizedText?.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()
+    ) {
+      return {
+        result: params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          delivered: true,
+          ...params.telemetry,
+        }),
+        delivered,
+        deliveryAttempted,
+        summary,
+        outputText,
+        synthesizedText,
+        deliveryPayloads,
+      };
+    }
+
     if (useDirectDelivery) {
       const directResult = await deliverViaDirect(params.resolvedDelivery);
       if (directResult) {
@@ -566,6 +593,30 @@ export async function dispatchCronDelivery(
       }
     } else {
       const finalizedTextResult = await finalizeTextDelivery(params.resolvedDelivery);
+      // After finalization (which waits for descendants), suppress NO_REPLY
+      // only when finalization completed actual delivery (delivered=true).
+      // Skip when descendants are still active (deliveryAttempted-only result)
+      // so the flow can continue to announce routing.
+      if (
+        finalizedTextResult?.delivered &&
+        synthesizedText?.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()
+      ) {
+        return {
+          result: params.withRunSession({
+            status: "ok",
+            summary,
+            outputText,
+            delivered: true,
+            ...params.telemetry,
+          }),
+          delivered,
+          deliveryAttempted,
+          summary,
+          outputText,
+          synthesizedText,
+          deliveryPayloads,
+        };
+      }
       if (finalizedTextResult) {
         return {
           result: finalizedTextResult,
