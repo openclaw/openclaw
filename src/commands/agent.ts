@@ -493,6 +493,7 @@ function runAgentAttempt(params: {
     extraSystemPrompt: params.opts.extraSystemPrompt,
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
+    disableMessageTool: params.opts.disableMessageTool,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     onAgentEvent: params.onAgentEvent,

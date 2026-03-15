@@ -98,6 +98,7 @@ export const AgentParamsSchema = Type.Object(
     inputProvenance: Type.Optional(InputProvenanceSchema),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    disableMessageTool: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
