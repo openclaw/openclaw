@@ -549,9 +549,12 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
-  // Strip thinking blocks with empty/invalid signatures before replay.
-  // Bedrock can return thinking blocks with empty thinkingSignature; these
-  // cause "Invalid signature in thinking block" API errors on subsequent turns.
+  // Strip thinking blocks with obviously invalid (empty/missing) signatures
+  // before replay. Bedrock can return thinking blocks with empty
+  // thinkingSignature; these cause "Invalid signature in thinking block" API
+  // errors on subsequent turns. This only catches clearly broken signatures;
+  // corrupt-but-non-empty signatures are handled by the retry logic in run.ts
+  // which catches the API error and forces dropThinkingBlocks on the next attempt.
   // This runs before dropThinkingBlocks so it also catches cases where
   // preserveSignatures is true (Anthropic/Bedrock providers).
   const validatedSignatures = policy.preserveSignatures

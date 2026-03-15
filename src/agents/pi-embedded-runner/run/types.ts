@@ -30,6 +30,13 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  /**
+   * When true, force-drop ALL thinking blocks from the session transcript
+   * before sending to the API. Used as a recovery mechanism after an
+   * "Invalid signature in thinking block" API error — the retry strips all
+   * thinking so corrupt signatures cannot cause further failures.
+   */
+  forceDropThinkingBlocks?: boolean;
 };
 
 export type EmbeddedRunAttemptResult = {

@@ -13,21 +13,19 @@ export function isAssistantMessageWithContent(message: AgentMessage): message is
 }
 
 /**
- * Minimum length for a valid Anthropic thinking block signature.
- * Real signatures from Claude are 356-2344+ characters. An empty string
- * or very short value is always invalid and will cause API rejection.
- */
-const MIN_VALID_SIGNATURE_LENGTH = 10;
-
-/**
- * Strip thinking blocks that have empty or invalid `thinkingSignature` from
+ * Strip thinking blocks that have obviously invalid `thinkingSignature` from
  * assistant messages. This prevents Anthropic API rejection errors like
  * "Invalid signature in thinking block" caused by empty signatures that were
  * persisted from Bedrock streaming responses.
  *
+ * Only strips thinking blocks with missing, empty, or non-string signatures —
+ * the clearly broken cases. Does NOT attempt length-based heuristics to guess
+ * whether a signature is valid; the API itself is the authoritative validator.
+ * If a corrupt but non-empty signature slips through, the caller should catch
+ * the resulting API error and fall back to `dropThinkingBlocks` (see run.ts).
+ *
  * Unlike `dropThinkingBlocks` which removes ALL thinking blocks, this function
- * only removes thinking blocks with missing/invalid signatures while preserving
- * validly-signed ones.
+ * preserves thinking blocks that have a non-empty string signature.
  *
  * Returns the original array reference when nothing was changed.
  */
@@ -51,16 +49,18 @@ export function stripInvalidThinkingSignatures(messages: AgentMessage[]): AgentM
         nextContent.push(block);
         continue;
       }
-      // Thinking block — validate its signature
+      // Thinking block — check for obviously invalid signatures.
+      // A valid signature must be a non-empty string. We intentionally avoid
+      // length thresholds; the API is the source of truth for signature validity.
       const sig = rec.thinkingSignature;
-      if (typeof sig === "string" && sig.length >= MIN_VALID_SIGNATURE_LENGTH) {
-        // Valid signature, keep block as-is
+      if (typeof sig === "string" && sig.length > 0) {
+        // Has a non-empty signature — keep block as-is and let the API validate.
         nextContent.push(block);
         continue;
       }
-      // Missing or invalid signature — drop the thinking block to prevent
-      // API rejection on replay. The thinking content is already captured
-      // in the session JSONL for debugging purposes.
+      // Missing, empty, or non-string signature — drop the thinking block to
+      // prevent API rejection on replay. The thinking content is already
+      // captured in the session JSONL for debugging purposes.
       touched = true;
       changed = true;
     }
@@ -74,6 +74,14 @@ export function stripInvalidThinkingSignatures(messages: AgentMessage[]): AgentM
     out.push({ ...msg, content });
   }
   return touched ? out : messages;
+}
+
+/**
+ * Returns true if the given error message indicates an Anthropic
+ * "Invalid signature in thinking block" rejection.
+ */
+export function isInvalidThinkingSignatureError(errorText: string): boolean {
+  return /invalid signature in thinking block/i.test(errorText);
 }
 
 /**

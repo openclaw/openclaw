@@ -4,6 +4,7 @@ import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   dropThinkingBlocks,
   isAssistantMessageWithContent,
+  isInvalidThinkingSignatureError,
   stripInvalidThinkingSignatures,
 } from "./thinking.js";
 
@@ -136,19 +137,17 @@ describe("stripInvalidThinkingSignatures", () => {
       }),
     ];
 
+    // Non-empty signatures are kept — the API is the source of truth for validity.
+    // stripInvalidThinkingSignatures only catches empty/missing signatures.
     const result = stripInvalidThinkingSignatures(messages);
-    expect(result).not.toBe(messages);
-    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
-    expect(assistant.content).toEqual([{ type: "text", text: "answer" }]);
+    expect(result).toBe(messages);
   });
 
   it("preserves assistant turn when all thinking blocks are invalid", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
-        content: [
-          { type: "thinking", thinking: "reasoning", thinkingSignature: "" },
-        ],
+        content: [{ type: "thinking", thinking: "reasoning", thinkingSignature: "" }],
       }),
     ];
 
@@ -158,7 +157,7 @@ describe("stripInvalidThinkingSignatures", () => {
   });
 
   it("keeps valid thinking blocks while stripping invalid ones in same message", () => {
-    const validSig = "b".repeat(100);
+    const validSig = "b".repeat(356); // Real signatures are 356-2344+ chars
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
@@ -179,11 +178,26 @@ describe("stripInvalidThinkingSignatures", () => {
   });
 
   it("does not touch non-assistant messages", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "hello" }),
-    ];
+    const messages: AgentMessage[] = [castAgentMessage({ role: "user", content: "hello" })];
 
     const result = stripInvalidThinkingSignatures(messages);
     expect(result).toBe(messages);
+  });
+});
+
+describe("isInvalidThinkingSignatureError", () => {
+  it("matches the Anthropic invalid signature error message", () => {
+    expect(isInvalidThinkingSignatureError("Invalid signature in thinking block")).toBe(true);
+    expect(
+      isInvalidThinkingSignatureError(
+        'Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Invalid signature in thinking block"}}',
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match unrelated errors", () => {
+    expect(isInvalidThinkingSignatureError("context overflow")).toBe(false);
+    expect(isInvalidThinkingSignatureError("Invalid signature")).toBe(false);
+    expect(isInvalidThinkingSignatureError("")).toBe(false);
   });
 });
