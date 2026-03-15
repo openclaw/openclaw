@@ -47,6 +47,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   sessionKey?: string;
   storePath?: string;
   isNewSession: boolean;
+  overrideProfileId?: string;
 }): Promise<string | undefined> {
   const {
     cfg,
@@ -58,6 +59,10 @@ export async function resolveSessionAuthProfileOverride(params: {
     storePath,
     isNewSession,
   } = params;
+  const overrideProfileId = params.overrideProfileId?.trim();
+  if (overrideProfileId) {
+    return overrideProfileId;
+  }
   if (!sessionEntry || !sessionStore || !sessionKey) {
     return sessionEntry?.authProfileOverride;
   }

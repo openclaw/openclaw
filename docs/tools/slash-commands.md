@@ -16,7 +16,8 @@ There are two related systems:
 - **Commands**: standalone `/...` messages.
 - **Directives**: `/think`, `/fast`, `/verbose`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue`.
   - Directives are stripped from the message before the model sees it.
-  - In normal chat messages (not directive-only), they are treated as “inline hints” and do **not** persist session settings.
+  - In normal chat messages (not directive-only), `/model <provider/model> <message>` acts as a one-shot inline hint for that message and does **not** persist session settings.
+  - Other directives may still require directive-only form unless otherwise documented.
   - In directive-only messages (the message contains only directives), they persist to the session and reply with an acknowledgement.
   - Directives are only applied for **authorized senders**. If `commands.allowFrom` is set, it is the only
     allowlist used; otherwise authorization comes from channel allowlists/pairing plus `commands.useAccessGroups`.

@@ -277,6 +277,7 @@ export async function getReplyFromConfig(
     directiveAck,
     perMessageQueueMode,
     perMessageQueueOptions,
+    perMessageAuthProfileId,
   } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
@@ -387,6 +388,7 @@ export async function getReplyFromConfig(
     model,
     perMessageQueueMode,
     perMessageQueueOptions,
+    perMessageAuthProfileId,
     typing,
     opts: resolvedOpts,
     defaultProvider,

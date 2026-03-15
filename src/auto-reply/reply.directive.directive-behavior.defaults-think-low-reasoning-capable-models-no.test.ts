@@ -17,16 +17,6 @@ import {
 import { runModelDirectiveText } from "./reply.directive.directive-behavior.model-directive-test-utils.js";
 import { getReplyFromConfig } from "./reply.js";
 
-function makeDefaultModelConfig(home: string) {
-  return makeWhatsAppDirectiveConfig(home, {
-    model: { primary: "anthropic/claude-opus-4-5" },
-    models: {
-      "anthropic/claude-opus-4-5": {},
-      "openai/gpt-4.1-mini": {},
-    },
-  });
-}
-
 async function runReplyToCurrentCase(home: string, text: string) {
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue(makeEmbeddedTextResult(text));
 
@@ -264,29 +254,67 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("ignores inline /model and /think directives while still running agent content", async () => {
+  it("applies inline /model for one message without persisting session override", async () => {
     await withTempHome(async (home) => {
+      const storePath = sessionStorePath(home);
+      const cfg = makeWhatsAppDirectiveConfig(
+        home,
+        {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-4.1-mini": {},
+          },
+        },
+        { session: { store: storePath } },
+      );
       mockEmbeddedTextResult("done");
 
-      const inlineModelRes = await getReplyFromConfig(
+      const oneShotModelRes = await getReplyFromConfig(
         {
-          Body: "please sync /model openai/gpt-4.1-mini now",
+          Body: "/model openai/gpt-4.1-mini please sync now",
+          From: "+1004",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+
+      const texts = replyTexts(oneShotModelRes);
+      expect(texts).toContain("done");
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      expect(call?.provider).toBe("openai");
+      expect(call?.model).toBe("gpt-4.1-mini");
+      const storeAfterOneShot = loadSessionStore(storePath);
+      const oneShotEntry = Object.values(storeAfterOneShot)[0];
+      expect(oneShotEntry?.providerOverride).toBeUndefined();
+      expect(oneShotEntry?.modelOverride).toBeUndefined();
+      vi.mocked(runEmbeddedPiAgent).mockClear();
+
+      mockEmbeddedTextResult("done");
+      const followupRes = await getReplyFromConfig(
+        {
+          Body: "hello again",
           From: "+1004",
           To: "+2000",
         },
         {},
-        makeDefaultModelConfig(home),
+        cfg,
       );
 
-      const texts = replyTexts(inlineModelRes);
-      expect(texts).toContain("done");
+      expect(replyTexts(followupRes)).toContain("done");
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
-      expect(call?.provider).toBe("anthropic");
-      expect(call?.model).toBe("claude-opus-4-5");
-      vi.mocked(runEmbeddedPiAgent).mockClear();
-
+      const followupCall = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      expect(followupCall?.provider).toBe("anthropic");
+      expect(followupCall?.model).toBe("claude-opus-4-5");
+    });
+  });
+  it("still ignores inline /think directives while running agent content", async () => {
+    await withTempHome(async (home) => {
       mockEmbeddedTextResult("done");
+
       const inlineThinkRes = await getReplyFromConfig(
         {
           Body: "please sync /think:high now",
