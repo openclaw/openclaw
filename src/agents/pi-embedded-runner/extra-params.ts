@@ -33,6 +33,7 @@ import {
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
+import { createZaiToolStreamWrapper } from "./zai-stream-wrappers.js";
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -209,39 +210,6 @@ function createGoogleThinkingPayloadWrapper(
           });
         }
         return onPayload?.(payload, model);
-      },
-    });
-  };
-}
-
-/**
- * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
- *
- * Z.AI's API supports the `tool_stream` parameter to enable real-time streaming
- * of tool call arguments and reasoning content. When enabled, the API returns
- * progressive tool_call deltas, allowing users to see tool execution in real-time.
- *
- * @see https://docs.z.ai/api-reference#streaming
- */
-function createZaiToolStreamWrapper(
-  baseStreamFn: StreamFn | undefined,
-  enabled: boolean,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    if (!enabled) {
-      return underlying(model, context, options);
-    }
-
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          // Inject tool_stream: true for Z.AI API
-          (payload as Record<string, unknown>).tool_stream = true;
-        }
-        return originalOnPayload?.(payload, model);
       },
     });
   };

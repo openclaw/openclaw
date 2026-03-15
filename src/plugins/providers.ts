@@ -15,11 +15,14 @@ const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "kimi-coding",
   "minimax",
   "minimax-portal-auth",
+  "mistral",
   "modelstudio",
   "moonshot",
   "nvidia",
   "ollama",
   "openai-codex",
+  "opencode",
+  "opencode-go",
   "openrouter",
   "qianfan",
   "qwen-portal-auth",
@@ -31,6 +34,7 @@ const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "volcengine",
   "vllm",
   "xiaomi",
+  "zai",
 ] as const;
 
 function withBundledProviderAllowlistCompat(
