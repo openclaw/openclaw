@@ -43,6 +43,41 @@ let timer: NodeJS.Timeout | null = null;
 let timerDueAt: number | null = null;
 let timerKind: WakeTimerKind | null = null;
 
+// Circuit breaker: track consecutive failures *per wake target* to prevent
+// retry storms. After MAX_CONSECUTIVE_FAILURES for a given target, stop
+// retrying that target for BREAKER_COOLDOWN_MS. Other targets are unaffected.
+// The breaker auto-resets (half-open) after the cooldown so heartbeats
+// self-heal once dependencies recover, without requiring a lifecycle restart.
+type BreakerState = { failures: number; trippedAt: number };
+const breakerByTarget = new Map<string, BreakerState>();
+const MAX_CONSECUTIVE_FAILURES = 5;
+const MAX_RETRY_BACKOFF_MS = 60_000;
+const BREAKER_COOLDOWN_MS = 5 * 60_000; // 5 minutes
+
+function getBreakerState(targetKey: string): BreakerState {
+  let state = breakerByTarget.get(targetKey);
+  if (!state) {
+    state = { failures: 0, trippedAt: 0 };
+    breakerByTarget.set(targetKey, state);
+  }
+  return state;
+}
+
+/** Check if a target's breaker is tripped (open). Returns true if the target should be skipped. */
+function isBreakerOpen(targetKey: string): boolean {
+  const state = breakerByTarget.get(targetKey);
+  if (!state || state.failures < MAX_CONSECUTIVE_FAILURES) {
+    return false;
+  }
+  const elapsed = Date.now() - state.trippedAt;
+  if (elapsed >= BREAKER_COOLDOWN_MS) {
+    // Half-open: allow one probe attempt after the cooldown.
+    state.failures = MAX_CONSECUTIVE_FAILURES - 1;
+    return false;
+  }
+  return true;
+}
+
 const DEFAULT_COALESCE_MS = 250;
 const DEFAULT_RETRY_MS = 1_000;
 const REASON_PRIORITY = {
@@ -64,6 +99,12 @@ function resolveReasonPriority(reason: string): number {
     return REASON_PRIORITY.ACTION;
   }
   return REASON_PRIORITY.DEFAULT;
+}
+
+/** Exponential backoff capped at MAX_RETRY_BACKOFF_MS. */
+function computeRetryBackoffMs(failures: number): number {
+  // 1s, 2s, 4s, 8s, 16s, 32s, 60s, 60s, ...
+  return Math.min(DEFAULT_RETRY_MS * Math.pow(2, Math.max(0, failures - 1)), MAX_RETRY_BACKOFF_MS);
 }
 
 function normalizeWakeReason(reason?: string): string {
@@ -122,6 +163,10 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
   if (timer) {
     // Keep retry cooldown as a hard minimum delay. This prevents the
     // finally-path reschedule (often delay=0) from collapsing backoff.
+    // NOTE: This means a failing target's retry timer can delay wakes for
+    // other targets by up to MAX_RETRY_BACKOFF_MS. The per-target breaker
+    // bounds this: after MAX_CONSECUTIVE_FAILURES the target is open-circuited
+    // and stops scheduling retries, so the delay window is finite.
     if (timerKind === "retry") {
       return;
     }
@@ -152,18 +197,45 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
       return;
     }
 
-    const pendingBatch = Array.from(pendingWakes.values());
+    // Build pending batch, filtering out targets whose breaker is open.
+    const pendingBatch: PendingWakeReason[] = [];
+    for (const [targetKey, wake] of pendingWakes) {
+      if (isBreakerOpen(targetKey)) {
+        // Target's breaker is tripped — drop this wake silently.
+        continue;
+      }
+      pendingBatch.push(wake);
+    }
     pendingWakes.clear();
+    if (pendingBatch.length === 0) {
+      return;
+    }
     running = true;
     try {
       for (const pendingWake of pendingBatch) {
+        const targetKey = getWakeTargetKey(pendingWake);
+        const breaker = getBreakerState(targetKey);
         const wakeOpts = {
           reason: pendingWake.reason ?? undefined,
           ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
           ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
         };
         const res = await active(wakeOpts);
-        if (res.status === "skipped" && res.reason === "requests-in-flight") {
+        if (res.status === "failed") {
+          breaker.failures += 1;
+          if (breaker.failures >= MAX_CONSECUTIVE_FAILURES) {
+            // Trip the breaker for this target — skip remaining retries.
+            breaker.trippedAt = Date.now();
+            continue;
+          }
+          const backoffMs = computeRetryBackoffMs(breaker.failures);
+          queuePendingWakeReason({
+            reason: pendingWake.reason ?? "retry",
+            agentId: pendingWake.agentId,
+            sessionKey: pendingWake.sessionKey,
+          });
+          schedule(backoffMs, "retry");
+        } else if (res.status === "skipped" && res.reason === "requests-in-flight") {
           // The main lane is busy; retry this wake target soon.
           queuePendingWakeReason({
             reason: pendingWake.reason ?? "retry",
@@ -171,18 +243,34 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
             sessionKey: pendingWake.sessionKey,
           });
           schedule(DEFAULT_RETRY_MS, "retry");
+        } else {
+          // Success or benign skip — evict the breaker entry to bound map size.
+          breakerByTarget.delete(targetKey);
         }
       }
     } catch {
-      // Error is already logged by the heartbeat runner; schedule a retry.
+      // Error is already logged by the heartbeat runner; apply backoff
+      // to all targets in the batch since we don't know which one threw.
+      let maxBackoffMs = 0;
       for (const pendingWake of pendingBatch) {
-        queuePendingWakeReason({
-          reason: pendingWake.reason ?? "retry",
-          agentId: pendingWake.agentId,
-          sessionKey: pendingWake.sessionKey,
-        });
+        const targetKey = getWakeTargetKey(pendingWake);
+        const breaker = getBreakerState(targetKey);
+        breaker.failures += 1;
+        if (breaker.failures >= MAX_CONSECUTIVE_FAILURES) {
+          breaker.trippedAt = Date.now();
+        } else {
+          const backoffMs = computeRetryBackoffMs(breaker.failures);
+          maxBackoffMs = Math.max(maxBackoffMs, backoffMs);
+          queuePendingWakeReason({
+            reason: pendingWake.reason ?? "retry",
+            agentId: pendingWake.agentId,
+            sessionKey: pendingWake.sessionKey,
+          });
+        }
       }
-      schedule(DEFAULT_RETRY_MS, "retry");
+      if (maxBackoffMs > 0) {
+        schedule(maxBackoffMs, "retry");
+      }
     } finally {
       running = false;
       if (pendingWakes.size > 0 || scheduled) {
@@ -219,6 +307,8 @@ export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null): () =
     // `scheduled === true` can cause spurious immediate re-runs.
     running = false;
     scheduled = false;
+    // Reset the circuit breaker so a fresh lifecycle starts clean.
+    breakerByTarget.clear();
   }
   if (handler && pendingWakes.size > 0) {
     schedule(DEFAULT_COALESCE_MS, "normal");
@@ -267,6 +357,7 @@ export function resetHeartbeatWakeStateForTests() {
   pendingWakes.clear();
   scheduled = false;
   running = false;
+  breakerByTarget.clear();
   handlerGeneration += 1;
   handler = null;
 }
