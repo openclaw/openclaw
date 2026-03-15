@@ -1,17 +1,73 @@
+import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type {
+  PluginChannelRegistration,
   PluginCliRegistration,
   PluginCommandRegistration,
+  PluginHttpRouteRegistration,
   PluginRecord,
   PluginRegistry,
+  PluginProviderRegistration,
   PluginServiceRegistration,
   PluginToolRegistration,
 } from "../plugins/registry.js";
 import type {
+  ExtensionHostChannelRegistration,
   ExtensionHostCliRegistration,
   ExtensionHostCommandRegistration,
+  ExtensionHostHttpRouteRegistration,
+  ExtensionHostProviderRegistration,
   ExtensionHostServiceRegistration,
   ExtensionHostToolRegistration,
 } from "./runtime-registrations.js";
+
+export function addExtensionGatewayMethodRegistration(params: {
+  registry: PluginRegistry;
+  record: PluginRecord;
+  method: string;
+  handler: GatewayRequestHandler;
+}): void {
+  params.registry.gatewayHandlers[params.method] = params.handler;
+  params.record.gatewayMethods.push(params.method);
+}
+
+export function addExtensionHttpRouteRegistration(params: {
+  registry: PluginRegistry;
+  record: PluginRecord;
+  entry: ExtensionHostHttpRouteRegistration;
+  action: "replace" | "append";
+  existingIndex?: number;
+}): void {
+  if (params.action === "replace") {
+    if (params.existingIndex === undefined) {
+      return;
+    }
+    params.registry.httpRoutes[params.existingIndex] = params.entry as PluginHttpRouteRegistration;
+    return;
+  }
+
+  params.record.httpRoutes += 1;
+  params.registry.httpRoutes.push(params.entry as PluginHttpRouteRegistration);
+}
+
+export function addExtensionChannelRegistration(params: {
+  registry: PluginRegistry;
+  record: PluginRecord;
+  channelId: string;
+  entry: ExtensionHostChannelRegistration;
+}): void {
+  params.record.channelIds.push(params.channelId);
+  params.registry.channels.push(params.entry as PluginChannelRegistration);
+}
+
+export function addExtensionProviderRegistration(params: {
+  registry: PluginRegistry;
+  record: PluginRecord;
+  providerId: string;
+  entry: ExtensionHostProviderRegistration;
+}): void {
+  params.record.providerIds.push(params.providerId);
+  params.registry.providers.push(params.entry as PluginProviderRegistration);
+}
 
 export function addExtensionToolRegistration(params: {
   registry: PluginRegistry;

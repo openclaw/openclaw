@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry, type PluginRecord } from "../plugins/registry.js";
 import {
+  addExtensionChannelRegistration,
   addExtensionCliRegistration,
   addExtensionCommandRegistration,
+  addExtensionGatewayMethodRegistration,
+  addExtensionHttpRouteRegistration,
+  addExtensionProviderRegistration,
   addExtensionServiceRegistration,
   addExtensionToolRegistration,
 } from "./registry-writes.js";
@@ -93,5 +97,59 @@ describe("extension host registry writes", () => {
     expect(registry.cliRegistrars).toHaveLength(1);
     expect(registry.services).toHaveLength(1);
     expect(registry.commands).toHaveLength(1);
+  });
+
+  it("writes gateway, http, channel, and provider registrations through host helpers", () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createRecord();
+
+    addExtensionGatewayMethodRegistration({
+      registry,
+      record,
+      method: "demo.method",
+      handler: (() => {}) as never,
+    });
+    addExtensionHttpRouteRegistration({
+      registry,
+      record,
+      action: "append",
+      entry: {
+        pluginId: record.id,
+        path: "/demo",
+        handler: (() => {}) as never,
+        auth: "optional",
+        match: "exact",
+        source: record.source,
+      },
+    });
+    addExtensionChannelRegistration({
+      registry,
+      record,
+      channelId: "demo-channel",
+      entry: {
+        pluginId: record.id,
+        plugin: {} as never,
+        source: record.source,
+      },
+    });
+    addExtensionProviderRegistration({
+      registry,
+      record,
+      providerId: "demo-provider",
+      entry: {
+        pluginId: record.id,
+        provider: {} as never,
+        source: record.source,
+      },
+    });
+
+    expect(record.gatewayMethods).toEqual(["demo.method"]);
+    expect(record.httpRoutes).toBe(1);
+    expect(record.channelIds).toEqual(["demo-channel"]);
+    expect(record.providerIds).toEqual(["demo-provider"]);
+    expect(registry.gatewayHandlers["demo.method"]).toBeTypeOf("function");
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.channels).toHaveLength(1);
+    expect(registry.providers).toHaveLength(1);
   });
 });
