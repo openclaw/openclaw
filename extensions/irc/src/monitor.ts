@@ -136,6 +136,28 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${client.nick}`,
   );
 
+  // Keep the provider alive until the connection drops or the abort signal fires.
+  // Without this, the async function resolves immediately after connecting,
+  // causing the gateway framework to interpret it as "provider exited" and
+  // trigger an auto-restart loop.
+  await new Promise<void>((resolve) => {
+    const check = () => {
+      if (!client || !client.isReady()) {
+        clearInterval(timer);
+        resolve();
+      }
+    };
+    const timer = setInterval(check, 2000);
+    opts.abortSignal?.addEventListener(
+      "abort",
+      () => {
+        clearInterval(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+
   return {
     stop: () => {
       client?.quit("shutdown");
