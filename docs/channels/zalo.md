@@ -7,7 +7,7 @@ title: "Zalo"
 
 # Zalo (Bot API)
 
-Status: experimental. DMs are supported. For the currently tested Zalo Bot Creator / Marketplace bot flow, groups are not currently available.
+Status: experimental. DMs are supported. The [Capabilities](#capabilities) section below reflects current Marketplace-bot behavior.
 
 ## Plugin required
 
@@ -52,13 +52,13 @@ Minimal config:
 Zalo is a Vietnam-focused messaging app; its Bot API lets the Gateway run a bot for 1:1 conversations.
 It is a good fit for support or notifications where you want deterministic routing back to Zalo.
 
-This page reflects the currently verified OpenClaw behavior for **Zalo Bot Creator / Marketplace bots**.
+This page reflects current OpenClaw behavior for **Zalo Bot Creator / Marketplace bots**.
 **Zalo Official Account (OA) bots** are a different Zalo product surface and may behave differently.
 
 - A Zalo Bot API channel owned by the Gateway.
 - Deterministic routing: replies go back to Zalo; the model never chooses channels.
 - DMs share the agent's main session.
-- For the currently tested Marketplace bot flow, groups are not currently available because the bot could not be added to a group in testing.
+- The [Capabilities](#capabilities) section below shows current Marketplace-bot support.
 
 ## Setup (fast path)
 
@@ -66,7 +66,7 @@ This page reflects the currently verified OpenClaw behavior for **Zalo Bot Creat
 
 1. Go to [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) and sign in.
 2. Create a new bot and configure its settings.
-3. Copy the full bot token (typically `numeric_id:secret`). In current testing, the usable runtime token appeared in the bot's welcome message after creation.
+3. Copy the full bot token (typically `numeric_id:secret`). For Marketplace bots, the usable runtime token may appear in the bot's welcome message after creation.
 
 ### 2) Configure the token (env or config)
 
@@ -88,7 +88,7 @@ Example:
 }
 ```
 
-If you later move to a Zalo bot surface where groups are actually available, you can add group-specific config such as `groupPolicy` and `groupAllowFrom` explicitly.
+If you later move to a Zalo bot surface where groups are available, you can add group-specific config such as `groupPolicy` and `groupAllowFrom` explicitly. For current Marketplace-bot behavior, see [Capabilities](#capabilities).
 
 Env option: `ZALO_BOT_TOKEN=...` (works for the default account only).
 
@@ -122,9 +122,9 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
 
 ## Access control (Groups)
 
-For the currently tested **Zalo Bot Creator / Marketplace bot** flow, group support was not available in practice because the bot could not be added to a group at all.
+For **Zalo Bot Creator / Marketplace bots**, group support was not available in practice because the bot could not be added to a group at all.
 
-That means the group-related config keys below exist in the schema, but were not usable in current Marketplace-bot testing:
+That means the group-related config keys below exist in the schema, but were not usable for Marketplace bots:
 
 - `channels.zalo.groupPolicy` controls group inbound handling: `open | allowlist | disabled`.
 - `channels.zalo.groupAllowFrom` restricts which sender IDs can trigger the bot in groups.
@@ -155,32 +155,36 @@ If you are using a different Zalo bot product surface and have verified working 
 
 ## Supported message types
 
+For a quick support snapshot, see [Capabilities](#capabilities). The notes below add detail where the behavior needs extra context.
+
 - **Text messages**: Full support with 2000 character chunking.
 - **Plain URLs in text**: Behave like normal text input.
-- **Link previews / rich link cards**: Did not reliably trigger a reply in current Marketplace-bot testing.
-- **Image messages**: Inbound image handling was not reliable in current Marketplace-bot testing (typing indicator without a final reply), so verify in your environment before relying on it.
-- **Stickers**: No normal agent response in current testing.
-- **Voice notes / audio files / video / generic file attachments**: No normal agent response in current testing.
+- **Link previews / rich link cards**: See the Marketplace-bot status in [Capabilities](#capabilities); they did not reliably trigger a reply.
+- **Image messages**: See the Marketplace-bot status in [Capabilities](#capabilities); inbound image handling was unreliable (typing indicator without a final reply).
+- **Stickers**: See the Marketplace-bot status in [Capabilities](#capabilities).
+- **Voice notes / audio files / video / generic file attachments**: See the Marketplace-bot status in [Capabilities](#capabilities).
 - **Unsupported types**: Logged (for example, messages from protected users).
 
 ## Capabilities
 
-| Feature                     | Status                                                               |
-| --------------------------- | -------------------------------------------------------------------- |
-| Direct messages             | ✅ Supported                                                         |
-| Groups                      | ❌ Not available in current Marketplace-bot testing                  |
-| Media (inbound images)      | ⚠️ Limited / verify in your environment                              |
-| Media (outbound images)     | ⚠️ Not re-tested in current Marketplace-bot testing                  |
-| Plain URLs in text          | ✅ Supported                                                         |
-| Link previews               | ⚠️ Unreliable / no reply observed in current Marketplace-bot testing |
-| Reactions                   | ❌ Not supported                                                     |
-| Stickers                    | ⚠️ No normal agent reply observed in current Marketplace-bot testing |
-| Voice notes / audio / video | ⚠️ No normal agent reply observed in current Marketplace-bot testing |
-| File attachments            | ⚠️ No normal agent reply observed in current Marketplace-bot testing |
-| Threads                     | ❌ Not supported                                                     |
-| Polls                       | ❌ Not supported                                                     |
-| Native commands             | ❌ Not supported                                                     |
-| Streaming                   | ⚠️ Blocked (2000 char limit)                                         |
+This table summarizes current **Zalo Bot Creator / Marketplace bot** behavior in OpenClaw.
+
+| Feature                     | Status                                  |
+| --------------------------- | --------------------------------------- |
+| Direct messages             | ✅ Supported                            |
+| Groups                      | ❌ Not available for Marketplace bots   |
+| Media (inbound images)      | ⚠️ Limited / verify in your environment |
+| Media (outbound images)     | ⚠️ Not re-tested for Marketplace bots   |
+| Plain URLs in text          | ✅ Supported                            |
+| Link previews               | ⚠️ Unreliable for Marketplace bots      |
+| Reactions                   | ❌ Not supported                        |
+| Stickers                    | ⚠️ No agent reply for Marketplace bots  |
+| Voice notes / audio / video | ⚠️ No agent reply for Marketplace bots  |
+| File attachments            | ⚠️ No agent reply for Marketplace bots  |
+| Threads                     | ❌ Not supported                        |
+| Polls                       | ❌ Not supported                        |
+| Native commands             | ❌ Not supported                        |
+| Streaming                   | ⚠️ Blocked (2000 char limit)            |
 
 ## Delivery targets (CLI/cron)
 
@@ -215,7 +219,7 @@ Provider options:
 - `channels.zalo.tokenFile`: read token from a regular file path. Symlinks are rejected.
 - `channels.zalo.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.zalo.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`. The wizard will ask for numeric IDs.
-- `channels.zalo.groupPolicy`: `open | allowlist | disabled` (default: allowlist). Present in config, but not usable for the current Marketplace-bot flow when the bot cannot be added to groups.
+- `channels.zalo.groupPolicy`: `open | allowlist | disabled` (default: allowlist). Present in config; see [Capabilities](#capabilities) and [Access control (Groups)](#access-control-groups) for current Marketplace-bot behavior.
 - `channels.zalo.groupAllowFrom`: group sender allowlist (user IDs). Falls back to `allowFrom` when unset.
 - `channels.zalo.mediaMaxMb`: inbound/outbound media cap (MB, default 5).
 - `channels.zalo.webhookUrl`: enable webhook mode (HTTPS required).
@@ -231,10 +235,9 @@ Multi-account options:
 - `channels.zalo.accounts.<id>.enabled`: enable/disable account.
 - `channels.zalo.accounts.<id>.dmPolicy`: per-account DM policy.
 - `channels.zalo.accounts.<id>.allowFrom`: per-account allowlist.
-- `channels.zalo.accounts.<id>.groupPolicy`: per-account group policy. Present in config, but not usable for the current Marketplace-bot flow when the bot cannot be added to groups.
+- `channels.zalo.accounts.<id>.groupPolicy`: per-account group policy. Present in config; see [Capabilities](#capabilities) and [Access control (Groups)](#access-control-groups) for current Marketplace-bot behavior.
 - `channels.zalo.accounts.<id>.groupAllowFrom`: per-account group sender allowlist.
 - `channels.zalo.accounts.<id>.webhookUrl`: per-account webhook URL.
 - `channels.zalo.accounts.<id>.webhookSecret`: per-account webhook secret.
 - `channels.zalo.accounts.<id>.webhookPath`: per-account webhook path.
 - `channels.zalo.accounts.<id>.proxy`: per-account proxy URL.
-  per-account proxy URL.
