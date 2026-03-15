@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
-import { isLoopbackHost } from "./net.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -41,11 +41,16 @@ export async function probeGateway(opts: {
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
 
-  const disableDeviceIdentity = (() => {
+  const deviceIdentity = (() => {
+    if (opts.includeDetails === false) {
+      return null;
+    }
     try {
-      return isLoopbackHost(new URL(opts.url).hostname);
+      return loadOrCreateDeviceIdentity();
     } catch {
-      return false;
+      // Read-only or restricted environments should still be able to run
+      // token/password-auth detail probes without crashing on identity persistence.
+      return null;
     }
   })();
 
@@ -70,7 +75,7 @@ export async function probeGateway(opts: {
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
-      deviceIdentity: disableDeviceIdentity ? null : undefined,
+      deviceIdentity,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
       },

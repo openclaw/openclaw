@@ -1,8 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   requests: [] as string[],
+}));
+
+const deviceIdentityState = vi.hoisted(() => ({
+  value: { id: "test-device-identity" } as Record<string, unknown>,
+  throwOnLoad: false,
 }));
 
 class MockGatewayClient {
@@ -40,9 +45,21 @@ vi.mock("./client.js", () => ({
   GatewayClient: MockGatewayClient,
 }));
 
+vi.mock("../infra/device-identity.js", () => ({
+  loadOrCreateDeviceIdentity: () => {
+    if (deviceIdentityState.throwOnLoad) {
+      throw new Error("read-only identity dir");
+    }
+    return deviceIdentityState.value;
+  },
+}));
+
 const { probeGateway } = await import("./probe.js");
 
 describe("probeGateway", () => {
+  beforeEach(() => {
+    deviceIdentityState.throwOnLoad = false;
+  });
   it("connects with operator.read scope", async () => {
     const result = await probeGateway({
       url: "ws://127.0.0.1:18789",
@@ -51,7 +68,7 @@ describe("probeGateway", () => {
     });
 
     expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
-    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+    expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
     expect(gatewayClientState.requests).toEqual([
       "health",
       "status",
@@ -68,7 +85,7 @@ describe("probeGateway", () => {
       timeoutMs: 1_000,
     });
 
-    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
+    expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
   it("skips detail RPCs for lightweight reachability probes", async () => {
@@ -79,6 +96,26 @@ describe("probeGateway", () => {
     });
 
     expect(result.ok).toBe(true);
+    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
     expect(gatewayClientState.requests).toEqual([]);
+  });
+
+  it("falls back to token/password auth when device identity cannot be persisted", async () => {
+    deviceIdentityState.throwOnLoad = true;
+
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+    expect(gatewayClientState.requests).toEqual([
+      "health",
+      "status",
+      "system-presence",
+      "config.get",
+    ]);
   });
 });

@@ -81,20 +81,11 @@ export type GatewayConnectionDetails = {
   message: string;
 };
 
-function shouldAttachDeviceIdentityForGatewayCall(params: {
-  url: string;
-  token?: string;
-  password?: string;
-}): boolean {
-  if (!(params.token || params.password)) {
-    return true;
-  }
-  try {
-    const parsed = new URL(params.url);
-    return !["127.0.0.1", "::1", "localhost"].includes(parsed.hostname);
-  } catch {
-    return true;
-  }
+function shouldAttachDeviceIdentityForGatewayCall(): boolean {
+  // Even when local CLI calls authenticate with a shared gateway token/password,
+  // we still want to attach device identity so paired operator scopes remain
+  // available for detail RPCs such as status / system-presence / last-heartbeat.
+  return true;
 }
 
 export type ExplicitGatewayAuth = {
@@ -834,7 +825,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
-      deviceIdentity: shouldAttachDeviceIdentityForGatewayCall({ url, token, password })
+      deviceIdentity: shouldAttachDeviceIdentityForGatewayCall()
         ? loadOrCreateDeviceIdentity()
         : undefined,
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,

@@ -118,7 +118,9 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
 
 export function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
   if (kind === "localLoopback") {
-    return Math.min(800, overallMs);
+    // Full localhost detail probes can take longer than the old 800ms budget,
+    // especially when they exercise status + heartbeat + presence RPCs.
+    return Math.min(3000, overallMs);
   }
   if (kind === "sshTunnel") {
     return Math.min(2000, overallMs);
