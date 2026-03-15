@@ -85,6 +85,13 @@ Implications:
 Use allowlists and explicit install/load paths for non-bundled plugins. Treat
 workspace plugins as development-time code, not production defaults.
 
+Important trust note:
+
+- `plugins.allow` trusts **plugin ids**, not source provenance.
+- A workspace plugin with the same id as a bundled plugin intentionally shadows
+  the bundled copy when that workspace plugin is enabled/allowlisted.
+- This is normal and useful for local development, patch testing, and hotfixes.
+
 ## Available plugins (official)
 
 - Microsoft Teams is plugin-only as of 2026.1.15; install `@openclaw/msteams` if you use Teams.
@@ -363,6 +370,14 @@ manifest.
 If multiple plugins resolve to the same id, the first match in the order above
 wins and lower-precedence copies are ignored.
 
+That means:
+
+- workspace plugins intentionally shadow bundled plugins with the same id
+- `plugins.allow: ["foo"]` authorizes the active `foo` plugin by id, even when
+  the active copy comes from the workspace instead of the bundled extension root
+- if you need stricter provenance control, use explicit install/load paths and
+  inspect the resolved plugin source before enabling it
+
 ### Enablement rules
 
 Enablement is resolved after discovery:
@@ -372,6 +387,7 @@ Enablement is resolved after discovery:
 - `plugins.entries.<id>.enabled: false` disables that plugin
 - workspace-origin plugins are disabled by default
 - allowlists restrict the active set when `plugins.allow` is non-empty
+- allowlists are **id-based**, not source-based
 - bundled plugins are disabled by default unless:
   - the bundled id is in the built-in default-on set, or
   - you explicitly enable it, or
@@ -771,18 +787,22 @@ are not just "OAuth helpers" anymore.
 
 ### Provider plugin lifecycle
 
-A provider plugin can participate in four distinct phases:
+A provider plugin can participate in five distinct phases:
 
 1. **Auth**
    `auth[].run(ctx)` performs OAuth, API-key capture, device code, or custom
    setup and returns auth profiles plus optional config patches.
-2. **Wizard integration**
+2. **Non-interactive setup**
+   `auth[].runNonInteractive(ctx)` handles `openclaw onboard --non-interactive`
+   without prompts. Use this when the provider needs custom headless setup
+   beyond the built-in simple API-key paths.
+3. **Wizard integration**
    `wizard.onboarding` adds an entry to `openclaw onboard`.
    `wizard.modelPicker` adds a setup entry to the model picker.
-3. **Implicit discovery**
+4. **Implicit discovery**
    `discovery.run(ctx)` can contribute provider config automatically during
    model resolution/listing.
-4. **Post-selection follow-up**
+5. **Post-selection follow-up**
    `onModelSelected(ctx)` runs after a model is chosen. Use this for provider-
    specific work such as downloading a local model.
 
@@ -790,6 +810,7 @@ This is the recommended split because these phases have different lifecycle
 requirements:
 
 - auth is interactive and writes credentials/config
+- non-interactive setup is flag/env-driven and must not prompt
 - wizard metadata is static and UI-facing
 - discovery should be safe, quick, and failure-tolerant
 - post-select hooks are side effects tied to the chosen model
@@ -814,6 +835,32 @@ Core then:
 That means a provider plugin owns the provider-specific setup logic, while core
 owns the generic persistence and config-merge path.
 
+### Provider non-interactive contract
+
+`auth[].runNonInteractive(ctx)` is optional. Implement it when the provider
+needs headless setup that cannot be expressed through the built-in generic
+API-key flows.
+
+The non-interactive context includes:
+
+- the current and base config
+- parsed onboarding CLI options
+- runtime logging/error helpers
+- agent/workspace dirs
+- `resolveApiKey(...)` to read provider keys from flags, env, or existing auth
+  profiles while honoring `--secret-input-mode`
+- `toApiKeyCredential(...)` to convert a resolved key into an auth-profile
+  credential with the right plaintext vs secret-ref storage
+
+Use this surface for providers such as:
+
+- self-hosted OpenAI-compatible runtimes that need `--custom-base-url` +
+  `--custom-model-id`
+- provider-specific non-interactive verification or config synthesis
+
+Do not prompt from `runNonInteractive`. Reject missing inputs with actionable
+errors instead.
+
 ### Provider wizard metadata
 
 `wizard.onboarding` controls how the provider appears in grouped onboarding:
@@ -835,6 +882,13 @@ entry in model selection:
 
 When a provider has multiple auth methods, the wizard can either point at one
 explicit method or let OpenClaw synthesize per-method choices.
+
+OpenClaw validates provider wizard metadata when the plugin registers:
+
+- duplicate or blank auth-method ids are rejected
+- wizard metadata is ignored when the provider has no auth methods
+- invalid `methodId` bindings are downgraded to warnings and fall back to the
+  provider's remaining auth methods
 
 ### Provider discovery contract
 
@@ -970,6 +1024,9 @@ Notes:
 
 - `run` receives a `ProviderAuthContext` with `prompter`, `runtime`,
   `openUrl`, and `oauth.createVpsAwareHandlers` helpers.
+- `runNonInteractive` receives a `ProviderAuthMethodNonInteractiveContext`
+  with `opts`, `resolveApiKey`, and `toApiKeyCredential` helpers for
+  headless onboarding.
 - Return `configPatch` when you need to add default models or provider config.
 - Return `defaultModel` so `--set-default` can update agent defaults.
 - `wizard.onboarding` adds a provider choice to `openclaw onboard`.
@@ -1281,6 +1338,8 @@ Plugins run in-process with the Gateway. Treat them as trusted code:
 
 - Only install plugins you trust.
 - Prefer `plugins.allow` allowlists.
+- Remember that `plugins.allow` is id-based, so an enabled workspace plugin can
+  intentionally shadow a bundled plugin with the same id.
 - Restart the Gateway after changes.
 
 ## Testing plugins

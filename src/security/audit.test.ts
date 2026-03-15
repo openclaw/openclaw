@@ -27,7 +27,7 @@ const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawF
 };
 
 function stubChannelPlugin(params: {
-  id: "discord" | "slack" | "telegram";
+  id: "discord" | "slack" | "telegram" | "zalouser";
   label: string;
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
   inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
@@ -106,6 +106,27 @@ const telegramPlugin = stubChannelPlugin({
     const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
     const base = cfg.channels?.telegram ?? {};
     const account = cfg.channels?.telegram?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
+});
+
+const zalouserPlugin = stubChannelPlugin({
+  id: "zalouser",
+  label: "Zalo Personal",
+  listAccountIds: (cfg) => {
+    const channel = (cfg.channels as Record<string, unknown> | undefined)?.zalouser as
+      | { accounts?: Record<string, unknown> }
+      | undefined;
+    const ids = Object.keys(channel?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const channel = (cfg.channels as Record<string, unknown> | undefined)?.zalouser as
+      | { accounts?: Record<string, unknown> }
+      | undefined;
+    const base = (channel ?? {}) as Record<string, unknown>;
+    const account = channel?.accounts?.[resolvedAccountId] ?? {};
     return { config: { ...base, ...account } };
   },
 });
@@ -2321,6 +2342,75 @@ description: test skill
       );
       expect(finding).toBeDefined();
       expect(finding?.detail).toContain("channels.discord.accounts.beta.allowFrom:Alice#1234");
+    });
+  });
+
+  it("warns when Zalouser group routing contains mutable group entries", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          zalouser: {
+            enabled: true,
+            groups: {
+              "Ops Room": { allow: true },
+              "group:g-123": { allow: true },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [zalouserPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("warn");
+      expect(finding?.detail).toContain("channels.zalouser.groups:Ops Room");
+      expect(finding?.detail).not.toContain("group:g-123");
+    });
+  });
+
+  it("marks Zalouser mutable group routing as break-glass when dangerous matching is enabled", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          zalouser: {
+            enabled: true,
+            dangerouslyAllowNameMatching: true,
+            groups: {
+              "Ops Room": { allow: true },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [zalouserPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("info");
+      expect(finding?.detail).toContain("out-of-scope");
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.zalouser.allowFrom.dangerous_name_matching_enabled",
+            severity: "info",
+          }),
+        ]),
+      );
     });
   });
 

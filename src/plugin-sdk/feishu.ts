@@ -11,6 +11,8 @@ export {
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { logTypingFailure } from "../channels/logging.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
+export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export { createActionGate } from "../agents/tools/common.js";
 export type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
@@ -29,6 +31,7 @@ export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js
 export type {
   BaseProbeResult,
   ChannelGroupContext,
+  ChannelMessageActionName,
   ChannelMeta,
   ChannelOutboundAdapter,
 } from "../channels/plugins/types.js";
@@ -51,8 +54,10 @@ export {
 } from "../config/types.secrets.js";
 export { buildSecretInputSchema } from "./secret-input-schema.js";
 export { createDedupeCache } from "../infra/dedupe.js";
-export { installRequestBodyLimitGuard } from "../infra/http-body.js";
+export { installRequestBodyLimitGuard, readJsonBodyWithLimit } from "../infra/http-body.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+export { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
+export type { OutboundIdentity } from "../infra/outbound/identity.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { AnyAgentTool, OpenClawPluginApi } from "../plugins/types.js";

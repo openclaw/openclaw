@@ -1008,6 +1008,7 @@ struct SettingsTab: View {
 
         // Reset onboarding state + clear saved gateway connection (the two things RootCanvas checks).
         GatewaySettingsStore.clearLastGatewayConnection()
+        OnboardingStateStore.reset()
 
         // RootCanvas also short-circuits onboarding when these are true.
         self.onboardingComplete = false

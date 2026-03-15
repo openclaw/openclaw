@@ -3,7 +3,6 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
-import type { CommandOptions } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const confirm = vi.fn();
@@ -25,11 +24,6 @@ const formatPortDiagnostics = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
-
-function getMockCommandOptions(call: readonly unknown[] | undefined): CommandOptions | undefined {
-  const options = call?.[1];
-  return options && typeof options === "object" ? (options as CommandOptions) : undefined;
-}
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -518,7 +512,8 @@ describe("update-cli", () => {
           call[0][1] === "i" &&
           call[0][2] === "-g",
       );
-    const updateOptions = getMockCommandOptions(updateCall);
+    const updateOptions =
+      typeof updateCall?.[1] === "object" && updateCall[1] !== null ? updateCall[1] : undefined;
     const mergedPath = updateOptions?.env?.Path ?? updateOptions?.env?.PATH ?? "";
     expect(mergedPath.split(path.delimiter).slice(0, 2)).toEqual([
       portableGitMingw,
@@ -629,10 +624,96 @@ describe("update-cli", () => {
 
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
       [expect.stringMatching(/node/), entryPath, "gateway", "install", "--force"],
-      expect.objectContaining({ timeoutMs: 60_000 }),
+      expect.objectContaining({ cwd: root, timeoutMs: 60_000 }),
     );
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runRestartScript).toHaveBeenCalled();
+  });
+
+  it("updateCommand preserves invocation-relative service env overrides during refresh", async () => {
+    const root = createCaseDir("openclaw-updated-root");
+    const entryPath = path.join(root, "dist", "entry.js");
+    pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
+
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "ok",
+      mode: "npm",
+      root,
+      steps: [],
+      durationMs: 100,
+    });
+    serviceLoaded.mockResolvedValue(true);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_STATE_DIR: "./state",
+        OPENCLAW_CONFIG_PATH: "./config/openclaw.json",
+      },
+      async () => {
+        await updateCommand({});
+      },
+    );
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), entryPath, "gateway", "install", "--force"],
+      expect.objectContaining({
+        cwd: root,
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: path.resolve("./state"),
+          OPENCLAW_CONFIG_PATH: path.resolve("./config/openclaw.json"),
+        }),
+        timeoutMs: 60_000,
+      }),
+    );
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+  });
+
+  it("updateCommand reuses the captured invocation cwd when process.cwd later fails", async () => {
+    const root = createCaseDir("openclaw-updated-root");
+    const entryPath = path.join(root, "dist", "entry.js");
+    pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
+
+    const originalCwd = process.cwd();
+    let restoreCwd: (() => void) | undefined;
+    vi.mocked(runGatewayUpdate).mockImplementation(async () => {
+      const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+        throw new Error("ENOENT: current working directory is gone");
+      });
+      restoreCwd = () => cwdSpy.mockRestore();
+      return {
+        status: "ok",
+        mode: "npm",
+        root,
+        steps: [],
+        durationMs: 100,
+      };
+    });
+    serviceLoaded.mockResolvedValue(true);
+
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: "./state",
+        },
+        async () => {
+          await updateCommand({});
+        },
+      );
+    } finally {
+      restoreCwd?.();
+    }
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), entryPath, "gateway", "install", "--force"],
+      expect.objectContaining({
+        cwd: root,
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: path.resolve(originalCwd, "./state"),
+        }),
+        timeoutMs: 60_000,
+      }),
+    );
+    expect(runDaemonInstall).not.toHaveBeenCalled();
   });
 
   it("updateCommand falls back to restart when env refresh install fails", async () => {

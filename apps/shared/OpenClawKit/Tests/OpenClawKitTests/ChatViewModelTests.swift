@@ -83,6 +83,7 @@ private func makeViewModel(
     historyResponses: [OpenClawChatHistoryPayload],
     sessionsResponses: [OpenClawChatSessionsListResponse] = [],
     modelResponses: [[OpenClawChatModelChoice]] = [],
+    resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
     setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
     initialThinkingLevel: String? = nil,
@@ -93,6 +94,7 @@ private func makeViewModel(
         historyResponses: historyResponses,
         sessionsResponses: sessionsResponses,
         modelResponses: modelResponses,
+        resetSessionHook: resetSessionHook,
         setSessionModelHook: setSessionModelHook,
         setSessionThinkingHook: setSessionThinkingHook)
     let vm = await MainActor.run {
@@ -199,6 +201,7 @@ private actor TestChatTransportState {
     var historyCallCount: Int = 0
     var sessionsCallCount: Int = 0
     var modelsCallCount: Int = 0
+    var resetSessionKeys: [String] = []
     var sentRunIds: [String] = []
     var sentThinkingLevels: [String] = []
     var abortedRunIds: [String] = []
@@ -211,6 +214,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
     private let modelResponses: [[OpenClawChatModelChoice]]
+    private let resetSessionHook: (@Sendable (String) async throws -> Void)?
     private let setSessionModelHook: (@Sendable (String?) async throws -> Void)?
     private let setSessionThinkingHook: (@Sendable (String) async throws -> Void)?
 
@@ -221,12 +225,14 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         historyResponses: [OpenClawChatHistoryPayload],
         sessionsResponses: [OpenClawChatSessionsListResponse] = [],
         modelResponses: [[OpenClawChatModelChoice]] = [],
+        resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
         setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil)
     {
         self.historyResponses = historyResponses
         self.sessionsResponses = sessionsResponses
         self.modelResponses = modelResponses
+        self.resetSessionHook = resetSessionHook
         self.setSessionModelHook = setSessionModelHook
         self.setSessionThinkingHook = setSessionThinkingHook
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
@@ -301,6 +307,13 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         }
     }
 
+    func resetSession(sessionKey: String) async throws {
+        await self.state.resetSessionKeysAppend(sessionKey)
+        if let resetSessionHook = self.resetSessionHook {
+            try await resetSessionHook(sessionKey)
+        }
+    }
+
     func setSessionThinking(sessionKey _: String, thinkingLevel: String) async throws {
         await self.state.patchedThinkingLevelsAppend(thinkingLevel)
         if let setSessionThinkingHook = self.setSessionThinkingHook {
@@ -336,6 +349,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     func patchedThinkingLevels() async -> [String] {
         await self.state.patchedThinkingLevels
     }
+
+    func resetSessionKeys() async -> [String] {
+        await self.state.resetSessionKeys
+    }
 }
 
 extension TestChatTransportState {
@@ -369,6 +386,10 @@ extension TestChatTransportState {
 
     fileprivate func patchedThinkingLevelsAppend(_ v: String) {
         self.patchedThinkingLevels.append(v)
+    }
+
+    fileprivate func resetSessionKeysAppend(_ v: String) {
+        self.resetSessionKeys.append(v)
     }
 }
 
@@ -592,6 +613,151 @@ extension TestChatTransportState {
         #expect(keys == ["main", "custom"])
     }
 
+    @Test func sessionChoicesUseResolvedMainSessionKeyInsteadOfLiteralMain() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let recent = now - (30 * 60 * 1000)
+        let recentOlder = now - (90 * 60 * 1000)
+        let history = historyPayload(sessionKey: "Luke’s MacBook Pro", sessionId: "sess-main")
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 2,
+            defaults: OpenClawChatSessionsDefaults(
+                model: nil,
+                contextTokens: nil,
+                mainSessionKey: "Luke’s MacBook Pro"),
+            sessions: [
+                OpenClawChatSessionEntry(
+                    key: "Luke’s MacBook Pro",
+                    kind: nil,
+                    displayName: "Luke’s MacBook Pro",
+                    surface: nil,
+                    subject: nil,
+                    room: nil,
+                    space: nil,
+                    updatedAt: recent,
+                    sessionId: nil,
+                    systemSent: nil,
+                    abortedLastRun: nil,
+                    thinkingLevel: nil,
+                    verboseLevel: nil,
+                    inputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: nil,
+                    modelProvider: nil,
+                    model: nil,
+                    contextTokens: nil),
+                sessionEntry(key: "recent-1", updatedAt: recentOlder),
+            ])
+
+        let (_, vm) = await makeViewModel(
+            sessionKey: "Luke’s MacBook Pro",
+            historyResponses: [history],
+            sessionsResponses: [sessions])
+        await MainActor.run { vm.load() }
+        try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
+
+        let keys = await MainActor.run { vm.sessionChoices.map(\.key) }
+        #expect(keys == ["Luke’s MacBook Pro", "recent-1"])
+    }
+
+    @Test func sessionChoicesHideInternalOnboardingSession() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let recent = now - (2 * 60 * 1000)
+        let recentOlder = now - (5 * 60 * 1000)
+        let history = historyPayload(sessionKey: "agent:main:main", sessionId: "sess-main")
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 2,
+            defaults: OpenClawChatSessionsDefaults(
+                model: nil,
+                contextTokens: nil,
+                mainSessionKey: "agent:main:main"),
+            sessions: [
+                OpenClawChatSessionEntry(
+                    key: "agent:main:onboarding",
+                    kind: nil,
+                    displayName: "Luke’s MacBook Pro",
+                    surface: nil,
+                    subject: nil,
+                    room: nil,
+                    space: nil,
+                    updatedAt: recent,
+                    sessionId: nil,
+                    systemSent: nil,
+                    abortedLastRun: nil,
+                    thinkingLevel: nil,
+                    verboseLevel: nil,
+                    inputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: nil,
+                    modelProvider: nil,
+                    model: nil,
+                    contextTokens: nil),
+                OpenClawChatSessionEntry(
+                    key: "agent:main:main",
+                    kind: nil,
+                    displayName: "Luke’s MacBook Pro",
+                    surface: nil,
+                    subject: nil,
+                    room: nil,
+                    space: nil,
+                    updatedAt: recentOlder,
+                    sessionId: nil,
+                    systemSent: nil,
+                    abortedLastRun: nil,
+                    thinkingLevel: nil,
+                    verboseLevel: nil,
+                    inputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: nil,
+                    modelProvider: nil,
+                    model: nil,
+                    contextTokens: nil),
+            ])
+
+        let (_, vm) = await makeViewModel(
+            sessionKey: "agent:main:main",
+            historyResponses: [history],
+            sessionsResponses: [sessions])
+        await MainActor.run { vm.load() }
+        try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
+
+        let keys = await MainActor.run { vm.sessionChoices.map(\.key) }
+        #expect(keys == ["agent:main:main"])
+    }
+
+    @Test func resetTriggerResetsSessionAndReloadsHistory() async throws {
+        let before = historyPayload(
+            messages: [
+                chatTextMessage(role: "assistant", text: "before reset", timestamp: 1),
+            ])
+        let after = historyPayload(
+            messages: [
+                chatTextMessage(role: "assistant", text: "after reset", timestamp: 2),
+            ])
+
+        let (transport, vm) = await makeViewModel(historyResponses: [before, after])
+        try await loadAndWaitBootstrap(vm: vm)
+        try await waitUntil("initial history loaded") {
+            await MainActor.run { vm.messages.first?.content.first?.text == "before reset" }
+        }
+
+        await MainActor.run {
+            vm.input = "/new"
+            vm.send()
+        }
+
+        try await waitUntil("reset called") {
+            await transport.resetSessionKeys() == ["main"]
+        }
+        try await waitUntil("history reloaded") {
+            await MainActor.run { vm.messages.first?.content.first?.text == "after reset" }
+        }
+        #expect(await transport.lastSentRunId() == nil)
+    }
+
     @Test func bootstrapsModelSelectionFromSessionAndDefaults() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
@@ -758,7 +924,8 @@ extension TestChatTransportState {
         }
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4-pro")
-        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "openai/gpt-5.4-pro")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4-pro")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
     }
 
     @Test func sendWaitsForInFlightModelPatchToFinish() async throws {
@@ -852,11 +1019,15 @@ extension TestChatTransportState {
         }
 
         try await waitUntil("older model completion wins after latest failure") {
-            await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model == "openai/gpt-5.4" }
+            await MainActor.run {
+                vm.sessions.first(where: { $0.key == "main" })?.model == "gpt-5.4" &&
+                    vm.sessions.first(where: { $0.key == "main" })?.modelProvider == "openai"
+            }
         }
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4")
-        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "openai/gpt-5.4")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
         #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
     }
 
@@ -1012,12 +1183,17 @@ extension TestChatTransportState {
         }
 
         try await waitUntil("late model completion updates only the original session") {
-            await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model == "openai/gpt-5.4" }
+            await MainActor.run {
+                vm.sessions.first(where: { $0.key == "main" })?.model == "gpt-5.4" &&
+                    vm.sessions.first(where: { $0.key == "main" })?.modelProvider == "openai"
+            }
         }
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4")
-        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "openai/gpt-5.4")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "other" })?.model } == "openai/gpt-5.4-pro")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "other" })?.modelProvider } == nil)
         #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
     }
 
