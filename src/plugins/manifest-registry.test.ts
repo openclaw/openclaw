@@ -280,6 +280,31 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
+  it("suppresses duplicate warning when source paths match after normalization", () => {
+    const dir = makeTempDir();
+    mkdirSafe(path.join(dir, "sub"));
+    const manifest = { id: "normalized-source-plugin", configSchema: { type: "object" } };
+    writeManifest(dir, manifest);
+
+    // rootDir representations differ, but resolve to the same directory.
+    const altDir = path.join(dir, "sub", "..");
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "normalized-source-plugin",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "normalized-source-plugin",
+        rootDir: altDir,
+        origin: "global",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+  });
+
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
     const dir = makeTempDir();
     mkdirSafe(path.join(dir, "sub"));
