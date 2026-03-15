@@ -4,6 +4,7 @@ const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
+const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
@@ -17,6 +18,7 @@ vi.mock("./runtime.js", () => ({ getFeishuRuntime: getFeishuRuntimeMock }));
 vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
+  sendStructuredCardFeishu: sendStructuredCardFeishuMock,
 }));
 vi.mock("./media.js", () => ({ sendMediaFeishu: sendMediaFeishuMock }));
 vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
@@ -56,6 +58,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     vi.clearAllMocks();
     streamingInstances.length = 0;
     sendMediaFeishuMock.mockResolvedValue(undefined);
+    sendStructuredCardFeishuMock.mockResolvedValue(undefined);
 
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
@@ -256,11 +259,17 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].start).toHaveBeenCalledWith("oc_chat", "chat_id", {
-      replyToMessageId: undefined,
-      replyInThread: undefined,
-      rootId: "om_root_topic",
-    });
+    expect(streamingInstances[0].start).toHaveBeenCalledWith(
+      "oc_chat",
+      "chat_id",
+      expect.objectContaining({
+        replyToMessageId: undefined,
+        replyInThread: undefined,
+        rootId: "om_root_topic",
+        header: { title: "agent", template: "blue" },
+        note: "Agent: agent",
+      }),
+    );
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
@@ -276,7 +285,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\npartial answer\n```");
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\npartial answer\n```", {
+      note: "Agent: agent",
+    });
   });
 
   it("delivers distinct final payloads after streaming close", async () => {
@@ -288,9 +299,16 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(2);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n完整回复第一段\n```");
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n完整回复第一段\n```", {
+      note: "Agent: agent",
+    });
     expect(streamingInstances[1].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[1].close).toHaveBeenCalledWith("```md\n完整回复第一段 + 第二段\n```");
+    expect(streamingInstances[1].close).toHaveBeenCalledWith(
+      "```md\n完整回复第一段 + 第二段\n```",
+      {
+        note: "Agent: agent",
+      },
+    );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
@@ -304,7 +322,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n同一条回复\n```");
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n同一条回复\n```", {
+      note: "Agent: agent",
+    });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
@@ -369,7 +389,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     // Block deliver merges via mergeStreamingText: partial "hello" + block "lo world"
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("hellolo world");
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("hellolo world", {
+      note: "Agent: agent",
+    });
   });
 
   it("sends media-only payloads as attachments", async () => {
@@ -438,7 +460,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
-  it("passes replyInThread to sendMarkdownCardFeishu for card text", async () => {
+  it("passes replyInThread to sendStructuredCardFeishu for card text", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -456,7 +478,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     await options.deliver({ text: "card text" }, { kind: "final" });
 
-    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_msg",
         replyInThread: true,
@@ -593,10 +615,16 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
 
     expect(streamingInstances).toHaveLength(1);
-    expect(streamingInstances[0].start).toHaveBeenCalledWith("oc_chat", "chat_id", {
-      replyToMessageId: "om_msg",
-      replyInThread: true,
-    });
+    expect(streamingInstances[0].start).toHaveBeenCalledWith(
+      "oc_chat",
+      "chat_id",
+      expect.objectContaining({
+        replyToMessageId: "om_msg",
+        replyInThread: true,
+        header: { title: "agent", template: "blue" },
+        note: "Agent: agent",
+      }),
+    );
   });
 
   it("disables streaming for thread replies and keeps reply metadata", async () => {
@@ -610,7 +638,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
 
     expect(streamingInstances).toHaveLength(0);
-    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_msg",
         replyInThread: true,
