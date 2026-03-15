@@ -14,11 +14,40 @@ export type CommandRunner = (
 const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
+export const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
 ] as const;
+
+function normalizePackageTarget(value: string): string {
+  return value.trim();
+}
+
+export function isMainPackageTarget(value: string): boolean {
+  return normalizePackageTarget(value).toLowerCase() === "main";
+}
+
+export function isExplicitPackageInstallSpec(value: string): boolean {
+  const trimmed = normalizePackageTarget(value);
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    trimmed.includes("://") ||
+    trimmed.includes("#") ||
+    /^(?:file|github|git\+ssh|git\+https|git\+http|git\+file|npm):/i.test(trimmed)
+  );
+}
+
+export function canResolveRegistryVersionForPackageTarget(value: string): boolean {
+  const trimmed = normalizePackageTarget(value);
+  if (!trimmed) {
+    return true;
+  }
+  return !isMainPackageTarget(trimmed) && !isExplicitPackageInstallSpec(trimmed);
+}
 
 async function resolvePortableGitPathPrepend(
   env: NodeJS.ProcessEnv | undefined,
@@ -68,7 +97,14 @@ export function resolveGlobalInstallSpec(params: {
   if (override) {
     return override;
   }
-  return `${params.packageName}@${params.tag}`;
+  const target = normalizePackageTarget(params.tag);
+  if (isMainPackageTarget(target)) {
+    return OPENCLAW_MAIN_PACKAGE_SPEC;
+  }
+  if (isExplicitPackageInstallSpec(target)) {
+    return target;
+  }
+  return `${params.packageName}@${target}`;
 }
 
 export async function createGlobalInstallEnv(

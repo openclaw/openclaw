@@ -441,6 +441,20 @@ describe("runGatewayUpdate", () => {
     expect(calls.some((call) => call === expectedInstallCommand)).toBe(true);
   });
 
+  it("updates global npm installs from the GitHub main package spec", async () => {
+    const { calls, result } = await runNpmGlobalUpdateCase({
+      expectedInstallCommand:
+        "npm i -g github:openclaw/openclaw#main --no-fund --no-audit --loglevel=error",
+      tag: "main",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.mode).toBe("npm");
+    expect(calls).toContain(
+      "npm i -g github:openclaw/openclaw#main --no-fund --no-audit --loglevel=error",
+    );
+  });
+
   it("falls back to global npm update when git is missing from PATH", async () => {
     const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
     const { calls, runCommand } = createGlobalInstallHarness({
