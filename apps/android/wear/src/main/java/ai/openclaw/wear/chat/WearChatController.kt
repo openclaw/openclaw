@@ -188,6 +188,7 @@ class WearChatController(
     hasSyncedHistory = false
     clearPendingRuns()
     clearQueuedOutboundMessages()
+    clearSideResults()
     lastAnnouncedAssistantId = null
     loadHistory()
   }

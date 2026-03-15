@@ -78,7 +78,7 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
   private var config: WearGatewayConfig = WearGatewayConfig()
   private var reconnectJob: Job? = null
   private var deviceId: String = UUID.randomUUID().toString()
-  private var connectionEpoch = 0L
+  @Volatile private var connectionEpoch = 0L
 
   private val _connected = MutableStateFlow(false)
   override val connected: StateFlow<Boolean> = _connected.asStateFlow()
@@ -166,7 +166,11 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
         // Wait for the connect.challenge nonce, then send connect
         scope.launch {
           try {
-            withTimeoutOrNull(5_000) { nonceDeferred.await() }
+            val nonce = withTimeoutOrNull(5_000) { nonceDeferred.await() }
+            if (nonce == null) {
+              Log.w(TAG, "connect.challenge not received within timeout; proceeding anyway")
+            }
+            // The challenge nonce is currently a readiness signal; we do not include it in connect params.
             sendConnect(webSocket, epoch)
           } catch (e: Throwable) {
             Log.w(TAG, "Connect handshake failed: ${e.message}")
