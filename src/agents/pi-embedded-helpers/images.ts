@@ -3,7 +3,7 @@ import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { ToolCallIdMode } from "../tool-call-id.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
-import { stripThoughtSignatures } from "./bootstrap.js";
+import { stripEmptyThinkingSignatures, stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 
@@ -122,7 +122,7 @@ export async function sanitizeSessionMessagesImages(
           continue;
         }
         const strippedContent = options?.preserveSignatures
-          ? content // Keep signatures for Antigravity Claude
+          ? stripEmptyThinkingSignatures(content) // Preserve valid signatures but strip empty ones
           : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
 
         const filteredContent = strippedContent.filter((block) => {

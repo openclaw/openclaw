@@ -82,6 +82,35 @@ export function stripThoughtSignatures<T>(
   }) as T;
 }
 
+/**
+ * Strip empty `thinkingSignature` fields from thinking content blocks.
+ * Bedrock may return `thinkingSignature: ""` which passes through the
+ * preserve-signatures path but later causes "Invalid signature in thinking
+ * block" errors when the history is replayed to the API.
+ */
+export function stripEmptyThinkingSignatures<T>(content: T): T {
+  if (!Array.isArray(content)) {
+    return content;
+  }
+  return content.map((block) => {
+    if (!block || typeof block !== "object") {
+      return block;
+    }
+    const rec = block as Record<string, unknown>;
+    if (
+      rec.type === "thinking" &&
+      "thinkingSignature" in rec &&
+      typeof rec.thinkingSignature === "string" &&
+      rec.thinkingSignature.trim().length === 0
+    ) {
+      const next = { ...rec };
+      delete next.thinkingSignature;
+      return next;
+    }
+    return block;
+  }) as T;
+}
+
 export const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
 export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 150_000;
 export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "once";

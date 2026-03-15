@@ -8,6 +8,7 @@ import {
   sanitizeUserFacingText,
   stripThoughtSignatures,
 } from "./pi-embedded-helpers.js";
+import { stripEmptyThinkingSignatures } from "./pi-embedded-helpers/bootstrap.js";
 
 describe("sanitizeUserFacingText", () => {
   it("strips final tags", () => {
@@ -449,5 +450,47 @@ describe("isMessagingToolDuplicate", () => {
     },
   ])("returns $expected for duplicate check", ({ input, sentTexts, expected }) => {
     expect(isMessagingToolDuplicate(input, sentTexts)).toBe(expected);
+  });
+});
+
+describe("stripEmptyThinkingSignatures", () => {
+  it("strips empty thinkingSignature from thinking blocks", () => {
+    const input = [
+      { type: "thinking", thinking: "reasoning text", thinkingSignature: "" },
+      { type: "text", text: "hello" },
+    ];
+    const result = stripEmptyThinkingSignatures(input);
+    expect(result[0]).toEqual({ type: "thinking", thinking: "reasoning text" });
+    expect(result[1]).toEqual({ type: "text", text: "hello" });
+  });
+
+  it("preserves valid thinkingSignature", () => {
+    const input = [
+      {
+        type: "thinking",
+        thinking: "reasoning text",
+        thinkingSignature: "dGhpcyBpcyBhIHZhbGlkIHNpZ25hdHVyZQ==",
+      },
+    ];
+    const result = stripEmptyThinkingSignatures(input);
+    expect(result[0]).toEqual(input[0]);
+  });
+
+  it("strips whitespace-only thinkingSignature", () => {
+    const input = [{ type: "thinking", thinking: "text", thinkingSignature: "   " }];
+    const result = stripEmptyThinkingSignatures(input);
+    expect(result[0]).toEqual({ type: "thinking", thinking: "text" });
+  });
+
+  it("returns non-array input unchanged", () => {
+    expect(stripEmptyThinkingSignatures("hello")).toBe("hello");
+    expect(stripEmptyThinkingSignatures(null)).toBe(null);
+    expect(stripEmptyThinkingSignatures(undefined)).toBe(undefined);
+  });
+
+  it("does not strip thinkingSignature from non-thinking blocks", () => {
+    const input = [{ type: "text", text: "hi", thinkingSignature: "" }];
+    const result = stripEmptyThinkingSignatures(input);
+    expect(result[0]).toEqual(input[0]);
   });
 });
