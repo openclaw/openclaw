@@ -17,7 +17,6 @@ import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
-import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -27,13 +26,7 @@ import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
-import {
-  describeUnknownError,
-  extractGatewayMiskeys,
-  maybeExplainGatewayServiceStop,
-  parsePort,
-  toOptionString,
-} from "./shared.js";
+import { extractGatewayMiskeys, parsePort, toOptionString } from "./shared.js";
 
 type GatewayRunOpts = {
   port?: unknown;
@@ -434,23 +427,16 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       err instanceof GatewayLockError ||
       (err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
     ) {
-      const errMessage = describeUnknownError(err);
-      defaultRuntime.error(
-        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
-      );
-      try {
-        const diagnostics = await inspectPortUsage(port);
-        if (diagnostics.status === "busy") {
-          for (const line of formatPortDiagnostics(diagnostics)) {
-            defaultRuntime.error(line);
-          }
-        }
-      } catch {
-        // ignore diagnostics failures
+      const msg = String((err as Error).message ?? "");
+      // Treat as "already running" only when the lock holder's PID was
+      // explicitly identified (proving another OpenClaw gateway owns the
+      // lock).  EADDRINUSE and ambiguous lock-timeout cases could indicate
+      // a non-OpenClaw process or a stale lock, so they should still fail.
+      if (/\(pid \d+\)/.test(msg)) {
+        defaultRuntime.error("Gateway is already running.");
+        defaultRuntime.exit(0);
+        return;
       }
-      await maybeExplainGatewayServiceStop();
-      defaultRuntime.exit(1);
-      return;
     }
     defaultRuntime.error(`Gateway failed to start: ${String(err)}`);
     defaultRuntime.exit(1);
