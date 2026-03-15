@@ -399,17 +399,6 @@ function logDiscordStartupPhase(params: {
   );
 }
 
-function resolveDiscordNativeCommandReconcileOnStartup(params: {
-  cfg: OpenClawConfig;
-  discordConfig?: DiscordConfig;
-}): boolean {
-  return (
-    params.discordConfig?.commands?.reconcileOnStartup ??
-    params.cfg.channels?.discord?.commands?.reconcileOnStartup ??
-    false
-  );
-}
-
 function resolveDiscordNativeCommandReconcileFallbackReason(params: {
   client: Client;
   commands: BaseCommand[];
@@ -437,23 +426,11 @@ async function deployDiscordCommandsWithOptionalReconcile(params: {
   commands: BaseCommand[];
   runtime: RuntimeEnv;
   enabled: boolean;
-  reconcileOnStartup: boolean;
   accountId: string;
   applicationId: string;
   startupStartedAt?: number;
 }) {
   if (!params.enabled) {
-    return;
-  }
-  if (!params.reconcileOnStartup) {
-    params.runtime.log?.("discord: native commands using legacy deploy path");
-    await deployDiscordCommands({
-      client: params.client,
-      runtime: params.runtime,
-      enabled: params.enabled,
-      accountId: params.accountId,
-      startupStartedAt: params.startupStartedAt,
-    });
     return;
   }
   const reconcileFallbackReason = resolveDiscordNativeCommandReconcileFallbackReason({
@@ -473,7 +450,7 @@ async function deployDiscordCommandsWithOptionalReconcile(params: {
     });
     return;
   }
-  params.runtime.log?.("discord: native commands using reconcile-on-startup path");
+  params.runtime.log?.("discord: native commands using reconcile path");
   await runDiscordNativeCommandSyncOperation({
     action: "reconcile",
     client: params.client,
@@ -611,10 +588,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     providerSetting: discordCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
   });
-  const reconcileNativeCommandsOnStartup = resolveDiscordNativeCommandReconcileOnStartup({
-    cfg,
-    discordConfig: discordCfg,
-  });
   const nativeDisabledExplicit = isNativeCommandsExplicitlyDisabled({
     providerSetting: discordCfg.commands?.native,
     globalSetting: cfg.commands?.native,
@@ -652,7 +625,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       emptyText: "any",
     });
     logVerbose(
-      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} nativeReconcile=${reconcileNativeCommandsOnStartup ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"} threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
+      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} nativeReconcile=on accessGroups=${useAccessGroups ? "on" : "off"} threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
     );
   }
 
@@ -918,14 +891,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       phase: "deploy-commands:start",
       startAt: startupStartedAt,
       gateway: lifecycleGateway,
-      details: `native=${nativeEnabled ? "on" : "off"} reconcile=${reconcileNativeCommandsOnStartup ? "on" : "off"} commandCount=${commands.length}`,
+      details: `native=${nativeEnabled ? "on" : "off"} reconcile=on commandCount=${commands.length}`,
     });
     await deployDiscordCommandsWithOptionalReconcile({
       client,
       commands,
       runtime,
       enabled: nativeEnabled,
-      reconcileOnStartup: reconcileNativeCommandsOnStartup,
       accountId: account.accountId,
       applicationId,
       startupStartedAt,

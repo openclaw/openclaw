@@ -1461,8 +1461,6 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
   "channels.discord.commands.nativeSkills":
     'Override native skill commands for Discord (bool or "auto").',
-  "channels.discord.commands.reconcileOnStartup":
-    "Reconcile Discord native command deployment on startup instead of bulk redeploying (default: false).",
   "channels.telegram.commands.native": 'Override native commands for Telegram (bool or "auto").',
   "channels.telegram.commands.nativeSkills":
     'Override native skill commands for Telegram (bool or "auto").',

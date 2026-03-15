@@ -513,19 +513,7 @@ describe("monitorDiscordProvider", () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 
     await monitorDiscordProvider({
-      config: {
-        ...baseConfig(),
-        channels: {
-          discord: {
-            accounts: {
-              default: {},
-            },
-            commands: {
-              reconcileOnStartup: true,
-            },
-          },
-        },
-      } as OpenClawConfig,
+      config: baseConfig(),
       runtime: baseRuntime(),
     });
 
@@ -860,50 +848,26 @@ describe("monitorDiscordProvider", () => {
       },
     );
     rateLimitError.discordCode = 30034;
-    clientHandleDeployRequestMock.mockRejectedValueOnce(rateLimitError);
+    reconcileDiscordNativeCommandsMock.mockRejectedValueOnce(rateLimitError);
 
     await monitorDiscordProvider({
       config: baseConfig(),
       runtime,
     });
 
-    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
+    expect(reconcileDiscordNativeCommandsMock).toHaveBeenCalledTimes(1);
     expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("native command deploy skipped"),
+      expect.stringContaining("native command reconcile skipped"),
     );
   });
 
-  it("uses the legacy deploy path when reconcileOnStartup is disabled", async () => {
+  it("uses the reconcile path by default", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 
     await monitorDiscordProvider({
       config: baseConfig(),
-      runtime: baseRuntime(),
-    });
-
-    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
-    expect(reconcileDiscordNativeCommandsMock).not.toHaveBeenCalled();
-  });
-
-  it("uses the reconcile path when reconcileOnStartup is enabled on the provider config", async () => {
-    const { monitorDiscordProvider } = await import("./provider.js");
-
-    await monitorDiscordProvider({
-      config: {
-        ...baseConfig(),
-        channels: {
-          discord: {
-            accounts: {
-              default: {},
-            },
-            commands: {
-              reconcileOnStartup: true,
-            },
-          },
-        },
-      } as OpenClawConfig,
       runtime: baseRuntime(),
     });
 
@@ -911,7 +875,7 @@ describe("monitorDiscordProvider", () => {
     expect(clientHandleDeployRequestMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to the legacy deploy path when reconcile is enabled for a guild-scoped command", async () => {
+  it("falls back to the legacy deploy path for a guild-scoped command", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
     createDiscordNativeCommandMock.mockReturnValue({
       name: "mock-command",
@@ -919,19 +883,7 @@ describe("monitorDiscordProvider", () => {
     } as unknown as { name: string });
 
     await monitorDiscordProvider({
-      config: {
-        ...baseConfig(),
-        channels: {
-          discord: {
-            commands: {
-              reconcileOnStartup: true,
-            },
-            accounts: {
-              default: {},
-            },
-          },
-        },
-      } as OpenClawConfig,
+      config: baseConfig(),
       runtime: baseRuntime(),
     });
 
@@ -946,19 +898,7 @@ describe("monitorDiscordProvider", () => {
     ]);
 
     await monitorDiscordProvider({
-      config: {
-        ...baseConfig(),
-        channels: {
-          discord: {
-            commands: {
-              reconcileOnStartup: true,
-            },
-            accounts: {
-              default: {},
-            },
-          },
-        },
-      } as OpenClawConfig,
+      config: baseConfig(),
       runtime: baseRuntime(),
     });
 
@@ -979,19 +919,7 @@ describe("monitorDiscordProvider", () => {
     });
 
     await monitorDiscordProvider({
-      config: {
-        ...baseConfig(),
-        channels: {
-          discord: {
-            accounts: {
-              default: {},
-            },
-            commands: {
-              reconcileOnStartup: true,
-            },
-          },
-        },
-      } as OpenClawConfig,
+      config: baseConfig(),
       runtime: baseRuntime(),
     });
 
