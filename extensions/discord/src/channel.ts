@@ -7,14 +7,12 @@ import {
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
 import {
-  applyAccountNameToChannelSection,
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   collectDiscordAuditChannelIds,
   collectDiscordStatusIssues,
   DEFAULT_ACCOUNT_ID,
-  discordOnboardingAdapter,
   DiscordConfigSchema,
   getChatChannelMeta,
   inspectDiscordAccount,
@@ -22,8 +20,6 @@ import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
   looksLikeDiscordTargetId,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
   PAIRING_APPROVED_MESSAGE,
@@ -39,6 +35,7 @@ import {
 } from "openclaw/plugin-sdk/discord";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { getDiscordRuntime } from "./runtime.js";
+import { discordSetupAdapter, discordSetupWizard } from "./setup-surface.js";
 
 type DiscordSendFn = ReturnType<
   typeof getDiscordRuntime
@@ -81,7 +78,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   meta: {
     ...meta,
   },
-  onboarding: discordOnboardingAdapter,
+  setupWizard: discordSetupWizard,
   pairing: {
     idLabel: "discordUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(discord|user):/i, ""),
@@ -233,71 +230,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     },
   },
   actions: discordMessageActions,
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "discord",
-        accountId,
-        name,
-      }),
-    validateInput: ({ accountId, input }) => {
-      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "DISCORD_BOT_TOKEN can only be used for the default account.";
-      }
-      if (!input.useEnv && !input.token) {
-        return "Discord requires token (or --use-env).";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "discord",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "discord",
-            })
-          : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            discord: {
-              ...next.channels?.discord,
-              enabled: true,
-              ...(input.useEnv ? {} : input.token ? { token: input.token } : {}),
-            },
-          },
-        };
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          discord: {
-            ...next.channels?.discord,
-            enabled: true,
-            accounts: {
-              ...next.channels?.discord?.accounts,
-              [accountId]: {
-                ...next.channels?.discord?.accounts?.[accountId],
-                enabled: true,
-                ...(input.token ? { token: input.token } : {}),
-              },
-            },
-          },
-        },
-      };
-    },
-  },
+  setup: discordSetupAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: null,
