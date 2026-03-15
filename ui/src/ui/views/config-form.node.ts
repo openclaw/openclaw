@@ -97,6 +97,11 @@ const icons = {
   `,
 };
 
+function fieldId(path: Array<string | number>, suffix?: string): string {
+  const base = `cfg-${path.map(String).join("-")}`;
+  return suffix ? `${base}-${suffix}` : base;
+}
+
 type FieldMeta = {
   label: string;
   help?: string;
@@ -458,11 +463,16 @@ export function renderNode(params: {
           ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
           ${renderTags(tags)}
-          <div class="cfg-segmented">
+          <div class="cfg-segmented" role="radiogroup" aria-label=${label}>
             ${literals.map(
               (lit) => html`
               <button
                 type="button"
+                role="radio"
+                aria-checked=${
+                  // oxlint-disable typescript/no-base-to-string
+                  lit === resolvedValue || String(lit) === String(resolvedValue)
+                }
                 class="cfg-segmented__btn ${
                   // oxlint-disable typescript/no-base-to-string
                   lit === resolvedValue || String(lit) === String(resolvedValue) ? "active" : ""
@@ -538,11 +548,13 @@ export function renderNode(params: {
           ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
           ${renderTags(tags)}
-          <div class="cfg-segmented">
+          <div class="cfg-segmented" role="radiogroup" aria-label=${label}>
             ${options.map(
               (opt) => html`
               <button
                 type="button"
+                role="radio"
+                aria-checked=${opt === resolvedValue || String(opt) === String(resolvedValue)}
                 class="cfg-segmented__btn ${opt === resolvedValue || String(opt) === String(resolvedValue) ? "active" : ""}"
                 ?disabled=${disabled}
                 @click=${() => onPatch(path, opt)}
@@ -586,6 +598,9 @@ export function renderNode(params: {
         <div class="cfg-toggle">
           <input
             type="checkbox"
+            role="switch"
+            aria-checked=${displayValue}
+            aria-label=${label}
             .checked=${displayValue}
             ?disabled=${disabled}
             @change=${(e: Event) => onPatch(path, (e.target as HTMLInputElement).checked)}
@@ -652,17 +667,19 @@ function renderTextInput(params: {
 
   return html`
     <div class="cfg-field">
-      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      ${showLabel ? html`<label class="cfg-field__label" for=${fieldId(path)}>${label}</label>` : nothing}
+      ${help ? html`<div class="cfg-field__help" id=${fieldId(path, "help")}>${help}</div>` : nothing}
       ${renderTags(tags)}
       <div class="cfg-input-wrap">
         <input
+          id=${fieldId(path)}
           type=${effectiveInputType}
           class="cfg-input"
           placeholder=${placeholder}
           .value=${displayValue == null ? "" : String(displayValue)}
           ?disabled=${effectiveDisabled}
           ?readonly=${sensitiveState.isRedacted}
+          aria-describedby=${help ? fieldId(path, "help") : nothing}
           @input=${(e: Event) => {
             if (sensitiveState.isRedacted) {
               return;
@@ -700,6 +717,7 @@ function renderTextInput(params: {
             type="button"
             class="cfg-input__reset"
             title="Reset to default"
+            aria-label="Reset to default"
             ?disabled=${effectiveDisabled}
             @click=${() => onPatch(path, schema.default)}
           >↺</button>
@@ -729,21 +747,24 @@ function renderNumberInput(params: {
 
   return html`
     <div class="cfg-field">
-      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      ${showLabel ? html`<label class="cfg-field__label" for=${fieldId(path)}>${label}</label>` : nothing}
+      ${help ? html`<div class="cfg-field__help" id=${fieldId(path, "help")}>${help}</div>` : nothing}
       ${renderTags(tags)}
       <div class="cfg-number">
         <button
           type="button"
           class="cfg-number__btn"
+          aria-label="Decrease"
           ?disabled=${disabled}
           @click=${() => onPatch(path, numValue - 1)}
         >−</button>
         <input
+          id=${fieldId(path)}
           type="number"
           class="cfg-number__input"
           .value=${displayValue == null ? "" : String(displayValue)}
           ?disabled=${disabled}
+          aria-describedby=${help ? fieldId(path, "help") : nothing}
           @input=${(e: Event) => {
             const raw = (e.target as HTMLInputElement).value;
             const parsed = raw === "" ? undefined : Number(raw);
@@ -753,6 +774,7 @@ function renderNumberInput(params: {
         <button
           type="button"
           class="cfg-number__btn"
+          aria-label="Increase"
           ?disabled=${disabled}
           @click=${() => onPatch(path, numValue + 1)}
         >+</button>
@@ -783,10 +805,11 @@ function renderSelect(params: {
 
   return html`
     <div class="cfg-field">
-      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      ${showLabel ? html`<label class="cfg-field__label" for=${fieldId(path)}>${label}</label>` : nothing}
+      ${help ? html`<div class="cfg-field__help" id=${fieldId(path, "help")}>${help}</div>` : nothing}
       ${renderTags(tags)}
       <select
+        id=${fieldId(path)}
         class="cfg-select"
         ?disabled=${disabled}
         .value=${currentIndex >= 0 ? String(currentIndex) : unset}
@@ -834,11 +857,12 @@ function renderJsonTextarea(params: {
 
   return html`
     <div class="cfg-field">
-      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      ${showLabel ? html`<label class="cfg-field__label" for=${fieldId(path)}>${label}</label>` : nothing}
+      ${help ? html`<div class="cfg-field__help" id=${fieldId(path, "help")}>${help}</div>` : nothing}
       ${renderTags(tags)}
       <div class="cfg-input-wrap">
         <textarea
+          id=${fieldId(path)}
           class="cfg-textarea"
           placeholder=${sensitiveState.isRedacted ? REDACTED_PLACEHOLDER : "JSON value"}
           rows="3"
@@ -1087,6 +1111,7 @@ function renderArray(params: {
                   type="button"
                   class="cfg-array__item-remove"
                   title="Remove item"
+                  aria-label="Remove item"
                   ?disabled=${disabled}
                   @click=${() => {
                     const next = [...arr];
@@ -1237,6 +1262,7 @@ function renderMapField(params: {
                     type="button"
                     class="cfg-map__item-remove"
                     title="Remove entry"
+                    aria-label="Remove entry"
                     ?disabled=${disabled}
                     @click=${() => {
                       const next = { ...value };

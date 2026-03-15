@@ -15,16 +15,17 @@ export class DashboardHeader extends LitElement {
 
     return html`
       <div class="dashboard-header">
-        <div class="dashboard-header__breadcrumb">
-          <span
+        <nav class="dashboard-header__breadcrumb" aria-label="Breadcrumb">
+          <button
+            type="button"
             class="dashboard-header__breadcrumb-link"
             @click=${() => this.dispatchEvent(new CustomEvent("navigate", { detail: "overview", bubbles: true, composed: true }))}
           >
             OpenClaw
-          </span>
-          <span class="dashboard-header__breadcrumb-sep">›</span>
-          <span class="dashboard-header__breadcrumb-current">${label}</span>
-        </div>
+          </button>
+          <span class="dashboard-header__breadcrumb-sep" aria-hidden="true">›</span>
+          <span class="dashboard-header__breadcrumb-current" aria-current="page">${label}</span>
+        </nav>
         <div class="dashboard-header__actions">
           <slot></slot>
         </div>

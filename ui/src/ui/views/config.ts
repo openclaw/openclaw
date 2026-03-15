@@ -827,6 +827,7 @@ export function renderConfig(props: ConfigProps) {
                         type="text"
                         class="config-search__input"
                         placeholder="Search settings..."
+                        aria-label="Search settings"
                         .value=${props.searchQuery}
                         @input=${(e: Event) =>
                           props.onSearchChange((e.target as HTMLInputElement).value)}
@@ -836,6 +837,7 @@ export function renderConfig(props: ConfigProps) {
                           ? html`
                               <button
                                 class="config-search__clear"
+                                aria-label="Clear search"
                                 @click=${() => props.onSearchChange("")}
                               >
                                 ×
@@ -1085,6 +1087,8 @@ export function renderConfig(props: ConfigProps) {
                         placeholder=${blurred ? REDACTED_PLACEHOLDER : "Raw JSON5 config"}
                         .value=${blurred ? "" : props.raw}
                         ?readonly=${blurred}
+                        aria-label="Raw JSON5 configuration editor"
+                        aria-roledescription="code editor"
                         @input=${(e: Event) => {
                           if (blurred) {
                             return;

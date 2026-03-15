@@ -62,6 +62,7 @@ function extractImages(message: unknown): ImageBlock[] {
 export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {
   return html`
     <div class="chat-group assistant">
+      <h6 class="sr-only">Assistant</h6>
       ${renderAvatar("assistant", assistant, basePath)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
@@ -89,6 +90,7 @@ export function renderStreamingGroup(
 
   return html`
     <div class="chat-group assistant">
+      <h6 class="sr-only">Assistant</h6>
       ${renderAvatar("assistant", assistant, basePath)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
@@ -151,6 +153,13 @@ export function renderMessageGroup(
 
   return html`
     <div class="chat-group ${roleClass}">
+      ${
+        normalizedRole === "user"
+          ? html`
+              <h5 class="sr-only">You</h5>
+            `
+          : html`<h6 class="sr-only">${who}</h6>`
+      }
       ${renderAvatar(
         group.role,
         {

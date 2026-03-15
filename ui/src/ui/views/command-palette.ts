@@ -203,12 +203,16 @@ export function renderCommandPalette(props: CommandPaletteProps) {
     }}>
       <div
         class="cmd-palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
         @click=${(e: Event) => e.stopPropagation()}
         @keydown=${(e: KeyboardEvent) => handleKeydown(e, props)}
       >
         <input
           ${ref(focusInput)}
           class="cmd-palette__input"
+          aria-label="Search commands"
           placeholder="${t("overview.palette.placeholder")}"
           .value=${props.query}
           @input=${(e: Event) => {
@@ -216,7 +220,7 @@ export function renderCommandPalette(props: CommandPaletteProps) {
             props.onActiveIndexChange(0);
           }}
         />
-        <div class="cmd-palette__results">
+        <div class="cmd-palette__results" role="listbox">
           ${
             grouped.length === 0
               ? html`<div class="cmd-palette__empty">
@@ -231,6 +235,8 @@ export function renderCommandPalette(props: CommandPaletteProps) {
                   const isActive = globalIndex === props.activeIndex;
                   return html`
                     <div
+                      role="option"
+                      aria-selected=${isActive}
                       class="cmd-palette__item ${isActive ? "cmd-palette__item--active" : ""}"
                       @click=${(e: Event) => {
                         e.stopPropagation();
@@ -252,7 +258,7 @@ export function renderCommandPalette(props: CommandPaletteProps) {
                 )
           }
         </div>
-        <div class="cmd-palette__footer">
+        <div class="cmd-palette__footer" aria-hidden="true">
           <span><kbd>↑↓</kbd> navigate</span>
           <span><kbd>↵</kbd> select</span>
           <span><kbd>esc</kbd> close</span>
