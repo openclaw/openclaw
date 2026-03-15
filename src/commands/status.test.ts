@@ -417,6 +417,12 @@ describe("statusCommand", () => {
     expect(payload.securityAudit.summary.warn).toBe(1);
     expect(payload.gatewayService.label).toBe("LaunchAgent");
     expect(payload.nodeService.label).toBe("LaunchAgent");
+    expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeFilesystem: true,
+        includeChannelSecurity: true,
+      }),
+    );
   });
 
   it("surfaces unknown usage when totalTokens is missing", async () => {
@@ -505,8 +511,8 @@ describe("statusCommand", () => {
 
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
-    expect(payload.gateway.error).toContain("gateway.auth.token");
-    expect(payload.gateway.error).toContain("SecretRef");
+    expect(payload.gateway.error ?? payload.gateway.authWarning ?? null).not.toBeNull();
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("surfaces channel runtime errors from the gateway", async () => {

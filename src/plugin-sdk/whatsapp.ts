@@ -38,7 +38,7 @@ export {
 export {
   createWhatsAppOutboundBase,
   resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppMentionStripPatterns,
+  resolveWhatsAppMentionStripRegexes,
 } from "../channels/plugins/whatsapp-shared.js";
 export { resolveWhatsAppHeartbeatRecipients } from "../channels/plugins/whatsapp-heartbeat.js";
 export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js";
