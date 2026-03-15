@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
@@ -57,6 +58,47 @@ import {
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
+
+const EDIT_NOT_FOUND_PREFIX = "Could not find the exact text in ";
+const EDIT_CONTENT_HINT_MAX_CHARS = 800;
+
+async function buildEditMismatchHint(err: Error): Promise<Error> {
+  if (!err.message.startsWith(EDIT_NOT_FOUND_PREFIX)) {
+    return err;
+  }
+  const pathMatch = err.message.match(/^Could not find the exact text in (.+?)\.\s/);
+  const path = pathMatch?.[1];
+  if (!path) {
+    return err;
+  }
+
+  try {
+    const raw = await readFile(path, "utf8");
+    const snippet =
+      raw.length <= EDIT_CONTENT_HINT_MAX_CHARS
+        ? raw
+        : `${raw.slice(0, EDIT_CONTENT_HINT_MAX_CHARS)}\n... (truncated)`;
+    return new Error(`${err.message}\nCurrent file contents:\n${snippet}`);
+  } catch {
+    return err;
+  }
+}
+
+function wrapEditToolWithContentHint(tool: AnyAgentTool): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      try {
+        return await tool.execute(toolCallId, params, signal, onUpdate);
+      } catch (err) {
+        if (err instanceof Error) {
+          throw await buildEditMismatchHint(err);
+        }
+        throw err;
+      }
+    },
+  };
+}
 
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
@@ -401,7 +443,9 @@ export function createOpenClawCodingTools(options?: {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
+      const wrapped = wrapEditToolWithContentHint(
+        createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly }),
+      );
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     return [tool];
@@ -464,13 +508,17 @@ export function createOpenClawCodingTools(options?: {
         ? [
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  wrapEditToolWithContentHint(
+                    createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  ),
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                   },
                 )
-              : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+              : wrapEditToolWithContentHint(
+                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                ),
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(
                   createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
