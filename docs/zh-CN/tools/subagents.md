@@ -164,4 +164,11 @@ x-i18n:
 - 子智能体通告是**尽力而为**的。如果 Gateway 网关重启，待处理的"通告回复"工作会丢失。
 - 子智能体仍然共享相同的 Gateway 网关进程资源；将 `maxConcurrent` 视为安全阀。
 - `sessions_spawn` 始终是非阻塞的：它立即返回 `{ status: "accepted", runId, childSessionKey }`。
-- 子智能体上下文仅注入 `AGENTS.md` + `TOOLS.md`（无 `SOUL.md`、`IDENTITY.md`、`USER.md`、`HEARTBEAT.md` 或 `BOOTSTRAP.md`）。
+- 子智能体上下文注入 **5 个引导文件**，以保持上下文聚焦：
+  - `AGENTS.md` — 智能体配置和工作流程指导
+  - `TOOLS.md` — 工具使用说明
+  - `SOUL.md` — 个性和语气指导
+  - `IDENTITY.md` — 智能体身份（名称、Emoji、头像）
+  - `USER.md` — 用户偏好和上下文
+- **不注入**: `HEARTBEAT.md`、`BOOTSTRAP.md`、`MEMORY.md`（以最小化上下文大小）。
+- **额外匹配模式**: 如果启用了 `bootstrap-extra-files` 钩子，匹配 allowlist 名称的额外文件（如 `packages/*/SOUL.md`）仍会在过滤后被注入。
