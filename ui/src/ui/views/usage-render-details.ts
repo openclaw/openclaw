@@ -1,5 +1,6 @@
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
+import { t } from "../../i18n/index.ts";
 import { parseToolSummary } from "../usage-helpers.ts";
 import { charsToTokens, formatCost, formatTokens } from "./usage-metrics.ts";
 import { renderInsightList } from "./usage-render-overview.ts";
@@ -9,6 +10,17 @@ import {
   TimeSeriesPoint,
   UsageSessionEntry,
 } from "./usageTypes.ts";
+
+const tr = (key: string, fallback: string, params?: Record<string, string>) => {
+  const v = t(key, params);
+  if (v !== key) {
+    return v;
+  }
+  if (!params) {
+    return fallback;
+  }
+  return fallback.replace(/\{(\w+)\}/g, (_, k) => params[k] || `{${k}}`);
+};
 
 // Chart constants
 const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)
@@ -59,7 +71,7 @@ function renderSessionSummary(
   const usage = filteredUsage || session.usage;
   if (!usage) {
     return html`
-      <div class="muted">No usage data for this session.</div>
+      <div class="muted">${tr("usageDetails.noUsage", "No usage data for this session.")}</div>
     `;
   }
 
@@ -121,29 +133,29 @@ function renderSessionSummary(
     ${badges.length > 0 ? html`<div class="usage-badges">${badges.map((b) => html`<span class="usage-badge">${b}</span>`)}</div>` : nothing}
     <div class="session-summary-grid">
       <div class="session-summary-card">
-        <div class="session-summary-title">Messages</div>
+        <div class="session-summary-title">${tr("usageOverview.messages", "Messages")}</div>
         <div class="session-summary-value">${usage.messageCounts?.total ?? 0}</div>
         <div class="session-summary-meta">${usage.messageCounts?.user ?? 0} user · ${usage.messageCounts?.assistant ?? 0} assistant</div>
       </div>
       <div class="session-summary-card">
-        <div class="session-summary-title">Tool Calls</div>
+        <div class="session-summary-title">${tr("usageDetails.toolCalls", "Tool Calls")}</div>
         <div class="session-summary-value">${toolCallCount}</div>
         <div class="session-summary-meta">${uniqueToolCount} tools</div>
       </div>
       <div class="session-summary-card">
-        <div class="session-summary-title">Errors</div>
+        <div class="session-summary-title">${tr("usageOverview.errors", "Errors")}</div>
         <div class="session-summary-value">${usage.messageCounts?.errors ?? 0}</div>
         <div class="session-summary-meta">${usage.messageCounts?.toolResults ?? 0} tool results</div>
       </div>
       <div class="session-summary-card">
-        <div class="session-summary-title">Duration</div>
+        <div class="session-summary-title">${tr("usageDetails.duration", "Duration")}</div>
         <div class="session-summary-value">${formatDurationCompact(usage.durationMs, { spaced: true }) ?? "—"}</div>
         <div class="session-summary-meta">${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}</div>
       </div>
     </div>
     <div class="usage-insights-grid" style="margin-top: 12px;">
-      ${renderInsightList("Top Tools", toolItems, "No tool calls")}
-      ${renderInsightList("Model Mix", modelItems, "No model data")}
+      ${renderInsightList(tr("usageDetails.topTools", "Top Tools"), toolItems, tr("usageDetails.noToolCalls", "No tool calls"))}
+      ${renderInsightList(tr("usageDetails.modelMix", "Model Mix"), modelItems, tr("usageDetails.noModelData", "No model data"))}
     </div>
   `;
 }
@@ -274,7 +286,7 @@ function renderSessionDetailPanel(
               : nothing
           }
         </div>
-        <button class="session-close-btn" @click=${onClose} title="Close session details">×</button>
+        <button class="session-close-btn" @click=${onClose} title=${tr("usageDetails.closeSessionDetails", "Close session details")}>×</button>
       </div>
       <div class="session-detail-content">
         ${renderSessionSummary(
@@ -339,14 +351,14 @@ function renderTimeSeriesCompact(
   if (loading) {
     return html`
       <div class="session-timeseries-compact">
-        <div class="muted" style="padding: 20px; text-align: center">Loading...</div>
+        <div class="muted" style="padding: 20px; text-align: center">${tr("usagePage.loading", "Loading...")}</div>
       </div>
     `;
   }
   if (!timeSeries || timeSeries.points.length < 2) {
     return html`
       <div class="session-timeseries-compact">
-        <div class="muted" style="padding: 20px; text-align: center">No timeline data</div>
+        <div class="muted" style="padding: 20px; text-align: center">${tr("usageDetails.noTimelineData", "No timeline data")}</div>
       </div>
     `;
   }
@@ -452,13 +464,13 @@ function renderTimeSeriesCompact(
   return html`
     <div class="session-timeseries-compact">
       <div class="timeseries-header-row">
-        <div class="card-title" style="font-size: 12px; color: var(--text);">Usage Over Time</div>
+        <div class="card-title" style="font-size: 12px; color: var(--text);">${tr("usageDetails.usageOverTime", "Usage Over Time")}</div>
         <div class="timeseries-controls">
           ${
             hasSelection
               ? html`
             <div class="chart-toggle small">
-              <button class="toggle-btn active" @click=${() => onCursorRangeChange?.(null, null)}>Reset</button>
+              <button class="toggle-btn active" @click=${() => onCursorRangeChange?.(null, null)}>${tr("usageDetails.reset", "Reset")}</button>
             </div>
           `
               : nothing
@@ -468,13 +480,13 @@ function renderTimeSeriesCompact(
               class="toggle-btn ${!isCumulative ? "active" : ""}"
               @click=${() => onModeChange("per-turn")}
             >
-              Per Turn
+              ${tr("usageDetails.perTurn", "Per Turn")}
             </button>
             <button
               class="toggle-btn ${isCumulative ? "active" : ""}"
               @click=${() => onModeChange("cumulative")}
             >
-              Cumulative
+              ${tr("usageDetails.cumulative", "Cumulative")}
             </button>
           </div>
           ${
@@ -485,13 +497,13 @@ function renderTimeSeriesCompact(
                       class="toggle-btn ${breakdownMode === "total" ? "active" : ""}"
                       @click=${() => onBreakdownChange("total")}
                     >
-                      Total
+                      ${tr("usageOverview.total", "Total")}
                     </button>
                     <button
                       class="toggle-btn ${breakdownMode === "by-type" ? "active" : ""}"
                       @click=${() => onBreakdownChange("by-type")}
                     >
-                      By Type
+                      ${tr("usageOverview.byType", "By Type")}
                     </button>
                   </div>
                 `
@@ -685,7 +697,7 @@ function renderTimeSeriesCompact(
         breakdownByType
           ? html`
               <div style="margin-top: 8px;">
-                <div class="card-title" style="font-size: 12px; margin-bottom: 6px; color: var(--text);">Tokens by Type</div>
+                <div class="card-title" style="font-size: 12px; margin-bottom: 6px; color: var(--text);">${tr("usageDetails.tokensByType", "Tokens by Type")}</div>
                 <div class="cost-breakdown-bar" style="height: 18px;">
                   <div class="cost-segment output" style="width: ${pct(filteredOutput, totalTypeTokens).toFixed(1)}%"></div>
                   <div class="cost-segment input" style="width: ${pct(filteredInput, totalTypeTokens).toFixed(1)}%"></div>
@@ -706,7 +718,7 @@ function renderTimeSeriesCompact(
                     <span class="legend-dot cache-read"></span>Cache Read ${formatTokens(filteredCacheRead)}
                   </div>
                 </div>
-                <div class="cost-breakdown-total">Total: ${formatTokens(totalTypeTokens)}</div>
+                <div class="cost-breakdown-total">${tr("usageDetails.total", "Total")}: ${formatTokens(totalTypeTokens)}</div>
               </div>
             `
           : nothing
@@ -742,7 +754,9 @@ function renderContextPanel(
   if (usage && usage.totalTokens > 0) {
     const inputTokens = usage.input + usage.cacheRead;
     if (inputTokens > 0) {
-      contextPct = `~${Math.min((totalContextTokens / inputTokens) * 100, 100).toFixed(0)}% of input`;
+      contextPct = tr("usageDetails.ofInput", "~{pct}% of input", {
+        pct: Math.min((totalContextTokens / inputTokens) * 100, 100).toFixed(0),
+      });
     }
   }
 
@@ -766,17 +780,17 @@ function renderContextPanel(
   return html`
     <div class="context-details-panel">
       <div class="context-breakdown-header">
-        <div class="card-title" style="font-size: 12px; color: var(--text);">System Prompt Breakdown</div>
+        <div class="card-title" style="font-size: 12px; color: var(--text);">${tr("usageDetails.systemPromptBreakdown", "System Prompt Breakdown")}</div>
         ${
           hasMore
             ? html`<button class="context-expand-btn" @click=${onToggleExpanded}>
-                ${showAll ? "Collapse" : "Expand all"}
+                ${showAll ? tr("usageDetails.collapse", "Collapse") : tr("usageDetails.expandAllLower", "Expand all")}
               </button>`
             : nothing
         }
       </div>
       <p class="context-weight-desc">
-        ${contextPct || "Base context per message"}
+        ${contextPct || tr("usageDetails.baseContextPerMessage", "Base context per message")}
       </p>
       <div class="context-stacked-bar">
         <div class="context-segment system" style="width: ${pct(systemTokens, totalContextTokens).toFixed(1)}%" title="System: ~${formatTokens(systemTokens)}"></div>
@@ -790,7 +804,7 @@ function renderContextPanel(
         <span class="legend-item"><span class="legend-dot tools"></span>Tools ~${formatTokens(toolsTokens)}</span>
         <span class="legend-item"><span class="legend-dot files"></span>Files ~${formatTokens(filesTokens)}</span>
       </div>
-      <div class="context-total">Total: ~${formatTokens(totalContextTokens)}</div>
+      <div class="context-total">${tr("usageDetails.total", "Total")}: ~${formatTokens(totalContextTokens)}</div>
       <div class="context-breakdown-grid">
         ${
           skillsList.length > 0
@@ -900,16 +914,16 @@ function renderSessionLogsCompact(
   if (loading) {
     return html`
       <div class="session-logs-compact">
-        <div class="session-logs-header">Conversation</div>
-        <div class="muted" style="padding: 20px; text-align: center">Loading...</div>
+        <div class="session-logs-header">${tr("usageDetails.conversation", "Conversation")}</div>
+        <div class="muted" style="padding: 20px; text-align: center">${tr("usagePage.loading", "Loading...")}</div>
       </div>
     `;
   }
   if (!logs || logs.length === 0) {
     return html`
       <div class="session-logs-compact">
-        <div class="session-logs-header">Conversation</div>
-        <div class="muted" style="padding: 20px; text-align: center">No messages</div>
+        <div class="session-logs-header">${tr("usageDetails.conversation", "Conversation")}</div>
+        <div class="muted" style="padding: 20px; text-align: center">${tr("usageDetails.noMessages", "No messages")}</div>
       </div>
     `;
   }
@@ -970,9 +984,9 @@ function renderSessionLogsCompact(
   return html`
     <div class="session-logs-compact">
       <div class="session-logs-header">
-        <span>Conversation <span style="font-weight: normal; color: var(--muted);">(${displayedCount} messages)</span></span>
+        <span>${tr("usageDetails.conversation", "Conversation")} <span style="font-weight: normal; color: var(--muted);">(${displayedCount} ${tr("usageOverview.messages", "messages")})</span></span>
         <button class="btn btn-sm usage-action-btn usage-secondary-btn" @click=${onToggleExpandedAll}>
-          ${expandedAll ? "Collapse All" : "Expand All"}
+          ${expandedAll ? tr("usageDetails.collapseAll", "Collapse All") : tr("usageDetails.expandAll", "Expand All")}
         </button>
       </div>
       <div class="usage-filters-inline" style="margin: 10px 12px;">
@@ -986,10 +1000,10 @@ function renderSessionLogsCompact(
               ),
             )}
         >
-          <option value="user" ?selected=${roleSelected.has("user")}>User</option>
-          <option value="assistant" ?selected=${roleSelected.has("assistant")}>Assistant</option>
-          <option value="tool" ?selected=${roleSelected.has("tool")}>Tool</option>
-          <option value="toolResult" ?selected=${roleSelected.has("toolResult")}>Tool result</option>
+          <option value="user" ?selected=${roleSelected.has("user")}>${tr("usageDetails.user", "User")}</option>
+          <option value="assistant" ?selected=${roleSelected.has("assistant")}>${tr("usageDetails.assistant", "Assistant")}</option>
+          <option value="tool" ?selected=${roleSelected.has("tool")}>${tr("usagePage.tool", "Tool")}</option>
+          <option value="toolResult" ?selected=${roleSelected.has("toolResult")}>${tr("usageDetails.toolResult", "Tool result")}</option>
         </select>
         <select
           multiple
@@ -1013,16 +1027,16 @@ function renderSessionLogsCompact(
             @change=${(event: Event) =>
               onFilterHasToolsChange((event.target as HTMLInputElement).checked)}
           />
-          Has tools
+          ${tr("usageDetails.hasTools", "Has tools")}
         </label>
         <input
           type="text"
-          placeholder="Search conversation"
+          placeholder=${tr("usageDetails.searchConversation", "Search conversation")}
           .value=${filters.query}
           @input=${(event: Event) => onFilterQueryChange((event.target as HTMLInputElement).value)}
         />
         <button class="btn btn-sm usage-action-btn usage-secondary-btn" @click=${onFilterClear}>
-          Clear
+          ${tr("usagePage.clear", "Clear")}
         </button>
       </div>
       <div class="session-logs-list">
@@ -1030,7 +1044,11 @@ function renderSessionLogsCompact(
           const { log, toolInfo, cleanContent } = entry;
           const roleClass = log.role === "user" ? "user" : "assistant";
           const roleLabel =
-            log.role === "user" ? "You" : log.role === "assistant" ? "Assistant" : "Tool";
+            log.role === "user"
+              ? tr("usageDetails.you", "You")
+              : log.role === "assistant"
+                ? tr("usageDetails.assistant", "Assistant")
+                : tr("usagePage.tool", "Tool");
           return html`
           <div class="session-log-entry ${roleClass}">
             <div class="session-log-meta">
@@ -1061,7 +1079,7 @@ function renderSessionLogsCompact(
         ${
           filteredEntries.length === 0
             ? html`
-                <div class="muted" style="padding: 12px">No messages match the filters.</div>
+                <div class="muted" style="padding: 12px">${tr("usageDetails.noMessagesMatch", "No messages match the filters.")}</div>
               `
             : nothing
         }

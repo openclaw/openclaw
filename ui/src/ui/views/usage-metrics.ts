@@ -4,7 +4,19 @@ import {
   mergeUsageDailyLatency,
   mergeUsageLatency,
 } from "../../../../src/shared/usage-aggregates.js";
+import { t, i18n } from "../../i18n/index.ts";
 import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
+
+const tr = (key: string, fallback: string, params?: Record<string, string>) => {
+  const v = t(key, params);
+  if (v !== key) {
+    return v;
+  }
+  if (!params) {
+    return fallback;
+  }
+  return fallback.replace(/\{(\w+)\}/g, (_, k) => params[k] || `{${k}}`);
+};
 
 const CHARS_PER_TOKEN = 4;
 
@@ -89,7 +101,12 @@ type UsageMosaicStats = {
   weekdayTotals: Array<{ label: string; tokens: number }>;
 };
 
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function getWeekdayLabels(locale: string): string[] {
+  const fmt = new Intl.DateTimeFormat(locale, { weekday: "short", timeZone: "UTC" });
+  // 1970-01-04 is Sunday (UTC). Build Sun..Sat labels in the active UI locale.
+  const base = Date.UTC(1970, 0, 4);
+  return Array.from({ length: 7 }, (_, i) => fmt.format(new Date(base + i * 86400000)));
+}
 
 function getZonedHour(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCHours() : date.getHours();
@@ -152,7 +169,7 @@ function buildUsageMosaicStats(
     }
   }
 
-  const weekdayLabels = WEEKDAYS.map((label, index) => ({
+  const weekdayLabels = getWeekdayLabels(i18n.getLocale()).map((label, index) => ({
     label,
     tokens: weekdayTotals[index],
   }));
@@ -177,12 +194,12 @@ function renderUsageMosaic(
       <div class="card usage-mosaic">
         <div class="usage-mosaic-header">
           <div>
-            <div class="usage-mosaic-title">Activity by Time</div>
-            <div class="usage-mosaic-sub">Estimates require session timestamps.</div>
+            <div class="usage-mosaic-title">${tr("usageMetrics.activityByTime", "Activity by Time")}</div>
+            <div class="usage-mosaic-sub">${tr("usageMetrics.estimateHint", "Estimates require session timestamps.")}</div>
           </div>
           <div class="usage-mosaic-total">${formatTokens(0)} tokens</div>
         </div>
-        <div class="muted" style="padding: 12px; text-align: center;">No timeline data yet.</div>
+        <div class="muted" style="padding: 12px; text-align: center;">${tr("usageMetrics.noTimeline", "No timeline data yet.")}</div>
       </div>
     `;
   }
@@ -194,16 +211,16 @@ function renderUsageMosaic(
     <div class="card usage-mosaic">
       <div class="usage-mosaic-header">
         <div>
-          <div class="usage-mosaic-title">Activity by Time</div>
+          <div class="usage-mosaic-title">${tr("usageMetrics.activityByTime", "Activity by Time")}</div>
           <div class="usage-mosaic-sub">
-            Estimated from session spans (first/last activity). Time zone: ${timeZone === "utc" ? "UTC" : "Local"}.
+            ${tr("usageMetrics.estimateFromSpan", "Estimated from session spans (first/last activity). Time zone: {zone}.", { zone: timeZone === "utc" ? "UTC" : tr("usagePage.local", "Local") })}
           </div>
         </div>
         <div class="usage-mosaic-total">${formatTokens(stats.totalTokens)} tokens</div>
       </div>
       <div class="usage-mosaic-grid">
         <div class="usage-mosaic-section">
-          <div class="usage-mosaic-section-title">Day of Week</div>
+          <div class="usage-mosaic-section-title">${tr("usageMetrics.dayOfWeek", "Day of Week")}</div>
           <div class="usage-daypart-grid">
             ${stats.weekdayTotals.map((part) => {
               const intensity = Math.min(part.tokens / maxWeekday, 1);
@@ -220,7 +237,7 @@ function renderUsageMosaic(
         </div>
         <div class="usage-mosaic-section">
           <div class="usage-mosaic-section-title">
-            <span>Hours</span>
+            <span>${tr("usageOverview.hours", "Hours")}</span>
             <span class="usage-mosaic-sub">0 → 23</span>
           </div>
           <div class="usage-hour-grid">
@@ -241,16 +258,16 @@ function renderUsageMosaic(
             })}
           </div>
           <div class="usage-hour-labels">
-            <span>Midnight</span>
+            <span>${tr("usageMetrics.midnight", "Midnight")}</span>
             <span>4am</span>
             <span>8am</span>
-            <span>Noon</span>
+            <span>${tr("usageMetrics.noon", "Noon")}</span>
             <span>4pm</span>
             <span>8pm</span>
           </div>
           <div class="usage-hour-legend">
             <span></span>
-            Low → High token density
+            ${tr("usageMetrics.tokenDensity", "Low → High token density")}
           </div>
         </div>
       </div>
