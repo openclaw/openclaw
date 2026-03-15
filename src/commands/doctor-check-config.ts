@@ -2,9 +2,11 @@ import { resolveAgentModelFallbacksOverride } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
+  buildModelAliasIndex,
   getModelRefStatus,
   parseModelRef,
   resolveConfiguredModelRef,
+  resolveModelRefFromString,
 } from "../agents/model-selection.js";
 import { readConfigFileSnapshot, validateConfigObjectWithPlugins } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
@@ -253,16 +255,24 @@ function checkFallbackModels(cfg: OpenClawConfig, results: CheckConfigResult[]):
     return;
   }
 
+  // Use resolveModelRefFromString (same parser as runtime fallback execution)
+  // which strips trailing auth-profile syntax and handles aliases.
+  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
+
   let hasIssue = false;
   for (const { source, fallbacks } of allFallbackSources) {
     for (const fallback of fallbacks) {
-      const ref = parseModelRef(String(fallback), defaultProvider);
-      if (!ref) {
+      const raw = String(fallback).trim();
+      if (!raw) {
+        continue;
+      }
+      const resolved = resolveModelRefFromString({ raw, defaultProvider, aliasIndex });
+      if (!resolved) {
         results.push({
           category: "model",
           label: "Model fallbacks",
           status: "fail",
-          message: `${source}: could not parse fallback "${fallback}"`,
+          message: `${source}: could not resolve fallback "${fallback}"`,
         });
         hasIssue = true;
       }
