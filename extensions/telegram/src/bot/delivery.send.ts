@@ -102,7 +102,7 @@ export async function sendTelegramText(
     linkPreview?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
-): Promise<number> {
+): Promise<number | undefined> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     thread: opts?.thread,
@@ -134,7 +134,10 @@ export async function sendTelegramText(
   // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
   if (!htmlText.trim()) {
     if (!hasFallbackText) {
-      throw new Error("telegram sendMessage failed: empty formatted text and empty plain fallback");
+      runtime.log?.(
+        `telegram sendMessage skipped: empty formatted text and empty plain fallback chat=${chatId}`,
+      );
+      return undefined;
     }
     return await sendPlainFallback();
   }
