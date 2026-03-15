@@ -7,6 +7,8 @@ import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import { isToolAllowedByPolicyName } from "../pi-tools.policy.js";
+import { pickSandboxToolPolicy } from "../sandbox-tool-policy.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
@@ -51,7 +53,46 @@ const CronToolSchema = Type.Object(
 
 type CronToolOptions = {
   agentSessionKey?: string;
+  /**
+   * When true, skip the runtime deny-list check inside execute().
+   * The deny list is already enforced by the tool-policy pipeline that filters
+   * the tool out of the tool list before the model sees it.  This flag exists
+   * only for tests that call createCronTool() in isolation.
+   */
+  __skipDenyCheck?: boolean;
 };
+
+/**
+ * Defense-in-depth: verify the cron tool is not denied for the resolved agent
+ * at execution time.  The primary deny-list enforcement happens earlier in the
+ * tool-policy pipeline (applyToolPolicyPipeline), but this guard catches any
+ * code path that bypasses the pipeline (e.g. direct gateway tool invocation).
+ */
+function assertCronNotDenied(agentSessionKey?: string): void {
+  const cfg = loadConfig();
+  const agentId = agentSessionKey
+    ? resolveSessionAgentId({ sessionKey: agentSessionKey, config: cfg })
+    : undefined;
+
+  // Check agent-level deny
+  if (agentId && cfg.agents?.list) {
+    const agentEntry = (
+      cfg.agents.list as Array<{ id?: string; tools?: { deny?: string[] } }>
+    ).find(
+      (entry) => typeof entry.id === "string" && entry.id.toLowerCase() === agentId.toLowerCase(),
+    );
+    const agentPolicy = pickSandboxToolPolicy(agentEntry?.tools);
+    if (agentPolicy && !isToolAllowedByPolicyName("cron", agentPolicy)) {
+      throw new Error("CRON_TOOL_DENIED: cron tool is blocked by agent tools.deny");
+    }
+  }
+
+  // Check global-level deny
+  const globalPolicy = pickSandboxToolPolicy(cfg.tools);
+  if (globalPolicy && !isToolAllowedByPolicyName("cron", globalPolicy)) {
+    throw new Error("CRON_TOOL_DENIED: cron tool is blocked by tools.deny");
+  }
+}
 
 type GatewayToolCaller = typeof callGatewayTool;
 
@@ -282,6 +323,11 @@ WAKE MODES (for wake action):
 Use jobId as the canonical identifier; id is accepted for compatibility. Use contextMessages (0-10) to add previous messages as context to the job text.`,
     parameters: CronToolSchema,
     execute: async (_toolCallId, args) => {
+      // Defense-in-depth: enforce agent/global deny list at execution time.
+      if (!opts?.__skipDenyCheck) {
+        assertCronNotDenied(opts?.agentSessionKey);
+      }
+
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const gatewayOpts: GatewayCallOptions = {
