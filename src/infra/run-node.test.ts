@@ -33,10 +33,8 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
   await fs.utimes(pluginSdkAliasPath, baselineTime, baselineTime);
 }
 
-function expectedBuildSpawn(platform: NodeJS.Platform = process.platform) {
-  return platform === "win32"
-    ? ["cmd.exe", "/d", "/s", "/c", "pnpm", "exec", "tsdown", "--no-clean"]
-    : ["pnpm", "exec", "tsdown", "--no-clean"];
+function expectedBuildSpawn() {
+  return [process.execPath, "scripts/tsdown-build.mjs", "--no-clean"];
 }
 
 describe("run-node script", () => {
@@ -44,7 +42,7 @@ describe("run-node script", () => {
     "preserves control-ui assets by building with tsdown --no-clean",
     async () => {
       await withTempDir(async (tmp) => {
-        const argsPath = path.join(tmp, ".pnpm-args.txt");
+        const argsPath = path.join(tmp, ".build-args.txt");
         const indexPath = path.join(tmp, "dist", "control-ui", "index.html");
 
         await writeRuntimePostBuildScaffold(tmp);
@@ -53,7 +51,7 @@ describe("run-node script", () => {
 
         const nodeCalls: string[][] = [];
         const spawn = (cmd: string, args: string[]) => {
-          if (cmd === "pnpm") {
+          if (cmd === process.execPath && args[0] === "scripts/tsdown-build.mjs") {
             fsSync.writeFileSync(argsPath, args.join(" "), "utf-8");
             if (!args.includes("--no-clean")) {
               fsSync.rmSync(path.join(tmp, "dist", "control-ui"), { recursive: true, force: true });
@@ -87,9 +85,14 @@ describe("run-node script", () => {
         });
 
         expect(exitCode).toBe(0);
-        await expect(fs.readFile(argsPath, "utf-8")).resolves.toContain("exec tsdown --no-clean");
+        await expect(fs.readFile(argsPath, "utf-8")).resolves.toContain(
+          "scripts/tsdown-build.mjs --no-clean",
+        );
         await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
-        expect(nodeCalls).toEqual([[process.execPath, "openclaw.mjs", "--version"]]);
+        expect(nodeCalls).toEqual([
+          [process.execPath, "scripts/tsdown-build.mjs", "--no-clean"],
+          [process.execPath, "openclaw.mjs", "--version"],
+        ]);
       });
     },
   );
@@ -151,8 +154,10 @@ describe("run-node script", () => {
         fs.readFile(path.join(tmp, "dist", "plugin-sdk", "root-alias.cjs"), "utf-8"),
       ).resolves.toContain("module.exports = {};");
       await expect(
-        fs.readFile(path.join(tmp, "dist", "extensions", "demo", "openclaw.plugin.json"), "utf-8"),
-      ).resolves.toContain('"id":"demo"');
+        fs
+          .readFile(path.join(tmp, "dist", "extensions", "demo", "openclaw.plugin.json"), "utf-8")
+          .then((raw) => JSON.parse(raw)),
+      ).resolves.toMatchObject({ id: "demo" });
       await expect(
         fs.readFile(path.join(tmp, "dist", "extensions", "demo", "package.json"), "utf-8"),
       ).resolves.toContain(
@@ -222,7 +227,7 @@ describe("run-node script", () => {
   it("returns the build exit code when the compiler step fails", async () => {
     await withTempDir(async (tmp) => {
       const spawn = (cmd: string, args: string[] = []) => {
-        if (cmd === "pnpm" || (cmd === "cmd.exe" && args.includes("pnpm"))) {
+        if (cmd === process.execPath && args[0] === "scripts/tsdown-build.mjs") {
           return createExitedProcess(23);
         }
         return createExitedProcess(0);
@@ -501,7 +506,11 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
-      await expect(fs.readFile(distManifestPath, "utf-8")).resolves.toContain('"id":"demo"');
+      await expect(
+        fs.readFile(distManifestPath, "utf-8").then((raw) => JSON.parse(raw)),
+      ).resolves.toMatchObject({
+        id: "demo",
+      });
     });
   });
 
@@ -567,7 +576,11 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", "status"]]);
-      await expect(fs.readFile(distManifestPath, "utf-8")).resolves.toContain('"id":"demo"');
+      await expect(
+        fs.readFile(distManifestPath, "utf-8").then((raw) => JSON.parse(raw)),
+      ).resolves.toMatchObject({
+        id: "demo",
+      });
     });
   });
 
