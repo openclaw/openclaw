@@ -4,7 +4,7 @@ import android.util.Log
 import ai.openclaw.android.gateway.GATEWAY_PROTOCOL_VERSION
 import ai.openclaw.android.gateway.GatewayClientInfo
 import ai.openclaw.android.gateway.GatewayConnectOptions
-import ai.openclaw.android.gateway.GatewayConnectProfiles
+import ai.openclaw.android.gateway.GatewayConnectBuilder
 import ai.openclaw.android.gateway.asBooleanOrNull
 import ai.openclaw.android.gateway.asLongOrNull
 import ai.openclaw.android.gateway.asObjectOrNull
@@ -566,7 +566,7 @@ class GatewaySession(
           null
         }
 
-      return GatewayConnectProfiles.buildConnectParamsJson(
+      return GatewayConnectBuilder.buildConnectParamsJson(
         options = options,
         locale = locale,
         authJson = authJson,

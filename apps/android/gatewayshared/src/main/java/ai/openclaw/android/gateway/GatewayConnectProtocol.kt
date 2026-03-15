@@ -10,13 +10,13 @@ const val GATEWAY_PROTOCOL_VERSION = 3
 
 data class GatewayClientInfo(
   val id: String,
-  val displayName: String?,
+  val displayName: String? = null,
   val version: String,
   val platform: String,
   val mode: String,
-  val instanceId: String?,
-  val deviceFamily: String?,
-  val modelIdentifier: String?,
+  val instanceId: String? = null,
+  val deviceFamily: String? = null,
+  val modelIdentifier: String? = null,
 )
 
 data class GatewayConnectOptions(
@@ -29,13 +29,18 @@ data class GatewayConnectOptions(
   val userAgent: String? = null,
 )
 
-object GatewayConnectProfiles {
+/**
+ * Standard connect-option profiles and JSON serialization helpers
+ * for the gateway `connect` RPC.
+ */
+object GatewayConnectBuilder {
   val OperatorScopes: List<String> = listOf(
     "operator.read",
     "operator.write",
     "operator.talk.secrets",
   )
 
+  /** Builds a standard operator [GatewayConnectOptions] (no node capabilities). */
   fun buildOperatorConnectOptions(
     client: GatewayClientInfo,
     userAgent: String? = null,
@@ -47,6 +52,49 @@ object GatewayConnectProfiles {
       commands = emptyList(),
       permissions = emptyMap(),
       client = client,
+      userAgent = userAgent,
+    )
+  }
+
+  /**
+   * Builds [GatewayClientInfo] for Wear OS operator connections.
+   */
+  fun buildWearClientInfo(
+    deviceId: String,
+    versionName: String,
+    displayName: String? = null,
+    modelIdentifier: String? = null,
+  ): GatewayClientInfo {
+    return GatewayClientInfo(
+      id = GatewayClientProfiles.AndroidClientId,
+      displayName = displayName ?: GatewayClientProfiles.resolveWearDisplayName(),
+      version = versionName,
+      platform = GatewayClientProfiles.WearOsPlatform,
+      mode = GatewayClientProfiles.UiMode,
+      instanceId = deviceId,
+      deviceFamily = GatewayClientProfiles.WatchDeviceFamily,
+      modelIdentifier = modelIdentifier ?: GatewayClientProfiles.resolveModelIdentifier(),
+    )
+  }
+
+  /**
+   * Builds a standard Wear OS operator [GatewayConnectOptions].
+   */
+  fun buildWearOperatorConnectOptions(
+    deviceId: String,
+    versionName: String,
+    displayName: String? = null,
+    modelIdentifier: String? = null,
+    userAgent: String? = null,
+  ): GatewayConnectOptions {
+    return buildOperatorConnectOptions(
+      client =
+        buildWearClientInfo(
+          deviceId = deviceId,
+          versionName = versionName,
+          displayName = displayName,
+          modelIdentifier = modelIdentifier,
+        ),
       userAgent = userAgent,
     )
   }
@@ -64,6 +112,14 @@ object GatewayConnectProfiles {
     }
   }
 
+  /**
+   * Serializes [options] into the JSON payload expected by the gateway
+   * `connect` RPC.
+   *
+   * @param locale BCP-47 locale tag. Defaults to the device locale at call
+   *   time ([Locale.getDefault]), so each invocation captures the current
+   *   locale rather than a fixed value.
+   */
   fun buildConnectParamsJson(
     options: GatewayConnectOptions,
     locale: String = Locale.getDefault().toLanguageTag(),

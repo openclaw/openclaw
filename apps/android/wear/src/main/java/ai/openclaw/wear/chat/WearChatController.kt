@@ -1,11 +1,10 @@
 package ai.openclaw.wear.chat
 
 import ai.openclaw.wear.R
-import ai.openclaw.android.gateway.GatewayEvent
+import ai.openclaw.wear.gateway.GatewayEvent
 import ai.openclaw.android.gateway.GatewaySessionEntry
 import ai.openclaw.android.gateway.asObjectOrNull
 import ai.openclaw.android.gateway.asStringOrNull
-import ai.openclaw.android.gateway.parseSessionsList
 import ai.openclaw.wear.gateway.GatewayClientInterface
 import java.util.UUID
 import java.util.Locale
@@ -168,7 +167,7 @@ class WearChatController(
           put("limit", JsonPrimitive(50))
         }
         val result = client.request("sessions.list", params.toString())
-        _sessions.value = parseSessionsList(result)
+        _sessions.value = GatewaySessionEntry.parseList(result)
       } catch (_: Throwable) {
         // best-effort
       }
@@ -375,8 +374,8 @@ class WearChatController(
     when (payload.str("state")) {
       "delta" -> {
         if (runId != null && !isPendingRun(runId)) return
-        val message = payload["message"].asObjectOrNull()
-        if (message?.get("role").asStringOrNull() == "assistant") {
+        val message = payload["message"].asObjectOrNull() ?: return
+        if (message["role"].asStringOrNull() == "assistant") {
           val content = (message["content"] as? JsonArray) ?: return
           for (item in content) {
             val obj = item.asObj() ?: continue
