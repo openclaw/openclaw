@@ -1,3 +1,4 @@
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import type { OpenClawConfig } from "./config.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 
@@ -25,6 +26,41 @@ export function resolveGatewayPortWithDefault(
   fallback = DEFAULT_GATEWAY_PORT,
 ): number {
   return typeof port === "number" && port > 0 ? port : fallback;
+}
+
+export function doesGatewayBindResolveToLoopback(params: {
+  bind: unknown;
+  customBindHost?: unknown;
+}): boolean {
+  const bind = params.bind ?? "loopback";
+  if (bind === "loopback") {
+    return true;
+  }
+  const customBindHost =
+    typeof params.customBindHost === "string" ? params.customBindHost : undefined;
+  return (
+    bind === "custom" &&
+    isCanonicalDottedDecimalIPv4(customBindHost) &&
+    isLoopbackIpAddress(customBindHost)
+  );
+}
+
+export function hasTailscaleServeFunnelNonLoopbackBind(params: {
+  bind: unknown;
+  customBindHost?: unknown;
+  tailscaleMode?: unknown;
+}): boolean {
+  const { tailscaleMode } = params;
+  if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") {
+    return false;
+  }
+  if (!isGatewayNonLoopbackBindMode(params.bind)) {
+    return false;
+  }
+  return !doesGatewayBindResolveToLoopback({
+    bind: params.bind,
+    customBindHost: params.customBindHost,
+  });
 }
 
 export function buildDefaultControlUiAllowedOrigins(params: {

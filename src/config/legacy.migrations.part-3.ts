@@ -1,5 +1,6 @@
 import {
   buildDefaultControlUiAllowedOrigins,
+  doesGatewayBindResolveToLoopback,
   hasConfiguredControlUiAllowedOrigins,
   isGatewayNonLoopbackBindMode,
   resolveGatewayPortWithDefault,
@@ -98,6 +99,36 @@ function mergeLegacyIntoDefaults(params: {
 // tools.alsoAllow legacy migration intentionally omitted (field not shipped in prod).
 
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
+  {
+    // v2026.3.2 started rejecting tailscale serve/funnel configs whose bind mode no longer
+    // resolves to loopback. Older installs could crash-loop before users had a chance to run
+    // doctor/fix, so normalize legacy non-loopback binds before validation runs (issue #40910).
+    id: "gateway.bind-loopback-for-tailscale-serve-funnel",
+    describe: "Migrate legacy non-loopback gateway.bind to loopback for tailscale serve/funnel",
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway) {
+        return;
+      }
+      const tailscale = getRecord(gateway.tailscale);
+      const tailscaleMode = tailscale?.mode;
+      if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") {
+        return;
+      }
+      const bind = gateway.bind ?? "loopback";
+      if (!isGatewayNonLoopbackBindMode(bind)) {
+        return;
+      }
+      if (doesGatewayBindResolveToLoopback({ bind, customBindHost: gateway.customBindHost })) {
+        return;
+      }
+      gateway.bind = "loopback";
+      raw.gateway = gateway;
+      changes.push(
+        `Migrated gateway.bind → "loopback" for gateway.tailscale.mode="${tailscaleMode}".`,
+      );
+    },
+  },
   {
     // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
     // host-header fallback flag) for any non-loopback bind. The onboarding wizard was updated

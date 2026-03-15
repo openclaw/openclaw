@@ -1,3 +1,4 @@
+import { hasTailscaleServeFunnelNonLoopbackBind } from "./gateway-control-ui-origins.js";
 import type { LegacyConfigRule } from "./legacy.shared.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -44,6 +45,16 @@ function isLegacyGatewayBindHostAlias(value: unknown): boolean {
     normalized === "::1" ||
     normalized === "[::1]"
   );
+}
+
+function hasLegacyTailscaleServeFunnelBind(value: unknown, root: Record<string, unknown>): boolean {
+  const gateway = isRecord(root.gateway) ? root.gateway : null;
+  const tailscale = gateway && isRecord(gateway.tailscale) ? gateway.tailscale : null;
+  return hasTailscaleServeFunnelNonLoopbackBind({
+    bind: value,
+    customBindHost: gateway?.customBindHost,
+    tailscaleMode: tailscale?.mode,
+  });
 }
 
 export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
@@ -202,6 +213,13 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     message:
       "gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead (auto-migrated on load).",
     match: (value) => isLegacyGatewayBindHostAlias(value),
+    requireSourceLiteral: true,
+  },
+  {
+    path: ["gateway", "bind"],
+    message:
+      "gateway.bind must resolve to loopback when gateway.tailscale.mode=serve/funnel; legacy non-loopback bind modes are auto-migrated on load.",
+    match: (value, root) => hasLegacyTailscaleServeFunnelBind(value, root),
     requireSourceLiteral: true,
   },
   {

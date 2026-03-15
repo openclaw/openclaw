@@ -479,4 +479,52 @@ describe("config strict validation", () => {
       expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
     });
   });
+
+  it("does not mark resolved-only tailscale serve bind modes as auto-migratable legacy", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        gateway: {
+          bind: "${OPENCLAW_BIND}",
+          tailscale: { mode: "serve" },
+          auth: { mode: "token", token: "tok" },
+        },
+      });
+
+      const prev = process.env.OPENCLAW_BIND;
+      process.env.OPENCLAW_BIND = "lan";
+      try {
+        const snap = await readConfigFileSnapshot();
+        expect(snap.valid).toBe(false);
+        expect(snap.legacyIssues).toHaveLength(0);
+        expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+      } finally {
+        if (prev === undefined) {
+          delete process.env.OPENCLAW_BIND;
+        } else {
+          process.env.OPENCLAW_BIND = prev;
+        }
+      }
+    });
+  });
+
+  it("marks literal tailscale serve non-loopback bind modes as legacy", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        gateway: {
+          bind: "lan",
+          tailscale: { mode: "serve" },
+          auth: { mode: "token", token: "tok" },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+      expect(snap.valid).toBe(false);
+      expect(
+        snap.legacyIssues.some(
+          (issue) =>
+            issue.path === "gateway.bind" && issue.message.includes("gateway.tailscale.mode"),
+        ),
+      ).toBe(true);
+    });
+  });
 });
