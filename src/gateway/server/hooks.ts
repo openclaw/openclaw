@@ -70,6 +70,9 @@ export function createGatewayHooksRequestHandler(params: {
         to: value.to,
         allowUnsafeExternalContent: value.allowUnsafeExternalContent,
       },
+      ...(value.accountId && value.deliver
+        ? { delivery: { mode: "announce" as const, accountId: value.accountId } }
+        : {}),
       state: { nextRunAtMs: now },
     };
 

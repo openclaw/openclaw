@@ -230,6 +230,7 @@ export type HookAgentPayload = {
   deliver: boolean;
   channel: HookMessageChannel;
   to?: string;
+  accountId?: string;
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
@@ -401,6 +402,9 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
   }
   const toRaw = payload.to;
   const to = typeof toRaw === "string" && toRaw.trim() ? toRaw.trim() : undefined;
+  const accountIdRaw = payload.accountId;
+  const accountId =
+    typeof accountIdRaw === "string" && accountIdRaw.trim() ? accountIdRaw.trim() : undefined;
   const modelRaw = payload.model;
   const model = typeof modelRaw === "string" && modelRaw.trim() ? modelRaw.trim() : undefined;
   if (modelRaw !== undefined && !model) {
@@ -427,6 +431,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       deliver,
       channel,
       to,
+      accountId,
       model,
       thinking,
       timeoutSeconds,
