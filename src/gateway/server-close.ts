@@ -4,6 +4,7 @@ import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { IdleTriggerRunner } from "../infra/idle-trigger-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 
 export function createGatewayCloseHandler(params: {
@@ -16,6 +17,7 @@ export function createGatewayCloseHandler(params: {
   cron: { stop: () => void };
   heartbeatRunner: HeartbeatRunner;
   updateCheckStop?: (() => void) | null;
+  idleTriggerRunner: IdleTriggerRunner;
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   tickInterval: ReturnType<typeof setInterval>;
@@ -77,6 +79,7 @@ export function createGatewayCloseHandler(params: {
     } catch {
       /* ignore */
     }
+    params.idleTriggerRunner.stop();
     for (const timer of params.nodePresenceTimers.values()) {
       clearInterval(timer);
     }

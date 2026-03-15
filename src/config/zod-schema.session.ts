@@ -21,6 +21,18 @@ const SessionResetConfigSchema = z
   })
   .strict();
 
+const OnIdleTriggerSchema = z
+  .object({
+    name: z.string().optional(),
+    after: z.string(),
+    file: z.string().optional(),
+    prompt: z.string().optional(),
+  })
+  .strict()
+  .refine((val) => !(val.file && val.prompt), {
+    message: "Cannot specify both 'file' and 'prompt' - they are mutually exclusive",
+  });
+
 export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
 export const SessionSchema = z
@@ -140,6 +152,7 @@ export const SessionSchema = z
         }
       })
       .optional(),
+    onIdle: z.array(OnIdleTriggerSchema).optional(),
   })
   .strict()
   .optional();
