@@ -252,6 +252,24 @@ describe("applyExtraParamsToAgent", () => {
     return payload;
   }
 
+  function runAssistantContentPayloadMutationCase(params: {
+    applyProvider: string;
+    applyModelId: string;
+    model: Model<"openai-completions"> | Model<"anthropic-messages">;
+    payload?: Record<string, unknown>;
+  }) {
+    const payload = params.payload ?? {};
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(payload, model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(agent, undefined, params.applyProvider, params.applyModelId);
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(params.model, context, {});
+    return payload;
+  }
+
   function runAnthropicHeaderCase(params: {
     cfg: Record<string, unknown>;
     modelId: string;
@@ -585,6 +603,74 @@ describe("applyExtraParamsToAgent", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  it("serializes assistant content blocks as a plain string for openai-completions payloads", () => {
+    const payload = runAssistantContentPayloadMutationCase({
+      applyProvider: "moonshot",
+      applyModelId: "kimi-k2.5",
+      model: {
+        api: "openai-completions",
+        provider: "moonshot",
+        id: "kimi-k2.5",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Checking " },
+              { type: "text", text: "weather." },
+            ],
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: { name: "weather", arguments: "{}" },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [{ type: "text", text: "What next?" }],
+          },
+        ],
+      },
+    });
+
+    const messages = payload.messages as Array<Record<string, unknown>>;
+    expect(messages[0]?.content).toBe("Checking weather.");
+    expect(messages[0]?.tool_calls).toEqual([
+      {
+        id: "call_1",
+        type: "function",
+        function: { name: "weather", arguments: "{}" },
+      },
+    ]);
+    expect(messages[1]?.content).toEqual([{ type: "text", text: "What next?" }]);
+  });
+
+  it("uses an empty assistant string when openai-completions payload content has no text blocks", () => {
+    const payload = runAssistantContentPayloadMutationCase({
+      applyProvider: "local",
+      applyModelId: "qwen3-32b",
+      model: {
+        api: "openai-completions",
+        provider: "local",
+        id: "qwen3-32b",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "internal-only" }],
+          },
+        ],
+      },
+    });
+
+    const messages = payload.messages as Array<Record<string, unknown>>;
+    expect(messages[0]?.content).toBe("");
   });
 
   it("normalizes thinking=off to null for SiliconFlow Pro models", () => {

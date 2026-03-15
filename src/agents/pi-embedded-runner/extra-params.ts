@@ -23,6 +23,7 @@ import {
 } from "./moonshot-stream-wrappers.js";
 import {
   createCodexDefaultTransportWrapper,
+  createOpenAICompletionsAssistantContentStringWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
@@ -482,4 +483,6 @@ export function applyExtraParamsToAgent(
       log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
     }
   }
+
+  agent.streamFn = createOpenAICompletionsAssistantContentStringWrapper(agent.streamFn);
 }
