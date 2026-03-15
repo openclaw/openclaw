@@ -361,7 +361,7 @@ See [Dashboard](/web/dashboard) and [Web surfaces](/web) for bind modes and auth
 
 ### What runtime do I need
 
-Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
+Node **>= 22.16** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
 
 ### Does it run on Raspberry Pi
 
