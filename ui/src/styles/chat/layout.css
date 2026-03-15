@@ -991,5 +991,36 @@
   border-color: var(--accent);
 }
 
+/* Context usage notice (shown when context usage >= 85%) */
+.context-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.2;
+  padding: 6px 14px;
+  margin-bottom: 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ctx-color) 30%, transparent);
+  background: var(--ctx-bg);
+  color: var(--ctx-color);
+  white-space: nowrap;
+  user-select: none;
+  align-self: flex-start;
+  animation: fade-in 0.2s var(--ease-out);
+}
+
+.context-notice__icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.context-notice__detail {
+  opacity: 0.75;
+  font-size: 12px;
+}
+
 /* Mobile dropdown toggle — hidden on desktop */
 /* Mobile gear toggle + dropdown are hidden by default in layout.css */
+
