@@ -413,4 +413,59 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it("suppresses NO_REPLY payload in direct delivery so sentinel never leaks to external channels", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "NO_REPLY" });
+    // Force the useDirectDelivery path (structured content) to exercise
+    // deliverViaDirect without going through finalizeTextDelivery.
+    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
+    const state = await dispatchCronDelivery(params);
+
+    // NO_REPLY must be filtered out before reaching the outbound adapter.
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    // Mark as silently delivered so the job is persisted as successful.
+    expect(state.delivered).toBe(true);
+    // deliveryAttempted must be true so the heartbeat timer does not fire
+    // a fallback enqueueSystemEvent with the NO_REPLY sentinel text.
+    expect(state.deliveryAttempted).toBe(true);
+
+    // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
+    expect(
+      shouldEnqueueCronMainSummary({
+        summaryText: "NO_REPLY",
+        deliveryRequested: true,
+        delivered: state.delivered,
+        deliveryAttempted: state.deliveryAttempted,
+        suppressMainSummary: false,
+        isCronSystemEvent: () => true,
+      }),
+    ).toBe(false);
+  });
+
+  it("suppresses NO_REPLY payload with surrounding whitespace", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "  NO_REPLY  " });
+    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+
+    expect(
+      shouldEnqueueCronMainSummary({
+        summaryText: "  NO_REPLY  ",
+        deliveryRequested: true,
+        delivered: state.delivered,
+        deliveryAttempted: state.deliveryAttempted,
+        suppressMainSummary: false,
+        isCronSystemEvent: () => true,
+      }),
+    ).toBe(false);
+  });
 });
