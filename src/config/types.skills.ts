@@ -17,6 +17,12 @@ export type SkillsLoadConfig = {
   watch?: boolean;
   /** Debounce for the skills watcher (ms). */
   watchDebounceMs?: number;
+  /** Name of the index file to look for in each skills root. */
+  indexFileName?: string;
+  /** Attempt index loading before scanning skill directories. */
+  indexFirst?: boolean;
+  /** Require a valid index instead of falling back to directory scanning. */
+  strictIndex?: boolean;
 };
 
 export type SkillsInstallConfig = {

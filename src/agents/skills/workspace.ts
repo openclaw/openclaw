@@ -136,6 +136,18 @@ type ResolvedSkillsLimits = {
   maxSkillFileBytes: number;
 };
 
+type SkillIndexEntry = {
+  name: string;
+  path: string;
+  description?: string;
+};
+
+type SkillsIndex = {
+  version: number;
+  generated?: string;
+  skills: SkillIndexEntry[];
+};
+
 function resolveSkillsLimits(config?: OpenClawConfig): ResolvedSkillsLimits {
   const limits = config?.skills?.limits;
   return {
@@ -289,6 +301,162 @@ function unwrapLoadedSkills(loaded: unknown): Skill[] {
   return [];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPathWithinRoot(rootPath: string, targetPath: string): boolean {
+  const relativePath = path.relative(rootPath, targetPath);
+  return (
+    relativePath === "" || (!relativePath.startsWith(`..${path.sep}`) && relativePath !== "..")
+  );
+}
+
+function parseSkillsIndex(raw: string, indexPath: string): SkillsIndex {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed) || !Array.isArray(parsed.skills)) {
+    throw new Error("missing .skills array");
+  }
+
+  const skills: SkillIndexEntry[] = [];
+  for (const entry of parsed.skills) {
+    if (!isRecord(entry) || typeof entry.name !== "string" || typeof entry.path !== "string") {
+      skillsLogger.warn("Skipping invalid skill entry in skills index.", {
+        indexPath,
+        entry,
+      });
+      continue;
+    }
+
+    const name = entry.name.trim();
+    const entryPath = entry.path.trim();
+    if (!name || !entryPath) {
+      skillsLogger.warn("Skipping skill entry with empty name or path in skills index.", {
+        indexPath,
+        entry,
+      });
+      continue;
+    }
+
+    skills.push({
+      name,
+      path: entryPath,
+      description: typeof entry.description === "string" ? entry.description : undefined,
+    });
+  }
+
+  return {
+    version: typeof parsed.version === "number" ? parsed.version : 1,
+    generated: typeof parsed.generated === "string" ? parsed.generated : undefined,
+    skills,
+  };
+}
+
+function loadSkillsFromIndex(params: {
+  baseDir: string;
+  indexPath: string;
+  source: string;
+  limits: ResolvedSkillsLimits;
+  strict: boolean;
+}): Skill[] | null {
+  const { baseDir, indexPath, source, limits, strict } = params;
+
+  if (!fs.existsSync(indexPath)) {
+    if (strict) {
+      skillsLogger.warn("Skills index missing and strictIndex is enabled.", { baseDir, indexPath });
+      return [];
+    }
+    return null;
+  }
+
+  let parsed: SkillsIndex;
+  try {
+    parsed = parseSkillsIndex(fs.readFileSync(indexPath, "utf-8"), indexPath);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    skillsLogger.warn("Failed to parse skills index.", { baseDir, indexPath, error: message });
+    if (strict) {
+      return [];
+    }
+    return null;
+  }
+
+  const baseRealPath = fs.realpathSync.native?.(baseDir) ?? fs.realpathSync(baseDir);
+  const loadedSkills: Skill[] = [];
+  for (const entry of parsed.skills) {
+    if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
+      break;
+    }
+
+    if (path.isAbsolute(entry.path)) {
+      skillsLogger.warn("Skipping absolute path in skills index.", {
+        baseDir,
+        indexPath,
+        entryPath: entry.path,
+      });
+      continue;
+    }
+
+    const skillDir = path.resolve(baseDir, entry.path);
+    if (!isPathWithinRoot(baseDir, skillDir)) {
+      skillsLogger.warn("Skipping out-of-root path in skills index.", {
+        baseDir,
+        indexPath,
+        entryPath: entry.path,
+      });
+      continue;
+    }
+
+    const skillMd = path.join(skillDir, "SKILL.md");
+    if (!fs.existsSync(skillMd)) {
+      continue;
+    }
+
+    let skillRealPath: string;
+    try {
+      skillRealPath = fs.realpathSync.native?.(skillDir) ?? fs.realpathSync(skillDir);
+    } catch {
+      continue;
+    }
+    if (!isPathWithinRoot(baseRealPath, skillRealPath)) {
+      skillsLogger.warn("Skipping symlinked out-of-root path in skills index.", {
+        baseDir,
+        indexPath,
+        entryPath: entry.path,
+        skillRealPath,
+      });
+      continue;
+    }
+
+    try {
+      const size = fs.statSync(skillMd).size;
+      if (size > limits.maxSkillFileBytes) {
+        skillsLogger.warn("Skipping indexed skill due to oversized SKILL.md.", {
+          skill: entry.name,
+          filePath: skillMd,
+          size,
+          maxSkillFileBytes: limits.maxSkillFileBytes,
+        });
+        continue;
+      }
+    } catch {
+      continue;
+    }
+
+    const loaded = loadSkillsFromDir({ dir: skillDir, source });
+    loadedSkills.push(...unwrapLoadedSkills(loaded));
+  }
+
+  if (loadedSkills.length > limits.maxSkillsLoadedPerSource) {
+    return loadedSkills
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, limits.maxSkillsLoadedPerSource);
+  }
+
+  return loadedSkills;
+}
+
 function loadSkillEntries(
   workspaceDir: string,
   opts?: {
@@ -306,6 +474,22 @@ function loadSkillEntries(
       maxEntriesToScan: limits.maxCandidatesPerRoot,
     });
     const baseDir = resolved.baseDir;
+    const loadConfig = opts?.config?.skills?.load;
+
+    if (loadConfig?.indexFirst) {
+      const indexFileName = loadConfig.indexFileName?.trim() || "skills-index.json";
+      const indexedSkills = loadSkillsFromIndex({
+        baseDir,
+        indexPath: path.join(baseDir, indexFileName),
+        source: params.source,
+        limits,
+        strict: loadConfig.strictIndex === true,
+      });
+      if (indexedSkills !== null) {
+        return indexedSkills;
+      }
+    }
+
     const baseDirRealPath = resolveContainedSkillPath({
       source: params.source,
       rootDir,

@@ -81,16 +81,36 @@ function toWatchGlobRoot(raw: string): string {
   return raw.replaceAll("\\", "/").replace(/\/+$/, "");
 }
 
-function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): string[] {
+function addWatchTargets(params: {
+  root: string;
+  targets: Set<string>;
+  indexFirst: boolean;
+  indexFileName: string;
+}) {
+  const { root, targets, indexFirst, indexFileName } = params;
+  for (const watchRoot of [root, path.join(root, "skills")]) {
+    const globRoot = toWatchGlobRoot(watchRoot);
+    targets.add(`${globRoot}/SKILL.md`);
+    targets.add(`${globRoot}/*/SKILL.md`);
+    if (indexFirst) {
+      targets.add(`${globRoot}/${indexFileName}`);
+    }
+  }
+}
+
+export function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): string[] {
   // Skills are defined by SKILL.md; watch only those files to avoid traversing
   // or watching unrelated large trees (e.g. datasets) that can exhaust FDs.
   const targets = new Set<string>();
+  const loadConfig = config?.skills?.load;
+  const indexFileName = loadConfig?.indexFileName?.trim() || "skills-index.json";
   for (const root of resolveWatchPaths(workspaceDir, config)) {
-    const globRoot = toWatchGlobRoot(root);
-    // Some configs point directly at a skill folder.
-    targets.add(`${globRoot}/SKILL.md`);
-    // Standard layout: <skillsRoot>/<skillName>/SKILL.md
-    targets.add(`${globRoot}/*/SKILL.md`);
+    addWatchTargets({
+      root,
+      targets,
+      indexFirst: loadConfig?.indexFirst === true,
+      indexFileName,
+    });
   }
   return Array.from(targets).toSorted();
 }
