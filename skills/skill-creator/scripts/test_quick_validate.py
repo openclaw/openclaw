@@ -67,6 +67,22 @@ metadata: |
 
         self.assertTrue(valid, message)
 
+    def test_accepts_homepage_frontmatter_key(self):
+        skill_dir = self.temp_dir / "homepage-skill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: homepage-skill
+description: Supports homepage
+homepage: https://example.com
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertTrue(valid, message)
+
 
 if __name__ == "__main__":
     main()

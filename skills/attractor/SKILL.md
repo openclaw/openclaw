@@ -1,7 +1,8 @@
 ---
 name: attractor
 description: Build, extend, and debug Attractor implementations from the strongdm/attractor specs. Use when work involves DOT pipeline DSL parsing, graph execution traversal, node handlers, checkpoint/resume state, human-in-the-loop gates, condition expressions, model stylesheet rules, or integrating coding-agent-loop/unified-llm backends.
-metadata: { "openclaw": { "emoji": "🧲", "homepage": "https://github.com/strongdm/attractor" } }
+homepage: https://github.com/strongdm/attractor
+metadata: { "openclaw": { "emoji": "🧲" } }
 ---
 
 # Attractor
