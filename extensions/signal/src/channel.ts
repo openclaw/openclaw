@@ -33,6 +33,9 @@ import {
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { getSignalRuntime } from "./runtime.js";
 
+/** Default text chunk size for Signal outbound messages (chars). */
+const SIGNAL_TEXT_CHUNK_LIMIT = 4000;
+
 const signalMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
   supportsAction: (ctx) =>
@@ -301,7 +304,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     deliveryMode: "direct",
     chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
-    textChunkLimit: 4000,
+    textChunkLimit: SIGNAL_TEXT_CHUNK_LIMIT,
     sendPayload: async (ctx) => {
       const text = ctx.payload.text ?? "";
       const urls: string[] = ctx.payload.mediaUrls?.length
@@ -332,7 +335,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         return lastResult ?? { channel: "signal", messageId: "" };
       }
       // Text-only: chunk and send; only first chunk carries the quote.
-      const limit = 4000;
+      const limit = SIGNAL_TEXT_CHUNK_LIMIT;
       const chunks = getSignalRuntime().channel.text.chunkText(text, limit);
       let lastResult: { channel: string; messageId: string } | undefined;
       for (let i = 0; i < chunks.length; i++) {

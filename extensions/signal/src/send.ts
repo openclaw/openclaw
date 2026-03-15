@@ -193,7 +193,9 @@ export async function sendMessageSignal(
       const normalizedTo = to.replace(/^signal:/i, "").trim();
       const isGroup = normalizedTo.toLowerCase().startsWith("group:");
       if (!isGroup) {
-        resolvedQuoteTimestamp = parsedTs;
+        if (typeof resolvedQuoteTimestamp !== "number") {
+          resolvedQuoteTimestamp = parsedTs;
+        }
         resolvedQuoteAuthor = resolvedQuoteAuthor || normalizedTo;
       }
     }
