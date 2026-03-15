@@ -112,3 +112,23 @@ export function resolveHttpApprovalAgent(
     allowlist: Array.isArray(agent?.allowlist) ? agent.allowlist : [],
   };
 }
+
+/**
+ * Derive a host-scoped URL pattern for an "allow always" decision.
+ *
+ * Given a URL like `https://api.example.com/v1/data?q=1`, returns
+ * `https://api.example.com/**` so that all paths on the same host are
+ * allowed in future requests. Returns null if the URL cannot be parsed.
+ */
+export function resolveHttpAllowAlwaysPattern(url: string): string | null {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return `${parsed.protocol}//${parsed.host}/**`;
+  } catch {
+    return null;
+  }
+}

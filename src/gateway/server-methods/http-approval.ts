@@ -21,7 +21,11 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 export function createHttpApprovalHandlers(
   manager: ExecApprovalManager,
-  opts?: { forwarder?: ExecApprovalForwarder },
+  opts?: {
+    forwarder?: ExecApprovalForwarder;
+    /** Called when an operator selects "allow-always" so the URL pattern can be persisted. */
+    onAllowAlways?: (url: string, agentId: string | null) => void;
+  },
 ): GatewayRequestHandlers {
   // Keep the original HTTP-shaped request alongside each pending approval so
   // resolved events broadcast the url/method payload, not the exec-shaped
@@ -267,6 +271,16 @@ export function createHttpApprovalHandlers(
         return;
       }
       httpRequests.delete(approvalId);
+
+      // Persist the URL to the HTTP allowlist when "allow-always" is selected.
+      if (decision === "allow-always" && httpRequest?.url && opts?.onAllowAlways) {
+        try {
+          opts.onAllowAlways(httpRequest.url, httpRequest.agentId ?? null);
+        } catch {
+          // Best-effort persistence. Failure should not block the approval flow.
+        }
+      }
+
       context.broadcast(
         "http.approval.resolved",
         { id: approvalId, decision, resolvedBy, ts: Date.now(), request: httpRequest },

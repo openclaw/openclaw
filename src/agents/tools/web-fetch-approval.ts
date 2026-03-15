@@ -19,7 +19,11 @@ import {
   evaluateHttpApprovalPolicy,
   resolveHttpApprovalPolicy,
 } from "../../infra/http-approval-policy.js";
-import { DEFAULT_HTTP_APPROVAL_TIMEOUT_MS } from "../../infra/http-approvals.js";
+import { matchHttpAllowlist } from "../../infra/http-approvals-allowlist.js";
+import {
+  DEFAULT_HTTP_APPROVAL_TIMEOUT_MS,
+  resolveHttpAllowAlwaysPattern,
+} from "../../infra/http-approvals.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
@@ -63,6 +67,10 @@ export function withHttpApprovalGate(
 
   const originalExecute = tool.execute;
 
+  // Runtime cache of allow-always patterns so that subsequent fetches to the
+  // same host are allowed immediately without waiting for config reload.
+  const runtimeAllowedPatterns: Array<{ pattern: string }> = [];
+
   return {
     ...tool,
     execute: async (toolCallId: string, args: Record<string, unknown>) => {
@@ -71,6 +79,13 @@ export function withHttpApprovalGate(
       const url = extractUrlFromArgs(args);
       if (!url) {
         // Let the original tool handle the missing URL error.
+        return originalExecute(toolCallId, args);
+      }
+
+      // Check the runtime allow-always cache before policy evaluation.
+      // This allows "allow-always" to take effect immediately for subsequent
+      // fetches without waiting for config reload.
+      if (runtimeAllowedPatterns.length > 0 && matchHttpAllowlist(runtimeAllowedPatterns, url)) {
         return originalExecute(toolCallId, args);
       }
 
@@ -101,7 +116,14 @@ export function withHttpApprovalGate(
         });
 
         if (approvalDecision === "allow-once" || approvalDecision === "allow-always") {
-          // Approved. Proceed with the fetch.
+          // Record allow-always patterns in the runtime cache so future
+          // fetches to the same host bypass approval immediately.
+          if (approvalDecision === "allow-always") {
+            const pattern = resolveHttpAllowAlwaysPattern(url);
+            if (pattern && !runtimeAllowedPatterns.some((e) => e.pattern === pattern)) {
+              runtimeAllowedPatterns.push({ pattern });
+            }
+          }
           return originalExecute(toolCallId, args);
         }
 

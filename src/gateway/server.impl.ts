@@ -33,6 +33,7 @@ import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { resolveHttpAllowAlwaysPattern } from "../infra/http-approvals.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
@@ -800,6 +801,46 @@ export async function startGatewayServer(
   const httpApprovalForwarder = createExecApprovalForwarder({ configKey: "http" });
   const httpApprovalHandlers = createHttpApprovalHandlers(httpApprovalManager, {
     forwarder: httpApprovalForwarder,
+    onAllowAlways: (url, agentId) => {
+      const pattern = resolveHttpAllowAlwaysPattern(url);
+      if (!pattern) {
+        return;
+      }
+      // Persist the URL pattern to the HTTP allowlist in the config file.
+      // This runs synchronously on the current config snapshot to avoid
+      // races with other config writers. The config reloader will pick up
+      // the change for future policy evaluations.
+      try {
+        const cfg = loadConfig();
+        const httpPolicy = cfg.approvals?.httpPolicy ?? {};
+        const target = agentId ?? undefined;
+        if (target) {
+          const agents: Record<string, { allowlist?: Array<{ pattern: string }> }> =
+            (httpPolicy.agents as Record<string, { allowlist?: Array<{ pattern: string }> }>) ?? {};
+          const agent = agents[target] ?? {};
+          const allowlist = Array.isArray(agent.allowlist) ? [...agent.allowlist] : [];
+          if (!allowlist.some((e) => e.pattern === pattern)) {
+            allowlist.push({ pattern });
+            agents[target] = { ...agent, allowlist };
+            void writeConfigFile({
+              ...cfg,
+              approvals: { ...cfg.approvals, httpPolicy: { ...httpPolicy, agents } },
+            });
+          }
+        } else {
+          const allowlist = Array.isArray(httpPolicy.allowlist) ? [...httpPolicy.allowlist] : [];
+          if (!allowlist.some((e) => e.pattern === pattern)) {
+            allowlist.push({ pattern });
+            void writeConfigFile({
+              ...cfg,
+              approvals: { ...cfg.approvals, httpPolicy: { ...httpPolicy, allowlist } },
+            });
+          }
+        }
+      } catch {
+        // Best-effort. Config write failure should not block the approval.
+      }
+    },
   });
   const secretsHandlers = createSecretsHandlers({
     reloadSecrets: async () => {
