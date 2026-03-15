@@ -24,6 +24,12 @@ function createExitedProcess(code: number | null, signal: string | null = null) 
   };
 }
 
+function expectedBuildSpawn(platform: NodeJS.Platform = process.platform) {
+  return platform === "win32"
+    ? ["cmd.exe", "/d", "/s", "/c", "pnpm", "exec", "tsdown", "--no-clean"]
+    : ["pnpm", "exec", "tsdown", "--no-clean"];
+}
+
 describe("run-node script", () => {
   it.runIf(process.platform !== "win32")(
     "preserves control-ui assets by building with tsdown --no-clean",
@@ -208,7 +214,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
-        ["pnpm", "exec", "tsdown", "--no-clean"],
+        expectedBuildSpawn(),
         [process.execPath, "openclaw.mjs", "status"],
       ]);
     });
@@ -268,7 +274,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
-        ["pnpm", "exec", "tsdown", "--no-clean"],
+        expectedBuildSpawn(),
         [process.execPath, "openclaw.mjs", "status"],
       ]);
     });
@@ -397,7 +403,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
-        ["pnpm", "exec", "tsdown", "--no-clean"],
+        expectedBuildSpawn(),
         [process.execPath, "openclaw.mjs", "status"],
       ]);
     });
@@ -518,7 +524,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
-        ["pnpm", "exec", "tsdown", "--no-clean"],
+        expectedBuildSpawn(),
         [process.execPath, "openclaw.mjs", "status"],
       ]);
     });
