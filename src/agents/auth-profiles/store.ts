@@ -379,10 +379,51 @@ function loadAuthProfileStoreForAgent(
   const authPath = resolveAuthStorePath(agentDir);
   const asStore = loadCoercedStore(authPath);
   if (asStore) {
+    // Fix #41634: Prune ghost profiles that are not in the configured order.
+    // This prevents profiles from accumulating indefinitely when repairOAuthProfileIdMismatch
+    // or other code creates new profile entries without cleaning up old ones.
+    let pruned = false;
+    if (asStore.order && typeof asStore.order === "object") {
+      const validProfileIds = new Set<string>();
+      for (const profiles of Object.values(asStore.order)) {
+        if (Array.isArray(profiles)) {
+          for (const profileId of profiles) {
+            validProfileIds.add(profileId);
+          }
+        }
+      }
+      // Also keep profiles that are explicitly configured (lastGood values are profile IDs)
+      if (asStore.lastGood) {
+        for (const profileId of Object.values(asStore.lastGood)) {
+          validProfileIds.add(profileId);
+        }
+      }
+      // Collect providers that are explicitly managed in order
+      const managedProviders = new Set<string>(Object.keys(asStore.order));
+      // Remove ghost profiles not in any valid list
+      for (const [profileId, credential] of Object.entries(asStore.profiles)) {
+        // Skip deletion if this profile's provider is not managed in order
+        // This prevents silent data loss for profiles added via upsertAuthProfile
+        // that don't have a corresponding order entry yet
+        if (credential.provider && !managedProviders.has(credential.provider)) {
+          continue;
+        }
+        if (!validProfileIds.has(profileId)) {
+          delete asStore.profiles[profileId];
+          // Also clean up orphaned usageStats entries
+          if (asStore.usageStats) {
+            delete asStore.usageStats[profileId];
+          }
+          log.info("pruned ghost auth profile", { profileId, agentDir });
+          pruned = true;
+        }
+      }
+    }
     // Runtime secret activation must remain read-only:
     // sync external CLI credentials in-memory, but never persist while readOnly.
     const synced = syncExternalCliCredentials(asStore);
-    if (synced && !readOnly) {
+    // Save when either external credentials synced OR we pruned ghost profiles
+    if ((synced || pruned) && !readOnly) {
       saveJsonFile(authPath, asStore);
     }
     return asStore;
@@ -414,6 +455,7 @@ function loadAuthProfileStoreForAgent(
   const mergedOAuth = mergeOAuthFileIntoStore(store);
   // Keep external CLI credentials visible in runtime even during read-only loads.
   const syncedCli = syncExternalCliCredentials(store);
+
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
   const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth || syncedCli);
   if (shouldWrite) {
