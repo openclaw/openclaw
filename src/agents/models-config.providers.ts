@@ -26,6 +26,8 @@ import {
   buildDoubaoProvider,
   buildKimiCodingProvider,
   buildKilocodeProvider,
+  buildBlinkProvider,
+  BLINK_DEFAULT_MODEL_ID,
   buildMinimaxPortalProvider,
   buildMinimaxProvider,
   buildModelStudioProvider,
@@ -43,6 +45,8 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 export {
+  buildBlinkProvider,
+  BLINK_DEFAULT_MODEL_ID,
   buildKimiCodingProvider,
   buildKilocodeProvider,
   buildNvidiaProvider,
@@ -709,6 +713,14 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("nvidia", async ({ apiKey }) => ({ ...buildNvidiaProvider(), apiKey })),
   withApiKey("kilocode", async ({ apiKey }) => ({
     ...(await buildKilocodeProviderWithDiscovery()),
+    apiKey,
+  })),
+  // Blink AI Gateway — auto-activated when BLINK_API_KEY env var is set.
+  // Present in all Blink Claw containers (injected at Fly.io machine creation).
+  // Uses openai-completions API to call blink-apis /api/v1/ai/chat/completions.
+  // x-blink-agent-id header read from BLINK_AGENT_ID env var (per-agent tracking).
+  withApiKey("blink", async ({ apiKey }) => ({
+    ...buildBlinkProvider(),
     apiKey,
   })),
 ];

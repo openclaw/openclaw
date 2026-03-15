@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+export { buildBlinkProvider, BLINK_DEFAULT_MODEL_ID } from "./blink-models.js";
 import {
   KILOCODE_BASE_URL,
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
