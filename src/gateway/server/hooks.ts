@@ -66,9 +66,15 @@ export function createGatewayHooksRequestHandler(params: {
     };
 
     const runId = randomUUID();
+    logHooks.info(
+      `hook agent queued: runId=${runId} jobId=${jobId} name=${value.name} agentId=${value.agentId} sessionKey=${sessionKey} wakeMode=${value.wakeMode}`,
+    );
     void (async () => {
       try {
         const cfg = loadConfig();
+        logHooks.info(
+          `hook agent start: runId=${runId} jobId=${jobId} sessionKey=${sessionKey} message=${JSON.stringify(value.message)}`,
+        );
         const result = await runCronIsolatedAgentTurn({
           cfg,
           deps,
@@ -77,6 +83,9 @@ export function createGatewayHooksRequestHandler(params: {
           sessionKey,
           lane: "cron",
         });
+        logHooks.info(
+          `hook agent result: runId=${runId} jobId=${jobId} status=${result.status} delivered=${result.delivered} summary=${JSON.stringify(result.summary ?? result.error ?? result.status)}`,
+        );
         const summary = result.summary?.trim() || result.error?.trim() || result.status;
         const prefix =
           result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
