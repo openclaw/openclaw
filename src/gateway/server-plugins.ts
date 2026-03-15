@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { loadConfig } from "../config/config.js";
+import {
+  logExtensionHostPluginDiagnostics,
+  resolveExtensionHostGatewayMethods,
+} from "../extension-host/gateway-methods.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -187,25 +191,13 @@ export function loadGatewayPlugins(params: {
       subagent: createGatewaySubagentRuntime(),
     },
   });
-  const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
-  const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
-  if (pluginRegistry.diagnostics.length > 0) {
-    for (const diag of pluginRegistry.diagnostics) {
-      const details = [
-        diag.pluginId ? `plugin=${diag.pluginId}` : null,
-        diag.source ? `source=${diag.source}` : null,
-      ]
-        .filter((entry): entry is string => Boolean(entry))
-        .join(", ");
-      const message = details
-        ? `[plugins] ${diag.message} (${details})`
-        : `[plugins] ${diag.message}`;
-      if (diag.level === "error") {
-        params.log.error(message);
-      } else {
-        params.log.info(message);
-      }
-    }
-  }
+  const gatewayMethods = resolveExtensionHostGatewayMethods({
+    registry: pluginRegistry,
+    baseMethods: params.baseMethods,
+  });
+  logExtensionHostPluginDiagnostics({
+    diagnostics: pluginRegistry.diagnostics,
+    log: params.log,
+  });
   return { pluginRegistry, gatewayMethods };
 }
