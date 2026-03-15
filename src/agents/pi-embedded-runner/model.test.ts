@@ -827,6 +827,8 @@ describe("resolveModel", () => {
         api: "anthropic-messages",
         baseUrl: "https://api.anthropic.com",
         reasoning: true,
+        contextWindow: 1_000_000,
+        maxTokens: 64_000,
       },
     });
   });
@@ -853,6 +855,8 @@ describe("resolveModel", () => {
         api: "anthropic-messages",
         baseUrl: "https://api.anthropic.com",
         reasoning: true,
+        contextWindow: 1_000_000,
+        maxTokens: 64_000,
       },
     });
   });
