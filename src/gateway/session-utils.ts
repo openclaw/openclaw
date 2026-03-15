@@ -885,7 +885,7 @@ export function setActiveNamedSession(params: {
   }
   const normalized = trimmed.toLowerCase();
   if (normalized.includes(":")) {
-    return false;
+    throw new Error(`setActiveNamedSession: name must not contain ":" (got: "${normalized}")`);
   }
   if (params.mainEntry.activeNamedSession !== normalized) {
     params.mainEntry.activeNamedSession = normalized;

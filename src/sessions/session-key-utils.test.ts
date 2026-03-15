@@ -236,10 +236,9 @@ describe("Named DM Session Keys (ETH-608)", () => {
       expect(result).toBe(false);
     });
 
-    it("rejects names containing colons and returns false", () => {
+    it("throws when name contains a colon", () => {
       const entry = {} as SessionEntry;
-      const result = setActiveNamedSession({ mainEntry: entry, name: "foo:bar" });
-      expect(result).toBe(false);
+      expect(() => setActiveNamedSession({ mainEntry: entry, name: "foo:bar" })).toThrow();
       expect(entry.activeNamedSession).toBeUndefined();
     });
 
