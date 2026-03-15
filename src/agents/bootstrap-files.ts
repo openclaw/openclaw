@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import {
@@ -72,12 +71,7 @@ export async function resolveBootstrapFilesForRun(params: {
   runKind?: BootstrapContextRunKind;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
-  const rawFiles = params.sessionKey
-    ? await getOrLoadBootstrapFiles({
-        workspaceDir: params.workspaceDir,
-        sessionKey: params.sessionKey,
-      })
-    : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  const rawFiles = await loadWorkspaceBootstrapFiles(params.workspaceDir);
   const bootstrapFiles = applyContextModeFilter({
     files: filterBootstrapFilesForSession(rawFiles, sessionKey),
     contextMode: params.contextMode,

@@ -8,16 +8,6 @@ vi.mock("../../config/sessions.js", () => ({
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
 
-vi.mock("../../agents/bootstrap-cache.js", () => ({
-  clearBootstrapSnapshot: vi.fn(),
-  clearBootstrapSnapshotOnSessionRollover: vi.fn(({ sessionKey, previousSessionId }) => {
-    if (sessionKey && previousSessionId) {
-      clearBootstrapSnapshot(sessionKey);
-    }
-  }),
-}));
-
-import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { loadSessionStore, evaluateSessionFreshness } from "../../config/sessions.js";
 import { resolveCronSession } from "./session.js";
 
@@ -51,7 +41,7 @@ function resolveWithStoredEntry(params?: {
 
 describe("resolveCronSession", () => {
   beforeEach(() => {
-    vi.mocked(clearBootstrapSnapshot).mockReset();
+    vi.clearAllMocks();
   });
 
   it("preserves modelOverride and providerOverride from existing session entry", () => {
@@ -114,7 +104,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.sessionId).toBe("existing-session-id-123");
       expect(result.isNewSession).toBe(false);
       expect(result.systemSent).toBe(true);
-      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+      // L1 bootstrap cache removed; no snapshot clearing needed
     });
 
     it("creates new sessionId when session is stale", () => {
@@ -136,7 +126,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
       expect(result.sessionEntry.providerOverride).toBe("openai");
       expect(result.sessionEntry.sendPolicy).toBe("allow");
-      expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+      // L1 bootstrap cache removed; no snapshot clearing needed
     });
 
     it("creates new sessionId when forceNew is true", () => {
@@ -157,7 +147,7 @@ describe("resolveCronSession", () => {
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
-      expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+      // L1 bootstrap cache removed; no snapshot clearing needed
     });
 
     it("clears delivery routing metadata and deliveryContext when forceNew is true", () => {
