@@ -96,4 +96,25 @@ describe("loadDotEnv", () => {
       });
     });
   });
+
+  it("loads .env.local last and overrides previous dotenv values", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\nBAR=from-global\n");
+        await writeEnvFile(path.join(cwdDir, ".env"), "FOO=from-cwd\n");
+        await writeEnvFile(path.join(cwdDir, ".env.local"), "FOO=from-local\nBAZ=from-local\n");
+
+        process.chdir(cwdDir);
+        delete process.env.FOO;
+        delete process.env.BAR;
+        delete process.env.BAZ;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-local");
+        expect(process.env.BAR).toBe("from-global");
+        expect(process.env.BAZ).toBe("from-local");
+      });
+    });
+  });
 });

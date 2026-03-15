@@ -334,3 +334,16 @@
   - `node --import tsx scripts/release-check.ts`
   - `pnpm release:check`
   - `pnpm test:install:smoke` or `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` for non-root smoke path.
+
+## Bot Testing Protocol (Multi-Worktree)
+
+BEFORE starting the bot in any worktree:
+
+1. Check if `.env.local` exists in this worktree
+2. If NOT, run: `bash scripts/assign-bot.sh`
+3. This assigns a dedicated test bot token to this worktree
+4. Always start the bot — it will use the assigned token automatically
+5. NEVER use the production token for testing
+6. When done with this worktree, you can delete `.env.local` to free the token
+
+DO NOT share tokens between worktrees. Each worktree = one bot.
