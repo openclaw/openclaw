@@ -164,23 +164,27 @@ export class StrategyDiscoveryEngine {
     return createdIds;
   }
 
-  /** Phase B: build subagent task prompt and fire wake event. */
+  /**
+   * Phase B: build subagent task prompt and fire wake event.
+   * Always fires when wakeBridge is present — the subagent uses fin_kline/fin_price
+   * tools to fetch its own data, so Phase A's data provider is NOT required.
+   */
   private fireSubagentDiscovery(
     snapshot: DiscoveryMarketSnapshot,
     deterministicIds: string[],
     config: DiscoveryConfig,
   ): boolean {
     if (!this.deps.wakeBridge) return false;
-    if (snapshot.symbols.length === 0) return false;
 
     // Gather existing strategy names to avoid duplicates
     const existingNames = this.deps.strategyRegistry.list().map((r) => r.name);
 
     // Build the subagent task prompt — LLM will fetch its own data via tools
+    // Phase A snapshots are optional hints (may be empty if data provider unavailable)
     const subagentTask = buildSubagentTaskPrompt(
       config,
       existingNames,
-      snapshot.symbols, // Phase A snapshots as optional hints
+      snapshot.symbols.length > 0 ? snapshot.symbols : undefined,
     );
 
     // Build the wake message that instructs the main Agent to spawn a subagent

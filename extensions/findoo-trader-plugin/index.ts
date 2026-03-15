@@ -821,7 +821,8 @@ const findooTraderPlugin = {
       discoveryEngine,
       discoveryConfig: DEFAULT_DISCOVERY_CONFIG,
     });
-    setTimeout(() => void coldStartSeeder.maybeSeed(), 500);
+    // 3s delay: all plugins (incl. datahub-slim fin-data-provider) must register first
+    setTimeout(() => void coldStartSeeder.maybeSeed(), 3000);
 
     // ── Alpha Factory (S1-S6 pipeline) ──
 
