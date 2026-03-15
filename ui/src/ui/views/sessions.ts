@@ -42,6 +42,7 @@ export type SessionsProps = {
       fastMode?: boolean | null;
       verboseLevel?: string | null;
       reasoningLevel?: string | null;
+      archivedAt?: number | null;
     },
   ) => void;
   onDelete: (key: string) => void;
