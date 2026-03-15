@@ -4,6 +4,8 @@ import { isTelegramSurface } from "./channel-context.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const COMMAND_REGEX = /^\/set_topic_name(?:\s|$)/i;
+const MAX_NAME_LEN = 64;
+const MAX_LABEL_LEN = 64;
 
 function parseTopicNameCommand(
   raw: string,
@@ -14,18 +16,51 @@ function parseTopicNameCommand(
     return null;
   }
   const rest = trimmed.slice(match[0].length).trim();
-  if (!rest) {
+  const name = rest.replace(/·/g, " ").slice(0, MAX_NAME_LEN).trim();
+  if (!name) {
     return { ok: false, error: "Usage: /set_topic_name <name>" };
   }
-  return { ok: true, name: rest };
+  return { ok: true, name };
 }
 
 function resolveConversationLabel(params: Parameters<CommandHandler>[0]): string {
-  const base =
-    (typeof params.ctx.GroupSubject === "string" ? params.ctx.GroupSubject.trim() : "") ||
+  return (
     (typeof params.ctx.ConversationLabel === "string" ? params.ctx.ConversationLabel.trim() : "") ||
-    "telegram";
-  return base;
+    (typeof params.ctx.GroupSubject === "string" ? params.ctx.GroupSubject.trim() : "")
+  );
+}
+
+function normalizeBaseLabel(raw: string): string {
+  return raw.replace(/^telegram\s*·\s*/i, "").trim();
+}
+
+function buildTopicLabel(baseLabel: string, name: string): string {
+  const prefix = "telegram";
+  const separator = " · ";
+  let normalizedBase = baseLabel ? normalizeBaseLabel(baseLabel) : "";
+
+  const maxNameWithoutBase = Math.max(1, MAX_LABEL_LEN - (prefix + separator).length);
+  let nextName = name.slice(0, maxNameWithoutBase).trim();
+
+  if (normalizedBase) {
+    const maxBaseLen = MAX_LABEL_LEN - (prefix + separator + separator + nextName).length;
+    if (maxBaseLen > 0) {
+      normalizedBase = normalizedBase.slice(0, maxBaseLen).trim();
+    } else {
+      normalizedBase = "";
+    }
+  }
+
+  const maxNameLen = Math.max(
+    1,
+    MAX_LABEL_LEN -
+      (prefix + separator + (normalizedBase ? normalizedBase + separator : "")).length,
+  );
+  nextName = name.slice(0, maxNameLen).trim();
+
+  return normalizedBase
+    ? `${prefix}${separator}${normalizedBase}${separator}${nextName}`
+    : `${prefix}${separator}${nextName}`;
 }
 
 export const handleSetTopicNameCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -42,14 +77,14 @@ export const handleSetTopicNameCommand: CommandHandler = async (params, allowTex
     );
     return { shouldContinue: false };
   }
-  if (!parsed.ok) {
-    return { shouldContinue: false, reply: { text: parsed.error } };
-  }
   if (!isTelegramSurface(params)) {
     return {
       shouldContinue: false,
       reply: { text: "⚙️ /set_topic_name only works for Telegram topics." },
     };
+  }
+  if (!parsed.ok) {
+    return { shouldContinue: false, reply: { text: parsed.error } };
   }
   const threadId = params.ctx.MessageThreadId;
   if (threadId == null || `${threadId}`.trim() === "") {
@@ -58,6 +93,8 @@ export const handleSetTopicNameCommand: CommandHandler = async (params, allowTex
       reply: { text: "⚙️ /set_topic_name only works inside a Telegram topic." },
     };
   }
+  // Telegram topics are thread-scoped; sessionKey already includes the thread context.
+  // threadId is only used to enforce topic usage, not to disambiguate sessions.patch.
   if (!params.sessionKey) {
     return {
       shouldContinue: false,
@@ -65,7 +102,7 @@ export const handleSetTopicNameCommand: CommandHandler = async (params, allowTex
     };
   }
   const baseLabel = resolveConversationLabel(params);
-  const label = `telegram · ${baseLabel} · ${parsed.name}`;
+  const label = buildTopicLabel(baseLabel, parsed.name);
 
   try {
     await callGateway({
@@ -77,9 +114,10 @@ export const handleSetTopicNameCommand: CommandHandler = async (params, allowTex
       timeoutMs: 10_000,
     });
   } catch (err) {
+    logVerbose(`/set_topic_name gateway error: ${String(err)}`);
     return {
       shouldContinue: false,
-      reply: { text: `❌ Failed to set topic name: ${String(err)}` },
+      reply: { text: "❌ Failed to set topic name. Please try again later." },
     };
   }
 
