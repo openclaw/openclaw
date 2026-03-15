@@ -15,6 +15,7 @@ const { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegr
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
+  editForumTopicTelegram,
   editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
@@ -2001,4 +2002,103 @@ describe("createForumTopicTelegram", () => {
       expect(result).toEqual(testCase.expectedResult);
     });
   }
+});
+
+describe("editForumTopicTelegram", () => {
+  it("calls editForumTopic with name only", async () => {
+    const editForumTopic = vi.fn().mockResolvedValue(true);
+    const api = { editForumTopic } as unknown as Bot["api"];
+
+    const result = await editForumTopicTelegram("-1001234567890", 42, {
+      token: "tok",
+      api,
+      name: "New Name",
+    });
+
+    expect(editForumTopic).toHaveBeenCalledWith("-1001234567890", 42, { name: "New Name" });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("calls editForumTopic with iconCustomEmojiId only", async () => {
+    const editForumTopic = vi.fn().mockResolvedValue(true);
+    const api = { editForumTopic } as unknown as Bot["api"];
+
+    const result = await editForumTopicTelegram("-1001234567890", 42, {
+      token: "tok",
+      api,
+      iconCustomEmojiId: "  emoji123  ",
+    });
+
+    expect(editForumTopic).toHaveBeenCalledWith("-1001234567890", 42, {
+      icon_custom_emoji_id: "emoji123",
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("calls editForumTopic with both name and icon", async () => {
+    const editForumTopic = vi.fn().mockResolvedValue(true);
+    const api = { editForumTopic } as unknown as Bot["api"];
+
+    const result = await editForumTopicTelegram("-1001234567890", 42, {
+      token: "tok",
+      api,
+      name: "Renamed",
+      iconCustomEmojiId: "emoji456",
+    });
+
+    expect(editForumTopic).toHaveBeenCalledWith("-1001234567890", 42, {
+      name: "Renamed",
+      icon_custom_emoji_id: "emoji456",
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("strips topic suffix from target", async () => {
+    const editForumTopic = vi.fn().mockResolvedValue(true);
+    const api = { editForumTopic } as unknown as Bot["api"];
+
+    await editForumTopicTelegram("telegram:group:-1001234567890:topic:271", 42, {
+      token: "tok",
+      api,
+      name: "Stripped",
+    });
+
+    expect(editForumTopic).toHaveBeenCalledWith("-1001234567890", 42, { name: "Stripped" });
+  });
+
+  it("throws when neither name nor iconCustomEmojiId is provided", async () => {
+    const api = {} as unknown as Bot["api"];
+    await expect(
+      editForumTopicTelegram("-1001234567890", 42, { token: "tok", api }),
+    ).rejects.toThrow("At least one of name or iconCustomEmojiId must be provided");
+  });
+
+  it("throws when name exceeds 128 characters", async () => {
+    const api = {} as unknown as Bot["api"];
+    await expect(
+      editForumTopicTelegram("-1001234567890", 42, {
+        token: "tok",
+        api,
+        name: "x".repeat(129),
+      }),
+    ).rejects.toThrow("Forum topic name must be 128 characters or fewer");
+  });
+
+  it("throws when name is whitespace-only", async () => {
+    const api = {} as unknown as Bot["api"];
+    await expect(
+      editForumTopicTelegram("-1001234567890", 42, { token: "tok", api, name: "   " }),
+    ).rejects.toThrow("Forum topic name cannot be empty");
+  });
+
+  it("throws when iconCustomEmojiId is whitespace-only", async () => {
+    const api = {} as unknown as Bot["api"];
+    await expect(
+      editForumTopicTelegram("-1001234567890", 42, {
+        token: "tok",
+        api,
+        iconCustomEmojiId: "   ",
+      }),
+    ).rejects.toThrow("Forum topic icon custom emoji ID cannot be empty");
+  });
 });

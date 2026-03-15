@@ -1529,3 +1529,88 @@ export async function createForumTopicTelegram(
     chatId: normalizedChatId,
   };
 }
+
+// ---------------------------------------------------------------------------
+// editForumTopic
+// ---------------------------------------------------------------------------
+
+type TelegramEditForumTopicOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
+  token?: string;
+  accountId?: string;
+  api?: TelegramApiOverride;
+  verbose?: boolean;
+  retry?: RetryConfig;
+  /** New topic name (1-128 characters). */
+  name?: string;
+  /** New custom emoji ID for the topic icon. */
+  iconCustomEmojiId?: string;
+};
+
+/**
+ * Edit a forum topic in a Telegram supergroup (rename / change icon).
+ * Requires the bot to have `can_manage_topics` permission.
+ *
+ * @param chatId - Supergroup chat ID
+ * @param messageThreadId - Topic thread ID
+ * @param opts - At least one of `name` or `iconCustomEmojiId` must be provided
+ */
+export async function editForumTopicTelegram(
+  chatId: string,
+  messageThreadId: number,
+  opts: TelegramEditForumTopicOpts = {},
+): Promise<{ ok: true }> {
+  const name = opts.name?.trim();
+  const iconCustomEmojiId = opts.iconCustomEmojiId?.trim();
+
+  if (name != null && name.length === 0) {
+    throw new Error("Forum topic name cannot be empty");
+  }
+  if (iconCustomEmojiId != null && iconCustomEmojiId.length === 0) {
+    throw new Error("Forum topic icon custom emoji ID cannot be empty");
+  }
+  if (!name && !iconCustomEmojiId) {
+    throw new Error("At least one of name or iconCustomEmojiId must be provided");
+  }
+  if (name != null && name.length > 128) {
+    throw new Error("Forum topic name must be 128 characters or fewer");
+  }
+
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const target = parseTelegramTarget(chatId);
+  const normalizedChatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: chatId,
+    verbose: opts.verbose,
+  });
+
+  const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+  });
+
+  const extra: Record<string, unknown> = {};
+  if (name) {
+    extra.name = name;
+  }
+  if (iconCustomEmojiId) {
+    extra.icon_custom_emoji_id = iconCustomEmojiId;
+  }
+
+  await requestWithDiag(
+    () => api.editForumTopic(normalizedChatId, messageThreadId, extra),
+    "editForumTopic",
+  );
+
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+
+  return { ok: true };
+}
