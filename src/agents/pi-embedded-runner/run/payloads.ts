@@ -9,7 +9,6 @@ import {
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
   getApiErrorPayloadFingerprint,
-  isCloudflareOrHtmlErrorPage,
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
@@ -228,13 +227,6 @@ export function buildEmbeddedRunPayloads(params: {
       return true;
     }
     if (formattedRawErrorMessage && trimmed === formattedRawErrorMessage) {
-      return true;
-    }
-    if (
-      rawErrorMessage &&
-      isCloudflareOrHtmlErrorPage(rawErrorMessage) &&
-      isCloudflareOrHtmlErrorPage(trimmed)
-    ) {
       return true;
     }
     if (normalizedRawErrorText) {

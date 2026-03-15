@@ -764,6 +764,7 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
       let transientTransportRetryAttempts = 0;
+      let transientTransportRetryScopeKey: string | null = null;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1429,7 +1430,14 @@ export async function runEmbeddedPiAgent(
             !aborted &&
             assistantFailoverReason === "timeout" &&
             standaloneHtmlTransientError &&
-            transientTransportRetryAttempts < MAX_TRANSIENT_TRANSPORT_RETRIES
+            (() => {
+              const currentRetryScopeKey = `${provider}\u0000${modelId}\u0000${failedAssistantProfileId ?? ""}`;
+              if (currentRetryScopeKey !== transientTransportRetryScopeKey) {
+                transientTransportRetryScopeKey = currentRetryScopeKey;
+                transientTransportRetryAttempts = 0;
+              }
+              return transientTransportRetryAttempts < MAX_TRANSIENT_TRANSPORT_RETRIES;
+            })()
           ) {
             transientTransportRetryAttempts += 1;
             const delayMs = computeBackoff(

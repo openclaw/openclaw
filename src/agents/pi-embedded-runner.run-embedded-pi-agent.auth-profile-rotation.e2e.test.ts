@@ -969,6 +969,41 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
   });
 
+  it("resets standalone HTML retry budget after auth profile rotation", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+
+      runEmbeddedAttemptMock.mockClear();
+      mockStandaloneHtmlErrorOnlyAttempts(5);
+      mockStandaloneHtmlErrorThenSuccessfulAttempt();
+
+      await runAutoPinnedOpenAiTurn({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:standalone-html-budget-reset",
+        runId: "run:standalone-html-budget-reset",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(7);
+      const authProfileIds = runEmbeddedAttemptMock.mock.calls.map((call) => {
+        const params = call[0] as { authProfileId?: string };
+        return params.authProfileId;
+      });
+      expect(authProfileIds).toEqual([
+        "openai:p1",
+        "openai:p1",
+        "openai:p1",
+        "openai:p1",
+        "openai:p1",
+        "openai:p2",
+        "openai:p2",
+      ]);
+      expect(computeBackoffMock).toHaveBeenCalledTimes(5);
+      expect(computeBackoffMock.mock.calls.map((call) => call[1])).toEqual([1, 2, 3, 4, 1]);
+      expect(sleepWithAbortMock).toHaveBeenCalledTimes(5);
+    });
+  });
+
   it("rethrows AbortError when standalone HTML retry backoff is aborted", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       const authPath = path.join(agentDir, "auth-profiles.json");

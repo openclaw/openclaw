@@ -136,6 +136,18 @@ describe("buildEmbeddedRunPayloads", () => {
     );
   });
 
+  it("keeps distinct Cloudflare-classified diagnostics when they are not the same payload", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["526 Invalid SSL certificate"],
+      lastAssistant: makeAssistant({
+        errorMessage: "525 SSL handshake failed",
+        content: [],
+      }),
+    });
+
+    expect(payloads.some((payload) => payload.text === "526 Invalid SSL certificate")).toBe(true);
+  });
+
   it("includes provider and model context for billing errors", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
