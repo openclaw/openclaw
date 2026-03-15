@@ -442,6 +442,142 @@ describe("handleFeishuMessage sender name resolution", () => {
     );
   });
 
+  it("caches a user_id-resolved sender name under open_id for later events", async () => {
+    const getUser = vi.fn().mockResolvedValueOnce({ data: { user: { name: "同同" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: getUser,
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_cache_all_ids",
+            user_id: "0b1a2c3d_cache_all_ids",
+          },
+        },
+        message: {
+          message_id: "msg-cache-all-ids-prime",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "第一次你好" }),
+        },
+      },
+    });
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_cache_all_ids",
+          },
+        },
+        message: {
+          message_id: "msg-cache-all-ids-open-only",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "再次你好" }),
+        },
+      },
+    });
+
+    expect(getUser).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeInboundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("同同: 再次你好"),
+      }),
+    );
+  });
+
+  it("falls back to a cached lower-priority sender name when client creation later fails", async () => {
+    const getUser = vi.fn().mockResolvedValueOnce({ data: { user: { name: "同同" } } });
+    mockCreateFeishuClient
+      .mockReturnValueOnce({
+        contact: {
+          user: {
+            get: getUser,
+          },
+        },
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("client init failed");
+      });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_cached_fallback_after_client_failure",
+          },
+        },
+        message: {
+          message_id: "msg-cached-fallback-prime",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "prime cache" }),
+        },
+      },
+    });
+
+    await expect(
+      dispatchMessage({
+        cfg,
+        event: {
+          sender: {
+            sender_id: {
+              open_id: "ou_sender_cached_fallback_after_client_failure",
+              user_id: "0b1a2c3d_cached_fallback_after_client_failure",
+            },
+          },
+          message: {
+            message_id: "msg-cached-fallback-client-init-failure",
+            chat_id: "oc-dm",
+            chat_type: "p2p",
+            message_type: "text",
+            content: JSON.stringify({ text: "你好" }),
+          },
+        },
+      }),
+    ).resolves.toBeDefined();
+
+    expect(getUser).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeInboundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("同同: 你好"),
+      }),
+    );
+  });
+
   it("keeps sender-name lookup best-effort when Feishu client creation throws", async () => {
     mockCreateFeishuClient.mockImplementation(() => {
       throw new Error("client init failed");

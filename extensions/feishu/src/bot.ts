@@ -160,19 +160,41 @@ async function resolveFeishuSenderName(params: {
 
   const now = Date.now();
   let deferredPermissionError: PermissionError | undefined;
-  let client: ReturnType<typeof createFeishuClient>;
+  let client: ReturnType<typeof createFeishuClient> | undefined;
+  const cachedResults = lookupCandidates.map((candidate) => {
+    const cached = senderNameCache.get(candidate.id);
+    return cached && cached.expireAt > now ? cached : undefined;
+  });
+  const cachedFallback = cachedResults.find((cached) => cached !== undefined);
 
-  try {
-    client = createFeishuClient(account);
-  } catch (err) {
-    log(`feishu: failed to initialize sender name lookup client: ${String(err)}`);
-    return {};
+  if (cachedResults[0]) {
+    return { name: cachedResults[0].name };
   }
 
-  for (const candidate of lookupCandidates) {
-    const cached = senderNameCache.get(candidate.id);
-    if (cached && cached.expireAt > now) {
+  const cacheResolvedName = (name: string) => {
+    const entry = { name, expireAt: now + SENDER_NAME_TTL_MS };
+    for (const knownCandidate of lookupCandidates) {
+      senderNameCache.set(knownCandidate.id, entry);
+    }
+  };
+
+  for (let i = 0; i < lookupCandidates.length; i++) {
+    const candidate = lookupCandidates[i];
+    const cached = cachedResults[i];
+    if (cached) {
       return { name: cached.name };
+    }
+
+    if (!client) {
+      try {
+        client = createFeishuClient(account);
+      } catch (err) {
+        log(`feishu: failed to initialize sender name lookup client: ${String(err)}`);
+        if (cachedFallback) {
+          return { name: cachedFallback.name };
+        }
+        return {};
+      }
     }
 
     try {
@@ -189,7 +211,7 @@ async function resolveFeishuSenderName(params: {
         res?.data?.user?.en_name;
 
       if (name && typeof name === "string") {
-        senderNameCache.set(candidate.id, { name, expireAt: now + SENDER_NAME_TTL_MS });
+        cacheResolvedName(name);
         return { name };
       }
     } catch (err) {
