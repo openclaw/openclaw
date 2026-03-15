@@ -188,7 +188,9 @@ describe("isBillingErrorMessage", () => {
     expect(isBillingErrorMessage(sample)).toBe(false);
     expect(classifyFailoverReason(sample)).toBeNull();
   });
-  it("still matches explicit 402 markers in long payloads", () => {
+  it("matches long payloads with explicit machine 402 markers", () => {
+    // JSON error blobs with structured "code":402 are real billing errors
+    // regardless of length.
     const longStructuredError =
       '{"error":{"code":402,"message":"payment required","details":"' + "x".repeat(700) + '"}}';
     expect(longStructuredError.length).toBeGreaterThan(512);
@@ -202,6 +204,18 @@ describe("isBillingErrorMessage", () => {
       "x".repeat(700);
     expect(longNonError.length).toBeGreaterThan(512);
     expect(isBillingErrorMessage(longNonError)).toBe(false);
+  });
+
+  it("does not false-positive on long assistant text discussing HTTP 402 billing concepts", () => {
+    const assistantReply =
+      "Here is how HTTP status codes work.\n\n" +
+      "A 402 Payment Required response indicates the request cannot be processed. " +
+      'The status code 402 was created for digital cash schemes.\n\nExample:\nif (response.code === 402) {\n  showError("Payment required");\n}\n\n' +
+      "If your API returns status: 402 it means credits are exhausted. " +
+      "You may need to upgrade your plan. " +
+      "x".repeat(300);
+    expect(assistantReply.length).toBeGreaterThan(512);
+    expect(isBillingErrorMessage(assistantReply)).toBe(false);
   });
 
   it("prefers billing when API-key and 402 hints both appear", () => {
