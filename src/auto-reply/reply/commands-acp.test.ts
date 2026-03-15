@@ -853,6 +853,16 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("requires operator.admin");
   });
 
+  it("blocks /acp status for internal operator.write clients", async () => {
+    const result = await runInternalAcpCommand({
+      commandBody: "/acp status",
+      scopes: ["operator.write"],
+    });
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("requires operator.admin");
+  });
+
   it("keeps read-only /acp actions available to internal operator.write clients", async () => {
     hoisted.listAcpSessionEntriesMock.mockResolvedValue([
       createAcpSessionEntry({

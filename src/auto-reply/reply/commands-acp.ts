@@ -62,6 +62,7 @@ const ACP_MUTATING_ACTIONS = new Set<AcpAction>([
   "cancel",
   "steer",
   "close",
+  "status",
   "set-mode",
   "set",
   "cwd",
