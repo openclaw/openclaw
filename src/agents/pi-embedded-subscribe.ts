@@ -45,7 +45,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     reasoningMode,
     includeReasoning: reasoningMode === "on",
     shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
-    streamReasoning: reasoningMode === "stream" && typeof params.onReasoningStream === "function",
+    streamReasoning: reasoningMode === "stream",
     deltaBuffer: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
@@ -554,7 +554,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const emitReasoningStream = (text: string) => {
-    if (!state.streamReasoning || !params.onReasoningStream) {
+    if (!state.streamReasoning) {
       return;
     }
     const formatted = formatReasoningMessage(text);
@@ -580,9 +580,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       },
     });
 
-    void params.onReasoningStream({
-      text: formatted,
-    });
+    if (params.onReasoningStream) {
+      void params.onReasoningStream({
+        text: formatted,
+      });
+    }
   };
 
   const resetForCompactionRetry = () => {
