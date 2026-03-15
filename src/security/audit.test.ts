@@ -466,6 +466,19 @@ description: test skill
         checkId: "tools.exec.host_sandbox_no_sandbox_defaults",
       },
       {
+        name: "defaults host implicitly resolves to sandbox in non-main mode",
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "non-main",
+              },
+            },
+          },
+        },
+        checkId: "tools.exec.host_sandbox_no_sandbox_defaults",
+      },
+      {
         name: "agent inherits implicit sandbox host while agent sandbox mode is off",
         cfg: {
           agents: {
@@ -479,6 +492,27 @@ description: test skill
                 id: "ops",
                 sandbox: {
                   mode: "off",
+                },
+              },
+            ],
+          },
+        },
+        checkId: "tools.exec.host_sandbox_no_sandbox_agents",
+      },
+      {
+        name: "agent override non-main sandbox still warns when exec resolves to sandbox",
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+              },
+            },
+            list: [
+              {
+                id: "ops",
+                sandbox: {
+                  mode: "non-main",
                 },
               },
             ],
