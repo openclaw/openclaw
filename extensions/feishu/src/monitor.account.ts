@@ -277,20 +277,20 @@ function registerEventHandlers(
       error(`${params.errorMessage}: ${String(err)}`);
     }
   };
+  const invokeHandler = (event: FeishuMessageEvent) =>
+    handleFeishuMessage({
+      cfg,
+      event,
+      botOpenId: botOpenIds.get(accountId),
+      botName: botNames.get(accountId),
+      runtime,
+      chatHistories,
+      accountId,
+      processingClaimHeld: true,
+    });
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
     const chatId = event.message.chat_id?.trim() || "unknown";
-    const task = () =>
-      handleFeishuMessage({
-        cfg,
-        event,
-        botOpenId: botOpenIds.get(accountId),
-        botName: botNames.get(accountId),
-        runtime,
-        chatHistories,
-        accountId,
-        processingClaimHeld: true,
-      });
-    await enqueue(chatId, task);
+    await enqueue(chatId, () => invokeHandler(event));
   };
   const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {
     const senderId =
@@ -328,18 +328,20 @@ function registerEventHandlers(
   const isMessageAlreadyProcessed = async (entry: FeishuMessageEvent): Promise<boolean> => {
     return await hasProcessedFeishuMessage(entry.message.message_id, accountId, log);
   };
+  /** Build the debounce buffer key for an event. */
+  const resolveDebounceKey = (event: FeishuMessageEvent): string | null => {
+    const chatId = event.message.chat_id?.trim();
+    const senderId = resolveSenderDebounceId(event);
+    if (!chatId || !senderId) {
+      return null;
+    }
+    const rootId = event.message.root_id?.trim();
+    const threadKey = rootId ? `thread:${rootId}` : "chat";
+    return `feishu:${accountId}:${chatId}:${threadKey}:${senderId}`;
+  };
   const inboundDebouncer = core.channel.debounce.createInboundDebouncer<FeishuMessageEvent>({
     debounceMs: inboundDebounceMs,
-    buildKey: (event) => {
-      const chatId = event.message.chat_id?.trim();
-      const senderId = resolveSenderDebounceId(event);
-      if (!chatId || !senderId) {
-        return null;
-      }
-      const rootId = event.message.root_id?.trim();
-      const threadKey = rootId ? `thread:${rootId}` : "chat";
-      return `feishu:${accountId}:${chatId}:${threadKey}:${senderId}`;
-    },
+    buildKey: resolveDebounceKey,
     shouldDebounce: (event) => {
       if (event.message.message_type !== "text") {
         return false;
@@ -407,6 +409,38 @@ function registerEventHandlers(
     },
   });
 
+  const isControlCommand = (event: FeishuMessageEvent): boolean => {
+    if (event.message.message_type !== "text") {
+      return false;
+    }
+    const text = resolveDebounceText(event);
+    return Boolean(text) && core.channel.text.hasControlCommand(text, cfg);
+  };
+
+  /** Commands that discard pending work — buffered text should be dropped. */
+  const DESTRUCTIVE_COMMAND_RE = /^\/(?:stop|new|reset)\b/i;
+  const isDestructiveCommand = (text: string): boolean => {
+    return DESTRUCTIVE_COMMAND_RE.test(text.trim());
+  };
+
+  /**
+   * Dispatch a control command bypassing the per-chat queue.
+   * For destructive commands (/stop, /new, /reset), pending debounced text
+   * is dropped so stale input cannot restart work after the command.
+   * Informational commands (/status, /help) bypass the queue without
+   * discarding buffered text.
+   */
+  const dispatchCommandDirectly = async (event: FeishuMessageEvent) => {
+    const key = resolveDebounceKey(event);
+    if (key) {
+      const text = resolveDebounceText(event);
+      if (isDestructiveCommand(text)) {
+        inboundDebouncer.dropKey(key);
+      }
+    }
+    await invokeHandler(event);
+  };
+
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
       const event = data as unknown as FeishuMessageEvent;
@@ -416,6 +450,12 @@ function registerEventHandlers(
         return;
       }
       const processMessage = async () => {
+        // Control commands (/stop, /new, /status) bypass the debouncer and
+        // per-chat queue so they execute immediately during active runs (#42803).
+        if (isControlCommand(event)) {
+          await dispatchCommandDirectly(event);
+          return;
+        }
         await inboundDebouncer.enqueue(event);
       };
       if (fireAndForget) {
