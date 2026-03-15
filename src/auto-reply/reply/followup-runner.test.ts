@@ -1747,6 +1747,117 @@ describe("createFollowupRunner media understanding", () => {
     expect(matches?.length).toBe(1);
   });
 
+  it("does not duplicate file blocks for mixed audio+file messages re-processed in followup", async () => {
+    const existingFileBlock =
+      '<file name="report.pdf" mime="application/pdf">\nold extracted content\n</file>';
+    const newFileBlock =
+      '<file name="report.pdf" mime="application/pdf">\nnew extracted content\n</file>';
+    const transcriptText = "Mixed message transcript";
+
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.MediaUnderstanding = [
+          {
+            kind: "audio.transcription",
+            text: transcriptText,
+            attachmentIndex: 0,
+            provider: "whisper",
+          },
+        ];
+        params.ctx.Transcript = transcriptText;
+        params.ctx.Body = `[Audio]\nTranscript:\n${transcriptText}\n\nanalyze this\n\n${newFileBlock}`;
+        return {
+          outputs: [
+            {
+              kind: "audio.transcription",
+              text: transcriptText,
+              attachmentIndex: 0,
+              provider: "whisper",
+            },
+          ],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: true,
+          appliedVideo: false,
+          appliedFile: true,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "processed" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    // Simulate a mixed message where the primary path already extracted the
+    // PDF (file block is in the prompt) but audio transcription failed.
+    await runner(
+      createQueuedRun({
+        prompt: `[media attached 1/2: /tmp/voice.ogg]\n[media attached 2/2: /tmp/report.pdf]\n${MEDIA_REPLY_HINT}\nanalyze this\n\n${existingFileBlock}`,
+        mediaContext: {
+          Body: `analyze this\n\n${existingFileBlock}`,
+          CommandBody: "analyze this",
+          RawBody: "analyze this",
+          MediaPaths: ["/tmp/voice.ogg", "/tmp/report.pdf"],
+          MediaTypes: ["audio/ogg", "application/pdf"],
+        },
+      }),
+    );
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    // Should contain the transcript
+    expect(agentCall?.prompt).toContain(transcriptText);
+    // Should have exactly one file block (the new one), not two
+    expect(agentCall?.prompt?.match(/<file\s+name="report\.pdf"/g)).toHaveLength(1);
+    expect(agentCall?.prompt).toContain("new extracted content");
+    expect(agentCall?.prompt).not.toContain("old extracted content");
+  });
+
+  it("sets DeferredMediaApplied when media understanding throws", async () => {
+    applyMediaUnderstandingMock.mockRejectedValueOnce(
+      new Error("transcription service unavailable"),
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback reply" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queued = createQueuedRun({
+      prompt: "[media attached: /tmp/voice.ogg (audio/ogg)]\nsome text",
+      mediaContext: {
+        Body: "some text",
+        MediaPaths: ["/tmp/voice.ogg"],
+        MediaTypes: ["audio/ogg"],
+      },
+    });
+
+    await runner(queued);
+
+    // DeferredMediaApplied should be set so re-runs don't retry
+    expect(queued.mediaContext?.DeferredMediaApplied).toBe(true);
+
+    // The agent should still be called with the raw prompt
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain("some text");
+  });
+
   it("does not re-apply file extraction when the stored media body already has a file block", async () => {
     const fileBlock = '<file name="report.pdf" mime="application/pdf">\nreport content\n</file>';
     runEmbeddedPiAgentMock.mockResolvedValueOnce({

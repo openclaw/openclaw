@@ -13,6 +13,11 @@ const MEDIA_ONLY_PLACEHOLDER = "[User sent media without caption]";
 const MEDIA_REPLY_HINT_PREFIX = "To send an image back, prefer the message tool";
 const LEADING_MEDIA_ATTACHED_LINE_RE = /^\[media attached(?: \d+\/\d+)?: [^\r\n]*\]$/;
 const FILE_BLOCK_RE = /<file\s+name="/i;
+const FILE_BLOCK_FULL_RE = /<file\s+name="[^"]*"[^>]*>[\s\S]*?<\/file>\n?/gi;
+
+function stripExistingFileBlocks(text: string): string {
+  return text.replace(FILE_BLOCK_FULL_RE, "").trim();
+}
 
 function stripLeadingMediaAttachedLines(prompt: string): string {
   const lines = prompt.split("\n");
@@ -85,6 +90,15 @@ function rebuildQueuedPromptWithMediaUnderstanding(params: {
   let stripped = stripLeadingMediaAttachedLines(params.prompt);
   if (!params.mediaNote) {
     stripped = stripLeadingMediaReplyHint(stripped);
+  }
+
+  // Strip pre-existing file blocks from the prompt when the updated body
+  // contains new file blocks.  Mixed messages (audio + PDF) can arrive with
+  // file extraction already applied in the primary path; without this strip
+  // the old block stays in the prompt while the updated body adds a new one,
+  // duplicating potentially large file payloads.
+  if (params.updatedBody && FILE_BLOCK_RE.test(params.updatedBody)) {
+    stripped = stripExistingFileBlocks(stripped);
   }
 
   const updatedBody = normalizeUpdatedBody({
@@ -234,6 +248,7 @@ export async function applyDeferredMediaUnderstandingToQueuedRun(
       updatedBody: shouldRebuildPrompt ? mediaCtx.Body : undefined,
     });
   } catch (err) {
+    mediaContext.DeferredMediaApplied = true;
     logVerbose(
       `${params.logLabel ?? "followup"}: media understanding failed, proceeding with raw content: ${err instanceof Error ? err.message : String(err)}`,
     );
