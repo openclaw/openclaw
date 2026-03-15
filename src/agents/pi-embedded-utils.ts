@@ -9,6 +9,211 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
   return msg?.role === "assistant";
 }
 
+export interface ParsedMinimaxToolCall {
+  name: string;
+  input: Record<string, string>;
+  id: string;
+}
+
+let minimaxToolCallCounter = 0;
+
+/** Reset the tool-call counter (for test isolation). */
+export function resetMinimaxToolCallCounter(): void {
+  minimaxToolCallCounter = 0;
+}
+
+const XML_ENTITY_MAP: Record<string, string> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&apos;": "'",
+};
+
+function decodeXmlEntities(text: string): string {
+  return text.replace(/&(?:amp|lt|gt|quot|apos);/g, (entity) => XML_ENTITY_MAP[entity] ?? entity);
+}
+
+/**
+ * Parse MiniMax XML tool invocations from text content.
+ *
+ * MiniMax M2.5 embeds tool calls as XML instead of structured `toolUse` blocks:
+ * ```xml
+ * <minimax:tool_call>
+ * <invoke name="some_tool">
+ * <parameter name="param1">value1</parameter>
+ * </invoke>
+ * </minimax:tool_call>
+ * ```
+ *
+ * Returns an array of parsed tool calls. Returns empty array when the text
+ * contains no minimax tool call markers or no parseable invocations.
+ */
+export function parseMinimaxToolCallXml(text: string): ParsedMinimaxToolCall[] {
+  if (!text || (!/minimax:tool_call/i.test(text) && !/<invoke\s/i.test(text))) {
+    return [];
+  }
+
+  const toolCalls: ParsedMinimaxToolCall[] = [];
+
+  // Track character ranges covered by <minimax:tool_call> segments so bare
+  // <invoke> blocks inside them are not double-counted.
+  const coveredRanges: [number, number][] = [];
+
+  // First: parse <invoke> blocks within <minimax:tool_call>...</minimax:tool_call> segments.
+  const segmentRe = /<minimax:tool_call>([\s\S]*?)<\/minimax:tool_call>/gi;
+
+  for (const segment of text.matchAll(segmentRe)) {
+    coveredRanges.push([segment.index, segment.index + segment[0].length]);
+    const segmentText = segment[1];
+    const invokeRe = /<invoke\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/invoke>/gi;
+
+    for (const match of segmentText.matchAll(invokeRe)) {
+      const name = match[1];
+      const body = match[2];
+      const input: Record<string, string> = {};
+
+      const paramRe = /<parameter\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
+      for (const paramMatch of body.matchAll(paramRe)) {
+        input[paramMatch[1]] = decodeXmlEntities(paramMatch[2]);
+      }
+
+      minimaxToolCallCounter += 1;
+      toolCalls.push({
+        name,
+        input,
+        id: `toolu_minimax_${minimaxToolCallCounter}`,
+      });
+    }
+  }
+
+  // Second: parse bare <invoke> blocks not inside any <minimax:tool_call> segment.
+  // MiniMax can send <invoke> without the wrapping <minimax:tool_call> tag.
+  const bareInvokeRe = /<invoke\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/invoke>/gi;
+  for (const match of text.matchAll(bareInvokeRe)) {
+    const matchStart = match.index;
+    const matchEnd = matchStart + match[0].length;
+    if (coveredRanges.some(([s, e]) => matchStart >= s && matchEnd <= e)) {
+      continue;
+    }
+
+    const name = match[1];
+    const body = match[2];
+    const input: Record<string, string> = {};
+
+    const paramRe = /<parameter\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
+    for (const paramMatch of body.matchAll(paramRe)) {
+      input[paramMatch[1]] = decodeXmlEntities(paramMatch[2]);
+    }
+
+    minimaxToolCallCounter += 1;
+    toolCalls.push({
+      name,
+      input,
+      id: `toolu_minimax_${minimaxToolCallCounter}`,
+    });
+  }
+
+  return toolCalls;
+}
+
+/**
+ * Transform MiniMax XML tool invocations in text content blocks into
+ * structured `toolUse` content blocks on the assistant message.
+ *
+ * Follows the same in-place mutation pattern as {@link promoteThinkingTagsToBlocks}.
+ * Must be called before {@link extractAssistantText} so the tool calls are
+ * available as structured blocks and the XML is removed from displayed text.
+ *
+ * Falls back gracefully: if parsing yields no tool calls the text block is
+ * left untouched and the existing strip-only path in extractAssistantText
+ * will clean it up.
+ */
+export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void {
+  if (!Array.isArray(message.content)) {
+    return;
+  }
+
+  const next: AssistantMessage["content"] = [];
+  let changed = false;
+
+  for (const block of message.content) {
+    if (!block || typeof block !== "object" || !("type" in block)) {
+      next.push(block);
+      continue;
+    }
+    if (block.type !== "text") {
+      next.push(block);
+      continue;
+    }
+    const text: string = (block as { text?: string }).text ?? "";
+    if (!text || (!/minimax:tool_call/i.test(text) && !/<invoke\s/i.test(text))) {
+      next.push(block);
+      continue;
+    }
+
+    const toolCalls = parseMinimaxToolCallXml(text);
+    if (toolCalls.length === 0) {
+      // No parseable invocations — keep the block as-is; the strip function
+      // inside extractAssistantText will still clean stray tags.
+      next.push(block);
+      continue;
+    }
+
+    changed = true;
+
+    // Walk through tool-call regions: either <minimax:tool_call>...</minimax:tool_call>
+    // segments or bare <invoke>...</invoke> blocks.
+    const regionRe =
+      /<minimax:tool_call>[\s\S]*?<\/minimax:tool_call>|<invoke\s+name=["'][^"']+["'][^>]*>[\s\S]*?<\/invoke>/gi;
+    let cursor = 0;
+    let tcIdx = 0;
+
+    for (const regionMatch of text.matchAll(regionRe)) {
+      const matchStart = regionMatch.index;
+      // Strip stray minimax wrapper tags from interleaved prose.
+      const prose = text
+        .slice(cursor, matchStart)
+        .replace(/<\/?minimax:tool_call>/gi, "")
+        .trim();
+      if (prose) {
+        next.push({ type: "text", text: prose });
+      }
+
+      // Count invoke blocks within this region to advance tcIdx
+      const invokeReInner = /<invoke\s+name=["'][^"']+["'][^>]*>[\s\S]*?<\/invoke>/gi;
+      for (const _inv of regionMatch[0].matchAll(invokeReInner)) {
+        if (tcIdx < toolCalls.length) {
+          const tc = toolCalls[tcIdx];
+          next.push({
+            type: "toolUse",
+            id: tc.id,
+            name: tc.name,
+            input: tc.input,
+          } as unknown as (typeof next)[number]);
+          tcIdx += 1;
+        }
+      }
+
+      cursor = matchStart + regionMatch[0].length;
+    }
+
+    // Trailing prose after the last region.
+    const trailing = text
+      .slice(cursor)
+      .replace(/<\/?minimax:tool_call>/gi, "")
+      .trim();
+    if (trailing) {
+      next.push({ type: "text", text: trailing });
+    }
+  }
+
+  if (!changed) {
+    return;
+  }
+  message.content = next;
+}
+
 /**
  * Strip malformed Minimax tool invocations that leak into text content.
  * Minimax sometimes embeds tool calls as XML in text blocks instead of
