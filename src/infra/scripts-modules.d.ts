@@ -26,6 +26,10 @@ declare module "../../scripts/lib/test-parallel-policy.mjs" {
     isCI?: boolean;
     testProfile?: string;
   }): boolean;
+  export function resolveVitestPoolForWorkerClamp(params: {
+    pool: string;
+    maxWorkers: number;
+  }): string;
 }
 
 declare module "*test-parallel-policy.mjs" {
@@ -33,4 +37,8 @@ declare module "*test-parallel-policy.mjs" {
     isCI?: boolean;
     testProfile?: string;
   }): boolean;
+  export function resolveVitestPoolForWorkerClamp(params: {
+    pool: string;
+    maxWorkers: number;
+  }): string;
 }
