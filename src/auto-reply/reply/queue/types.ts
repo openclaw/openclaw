@@ -50,6 +50,13 @@ export type FollowupMediaContext = {
   AccountId?: string;
   MessageThreadId?: string | number;
   DeferredMediaApplied?: boolean;
+  /**
+   * Set when file extraction has already been applied to Body (either in the
+   * primary path or by a previous deferred-media run).  Checked instead of
+   * scanning body text for `<file` patterns to avoid false-positives on user
+   * messages that contain literal XML-like text.
+   */
+  DeferredFileBlocksExtracted?: boolean;
 };
 
 export type FollowupRun = {

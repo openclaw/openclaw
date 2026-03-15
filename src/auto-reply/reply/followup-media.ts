@@ -183,10 +183,18 @@ function hasOnlyFileLikeAttachments(mediaContext: FollowupMediaContext): boolean
   );
 }
 
+function hasAnyFileAttachments(mediaContext: FollowupMediaContext): boolean {
+  return normalizeAttachments(mediaContext as MsgContext).some((attachment) => {
+    const kind = resolveAttachmentKind(attachment);
+    return kind !== "audio" && kind !== "image" && kind !== "video";
+  });
+}
+
 function snapshotUpdatedMediaContext(params: {
   original: FollowupMediaContext;
   mediaCtx: MsgContext;
   updatedBody?: string;
+  appliedFile?: boolean;
 }): FollowupMediaContext {
   return {
     ...params.original,
@@ -202,6 +210,8 @@ function snapshotUpdatedMediaContext(params: {
       ? [...params.mediaCtx.MediaUnderstandingDecisions]
       : params.original.MediaUnderstandingDecisions,
     DeferredMediaApplied: true,
+    DeferredFileBlocksExtracted:
+      params.original.DeferredFileBlocksExtracted || params.appliedFile || undefined,
   };
 }
 
@@ -227,13 +237,21 @@ export async function applyDeferredMediaUnderstandingToQueuedRun(
 
   const resolvedOriginalBody =
     mediaContext.CommandBody ?? mediaContext.RawBody ?? mediaContext.Body;
-  // Detect file extraction from the primary path by checking whether Body was
-  // mutated AND contains file blocks.  This avoids false-positives when a user
-  // message literally contains "<file name=" text.
-  const fileExtractionAlreadyApplied =
-    mediaContext.Body !== resolvedOriginalBody && FILE_BLOCK_RE.test(mediaContext.Body ?? "");
+  // Detect file extraction from the primary path via body mutation instead of
+  // scanning for literal '<file name=' patterns (which false-positives on user
+  // text).  Compare Body against RawBody (never mutated by the primary path's
+  // media/file processing) rather than CommandBody (which differs from Body
+  // when inline directives like /think were stripped).
+  const referenceBody = mediaContext.RawBody ?? mediaContext.Body;
+  if (
+    !mediaContext.DeferredFileBlocksExtracted &&
+    mediaContext.Body !== referenceBody &&
+    hasAnyFileAttachments(mediaContext)
+  ) {
+    mediaContext.DeferredFileBlocksExtracted = true;
+  }
 
-  if (fileExtractionAlreadyApplied && hasOnlyFileLikeAttachments(mediaContext)) {
+  if (mediaContext.DeferredFileBlocksExtracted && hasOnlyFileLikeAttachments(mediaContext)) {
     mediaContext.DeferredMediaApplied = true;
     return;
   }
@@ -266,7 +284,7 @@ export async function applyDeferredMediaUnderstandingToQueuedRun(
       muResult.appliedAudio ||
       muResult.appliedImage ||
       muResult.appliedVideo ||
-      (muResult.appliedFile && !fileExtractionAlreadyApplied);
+      (muResult.appliedFile && !mediaContext.DeferredFileBlocksExtracted);
 
     if (shouldRebuildPrompt) {
       const newMediaNote = buildInboundMediaNote(mediaCtx);
@@ -285,6 +303,7 @@ export async function applyDeferredMediaUnderstandingToQueuedRun(
       original: mediaContext,
       mediaCtx,
       updatedBody: shouldRebuildPrompt ? mediaCtx.Body : undefined,
+      appliedFile: muResult.appliedFile,
     });
   } catch (err) {
     mediaContext.DeferredMediaApplied = true;
