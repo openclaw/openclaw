@@ -31,6 +31,16 @@
       "title": "Session Send",
       "detailKeys": ["label", "sessionKey", "agentId", "timeoutSeconds"]
     },
+    "acp_send": {
+      "emoji": "📨",
+      "title": "ACP Send",
+      "detailKeys": ["label", "sessionKey", "agentId"]
+    },
+    "sessions_cancel": {
+      "emoji": "⏹️",
+      "title": "Session Cancel",
+      "detailKeys": ["sessionKey", "reason"]
+    },
     "sessions_history": {
       "emoji": "🧾",
       "title": "Session History",
