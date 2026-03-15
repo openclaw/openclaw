@@ -1,10 +1,12 @@
-import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   createScopedAccountConfigAccessors,
+  createScopedChannelConfigBase,
   createScopedDmSecurityResolver,
   formatAllowFromLowercase,
+  type OutboundSendDeps,
+  resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
@@ -40,10 +42,6 @@ import {
   type ResolvedTelegramAccount,
   type TelegramProbe,
 } from "openclaw/plugin-sdk/telegram";
-import {
-  type OutboundSendDeps,
-  resolveOutboundSendDep,
-} from "../../../src/infra/outbound/send-deps.js";
 import { getTelegramRuntime } from "./runtime.js";
 
 type TelegramSendFn = ReturnType<

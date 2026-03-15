@@ -1,10 +1,11 @@
-import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenProviderGroupPolicyWarnings,
   collectOpenGroupPolicyConfiguredRouteWarnings,
   createScopedAccountConfigAccessors,
+  createScopedChannelConfigBase,
   formatAllowFromLowercase,
+  resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
@@ -37,7 +38,6 @@ import {
   type ChannelPlugin,
   type ResolvedDiscordAccount,
 } from "openclaw/plugin-sdk/discord";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { getDiscordRuntime } from "./runtime.js";
 
 type DiscordSendFn = ReturnType<
