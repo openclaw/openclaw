@@ -1,13 +1,13 @@
 import util from "node:util";
+import {
+  listConfiguredAccountIds as listConfiguredAccountIdsFromSection,
+  resolveAccountWithDefaultFallback,
+} from "openclaw/plugin-sdk/account-resolution";
 import { createAccountActionGate } from "../../../src/channels/plugins/account-action-gate.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { TelegramAccountConfig, TelegramActionConfig } from "../../../src/config/types.js";
 import { isTruthyEnvValue } from "../../../src/infra/env.js";
 import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
-import {
-  listConfiguredAccountIds as listConfiguredAccountIdsFromSection,
-  resolveAccountWithDefaultFallback,
-} from "../../../src/plugin-sdk/account-resolution.js";
 import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
 import {
   listBoundAccountIds,

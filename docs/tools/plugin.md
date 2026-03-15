@@ -274,6 +274,13 @@ Compatibility note:
 - New and migrated bundled plugins should use channel or extension-specific
   subpaths; use `core` for generic surfaces and `compat` only when broader
   shared helpers are required.
+- Plugin code under `extensions/**` must not import OpenClaw core internals
+  directly. Allowed imports are:
+  - files inside the same extension
+  - `openclaw/plugin-sdk` and `openclaw/plugin-sdk/*`
+  - Node builtins and third-party packages
+- Direct imports into `src/**`, `openclaw/src/**`, or another extension's source
+  tree are treated as plugin boundary violations and rejected by repo checks.
 
 ## Read-only channel inspection
 

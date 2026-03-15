@@ -10,6 +10,9 @@ const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const ciWorkers = isWindows ? 2 : 3;
 const pluginSdkSubpaths = [
   "account-id",
+  "account-resolution",
+  "allow-from",
+  "boolean-param",
   "core",
   "web-search",
   "compat",
@@ -30,7 +33,9 @@ const pluginSdkSubpaths = [
   "feishu",
   "google-gemini-cli-auth",
   "googlechat",
+  "group-access",
   "irc",
+  "json-store",
   "llm-task",
   "lobster",
   "matrix",
@@ -48,11 +53,13 @@ const pluginSdkSubpaths = [
   "test-utils",
   "thread-ownership",
   "tlon",
+  "tool-send",
   "twitch",
   "voice-call",
   "zalo",
   "zalouser",
   "keyed-async-queue",
+  "request-url",
 ] as const;
 
 export default defineConfig({

@@ -212,9 +212,37 @@
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
     },
+    "./plugin-sdk/account-resolution": {
+      "types": "./dist/plugin-sdk/account-resolution.d.ts",
+      "default": "./dist/plugin-sdk/account-resolution.js"
+    },
+    "./plugin-sdk/allow-from": {
+      "types": "./dist/plugin-sdk/allow-from.d.ts",
+      "default": "./dist/plugin-sdk/allow-from.js"
+    },
+    "./plugin-sdk/boolean-param": {
+      "types": "./dist/plugin-sdk/boolean-param.d.ts",
+      "default": "./dist/plugin-sdk/boolean-param.js"
+    },
+    "./plugin-sdk/group-access": {
+      "types": "./dist/plugin-sdk/group-access.d.ts",
+      "default": "./dist/plugin-sdk/group-access.js"
+    },
+    "./plugin-sdk/json-store": {
+      "types": "./dist/plugin-sdk/json-store.d.ts",
+      "default": "./dist/plugin-sdk/json-store.js"
+    },
     "./plugin-sdk/keyed-async-queue": {
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
+    },
+    "./plugin-sdk/request-url": {
+      "types": "./dist/plugin-sdk/request-url.d.ts",
+      "default": "./dist/plugin-sdk/request-url.js"
+    },
+    "./plugin-sdk/tool-send": {
+      "types": "./dist/plugin-sdk/tool-send.d.ts",
+      "default": "./dist/plugin-sdk/tool-send.js"
     },
     "./cli-entry": "./openclaw.mjs"
   },
@@ -274,7 +302,7 @@
     "ios:gen": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate'",
     "ios:open": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate && open OpenClaw.xcodeproj'",
     "ios:run": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate && xcodebuild -project OpenClaw.xcodeproj -scheme OpenClaw -destination \"${IOS_DEST:-platform=iOS Simulator,name=iPhone 17}\" -configuration Debug build && xcrun simctl boot \"${IOS_SIM:-iPhone 17}\" || true && xcrun simctl launch booted ai.openclaw.ios'",
-    "lint": "oxlint --type-aware",
+    "lint": "oxlint --type-aware && pnpm lint:plugins:import-boundaries",
     "lint:agent:ingress-owner": "node scripts/check-ingress-agent-owner-context.mjs",
     "lint:all": "pnpm lint && pnpm lint:swift",
     "lint:auth:no-pairing-store-group": "node scripts/check-no-pairing-store-group-auth.mjs",
@@ -282,6 +310,7 @@
     "lint:docs": "pnpm dlx markdownlint-cli2",
     "lint:docs:fix": "pnpm dlx markdownlint-cli2 --fix",
     "lint:fix": "oxlint --type-aware --fix && pnpm format",
+    "lint:plugins:import-boundaries": "node --import tsx scripts/check-plugin-import-boundaries.ts",
     "lint:plugins:no-monolithic-plugin-sdk-entry-imports": "node --import tsx scripts/check-no-monolithic-plugin-sdk-entry-imports.ts",
     "lint:plugins:no-register-http-handler": "node scripts/check-no-register-http-handler.mjs",
     "lint:swift": "swiftlint lint --config .swiftlint.yml && (cd apps/ios && swiftlint lint --config .swiftlint.yml)",

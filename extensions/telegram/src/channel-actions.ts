@@ -1,3 +1,5 @@
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -15,8 +17,6 @@ import type {
   ChannelMessageActionName,
 } from "../../../src/channels/plugins/types.js";
 import type { TelegramActionConfig } from "../../../src/config/types.telegram.js";
-import { readBooleanParam } from "../../../src/plugin-sdk/boolean-param.js";
-import { extractToolSend } from "../../../src/plugin-sdk/tool-send.js";
 import { resolveTelegramPollVisibility } from "../../../src/poll-params.js";
 import {
   createTelegramActionGate,

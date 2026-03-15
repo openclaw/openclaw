@@ -3,6 +3,7 @@ import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
 import * as lineSdk from "openclaw/plugin-sdk/line";
 import * as msteamsSdk from "openclaw/plugin-sdk/msteams";
+import * as requestUrlSdk from "openclaw/plugin-sdk/request-url";
 import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
@@ -97,6 +98,28 @@ describe("plugin-sdk subpath exports", () => {
   it("exports Microsoft Teams helpers", () => {
     expect(typeof msteamsSdk.resolveControlCommandGate).toBe("function");
     expect(typeof msteamsSdk.loadOutboundMediaFromUrl).toBe("function");
+  });
+
+  it("exports shared utility subpaths", async () => {
+    expect(typeof requestUrlSdk.resolveRequestUrl).toBe("function");
+
+    const booleanParamSdk = await import("openclaw/plugin-sdk/boolean-param");
+    expect(typeof booleanParamSdk.readBooleanParam).toBe("function");
+
+    const groupAccessSdk = await import("openclaw/plugin-sdk/group-access");
+    expect(typeof groupAccessSdk.evaluateGroupRouteAccessForPolicy).toBe("function");
+
+    const toolSendSdk = await import("openclaw/plugin-sdk/tool-send");
+    expect(typeof toolSendSdk.extractToolSend).toBe("function");
+
+    const accountResolutionSdk = await import("openclaw/plugin-sdk/account-resolution");
+    expect(typeof accountResolutionSdk.resolveAccountWithDefaultFallback).toBe("function");
+
+    const allowFromSdk = await import("openclaw/plugin-sdk/allow-from");
+    expect(typeof allowFromSdk.isAllowedParsedChatSender).toBe("function");
+
+    const jsonStoreSdk = await import("openclaw/plugin-sdk/json-store");
+    expect(typeof jsonStoreSdk.readJsonFileWithFallback).toBe("function");
   });
 
   it("exports acpx helpers", async () => {

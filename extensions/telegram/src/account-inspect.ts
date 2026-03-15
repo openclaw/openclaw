@@ -1,3 +1,4 @@
+import { resolveAccountWithDefaultFallback } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   coerceSecretRef,
@@ -6,7 +7,6 @@ import {
 } from "../../../src/config/types.secrets.js";
 import type { TelegramAccountConfig } from "../../../src/config/types.telegram.js";
 import { tryReadSecretFileSync } from "../../../src/infra/secret-file.js";
-import { resolveAccountWithDefaultFallback } from "../../../src/plugin-sdk/account-resolution.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
 import { resolveDefaultSecretProviderAlias } from "../../../src/secrets/ref-contract.js";
 import {
