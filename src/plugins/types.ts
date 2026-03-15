@@ -424,6 +424,7 @@ export type PluginDiagnostic = {
 export type PluginHookName =
   | "before_model_resolve"
   | "before_prompt_build"
+  | "before_context_send"
   | "before_agent_start"
   | "llm_input"
   | "llm_output"
@@ -559,6 +560,18 @@ type AssertAllPluginPromptMutationResultFieldsListed =
   MissingPluginPromptMutationResultFields extends never ? true : never;
 const assertAllPluginPromptMutationResultFieldsListed: AssertAllPluginPromptMutationResultFieldsListed = true;
 void assertAllPluginPromptMutationResultFieldsListed;
+
+// before_context_send hook
+export type PluginHookBeforeContextSendEvent = {
+  messages: AgentMessage[];
+  modelId: string;
+  provider: string;
+  contextWindowTokens: number;
+};
+
+export type PluginHookBeforeContextSendResult = {
+  messages?: AgentMessage[];
+};
 
 // before_agent_start hook (legacy compatibility: combines both phases)
 export type PluginHookBeforeAgentStartEvent = {
@@ -899,6 +912,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void;
+  before_context_send: (
+    event: PluginHookBeforeContextSendEvent,
+    ctx: PluginHookAgentContext,
+  ) => PluginHookBeforeContextSendResult | void;
   before_agent_start: (
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,

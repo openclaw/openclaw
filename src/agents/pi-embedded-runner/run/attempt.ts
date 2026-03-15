@@ -25,7 +25,7 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { isCronSessionKey, isSubagentSessionKey, normalizeAgentId } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -143,7 +143,10 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
   runBeforePromptBuild: (
-    event: { prompt: string; messages: unknown[] },
+    event: {
+      prompt: string;
+      messages: unknown[];
+    },
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
   runBeforeAgentStart: (
@@ -1779,7 +1782,24 @@ export async function runEmbeddedAttempt(
         contextEngineInfo: params.contextEngine?.info,
       });
 
-      // Sets compaction/pruning runtime state and returns extension factories
+      // Compute hookAgentId early so it's available for buildEmbeddedExtensionFactories.
+      const hookAgentId =
+        typeof params.agentId === "string" && params.agentId.trim()
+          ? normalizeAgentId(params.agentId)
+          : resolveSessionAgentIds({
+              sessionKey: params.sessionKey,
+              config: params.config,
+            }).sessionAgentId;
+
+      const hookCtx = {
+        agentId: hookAgentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        messageProvider: params.messageProvider ?? undefined,
+      };
+
+      // Sets compaction/pruning/context-hooks runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
@@ -1787,6 +1807,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        hookCtx,
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.
@@ -2348,9 +2369,6 @@ export async function runEmbeddedAttempt(
           });
         }
       }
-
-      // Hook runner was already obtained earlier before tool creation
-      const hookAgentId = sessionAgentId;
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
