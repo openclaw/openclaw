@@ -65,7 +65,9 @@ function normalizePersistedToolResultName(
   if (typeof rawToolName === "string") {
     return { ...toolResult, toolName: "unknown" };
   }
-  return toolResult;
+  // toolName is entirely missing (undefined) — set a fallback to prevent
+  // Google API 400 errors where function_response.name cannot be empty.
+  return { ...toolResult, toolName: "unknown" };
 }
 
 export function installSessionToolResultGuard(
