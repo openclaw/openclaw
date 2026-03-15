@@ -218,14 +218,13 @@ describe("runMessageAction context isolation", () => {
         poll_public: "true",
       },
     },
-  ])("rejects send actions that include $name", async ({ actionParams }) => {
-    await expect(
-      runDrySend({
-        cfg: slackConfig,
-        actionParams,
-        toolContext: { currentChannelId: "C12345678" },
-      }),
-    ).rejects.toThrow(/use action "poll" instead of "send"/i);
+  ])("strips poll params from send action with $name", async ({ actionParams }) => {
+    const result = await runDrySend({
+      cfg: slackConfig,
+      actionParams,
+      toolContext: { currentChannelId: "C12345678" },
+    });
+    expect(result).toMatchObject({ kind: "send", channel: "slack" });
   });
 
   it.each([
