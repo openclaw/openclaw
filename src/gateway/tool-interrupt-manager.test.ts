@@ -143,6 +143,53 @@ describe("ToolInterruptManager", () => {
     manager.stop();
   });
 
+  it("accepts resume when only one optional payload binding was recorded", async () => {
+    const filePath = await createTempInterruptPath();
+    const manager = new ToolInterruptManager({ filePath });
+    await manager.load();
+
+    const toolOnly = await manager.emit({
+      approvalRequestId: "approval-bind-tool-only",
+      runId: "run-tool-only",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-tool-only",
+      toolName: "browser",
+      interrupt: { type: "approval" },
+      timeoutMs: 60_000,
+    });
+    const toolOnlyResume = await manager.resume({
+      approvalRequestId: "approval-bind-tool-only",
+      runId: "run-tool-only",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-tool-only",
+      toolName: "browser",
+      resumeToken: toolOnly.requested.resumeToken,
+      result: { ok: true },
+    });
+    expect(toolOnlyResume).toMatchObject({ ok: true, alreadyResolved: false });
+
+    const argsOnly = await manager.emit({
+      approvalRequestId: "approval-bind-args-only",
+      runId: "run-args-only",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-args-only",
+      normalizedArgsHash: "d".repeat(64),
+      interrupt: { type: "approval" },
+      timeoutMs: 60_000,
+    });
+    const argsOnlyResume = await manager.resume({
+      approvalRequestId: "approval-bind-args-only",
+      runId: "run-args-only",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-args-only",
+      normalizedArgsHash: "d".repeat(64),
+      resumeToken: argsOnly.requested.resumeToken,
+      result: { ok: true },
+    });
+    expect(argsOnlyResume).toMatchObject({ ok: true, alreadyResolved: false });
+    manager.stop();
+  });
+
   it("allows only one successful resume under double-approve race", async () => {
     const filePath = await createTempInterruptPath();
     const manager = new ToolInterruptManager({ filePath });
@@ -308,5 +355,56 @@ describe("ToolInterruptManager", () => {
     const snapshot = reloaded.getSnapshot("approval-3");
     expect(snapshot?.expiredAtMs).toBeDefined();
     reloaded.stop();
+  });
+
+  it("settles pending waits when capacity pruning drops an interrupt", async () => {
+    const filePath = await createTempInterruptPath();
+    const manager = new ToolInterruptManager({ filePath });
+    await manager.load();
+
+    const internal = manager as unknown as {
+      records: Map<string, object>;
+      pending: Map<string, { promise: Promise<unknown> }>;
+      createPendingEntry: (record: object) => { promise: Promise<unknown> };
+      pruneRecordsLocked: (now: number) => void;
+    };
+    const firstRecord = {
+      approvalRequestId: "approval-prune-0",
+      runId: "run-prune-0",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-prune-0",
+      interrupt: { type: "approval" },
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+      resumeTokenHash: "0".repeat(64),
+    };
+    internal.records.set("approval-prune-0", firstRecord);
+    const firstPending = internal.createPendingEntry(firstRecord);
+    internal.pending.set("approval-prune-0", firstPending);
+
+    for (let i = 1; i <= 2_000; i += 1) {
+      internal.records.set(`approval-prune-${i}`, {
+        approvalRequestId: `approval-prune-${i}`,
+        runId: `run-prune-${i}`,
+        sessionKey: "agent:main:main",
+        toolCallId: `tool-prune-${i}`,
+        interrupt: { type: "approval" },
+        createdAtMs: i,
+        expiresAtMs: 60_000 + i,
+        resumeTokenHash: `${i}`.padStart(64, "0"),
+      });
+    }
+
+    internal.pruneRecordsLocked(5_000);
+
+    await expect(firstPending.promise).resolves.toMatchObject({
+      status: "expired",
+      approvalRequestId: "approval-prune-0",
+      runId: "run-prune-0",
+      sessionKey: "agent:main:main",
+      toolCallId: "tool-prune-0",
+      expiresAtMs: 60_000,
+    });
+    manager.stop();
   });
 });

@@ -540,9 +540,12 @@ export class ToolInterruptManager {
         };
         return;
       }
-      if (record.toolName || record.normalizedArgsHash) {
-        const toolName = typeof params.toolName === "string" ? params.toolName.trim() : "";
-        if (!record.toolName || toolName !== record.toolName) {
+      if (record.toolName) {
+        const toolName =
+          typeof params.toolName === "string" && params.toolName.trim()
+            ? params.toolName.trim()
+            : undefined;
+        if (toolName !== record.toolName) {
           result = {
             ok: false,
             code: "binding_mismatch",
@@ -550,9 +553,14 @@ export class ToolInterruptManager {
           };
           return;
         }
+      }
+      if (record.normalizedArgsHash) {
         const argsHash =
-          typeof params.normalizedArgsHash === "string" ? params.normalizedArgsHash : "";
-        if (!record.normalizedArgsHash || argsHash !== record.normalizedArgsHash) {
+          typeof params.normalizedArgsHash === "string" &&
+          /^[a-f0-9]{64}$/.test(params.normalizedArgsHash)
+            ? params.normalizedArgsHash
+            : undefined;
+        if (argsHash !== record.normalizedArgsHash) {
           result = {
             ok: false,
             code: "binding_mismatch",
@@ -731,7 +739,7 @@ export class ToolInterruptManager {
   private pruneRecordsLocked(now: number) {
     for (const [id, record] of this.records) {
       if (this.shouldDropRecord(record, now)) {
-        this.records.delete(id);
+        this.dropRecordLocked(id, record, now);
       }
     }
     if (this.records.size <= MAX_STORED_INTERRUPTS) {
@@ -750,9 +758,34 @@ export class ToolInterruptManager {
       if (!next) {
         break;
       }
-      this.records.delete(next.approvalRequestId);
-      this.pending.delete(next.approvalRequestId);
+      this.dropRecordLocked(next.approvalRequestId, next, now);
     }
+  }
+
+  private dropRecordLocked(
+    approvalRequestId: string,
+    record: StoredToolInterruptRecord,
+    now: number,
+  ) {
+    this.records.delete(approvalRequestId);
+    const entry = this.pending.get(approvalRequestId);
+    if (!entry) {
+      return;
+    }
+    if (entry.settled) {
+      clearTimeout(entry.timer);
+      this.pending.delete(approvalRequestId);
+      return;
+    }
+    record.expiredAtMs = record.expiredAtMs ?? now;
+    this.settlePendingLocked(approvalRequestId, {
+      status: "expired",
+      approvalRequestId: record.approvalRequestId,
+      runId: record.runId,
+      sessionKey: record.sessionKey,
+      toolCallId: record.toolCallId,
+      expiresAtMs: record.expiresAtMs,
+    });
   }
 
   private clearPendingEntries() {
