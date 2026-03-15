@@ -48,6 +48,10 @@ def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:
     return payload
 
 
+def _provider_matches(payload_provider: Any, requested_provider: str) -> bool:
+    return isinstance(payload_provider, str) and payload_provider.lower() == requested_provider.lower()
+
+
 def load_payload(input_path: Optional[str], provider: str) -> Dict[str, Any]:
     if input_path:
         if input_path == "-":
@@ -60,11 +64,16 @@ def load_payload(input_path: Optional[str], provider: str) -> Dict[str, Any]:
         data = run_codexbar_cost(provider)
 
     if isinstance(data, dict):
+        payload_provider = data.get("provider")
+        if isinstance(payload_provider, str) and not _provider_matches(payload_provider, provider):
+            raise RuntimeError(
+                f"Input payload provider '{payload_provider}' does not match requested provider '{provider}'."
+            )
         return data
 
     if isinstance(data, list):
         for entry in data:
-            if isinstance(entry, dict) and entry.get("provider") == provider:
+            if isinstance(entry, dict) and _provider_matches(entry.get("provider"), provider):
                 return entry
         raise RuntimeError(f"Provider '{provider}' not found in codexbar payload.")
 
