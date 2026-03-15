@@ -12,6 +12,11 @@ export type FeishuCardActionEvent = {
   action: {
     value: Record<string, unknown>;
     tag: string;
+    name?: string;
+    option?: string;
+    options?: string[];
+    input_value?: string;
+    form_value?: Record<string, unknown>;
   };
   context: {
     open_id: string;
@@ -19,20 +24,6 @@ export type FeishuCardActionEvent = {
     chat_id: string;
   };
 };
-
-function buildCardActionTextFallback(event: FeishuCardActionEvent): string {
-  const actionValue = event.action.value;
-  if (typeof actionValue === "object" && actionValue !== null) {
-    if ("text" in actionValue && typeof actionValue.text === "string") {
-      return actionValue.text;
-    }
-    if ("command" in actionValue && typeof actionValue.command === "string") {
-      return actionValue.command;
-    }
-    return JSON.stringify(actionValue);
-  }
-  return String(actionValue);
-}
 
 export async function handleFeishuCardAction(params: {
   cfg: ClawdbotConfig;
@@ -44,7 +35,50 @@ export async function handleFeishuCardAction(params: {
   const { cfg, event, runtime, accountId } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   const log = runtime?.log ?? console.log;
-  const content = buildCardActionTextFallback(event);
+
+  // Extract action value — include interactive component fields when present
+  const actionValue = event.action.value;
+  const hasExtraFields =
+    event.action.name !== undefined ||
+    event.action.form_value !== undefined ||
+    event.action.input_value !== undefined ||
+    event.action.option !== undefined ||
+    event.action.options !== undefined;
+
+  let content = "";
+  // Preserve command/text extraction so slash-commands stay parseable by handleFeishuMessage,
+  // even when extra fields like `name` are present.
+  if (
+    typeof actionValue === "object" &&
+    actionValue !== null &&
+    "text" in actionValue &&
+    typeof actionValue.text === "string"
+  ) {
+    content = actionValue.text;
+  } else if (
+    typeof actionValue === "object" &&
+    actionValue !== null &&
+    "command" in actionValue &&
+    typeof actionValue.command === "string"
+  ) {
+    content = actionValue.command;
+  } else if (hasExtraFields) {
+    // Build a structured payload so the agent receives all form/input data
+    const payload: Record<string, unknown> = {
+      action: event.action.tag,
+      value: actionValue,
+    };
+    if (event.action.form_value !== undefined) payload.form_value = event.action.form_value;
+    if (event.action.input_value !== undefined) payload.input_value = event.action.input_value;
+    if (event.action.name !== undefined) payload.name = event.action.name;
+    if (event.action.option !== undefined) payload.option = event.action.option;
+    if (event.action.options !== undefined) payload.options = event.action.options;
+    content = JSON.stringify(payload);
+  } else if (typeof actionValue === "object" && actionValue !== null) {
+    content = JSON.stringify(actionValue);
+  } else {
+    content = String(actionValue);
+  }
 
   // Construct a synthetic message event
   const messageEvent: FeishuMessageEvent = {
