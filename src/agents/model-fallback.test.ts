@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
@@ -540,8 +541,11 @@ describe("runWithModelFallback", () => {
         .map((call) => call[0] as string)
         .find((value) => value.includes('Model "openai/gpt-6spoof" not found'));
       expect(warning).toContain('Model "openai/gpt-6spoof" not found');
-      expect(warning).not.toContain("\u001B");
-      expect(warning).not.toContain("\n");
+      // Strip all ANSI escape sequences (logger colorizes prefix + message), then verify
+      // the sanitized output contains no residual escapes or newlines from the injected model name.
+      const stripped = stripAnsi(warning!);
+      expect(stripped).not.toContain("\u001B");
+      expect(stripped).not.toContain("\n");
     } finally {
       warnSpy.mockRestore();
       setLoggerOverride(null);
