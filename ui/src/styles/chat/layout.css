@@ -993,35 +993,3 @@
 
 /* Mobile dropdown toggle — hidden on desktop */
 /* Mobile gear toggle + dropdown are hidden by default in layout.css */
-
-/* ── Context usage notice ─────────────────────────────── */
-
-.context-notice {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  margin: 4px 0;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--ctx-color, #d97706);
-  background: var(--ctx-bg, rgba(217, 119, 6, 0.08));
-  border: 1px solid var(--ctx-color, #d97706);
-  border-radius: 6px;
-  /* Non-blocking: sits in normal document flow, not overlaid */
-  position: relative;
-  z-index: 0;
-}
-
-.context-notice__icon {
-  flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  stroke: var(--ctx-color, #d97706);
-}
-
-.context-notice__detail {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-  opacity: 0.8;
-}
