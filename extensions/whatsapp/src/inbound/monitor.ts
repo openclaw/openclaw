@@ -426,7 +426,12 @@ export async function monitorWebInbox(options: {
   };
   const handleMessagesReaction = async (
     reactions: Array<{
-      key: { remoteJid?: string | null; id?: string | null; participant?: string | null };
+      key: {
+        remoteJid?: string | null;
+        id?: string | null;
+        participant?: string | null;
+        fromMe?: boolean | null;
+      };
       reaction: { text?: string | null };
       userJid?: string | null;
     }>,
