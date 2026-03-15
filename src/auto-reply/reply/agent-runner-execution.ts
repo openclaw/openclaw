@@ -3,10 +3,12 @@ import fs from "node:fs";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
+import { isFailoverError } from "../../agents/failover-error.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
-  BILLING_ERROR_USER_MESSAGE,
+  formatAuthErrorMessage,
+  formatBillingErrorMessage,
   isCompactionFailureError,
   isContextOverflowError,
   isBillingErrorMessage,
@@ -617,6 +619,29 @@ export async function runAgentTurnWithFallback(params: {
           setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
         });
         continue;
+      }
+
+      // Surface billing/auth FailoverErrors as clean user-facing messages
+      // instead of the generic "Agent failed before reply" text.
+      if (isFailoverError(err)) {
+        if (err.reason === "billing") {
+          defaultRuntime.error(`Billing error from ${err.provider ?? "provider"}: ${message}`);
+          return {
+            kind: "final",
+            payload: { text: formatBillingErrorMessage(err.provider) },
+          };
+        }
+        if (err.reason === "auth") {
+          defaultRuntime.error(
+            `Authentication error from ${err.provider ?? "provider"}: ${message}`,
+          );
+          return {
+            kind: "final",
+            payload: {
+              text: formatAuthErrorMessage(err.provider),
+            },
+          };
+        }
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
