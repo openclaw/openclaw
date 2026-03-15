@@ -32,8 +32,8 @@ declare global {
   var __openclaw_wa_listeners: Map<string, ActiveWebListener> | undefined;
 }
 
-const listeners: Map<string, ActiveWebListener> =
-  (globalThis.__openclaw_wa_listeners ??= new Map());
+const listeners: Map<string, ActiveWebListener> = (globalThis.__openclaw_wa_listeners ??=
+  new Map());
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
