@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
+  resolveRunTimeoutDuringCompaction,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
@@ -29,6 +30,36 @@ describe("compaction-timeout helpers", () => {
         isCompactionInFlight: true,
       }),
     ).toBe(false);
+  });
+
+  it("extends the first run timeout reached during compaction", () => {
+    expect(
+      resolveRunTimeoutDuringCompaction({
+        isCompactionPendingOrRetrying: false,
+        isCompactionInFlight: true,
+        graceAlreadyUsed: false,
+      }),
+    ).toBe("extend");
+  });
+
+  it("aborts after compaction grace has already been used", () => {
+    expect(
+      resolveRunTimeoutDuringCompaction({
+        isCompactionPendingOrRetrying: true,
+        isCompactionInFlight: false,
+        graceAlreadyUsed: true,
+      }),
+    ).toBe("abort");
+  });
+
+  it("aborts immediately when no compaction is active", () => {
+    expect(
+      resolveRunTimeoutDuringCompaction({
+        isCompactionPendingOrRetrying: false,
+        isCompactionInFlight: false,
+        graceAlreadyUsed: false,
+      }),
+    ).toBe("abort");
   });
 
   it("uses pre-compaction snapshot when compaction timeout occurs", () => {
