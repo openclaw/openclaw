@@ -8,6 +8,7 @@ import {
 describe("normalizePluginsConfig", () => {
   it("uses default memory slot when not specified", () => {
     const result = normalizePluginsConfig({});
+    expect(result.defaultedSlots.memory).toBe(true);
     expect(result.slots.memory).toBe("memory-core");
   });
 
@@ -15,7 +16,16 @@ describe("normalizePluginsConfig", () => {
     const result = normalizePluginsConfig({
       slots: { memory: "custom-memory" },
     });
+    expect(result.defaultedSlots.memory).toBe(false);
     expect(result.slots.memory).toBe("custom-memory");
+  });
+
+  it("tracks when the default memory slot was explicitly requested", () => {
+    const result = normalizePluginsConfig({
+      slots: { memory: "memory-core" },
+    });
+    expect(result.defaultedSlots.memory).toBe(false);
+    expect(result.slots.memory).toBe("memory-core");
   });
 
   it("disables memory slot when set to 'none' (case insensitive)", () => {

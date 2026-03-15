@@ -8,6 +8,7 @@ import {
 } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import { defaultSlotIdForKey } from "../plugins/slots.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -530,7 +531,16 @@ function validateConfigObjectWithPluginsBase(
 
   const memorySlot = normalizedPlugins.slots.memory;
   if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
-    pushMissingPluginIssue("plugins.slots.memory", memorySlot);
+    if (normalizedPlugins.defaultedSlots.memory && memorySlot === defaultSlotIdForKey("memory")) {
+      // Keep the default bundled memory slot from aborting update/startup flows
+      // when packaged plugin discovery is temporarily unavailable.
+      warnings.push({
+        path: "plugins.slots.memory",
+        message: `default bundled memory slot unavailable: ${memorySlot} (continuing without fatal validation; check packaged plugin installation)`,
+      });
+    } else {
+      pushMissingPluginIssue("plugins.slots.memory", memorySlot);
+    }
   }
 
   let selectedMemoryPluginId: string | null = null;
