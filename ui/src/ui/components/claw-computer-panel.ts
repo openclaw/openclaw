@@ -55,6 +55,10 @@ export class ClawComputerPanel extends LitElement {
   private aspectRatio = 1;
   // 记录拖拽开始时鼠标相对于拖拽句柄的位置（点 A）
   private dragAnchor = { x: 0, y: 0 };
+  // 拖拽过程中的临时悬浮状态
+  private tempIsFloating = false;
+  // canvas 的比例（用于悬浮模式缩放时保持）
+  private canvasRatio = 16 / 9;
 
   @property({ type: Boolean }) enabled = false;
 
@@ -326,7 +330,8 @@ export class ClawComputerPanel extends LitElement {
   `;
 
   render() {
-    const screenStyle = this.isFloating
+    const displayFloating = this.isDragging ? this.tempIsFloating : this.isFloating;
+    const screenStyle = displayFloating
       ? `transform: translate(${this.floatingRect.x}px, ${this.floatingRect.y}px); width: ${this.floatingRect.width}px; height: ${this.floatingRect.height}px;`
       : `transform: translate(${this.dockedOffsetX}px, ${this.dockedOffsetY}px);`;
 
@@ -336,12 +341,12 @@ export class ClawComputerPanel extends LitElement {
         <div class="screen-container">
           <div
             ${ref(this.screenRef)}
-            class="screen ${this.isFloating ? "floating" : ""}"
+            class="screen ${displayFloating ? "floating" : ""}"
             style="${screenStyle}"
           >
             <div class="drag-handle" @mousedown=${this.handleDragStart}></div>
             ${
-              this.isFloating
+              displayFloating
                 ? html`
                   <div class="resize-handle top" @mousedown=${(e: MouseEvent) => this.handleResizeStart(e, "top")}></div>
                   <div class="resize-handle bottom" @mousedown=${(e: MouseEvent) => this.handleResizeStart(e, "bottom")}></div>
@@ -381,6 +386,7 @@ export class ClawComputerPanel extends LitElement {
 
     this.isDragging = true;
     this.dragStart = { x: e.clientX, y: e.clientY };
+    this.tempIsFloating = this.isFloating; // 初始化临时状态
 
     const screen = this.shadowRoot?.querySelector(".screen") as HTMLDivElement | null;
     const dragHandle = this.shadowRoot?.querySelector(".drag-handle") as HTMLDivElement | null;
@@ -425,6 +431,18 @@ export class ClawComputerPanel extends LitElement {
           width: screenWidth,
           height: screenHeight,
         };
+
+        // 打印尺寸信息，用于调试
+        const canvas = this.shadowRoot?.querySelector(".screen canvas") as HTMLCanvasElement | null;
+        if (canvas) {
+          console.log("=== 切换到悬浮模式时的尺寸信息 ===");
+          console.log("screen 宽度:", screenWidth);
+          console.log("screen 高度:", screenHeight);
+          console.log("screen 比例:", screenWidth / screenHeight);
+          console.log("canvas 宽度:", canvas.clientWidth);
+          console.log("canvas 高度:", canvas.clientHeight);
+          console.log("canvas 比例:", canvas.clientWidth / canvas.clientHeight);
+        }
       }
     }
 
@@ -449,35 +467,15 @@ export class ClawComputerPanel extends LitElement {
     const dx = e.clientX - this.dragStart.x;
     const dy = e.clientY - this.dragStart.y;
 
-    if (this.isFloating) {
-      let newX = this.initialRect.x + dx;
-      let newY = this.initialRect.y + dy;
+    // 获取我们自己的左边界
+    const hostRect = this.getBoundingClientRect();
 
-      const windowWidth = window.innerWidth;
-      const windowHeight = window.innerHeight;
-
-      // 限制悬浮窗口不超出屏幕边界
-      newX = Math.max(0, Math.min(newX, windowWidth - this.initialRect.width));
-      newY = Math.max(0, Math.min(newY, windowHeight - this.initialRect.height));
-
-      this.floatingRect = {
-        x: newX,
-        y: newY,
-        width: this.initialRect.width,
-        height: this.initialRect.height,
-      };
-    } else {
-      // 检测是否超过 resizable-divider（左边的分割线）
-      // resizable-divider 就在我们左边，所以用我们自己的左边界作为判断依据
-      const hostRect = this.getBoundingClientRect();
-
-      // 检查鼠标是否超过了我们自己的左边界（即超过了 resizable-divider）
-      if (e.clientX < hostRect.left) {
-        // 切换到悬浮模式
-        this.isFloating = true;
-
+    // 根据鼠标位置更新临时悬浮状态
+    if (e.clientX < hostRect.left) {
+      // 鼠标在左侧，临时切换到悬浮模式
+      if (!this.tempIsFloating) {
+        this.tempIsFloating = true;
         // 计算新的悬浮窗口位置，保持鼠标相对于拖拽句柄的位置（点 A）
-        // 窗口的左上角 = 鼠标当前位置 - 锚点偏移
         const newX = e.clientX - this.dragAnchor.x;
         const newY = e.clientY - this.dragAnchor.y;
 
@@ -498,10 +496,37 @@ export class ClawComputerPanel extends LitElement {
 
         // 更新 dragStart，使其从当前位置继续拖拽
         this.dragStart = { x: e.clientX, y: e.clientY };
-
-        return;
       }
+    } else {
+      // 鼠标在右侧，临时切换回停靠模式
+      if (this.tempIsFloating) {
+        this.tempIsFloating = false;
+        // 重置停靠模式的偏移量
+        this.dockedOffsetY = this.initialRect.offsetY;
+        this.dockedOffsetX = 0;
+        // 更新 dragStart，使其从当前位置继续拖拽
+        this.dragStart = { x: e.clientX, y: e.clientY };
+      }
+    }
 
+    if (this.tempIsFloating) {
+      let newX = this.initialRect.x + dx;
+      let newY = this.initialRect.y + dy;
+
+      const windowWidth = window.innerWidth;
+      const windowHeight = window.innerHeight;
+
+      // 限制悬浮窗口不超出屏幕边界
+      newX = Math.max(0, Math.min(newX, windowWidth - this.initialRect.width));
+      newY = Math.max(0, Math.min(newY, windowHeight - this.initialRect.height));
+
+      this.floatingRect = {
+        x: newX,
+        y: newY,
+        width: this.initialRect.width,
+        height: this.initialRect.height,
+      };
+    } else {
       // 如果没有超过分割线，继续停靠模式的拖拽
       // 每次都直接获取当前尺寸
       const hostHeight = this.offsetHeight;
@@ -546,7 +571,22 @@ export class ClawComputerPanel extends LitElement {
     }
   };
 
-  private handleDragEnd = () => {
+  private handleDragEnd = (e: MouseEvent) => {
+    // 根据松手位置决定是否永久切换到悬浮模式
+    const hostRect = this.getBoundingClientRect();
+    if (e.clientX < hostRect.left) {
+      // 在左侧松手，永久切换到悬浮模式
+      this.isFloating = true;
+      // 触发事件告诉父组件关闭停靠面板
+      this.dispatchEvent(new CustomEvent("float", { bubbles: true, composed: true }));
+    } else {
+      // 在右侧松手，保持停靠模式
+      this.isFloating = false;
+      // 重置偏移量
+      this.dockedOffsetY = this.initialRect.offsetY;
+      this.dockedOffsetX = 0;
+    }
+
     this.cleanupDragListeners();
   };
 
@@ -570,6 +610,13 @@ export class ClawComputerPanel extends LitElement {
     this.isResizing = true;
     this.resizeEdge = edge;
     this.dragStart = { x: e.clientX, y: e.clientY };
+
+    // 每次开始缩放时，获取最新的 canvas 比例
+    const canvas = this.shadowRoot?.querySelector(".screen canvas") as HTMLCanvasElement | null;
+    if (canvas && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
+      this.canvasRatio = canvas.clientWidth / canvas.clientHeight;
+    }
+
     this.initialRect = {
       x: this.floatingRect.x,
       y: this.floatingRect.y,
@@ -604,65 +651,56 @@ export class ClawComputerPanel extends LitElement {
     const dx = e.clientX - this.dragStart.x;
     const dy = e.clientY - this.dragStart.y;
 
-    // 保持宽高比调整
-    // 只有在对角调整时才强制保持宽高比，或者在边缘调整时更新另一个维度？
-    // 用户说“悬浮模式的缩放我要求是不要改变窗口比例的，斜对角拖拽时以对角为固定点缩放，但是不能任意缩放”
-    // 所以应该始终保持比例？或者只在对角时？
-    // “斜对角拖拽时以对角为固定点缩放”暗示对角时必须保持比例。
-    // 单边拖拽通常只改变一个维度，这会破坏比例。
-    // 如果必须保持比例，单边拖拽也必须同时改变另一个维度。
+    // 考虑到窗口有边框和标题栏，实际的 canvas 内容区域要减去这些 padding
+    // 左右 padding: 5.4px * 2 = 10.8px
+    // 上下 padding: 32.4px (标题栏) + 5.4px (底边) = 37.8px
+    const PADDING_X = 10.8;
+    const PADDING_Y = 37.8;
 
     let { x, y, width, height } = this.initialRect;
 
+    // 1. 先计算出用户拖拽后的预期宽高
     if (this.resizeEdge.includes("right")) {
       width += dx;
-      if (!this.resizeEdge.includes("top") && !this.resizeEdge.includes("bottom")) {
-        height = width / this.aspectRatio;
-      }
     }
     if (this.resizeEdge.includes("left")) {
       x += dx;
       width -= dx;
-      if (!this.resizeEdge.includes("top") && !this.resizeEdge.includes("bottom")) {
-        height = width / this.aspectRatio;
-      }
     }
     if (this.resizeEdge.includes("bottom")) {
       height += dy;
-      if (!this.resizeEdge.includes("left") && !this.resizeEdge.includes("right")) {
-        width = height * this.aspectRatio;
-      }
     }
     if (this.resizeEdge.includes("top")) {
       y += dy;
       height -= dy;
-      if (!this.resizeEdge.includes("left") && !this.resizeEdge.includes("right")) {
-        width = height * this.aspectRatio;
-      }
     }
 
-    // 对角调整时的比例保持
-    if (
-      (this.resizeEdge.includes("left") || this.resizeEdge.includes("right")) &&
-      (this.resizeEdge.includes("top") || this.resizeEdge.includes("bottom"))
-    ) {
-      // 简单处理：基于宽度的变化来调整高度，或者基于高度调整宽度
-      // 优先保持宽高比
-      if (this.resizeEdge.includes("right")) {
-        height = width / this.aspectRatio;
-      } else {
-        height = width / this.aspectRatio;
+    // 2. 根据 canvas 的比例强制修正窗口尺寸，确保窗口能仅仅贴合 VNC
+    let canvasW = width - PADDING_X;
+    let canvasH = height - PADDING_Y;
+
+    if (this.resizeEdge === "top" || this.resizeEdge === "bottom") {
+      // 如果只拖拽上下边，以高度为基准计算宽度
+      canvasW = canvasH * this.canvasRatio;
+      width = canvasW + PADDING_X;
+      if (this.resizeEdge.includes("left")) {
+        x = this.initialRect.x + (this.initialRect.width - width);
       }
-      // 如果是 top，需要重新计算 y
+    } else {
+      // 左右边或者对角线，统一以宽度为基准计算高度
+      canvasH = canvasW / this.canvasRatio;
+      height = canvasH + PADDING_Y;
       if (this.resizeEdge.includes("top")) {
         y = this.initialRect.y + (this.initialRect.height - height);
       }
     }
 
-    // 最小尺寸限制
+    // 3. 最小尺寸限制
     if (width < 200) {
       width = 200;
-      height = width / this.aspectRatio;
+      canvasW = width - PADDING_X;
+      canvasH = canvasW / this.canvasRatio;
+      height = canvasH + PADDING_Y;
       if (this.resizeEdge.includes("left")) {
         x = this.initialRect.x + (this.initialRect.width - width);
       }
@@ -670,16 +708,7 @@ export class ClawComputerPanel extends LitElement {
         y = this.initialRect.y + (this.initialRect.height - height);
       }
     }
-    if (height < 150) {
-      height = 150;
-      width = height * this.aspectRatio;
-      if (this.resizeEdge.includes("left")) {
-        x = this.initialRect.x + (this.initialRect.width - width);
-      }
-      if (this.resizeEdge.includes("top")) {
-        y = this.initialRect.y + (this.initialRect.height - height);
-      }
-    }
+    // 注意：这里不再单独限制 height，因为 height 已经和 width 绑定了
 
     this.floatingRect = { x, y, width, height };
 
