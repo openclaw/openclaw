@@ -403,11 +403,6 @@ export async function monitorWebInbox(options: {
       if (!inbound) {
         continue;
       }
-      recordChannelActivity({
-        channel: "whatsapp",
-        accountId: options.accountId,
-        direction: "inbound",
-      });
 
       await maybeMarkInboundAsRead(inbound);
 
@@ -415,6 +410,13 @@ export async function monitorWebInbox(options: {
       if (upsert.type === "append") {
         continue;
       }
+
+      // Only record activity for real new messages, not deduped or history catch-up.
+      recordChannelActivity({
+        channel: "whatsapp",
+        accountId: options.accountId,
+        direction: "inbound",
+      });
 
       const enriched = await enrichInboundMessage(msg);
       if (!enriched) {
