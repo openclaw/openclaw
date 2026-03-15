@@ -282,6 +282,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         }
         const emoji = typeof ctx.params.emoji === "string" ? ctx.params.emoji.trim() : "";
         const remove = ctx.params.remove === true;
+        const clearAll = ctx.params.clearAll === true;
         if (remove) {
           if (!emoji) {
             throw new Error("Emoji is required to remove a Feishu reaction.");
@@ -315,6 +316,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           };
         }
         if (!emoji) {
+          if (!clearAll) {
+            throw new Error(
+              "Emoji is required to add a Feishu reaction. Set clearAll=true to remove all bot reactions.",
+            );
+          }
           const reactions = await listReactionsFeishu({
             cfg: ctx.cfg,
             messageId,
@@ -366,7 +372,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         };
       }
 
-      return null as never;
+      throw new Error(`Unsupported Feishu action: "${String(ctx.action)}"`);
     },
   },
   security: {

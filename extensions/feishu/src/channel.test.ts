@@ -2,9 +2,16 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/feishu";
 import { describe, expect, it, vi } from "vitest";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
+const listReactionsFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
+}));
+
+vi.mock("./reactions.js", () => ({
+  addReactionFeishu: vi.fn(),
+  listReactionsFeishu: listReactionsFeishuMock,
+  removeReactionFeishu: vi.fn(),
 }));
 
 import { feishuPlugin } from "./channel.js";
@@ -48,8 +55,21 @@ describe("feishuPlugin.status.probeAccount", () => {
 });
 
 describe("feishuPlugin actions", () => {
+  const cfg = {
+    channels: {
+      feishu: {
+        enabled: true,
+        appId: "cli_main",
+        appSecret: "secret_main",
+        actions: {
+          reactions: true,
+        },
+      },
+    },
+  } as OpenClawConfig;
+
   it("does not advertise reactions when disabled via actions config", () => {
-    const cfg = {
+    const disabledCfg = {
       channels: {
         feishu: {
           enabled: true,
@@ -62,7 +82,7 @@ describe("feishuPlugin actions", () => {
       },
     } as OpenClawConfig;
 
-    expect(feishuPlugin.actions?.listActions?.({ cfg })).toEqual([]);
+    expect(feishuPlugin.actions?.listActions?.({ cfg: disabledCfg })).toEqual([]);
   });
 
   it("advertises reactions when any enabled configured account allows them", () => {
@@ -97,5 +117,50 @@ describe("feishuPlugin actions", () => {
     } as OpenClawConfig;
 
     expect(feishuPlugin.actions?.listActions?.({ cfg })).toEqual(["react", "reactions"]);
+  });
+
+  it("requires clearAll=true before removing all bot reactions", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "react",
+        params: { messageId: "om_msg1" },
+        cfg,
+        accountId: undefined,
+      } as never),
+    ).rejects.toThrow(
+      "Emoji is required to add a Feishu reaction. Set clearAll=true to remove all bot reactions.",
+    );
+  });
+
+  it("throws for unsupported Feishu send actions without card payload", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: { to: "chat:oc_group_1", message: "hello" },
+        cfg,
+        accountId: undefined,
+      } as never),
+    ).rejects.toThrow('Unsupported Feishu action: "send"');
+  });
+
+  it("allows explicit clearAll=true when removing all bot reactions", async () => {
+    listReactionsFeishuMock.mockResolvedValueOnce([
+      { reactionId: "r1", operatorType: "app" },
+      { reactionId: "r2", operatorType: "app" },
+    ]);
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "react",
+      params: { messageId: "om_msg1", clearAll: true },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(listReactionsFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      messageId: "om_msg1",
+      accountId: undefined,
+    });
+    expect(result?.details).toMatchObject({ ok: true, removed: 2 });
   });
 });

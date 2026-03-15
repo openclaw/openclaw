@@ -262,6 +262,19 @@ function registerEventHandlers(
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const enqueue = createChatQueue();
+  const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
+    if (fireAndForget) {
+      void params.task().catch((err) => {
+        error(`${params.errorMessage}: ${String(err)}`);
+      });
+      return;
+    }
+    try {
+      await params.task();
+    } catch (err) {
+      error(`${params.errorMessage}: ${String(err)}`);
+    }
+  };
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
     const chatId = event.message.chat_id?.trim() || "unknown";
     const task = () =>
@@ -437,95 +450,63 @@ function registerEventHandlers(
       }
     },
     "im.message.reaction.created_v1": async (data) => {
-      const processReaction = async () => {
-        const event = data as FeishuReactionCreatedEvent;
-        const myBotId = botOpenIds.get(accountId);
-        const syntheticEvent = await resolveReactionSyntheticEvent({
-          cfg,
-          accountId,
-          event,
-          botOpenId: myBotId,
-          logger: log,
-        });
-        if (!syntheticEvent) {
-          return;
-        }
-        const promise = handleFeishuMessage({
-          cfg,
-          event: syntheticEvent,
-          botOpenId: myBotId,
-          botName: botNames.get(accountId),
-          runtime,
-          chatHistories,
-          accountId,
-        });
-        if (fireAndForget) {
-          promise.catch((err) => {
-            error(`feishu[${accountId}]: error handling reaction: ${String(err)}`);
+      await runFeishuHandler({
+        errorMessage: `feishu[${accountId}]: error handling reaction event`,
+        task: async () => {
+          const event = data as FeishuReactionCreatedEvent;
+          const myBotId = botOpenIds.get(accountId);
+          const syntheticEvent = await resolveReactionSyntheticEvent({
+            cfg,
+            accountId,
+            event,
+            botOpenId: myBotId,
+            logger: log,
           });
-          return;
-        }
-        await promise;
-      };
-
-      if (fireAndForget) {
-        void processReaction().catch((err) => {
-          error(`feishu[${accountId}]: error handling reaction event: ${String(err)}`);
-        });
-        return;
-      }
-
-      try {
-        await processReaction();
-      } catch (err) {
-        error(`feishu[${accountId}]: error handling reaction event: ${String(err)}`);
-      }
+          if (!syntheticEvent) {
+            return;
+          }
+          const promise = handleFeishuMessage({
+            cfg,
+            event: syntheticEvent,
+            botOpenId: myBotId,
+            botName: botNames.get(accountId),
+            runtime,
+            chatHistories,
+            accountId,
+          });
+          await promise;
+        },
+      });
     },
     "im.message.reaction.deleted_v1": async (data) => {
-      const processReaction = async () => {
-        const event = data as FeishuReactionDeletedEvent;
-        const myBotId = botOpenIds.get(accountId);
-        const syntheticEvent = await resolveReactionSyntheticEvent({
-          cfg,
-          accountId,
-          event,
-          botOpenId: myBotId,
-          logger: log,
-          action: "deleted",
-        });
-        if (!syntheticEvent) {
-          return;
-        }
-        const promise = handleFeishuMessage({
-          cfg,
-          event: syntheticEvent,
-          botOpenId: myBotId,
-          botName: botNames.get(accountId),
-          runtime,
-          chatHistories,
-          accountId,
-        });
-        if (fireAndForget) {
-          promise.catch((err) => {
-            error(`feishu[${accountId}]: error handling reaction removal: ${String(err)}`);
+      await runFeishuHandler({
+        errorMessage: `feishu[${accountId}]: error handling reaction removal event`,
+        task: async () => {
+          const event = data as FeishuReactionDeletedEvent;
+          const myBotId = botOpenIds.get(accountId);
+          const syntheticEvent = await resolveReactionSyntheticEvent({
+            cfg,
+            accountId,
+            event,
+            botOpenId: myBotId,
+            logger: log,
+            action: "deleted",
           });
-          return;
-        }
-        await promise;
-      };
-
-      if (fireAndForget) {
-        void processReaction().catch((err) => {
-          error(`feishu[${accountId}]: error handling reaction removal event: ${String(err)}`);
-        });
-        return;
-      }
-
-      try {
-        await processReaction();
-      } catch (err) {
-        error(`feishu[${accountId}]: error handling reaction removal event: ${String(err)}`);
-      }
+          if (!syntheticEvent) {
+            return;
+          }
+          const promise = handleFeishuMessage({
+            cfg,
+            event: syntheticEvent,
+            botOpenId: myBotId,
+            botName: botNames.get(accountId),
+            runtime,
+            chatHistories,
+            accountId,
+          });
+          await promise;
+        },
+      });
     },
     "application.bot.menu_v6": async (data) => {
       try {
