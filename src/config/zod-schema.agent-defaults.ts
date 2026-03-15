@@ -157,6 +157,17 @@ export const AgentDefaultsSchema = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     humanDelay: HumanDelaySchema.optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    streamIdleTimeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "Timeout in milliseconds between streamed SSE body chunks from the LLM provider. " +
+          "The timer resets on every received chunk; if no data arrives within this window " +
+          "the HTTP connection is aborted. Only affects the body-chunk idle timeout; " +
+          "the initial response-headers timeout is not changed. Default: 1800000 (30 minutes).",
+      ),
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
