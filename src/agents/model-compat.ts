@@ -52,11 +52,12 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
 
-  // The `developer` role and stream usage chunks are OpenAI-native behaviors.
-  // Many OpenAI-compatible backends reject `developer` and/or emit usage-only
-  // chunks that break strict parsers expecting choices[0]. For non-native
-  // openai-completions endpoints, force both compat flags off — unless the
+  // The `developer` role is an OpenAI-native behavior. Many OpenAI-compatible
+  // backends reject it, so force it off for non-native endpoints — unless the
   // user has explicitly opted in via their model config.
+  // However, `stream_options: { include_usage: true }` is widely supported by
+  // OpenAI-compatible providers and should be enabled by default so token
+  // usage is reported correctly.
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
   // leave compat unchanged and let default native behavior apply.
@@ -65,12 +66,12 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
 
-  // Respect explicit user overrides: if the user has set a compat flag to
-  // true in their model definition, they know their endpoint supports it.
+  // Respect explicit user overrides: if the user has set a compat flag,
+  // they know their endpoint's capabilities.
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
-  const forcedUsageStreaming = compat?.supportsUsageInStreaming === true;
+  const usageStreaming = compat?.supportsUsageInStreaming ?? true;
 
-  if (forcedDeveloperRole && forcedUsageStreaming) {
+  if (forcedDeveloperRole && usageStreaming) {
     return model;
   }
 
@@ -81,8 +82,8 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
       ? {
           ...compat,
           supportsDeveloperRole: forcedDeveloperRole || false,
-          supportsUsageInStreaming: forcedUsageStreaming || false,
+          supportsUsageInStreaming: usageStreaming,
         }
-      : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
+      : { supportsDeveloperRole: false, supportsUsageInStreaming: true },
   } as typeof model;
 }
