@@ -73,6 +73,68 @@ function normalizeOpenAITransport(params: { provider: string; model: Model<Api> 
   } as Model<Api>;
 }
 
+/**
+ * Azure OpenAI requires `api-version` as a URL query parameter, not a header.
+ * When the base URL targets Azure (*.openai.azure.com) and the model headers
+ * contain `api-version`, move it from headers to a query parameter on the URL.
+ */
+function normalizeAzureApiVersion(model: Model<Api>): Model<Api> {
+  const baseUrl = model.baseUrl?.trim();
+  if (!baseUrl) {
+    return model;
+  }
+
+  let isAzure: boolean;
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    isAzure = hostname.endsWith(".openai.azure.com") || hostname.endsWith(".services.ai.azure.com");
+  } catch {
+    const lower = baseUrl.toLowerCase();
+    isAzure = lower.includes(".openai.azure.com") || lower.includes(".services.ai.azure.com");
+  }
+  if (!isAzure) {
+    return model;
+  }
+
+  const headers = (model as unknown as { headers?: Record<string, string> }).headers;
+  if (!headers) {
+    return model;
+  }
+
+  const versionKey = Object.keys(headers).find((k) => k.toLowerCase() === "api-version");
+  if (!versionKey) {
+    return model;
+  }
+
+  const versionValue = String(headers[versionKey] ?? "").trim();
+  if (!versionValue) {
+    return model;
+  }
+
+  // Append api-version as a query param to the base URL.
+  let nextBaseUrl: string;
+  try {
+    const url = new URL(baseUrl);
+    if (!url.searchParams.has("api-version")) {
+      url.searchParams.set("api-version", versionValue);
+    }
+    nextBaseUrl = url.toString();
+  } catch {
+    // Fallback: simple string append.
+    const separator = baseUrl.includes("?") ? "&" : "?";
+    nextBaseUrl = `${baseUrl}${separator}api-version=${encodeURIComponent(versionValue)}`;
+  }
+
+  // Remove api-version from headers.
+  const { [versionKey]: _removed, ...remainingHeaders } = headers;
+
+  return {
+    ...model,
+    baseUrl: nextBaseUrl,
+    headers: Object.keys(remainingHeaders).length > 0 ? remainingHeaders : undefined,
+  } as Model<Api>;
+}
+
 export function normalizeResolvedProviderModel(params: {
   provider: string;
   model: Model<Api>;
@@ -82,5 +144,6 @@ export function normalizeResolvedProviderModel(params: {
     provider: params.provider,
     model: normalizedOpenAI,
   });
-  return normalizeModelCompat(normalizedCodex);
+  const normalizedAzure = normalizeAzureApiVersion(normalizedCodex);
+  return normalizeModelCompat(normalizedAzure);
 }
