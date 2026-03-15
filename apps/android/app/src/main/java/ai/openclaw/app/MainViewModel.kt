@@ -8,7 +8,9 @@ import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.voice.VoiceConversationEntry
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
   private val runtime: NodeRuntime = (app as NodeApp).runtime
@@ -71,6 +73,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val chatPendingToolCalls = runtime.chatPendingToolCalls
   val chatSessions = runtime.chatSessions
   val pendingRunCount: StateFlow<Int> = runtime.pendingRunCount
+
+  // One-shot event: incremented each time the System Assistant triggers voice launch.
+  // PostOnboardingTabs observes this to navigate to the Voice tab.
+  private val _navigateToVoiceTabEvent = MutableStateFlow(0L)
+  val navigateToVoiceTabEvent: StateFlow<Long> = _navigateToVoiceTabEvent.asStateFlow()
+
+  fun navigateToVoiceTab() {
+    _navigateToVoiceTabEvent.value = _navigateToVoiceTabEvent.value + 1L
+  }
 
   fun setForeground(value: Boolean) {
     runtime.setForeground(value)

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<voice-interaction-service
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="ai.openclaw.app.assistant.AssistantSessionService"
+    android:recognitionService="ai.openclaw.app.assistant.AssistantRecognitionService"
+    android:settingsActivity="ai.openclaw.app.MainActivity"
+    android:supportsAssist="true"
+    android:supportsLaunchVoiceAssistFromKeyguard="true"
+    android:supportsLocalInteraction="true" />

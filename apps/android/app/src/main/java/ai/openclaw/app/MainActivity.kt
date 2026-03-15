@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -49,6 +50,21 @@ class MainActivity : ComponentActivity() {
 
     // Keep startup path lean: start foreground service after first frame.
     window.decorView.post { NodeForegroundService.start(this) }
+
+    handleAssistantIntent(intent)
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    handleAssistantIntent(intent)
+  }
+
+  private fun handleAssistantIntent(intent: Intent?) {
+    if (intent?.getBooleanExtra("auto_listen", false) == true) {
+      viewModel.navigateToVoiceTab()
+      viewModel.setMicEnabled(true)
+    }
   }
 
   override fun onStart() {
