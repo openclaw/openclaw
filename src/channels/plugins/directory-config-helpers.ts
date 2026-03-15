@@ -8,7 +8,7 @@ function resolveDirectoryLimit(limit?: number | null): number | undefined {
   return typeof limit === "number" && limit > 0 ? limit : undefined;
 }
 
-function applyDirectoryQueryAndLimit(
+export function applyDirectoryQueryAndLimit(
   ids: string[],
   params: { query?: string | null; limit?: number | null },
 ): string[] {
@@ -18,29 +18,15 @@ function applyDirectoryQueryAndLimit(
   return typeof limit === "number" ? filtered.slice(0, limit) : filtered;
 }
 
-function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirectoryEntry[] {
+export function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirectoryEntry[] {
   return ids.map((id) => ({ kind, id }) as const);
 }
 
-function collectDirectoryIdsFromEntries(params: {
-  entries?: readonly unknown[];
+function normalizeDirectoryIds(params: {
+  rawIds: readonly string[];
   normalizeId?: (entry: string) => string | null | undefined;
 }): string[] {
-  return (params.entries ?? [])
-    .map((entry) => String(entry).trim())
-    .filter((entry) => Boolean(entry) && entry !== "*")
-    .map((entry) => {
-      const normalized = params.normalizeId ? params.normalizeId(entry) : entry;
-      return typeof normalized === "string" ? normalized.trim() : "";
-    })
-    .filter(Boolean);
-}
-
-function collectDirectoryIdsFromMapKeys(params: {
-  groups?: Record<string, unknown>;
-  normalizeId?: (entry: string) => string | null | undefined;
-}): string[] {
-  return Object.keys(params.groups ?? {})
+  return params.rawIds
     .map((entry) => entry.trim())
     .filter((entry) => Boolean(entry) && entry !== "*")
     .map((entry) => {
@@ -48,6 +34,26 @@ function collectDirectoryIdsFromMapKeys(params: {
       return typeof normalized === "string" ? normalized.trim() : "";
     })
     .filter(Boolean);
+}
+
+function collectDirectoryIdsFromEntries(params: {
+  entries?: readonly unknown[];
+  normalizeId?: (entry: string) => string | null | undefined;
+}): string[] {
+  return normalizeDirectoryIds({
+    rawIds: (params.entries ?? []).map((entry) => String(entry)),
+    normalizeId: params.normalizeId,
+  });
+}
+
+function collectDirectoryIdsFromMapKeys(params: {
+  groups?: Record<string, unknown>;
+  normalizeId?: (entry: string) => string | null | undefined;
+}): string[] {
+  return normalizeDirectoryIds({
+    rawIds: Object.keys(params.groups ?? {}),
+    normalizeId: params.normalizeId,
+  });
 }
 
 function dedupeDirectoryIds(ids: string[]): string[] {

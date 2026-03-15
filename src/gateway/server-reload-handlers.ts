@@ -22,9 +22,12 @@ import type { GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
+import type { HookClientIpConfig } from "./server-http.js";
+import { resolveHookClientIpConfig } from "./server/hooks.js";
 
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
+  hookClientIpConfig: HookClientIpConfig;
   heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
   browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
@@ -64,6 +67,7 @@ export function createGatewayReloadHandlers(params: {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
       }
     }
+    nextState.hookClientIpConfig = resolveHookClientIpConfig(nextConfig);
 
     if (plan.restartHeartbeat) {
       nextState.heartbeatRunner.updateConfig(nextConfig);

@@ -61,6 +61,8 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "network error",
   "network is unreachable",
   "temporary failure in name resolution",
+  "upstream connect error",
+  "disconnect/reset before headers",
   "tlsv1 alert",
   "ssl routines",
   "packet length too long",

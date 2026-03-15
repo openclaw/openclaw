@@ -66,12 +66,22 @@ function createGatewayTokenRefFixture() {
   };
 }
 
-function decodeSetupCode(setupCode: string): { url?: string; token?: string; password?: string } {
+function decodeSetupCode(setupCode: string): {
+  url?: string;
+  bootstrapToken?: string;
+  token?: string;
+  password?: string;
+} {
   const padded = setupCode.replace(/-/g, "+").replace(/_/g, "/");
   const padLength = (4 - (padded.length % 4)) % 4;
   const normalized = padded + "=".repeat(padLength);
   const json = Buffer.from(normalized, "base64").toString("utf8");
-  return JSON.parse(json) as { url?: string; token?: string; password?: string };
+  return JSON.parse(json) as {
+    url?: string;
+    bootstrapToken?: string;
+    token?: string;
+    password?: string;
+  };
 }
 
 async function runCli(args: string[]): Promise<void> {
@@ -126,7 +136,8 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     expect(setupCode).toBeTruthy();
     const payload = decodeSetupCode(setupCode ?? "");
     expect(payload.url).toBe("ws://gateway.local:18789");
-    expect(payload.token).toBe("shared-token-123");
+    expect(payload.bootstrapToken).toBeTruthy();
+    expect(payload.token).toBeUndefined();
     expect(runtimeErrors).toEqual([]);
 
     runtimeLogs.length = 0;

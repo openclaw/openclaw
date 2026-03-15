@@ -86,7 +86,10 @@ export function registerCronAddCommand(cron: Command) {
       .option("--exact", "Disable cron staggering (set stagger to 0)", false)
       .option("--system-event <text>", "System event payload (main session)")
       .option("--message <text>", "Agent message payload")
-      .option("--thinking <level>", "Thinking level for agent jobs (off|minimal|low|medium|high)")
+      .option(
+        "--thinking <level>",
+        "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
+      )
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
@@ -196,8 +199,13 @@ export function registerCronAddCommand(cron: Command) {
           const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
           const sessionTarget =
             sessionSource === "cli" ? sessionTargetRaw || "" : inferredSessionTarget;
-          if (sessionTarget !== "main" && sessionTarget !== "isolated") {
-            throw new Error("--session must be main or isolated");
+          const isCustomSessionTarget =
+            sessionTarget.toLowerCase().startsWith("session:") &&
+            sessionTarget.slice(8).trim().length > 0;
+          const isIsolatedLikeSessionTarget =
+            sessionTarget === "isolated" || sessionTarget === "current" || isCustomSessionTarget;
+          if (sessionTarget !== "main" && !isIsolatedLikeSessionTarget) {
+            throw new Error("--session must be main, isolated, current, or session:<id>");
           }
 
           if (opts.deleteAfterRun && opts.keepAfterRun) {
@@ -207,14 +215,14 @@ export function registerCronAddCommand(cron: Command) {
           if (sessionTarget === "main" && payload.kind !== "systemEvent") {
             throw new Error("Main jobs require --system-event (systemEvent).");
           }
-          if (sessionTarget === "isolated" && payload.kind !== "agentTurn") {
-            throw new Error("Isolated jobs require --message (agentTurn).");
+          if (isIsolatedLikeSessionTarget && payload.kind !== "agentTurn") {
+            throw new Error("Isolated/current/custom-session jobs require --message (agentTurn).");
           }
           if (
             (opts.announce || typeof opts.deliver === "boolean") &&
-            (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
+            (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")
           ) {
-            throw new Error("--announce/--no-deliver require --session isolated.");
+            throw new Error("--announce/--no-deliver require a non-main agentTurn session target.");
           }
 
           const accountId =
@@ -222,8 +230,8 @@ export function registerCronAddCommand(cron: Command) {
               ? opts.account.trim()
               : undefined;
 
-          if (accountId && (sessionTarget !== "isolated" || payload.kind !== "agentTurn")) {
-            throw new Error("--account requires an isolated agentTurn job with delivery.");
+          if (accountId && (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")) {
+            throw new Error("--account requires a non-main agentTurn job with delivery.");
           }
           if (
             opts.reuseSession === true &&
@@ -233,7 +241,7 @@ export function registerCronAddCommand(cron: Command) {
           }
 
           const deliveryMode =
-            sessionTarget === "isolated" && payload.kind === "agentTurn"
+            isIsolatedLikeSessionTarget && payload.kind === "agentTurn"
               ? hasAnnounce
                 ? "announce"
                 : hasNoDeliver

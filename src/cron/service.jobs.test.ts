@@ -119,6 +119,29 @@ describe("applyJobPatch", () => {
     });
   });
 
+  it("maps legacy payload delivery updates for custom session targets", () => {
+    const job = createIsolatedAgentTurnJob(
+      "job-custom-session",
+      {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+      },
+      { sessionTarget: "session:project-alpha" },
+    );
+
+    applyJobPatch(job, {
+      payload: { kind: "agentTurn", to: "555" },
+    });
+
+    expect(job.delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "555",
+      bestEffort: undefined,
+    });
+  });
+
   it("treats legacy payload targets as announce requests", () => {
     const job = createIsolatedAgentTurnJob("job-3", {
       mode: "none",

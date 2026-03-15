@@ -35,6 +35,29 @@ describe("cron protocol validators", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: { reuseSession: true } })).toBe(true);
   });
 
+  it("accepts current and custom session targets", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        sessionTarget: "current",
+        payload: { kind: "agentTurn", message: "tick" },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        sessionTarget: "session:project-alpha",
+        payload: { kind: "agentTurn", message: "tick" },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { sessionTarget: "session:project-alpha" },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects add params when required scheduling fields are missing", () => {
     const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
     expect(validateCronAddParams(withoutWakeMode)).toBe(false);

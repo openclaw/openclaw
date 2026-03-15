@@ -432,6 +432,42 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.mode).toBeUndefined();
     expect(delivery.to).toBe("123");
   });
+
+  it("resolves current sessionTarget to a persistent session when context is available", () => {
+    const normalized = normalizeCronJobCreate(
+      {
+        name: "current-session",
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "current",
+        payload: { kind: "agentTurn", message: "hello" },
+      },
+      { sessionContext: { sessionKey: "agent:main:discord:group:ops" } },
+    ) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("session:agent:main:discord:group:ops");
+  });
+
+  it("falls back current sessionTarget to isolated without context", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "current-without-context",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "current",
+      payload: { kind: "agentTurn", message: "hello" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("isolated");
+  });
+
+  it("preserves custom session ids with a session: prefix", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "custom-session",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "session:MySessionID",
+      payload: { kind: "agentTurn", message: "hello" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("session:MySessionID");
+  });
 });
 
 describe("normalizeCronJobPatch", () => {

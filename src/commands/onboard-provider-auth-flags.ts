@@ -126,7 +126,7 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
   },
   {
     optionKey: "minimaxApiKey",
-    authChoice: "minimax-api",
+    authChoice: "minimax-global-api",
     cliFlag: "--minimax-api-key",
     cliOption: "--minimax-api-key <key>",
     description: "MiniMax API key",

@@ -11,14 +11,19 @@ import {
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import {
+  resolveProviderPluginChoice,
+  resolveProviderModelPickerEntries,
+  runProviderModelSelectedHook,
+} from "../plugins/provider-wizard.js";
+import { resolvePluginProviders } from "../plugins/providers.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
+import { runProviderPluginAuthMethod } from "./auth-choice.apply.plugin-provider.js";
 import { formatTokenK } from "./models/shared.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
-import { promptAndConfigureVllm } from "./vllm-setup.js";
 
 const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
-const VLLM_VALUE = "__vllm__";
 const PROVIDER_FILTER_THRESHOLD = 30;
 
 // Models that are internal routing features and should not be shown in selection lists.
@@ -31,10 +36,13 @@ type PromptDefaultModelParams = {
   prompter: WizardPrompter;
   allowKeep?: boolean;
   includeManual?: boolean;
-  includeVllm?: boolean;
+  includeProviderPluginSetups?: boolean;
   ignoreAllowlist?: boolean;
   preferredProvider?: string;
   agentDir?: string;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  runtime?: import("../runtime.js").RuntimeEnv;
   message?: string;
 };
 
@@ -180,7 +188,7 @@ export async function promptDefaultModel(
   const cfg = params.config;
   const allowKeep = params.allowKeep ?? true;
   const includeManual = params.includeManual ?? true;
-  const includeVllm = params.includeVllm ?? false;
+  const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
   const ignoreAllowlist = params.ignoreAllowlist ?? false;
   const preferredProviderRaw = params.preferredProvider?.trim();
   const preferredProvider = preferredProviderRaw
@@ -227,19 +235,19 @@ export async function promptDefaultModel(
     });
   }
 
-  const providers = Array.from(new Set(models.map((entry) => entry.provider))).toSorted((a, b) =>
+  const providerIds = Array.from(new Set(models.map((entry) => entry.provider))).toSorted((a, b) =>
     a.localeCompare(b),
   );
 
-  const hasPreferredProvider = preferredProvider ? providers.includes(preferredProvider) : false;
+  const hasPreferredProvider = preferredProvider ? providerIds.includes(preferredProvider) : false;
   const shouldPromptProvider =
-    !hasPreferredProvider && providers.length > 1 && models.length > PROVIDER_FILTER_THRESHOLD;
+    !hasPreferredProvider && providerIds.length > 1 && models.length > PROVIDER_FILTER_THRESHOLD;
   if (shouldPromptProvider) {
     const selection = await params.prompter.select({
       message: "Filter models by provider",
       options: [
         { value: "*", label: "All providers" },
-        ...providers.map((provider) => {
+        ...providerIds.map((provider) => {
           const count = models.filter((entry) => entry.provider === provider).length;
           return {
             value: provider,
@@ -286,12 +294,14 @@ export async function promptDefaultModel(
   if (includeManual) {
     options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
   }
-  if (includeVllm && agentDir) {
-    options.push({
-      value: VLLM_VALUE,
-      label: "vLLM (custom)",
-      hint: "Enter vLLM URL + API key + model",
-    });
+  if (includeProviderPluginSetups && agentDir) {
+    options.push(
+      ...resolveProviderModelPickerEntries({
+        config: cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      }),
+    );
   }
 
   const seen = new Set<string>();
@@ -337,23 +347,65 @@ export async function promptDefaultModel(
       initialValue: configuredRaw || resolvedKey || undefined,
     });
   }
-  if (selection === VLLM_VALUE) {
-    if (!agentDir) {
+  const pluginProviders = resolvePluginProviders({
+    config: cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const pluginResolution = selection.startsWith("provider-plugin:")
+    ? selection
+    : selection.includes("/")
+      ? null
+      : pluginProviders.some(
+            (provider) => normalizeProviderId(provider.id) === normalizeProviderId(selection),
+          )
+        ? selection
+        : null;
+  if (pluginResolution) {
+    if (!agentDir || !params.runtime) {
       await params.prompter.note(
-        "vLLM setup requires an agent directory context.",
-        "vLLM not available",
+        "Provider setup requires agent and runtime context.",
+        "Provider setup unavailable",
       );
       return {};
     }
-    const { config: nextConfig, modelRef } = await promptAndConfigureVllm({
-      cfg,
-      prompter: params.prompter,
-      agentDir,
+    const resolved = resolveProviderPluginChoice({
+      providers: pluginProviders,
+      choice: pluginResolution,
     });
-
-    return { model: modelRef, config: nextConfig };
+    if (!resolved) {
+      return {};
+    }
+    const applied = await runProviderPluginAuthMethod({
+      config: cfg,
+      runtime: params.runtime,
+      prompter: params.prompter,
+      method: resolved.method,
+      agentDir,
+      workspaceDir: params.workspaceDir,
+    });
+    if (applied.defaultModel) {
+      await runProviderModelSelectedHook({
+        config: applied.config,
+        model: applied.defaultModel,
+        prompter: params.prompter,
+        agentDir,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
+    }
+    return { model: applied.defaultModel, config: applied.config };
   }
-  return { model: String(selection) };
+  const model = String(selection);
+  await runProviderModelSelectedHook({
+    config: cfg,
+    model,
+    prompter: params.prompter,
+    agentDir,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return { model };
 }
 
 export async function promptModelAllowlist(params: {

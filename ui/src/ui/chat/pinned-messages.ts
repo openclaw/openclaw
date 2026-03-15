@@ -56,6 +56,10 @@ export class PinnedMessages {
   }
 
   private save(): void {
-    localStorage.setItem(this.key, JSON.stringify([...this._indices]));
+    try {
+      localStorage.setItem(this.key, JSON.stringify([...this._indices]));
+    } catch {
+      // ignore
+    }
   }
 }
