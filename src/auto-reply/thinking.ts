@@ -1,3 +1,6 @@
+import { getRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
+import type { ModelCompatConfig } from "../config/types.models.js";
+
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
@@ -9,6 +12,11 @@ export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
   reasoning?: boolean;
+  compat?: Pick<ModelCompatConfig, "supportsXHighThinking">;
+};
+export type ThinkingSupportSource = {
+  config?: Pick<OpenClawConfig, "models"> | null;
+  catalog?: ThinkingCatalogEntry[] | null;
 };
 
 const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
@@ -25,6 +33,148 @@ function normalizeProviderId(provider?: string | null): string {
     return "amazon-bedrock";
   }
   return normalized;
+}
+
+function normalizeModelId(model?: string | null): string {
+  return model?.trim().toLowerCase() ?? "";
+}
+
+function normalizeModelRef(provider?: string | null, model?: string | null): string {
+  const providerKey = normalizeProviderId(provider);
+  const modelKey = normalizeModelId(model);
+  return providerKey && modelKey ? `${providerKey}/${modelKey}` : "";
+}
+
+function resolveThinkingSupportConfig(
+  source?: ThinkingSupportSource,
+): Pick<OpenClawConfig, "models"> | null {
+  return source?.config ?? getRuntimeConfigSnapshot();
+}
+
+function resolveCatalogXHighOverride(
+  provider?: string | null,
+  model?: string | null,
+  source?: ThinkingSupportSource,
+): boolean | undefined {
+  const ref = normalizeModelRef(provider, model);
+  if (!ref) {
+    return undefined;
+  }
+  const entry = source?.catalog?.find(
+    (candidate) => normalizeModelRef(candidate.provider, candidate.id) === ref,
+  );
+  return typeof entry?.compat?.supportsXHighThinking === "boolean"
+    ? entry.compat.supportsXHighThinking
+    : undefined;
+}
+
+function resolveConfigXHighOverride(
+  provider?: string | null,
+  model?: string | null,
+  source?: ThinkingSupportSource,
+): boolean | undefined {
+  const providerKey = normalizeProviderId(provider);
+  const modelKey = normalizeModelId(model);
+  if (!providerKey || !modelKey) {
+    return undefined;
+  }
+
+  const config = resolveThinkingSupportConfig(source);
+  const providers = config?.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return undefined;
+  }
+
+  for (const [configuredProviderId, configuredProvider] of Object.entries(providers)) {
+    if (normalizeProviderId(configuredProviderId) !== providerKey) {
+      continue;
+    }
+    if (!configuredProvider || typeof configuredProvider !== "object") {
+      continue;
+    }
+    const configuredModels = (configuredProvider as { models?: unknown }).models;
+    if (!Array.isArray(configuredModels)) {
+      continue;
+    }
+    for (const configuredModel of configuredModels) {
+      if (!configuredModel || typeof configuredModel !== "object") {
+        continue;
+      }
+      const configuredModelId = (configuredModel as { id?: unknown }).id;
+      if (
+        typeof configuredModelId !== "string" ||
+        normalizeModelId(configuredModelId) !== modelKey
+      ) {
+        continue;
+      }
+      const compat = (configuredModel as { compat?: { supportsXHighThinking?: unknown } }).compat;
+      if (typeof compat?.supportsXHighThinking === "boolean") {
+        return compat.supportsXHighThinking;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function resolveExplicitXHighOverride(
+  provider?: string | null,
+  model?: string | null,
+  source?: ThinkingSupportSource,
+): boolean | undefined {
+  return (
+    resolveCatalogXHighOverride(provider, model, source) ??
+    resolveConfigXHighOverride(provider, model, source)
+  );
+}
+
+function collectExplicitXHighRefs(
+  source?: ThinkingSupportSource,
+): Array<{ ref: string; supported: boolean }> {
+  const out = new Map<string, { ref: string; supported: boolean }>();
+
+  const add = (provider?: string | null, model?: string | null, supported?: unknown) => {
+    if (typeof supported !== "boolean") {
+      return;
+    }
+    const ref = normalizeModelRef(provider, model);
+    if (!ref) {
+      return;
+    }
+    out.set(ref, { ref, supported });
+  };
+
+  for (const entry of source?.catalog ?? []) {
+    add(entry.provider, entry.id, entry.compat?.supportsXHighThinking);
+  }
+
+  const config = resolveThinkingSupportConfig(source);
+  const providers = config?.models?.providers;
+  if (providers && typeof providers === "object") {
+    for (const [providerId, providerConfig] of Object.entries(providers)) {
+      const configuredModels =
+        providerConfig && typeof providerConfig === "object"
+          ? (providerConfig as { models?: unknown }).models
+          : undefined;
+      if (!Array.isArray(configuredModels)) {
+        continue;
+      }
+      for (const configuredModel of configuredModels) {
+        if (!configuredModel || typeof configuredModel !== "object") {
+          continue;
+        }
+        const modelId = (configuredModel as { id?: unknown }).id;
+        const compat = (configuredModel as { compat?: { supportsXHighThinking?: unknown } }).compat;
+        add(
+          providerId,
+          typeof modelId === "string" ? modelId : undefined,
+          compat?.supportsXHighThinking,
+        );
+      }
+    }
+  }
+
+  return [...out.values()];
 }
 
 export function isBinaryThinkingProvider(provider?: string | null): boolean {
@@ -50,6 +200,33 @@ const XHIGH_MODEL_IDS = new Set(
     (entry): entry is string => Boolean(entry),
   ),
 );
+
+function listSupportedXHighModelRefs(source?: ThinkingSupportSource): string[] {
+  const explicit = collectExplicitXHighRefs(source);
+  const explicitMap = new Map(explicit.map((entry) => [entry.ref.toLowerCase(), entry] as const));
+  const refs: string[] = [];
+  const seen = new Set<string>();
+
+  for (const ref of XHIGH_MODEL_REFS) {
+    const key = ref.toLowerCase();
+    if (explicitMap.get(key)?.supported === false) {
+      continue;
+    }
+    refs.push(ref);
+    seen.add(key);
+  }
+
+  for (const entry of explicit) {
+    const key = entry.ref.toLowerCase();
+    if (!entry.supported || seen.has(key)) {
+      continue;
+    }
+    refs.push(entry.ref);
+    seen.add(key);
+  }
+
+  return refs;
+}
 
 // Normalize user-provided thinking level strings to the canonical enum.
 export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
@@ -90,44 +267,61 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   return undefined;
 }
 
-export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
-  const modelKey = model?.trim().toLowerCase();
+export function supportsXHighThinking(
+  provider?: string | null,
+  model?: string | null,
+  source?: ThinkingSupportSource,
+): boolean {
+  const modelKey = normalizeModelId(model);
   if (!modelKey) {
     return false;
   }
-  const providerKey = provider?.trim().toLowerCase();
+  const explicit = resolveExplicitXHighOverride(provider, model, source);
+  if (typeof explicit === "boolean") {
+    return explicit;
+  }
+  const providerKey = normalizeProviderId(provider);
   if (providerKey) {
     return XHIGH_MODEL_SET.has(`${providerKey}/${modelKey}`);
   }
   return XHIGH_MODEL_IDS.has(modelKey);
 }
 
-export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {
+export function listThinkingLevels(
+  provider?: string | null,
+  model?: string | null,
+  source?: ThinkingSupportSource,
+): ThinkLevel[] {
   const levels: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
-  if (supportsXHighThinking(provider, model)) {
+  if (supportsXHighThinking(provider, model, source)) {
     levels.push("xhigh");
   }
   levels.push("adaptive");
   return levels;
 }
 
-export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
+export function listThinkingLevelLabels(
+  provider?: string | null,
+  model?: string | null,
+  source?: ThinkingSupportSource,
+): string[] {
   if (isBinaryThinkingProvider(provider)) {
     return ["off", "on"];
   }
-  return listThinkingLevels(provider, model);
+  return listThinkingLevels(provider, model, source);
 }
 
 export function formatThinkingLevels(
   provider?: string | null,
   model?: string | null,
   separator = ", ",
+  source?: ThinkingSupportSource,
 ): string {
-  return listThinkingLevelLabels(provider, model).join(separator);
+  return listThinkingLevelLabels(provider, model, source).join(separator);
 }
 
-export function formatXHighModelHint(): string {
-  const refs = [...XHIGH_MODEL_REFS] as string[];
+export function formatXHighModelHint(source?: ThinkingSupportSource): string {
+  const refs = listSupportedXHighModelRefs(source);
   if (refs.length === 0) {
     return "unknown model";
   }

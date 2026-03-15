@@ -156,11 +156,16 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const thinkLevel = thinkingRaw ? normalizeThinkLevel(thinkingRaw) : undefined;
       if (thinkingRaw && !thinkLevel) {
         throw new Error(
-          `Invalid thinking level "${thinkingRaw}". Use one of: ${formatThinkingLevels(provider, model)}.`,
+          `Invalid thinking level "${thinkingRaw}". Use one of: ${formatThinkingLevels(provider, model, ", ", { config: api.config })}.`,
         );
       }
-      if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-        throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
+      if (
+        thinkLevel === "xhigh" &&
+        !supportsXHighThinking(provider, model, { config: api.config })
+      ) {
+        throw new Error(
+          `Thinking level "xhigh" is only supported for ${formatXHighModelHint({ config: api.config })}.`,
+        );
       }
 
       const timeoutMs =

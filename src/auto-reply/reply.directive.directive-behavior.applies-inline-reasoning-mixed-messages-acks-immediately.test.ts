@@ -244,6 +244,61 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
+
+  it("allows custom provider config to opt into xhigh", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeWhatsAppDirectiveConfig(
+        home,
+        {
+          model: "robot/gpt-5.4",
+          thinkingDefault: "high",
+        },
+        {
+          models: {
+            providers: {
+              robot: {
+                baseUrl: "https://example.test/v1",
+                api: "openai-responses",
+                models: [
+                  {
+                    id: "gpt-5.4",
+                    name: "gpt-5.4 (robot)",
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 8192,
+                    compat: { supportsXHighThinking: true },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      );
+
+      const statusRes = await getReplyFromConfig(
+        { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {},
+        cfg,
+      );
+      expect(replyText(statusRes)).toContain(
+        "Options: off, minimal, low, medium, high, xhigh, adaptive.",
+      );
+
+      const setRes = await getReplyFromConfig(
+        {
+          Body: "/thinking xhigh",
+          From: "+1004",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+      expect(replyTexts(setRes)).toContain("Thinking level set to xhigh.");
+    });
+  });
   it("keeps reserved command aliases from matching after trimming", async () => {
     await withTempHome(async (home) => {
       const res = await getReplyFromConfig(

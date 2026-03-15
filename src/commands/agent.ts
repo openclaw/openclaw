@@ -566,7 +566,12 @@ async function prepareAgentCommandExecution(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const thinkingLevelsHint = formatThinkingLevels(configuredModel.provider, configuredModel.model);
+  const thinkingLevelsHint = formatThinkingLevels(
+    configuredModel.provider,
+    configuredModel.model,
+    ", ",
+    { config: cfg },
+  );
 
   const thinkOverride = normalizeThinkLevel(opts.thinking);
   const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
@@ -1032,10 +1037,15 @@ async function agentCommandInternal(
         catalog: catalogForThinking,
       });
     }
-    if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+    if (
+      resolvedThinkLevel === "xhigh" &&
+      !supportsXHighThinking(provider, model, { config: cfg })
+    ) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
       if (explicitThink) {
-        throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
+        throw new Error(
+          `Thinking level "xhigh" is only supported for ${formatXHighModelHint({ config: cfg })}.`,
+        );
       }
       resolvedThinkLevel = "high";
       if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {

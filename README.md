@@ -274,7 +274,7 @@ Send these in WhatsApp/Telegram/Slack/Google Chat/Microsoft Teams/WebChat (group
 - `/status` — compact session status (model + tokens, cost when available)
 - `/new` or `/reset` — reset the session
 - `/compact` — compact session context (summary)
-- `/think <level>` — off|minimal|low|medium|high|xhigh (GPT-5.2 + Codex models only)
+- `/think <level>` — off|minimal|low|medium|high|xhigh (supported GPT-5.x/Codex refs by default; custom model definitions can opt in with `compat.supportsXHighThinking`)
 - `/verbose on|off`
 - `/usage off|tokens|full` — per-response usage footer
 - `/restart` — restart the gateway (owner-only in groups)
