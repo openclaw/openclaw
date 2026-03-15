@@ -84,6 +84,14 @@ export function handleMessageUpdate(
     return;
   }
 
+  // Check for commentary-phase and update suppression flag early in the message lifecycle.
+  // This ensures block chunks drained during text_end streaming are also suppressed.
+  // See: https://github.com/openclaw/openclaw/issues/46554
+  const assistantPhase = (msg as { phase?: string }).phase;
+  if (assistantPhase === "commentary") {
+    ctx.state.suppressCommentaryPhase = true;
+  }
+
   ctx.noteLastAssistant(msg);
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
@@ -262,6 +270,15 @@ export function handleMessageEnd(
   }
 
   const assistantMessage = msg;
+
+  // Skip block replies for commentary-phase messages (internal planning text).
+  // These are intermediate "thinking out loud" texts that should not be sent to users.
+  // See: https://github.com/openclaw/openclaw/issues/46554
+  // See: https://github.com/openclaw/openclaw/issues/25592
+  const assistantPhase = (assistantMessage as { phase?: string }).phase;
+  const isCommentaryPhase = assistantPhase === "commentary";
+  // Set state flag so emitBlockChunk (used by blockChunker.drain) also respects this
+  ctx.state.suppressCommentaryPhase = isCommentaryPhase;
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   if (ctx.state.deterministicApprovalPromptSent) {
@@ -333,7 +350,9 @@ export function handleMessageEnd(
 
   const onBlockReply = ctx.params.onBlockReply;
   const emitBlockReplySafely = (payload: Parameters<NonNullable<typeof onBlockReply>>[0]) => {
-    if (!onBlockReply) {
+    // Skip block replies for commentary-phase messages to prevent internal planning
+    // text from leaking to user chat (even with /verbose off).
+    if (!onBlockReply || isCommentaryPhase) {
       return;
     }
     void Promise.resolve()
@@ -437,4 +456,5 @@ export function handleMessageEnd(
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;
   ctx.state.reasoningStreamOpen = false;
+  ctx.state.suppressCommentaryPhase = false;
 }
