@@ -288,6 +288,28 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     announceTimeoutMs?: number;
+    /** Hard limit on total concurrent API calls across all agents (default: 10). */
+    maxGlobalConcurrent?: number;
+    /** Circuit breaker for subagent spawning. */
+    circuitBreaker?: {
+      /** Number of failures before circuit trips (default: 3). */
+      failureThreshold?: number;
+      /** Time window for failure counting in ms (default: 300000). */
+      windowMs?: number;
+      /** Cooldown period after circuit trips in ms (default: 180000). */
+      cooldownMs?: number;
+    };
+    /** TTL in minutes for completed/aborted sessions before cleanup (default: 30). */
+    completedTtlMinutes?: number;
+    /** Minutes of inactivity before a session is considered zombie (default: 15). */
+    zombieInactivityMinutes?: number;
+    /** Spawn rate alert configuration. */
+    spawnRateAlert?: {
+      /** Max spawns per window before alert (default: 5). */
+      threshold?: number;
+      /** Rate tracking window in ms (default: 60000). */
+      windowMs?: number;
+    };
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;

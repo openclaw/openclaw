@@ -189,6 +189,64 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        maxGlobalConcurrent: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe("Hard limit on total concurrent API calls across all agents (default: 10)."),
+        circuitBreaker: z
+          .object({
+            failureThreshold: z
+              .number()
+              .int()
+              .min(1)
+              .optional()
+              .describe("Number of failures before circuit trips (default: 3)."),
+            windowMs: z
+              .number()
+              .int()
+              .positive()
+              .optional()
+              .describe("Time window for failure counting in ms (default: 300000)."),
+            cooldownMs: z
+              .number()
+              .int()
+              .positive()
+              .optional()
+              .describe("Cooldown period after circuit trips in ms (default: 180000)."),
+          })
+          .strict()
+          .optional(),
+        completedTtlMinutes: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("TTL in minutes for completed/aborted sessions before cleanup (default: 30)."),
+        zombieInactivityMinutes: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Minutes of inactivity before a session is considered zombie (default: 15)."),
+        spawnRateAlert: z
+          .object({
+            threshold: z
+              .number()
+              .int()
+              .min(1)
+              .optional()
+              .describe("Max spawns per window before alert (default: 5)."),
+            windowMs: z
+              .number()
+              .int()
+              .positive()
+              .optional()
+              .describe("Rate tracking window in ms (default: 60000)."),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
