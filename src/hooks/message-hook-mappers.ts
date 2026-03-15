@@ -179,6 +179,33 @@ function deriveParentConversationId(
 }
 
 function deriveConversationId(canonical: CanonicalInboundMessageHookContext): string | undefined {
+  if (canonical.channelId === "discord") {
+    const rawTarget = canonical.to ?? canonical.originatingTo ?? canonical.conversationId;
+    const rawSender = canonical.from;
+    const senderUserId = rawSender?.startsWith("discord:user:")
+      ? rawSender.slice("discord:user:".length)
+      : rawSender?.startsWith("discord:")
+        ? rawSender.slice("discord:".length)
+        : undefined;
+    if (!canonical.isGroup && senderUserId) {
+      return `user:${senderUserId}`;
+    }
+    if (!rawTarget) {
+      return undefined;
+    }
+    if (rawTarget.startsWith("discord:channel:")) {
+      return `channel:${rawTarget.slice("discord:channel:".length)}`;
+    }
+    if (rawTarget.startsWith("discord:user:")) {
+      return `user:${rawTarget.slice("discord:user:".length)}`;
+    }
+    if (rawTarget.startsWith("discord:")) {
+      return `user:${rawTarget.slice("discord:".length)}`;
+    }
+    if (rawTarget.startsWith("channel:") || rawTarget.startsWith("user:")) {
+      return rawTarget;
+    }
+  }
   const baseConversationId = stripChannelPrefix(
     canonical.to ?? canonical.originatingTo ?? canonical.conversationId,
     canonical.channelId,
