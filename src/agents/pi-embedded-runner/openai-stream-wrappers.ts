@@ -142,6 +142,39 @@ function applyOpenAIResponsesPayloadOverrides(params: {
   }
 }
 
+function normalizeOpenAICompatMaxTokensField(
+  value: unknown,
+): "max_completion_tokens" | "max_tokens" | undefined {
+  if (value === "max_completion_tokens" || value === "max_tokens") {
+    return value;
+  }
+  return undefined;
+}
+
+function applyOpenAICompatMaxTokensField(params: {
+  payloadObj: Record<string, unknown>;
+  preferredField: "max_completion_tokens" | "max_tokens";
+}): void {
+  if (params.preferredField === "max_tokens") {
+    if (
+      params.payloadObj.max_tokens === undefined &&
+      params.payloadObj.max_completion_tokens !== undefined
+    ) {
+      params.payloadObj.max_tokens = params.payloadObj.max_completion_tokens;
+      delete params.payloadObj.max_completion_tokens;
+    }
+    return;
+  }
+
+  if (
+    params.payloadObj.max_completion_tokens === undefined &&
+    params.payloadObj.max_tokens !== undefined
+  ) {
+    params.payloadObj.max_completion_tokens = params.payloadObj.max_tokens;
+    delete params.payloadObj.max_tokens;
+  }
+}
+
 function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -330,6 +363,33 @@ export function createOpenAIServiceTierWrapper(
       if (payloadObj.service_tier === undefined) {
         payloadObj.service_tier = serviceTier;
       }
+    });
+  };
+}
+
+export function createOpenAICompatMaxTokensFieldWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+
+    const preferredField = normalizeOpenAICompatMaxTokensField(
+      model.compat && "maxTokensField" in model.compat
+        ? (model.compat as { maxTokensField?: unknown }).maxTokensField
+        : undefined,
+    );
+    if (!preferredField) {
+      return underlying(model, context, options);
+    }
+
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      applyOpenAICompatMaxTokensField({
+        payloadObj,
+        preferredField,
+      });
     });
   };
 }
