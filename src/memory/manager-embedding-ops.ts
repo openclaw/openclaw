@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { getRecommendedConcurrency } from "../infra/platform-profile.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
 import {
@@ -31,7 +32,20 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
-const EMBEDDING_INDEX_CONCURRENCY = 4;
+/**
+ * Adaptive embedding index concurrency.
+ * Override with `OPENCLAW_EMBEDDING_CONCURRENCY` env var.
+ */
+function getEmbeddingIndexConcurrency(): number {
+  const override = process.env.OPENCLAW_EMBEDDING_CONCURRENCY;
+  if (override) {
+    const parsed = Number(override);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return Math.max(1, getRecommendedConcurrency() * 2);
+}
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
 const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
@@ -116,7 +130,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           `SELECT hash, embedding FROM ${EMBEDDING_CACHE_TABLE}\n` +
             ` WHERE provider = ? AND model = ? AND provider_key = ? AND hash IN (${placeholders})`,
         )
-        .all(...baseParams, ...batch) as Array<{ hash: string; embedding: string }>;
+        .all(...baseParams, ...batch) as Array<{
+        hash: string;
+        embedding: string;
+      }>;
       for (const row of rows) {
         out.set(row.hash, parseEmbedding(row.embedding));
       }
@@ -262,7 +279,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         }),
       );
     }
-    return hashText(JSON.stringify({ provider: this.provider.id, model: this.provider.model }));
+    return hashText(
+      JSON.stringify({
+        provider: this.provider.id,
+        model: this.provider.model,
+      }),
+    );
   }
 
   private async embedChunksWithBatch(
@@ -617,7 +639,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
     const timeoutMs = this.resolveEmbeddingTimeout("query");
-    log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
+    log.debug("memory embeddings: query start", {
+      provider: this.provider.id,
+      timeoutMs,
+    });
     return await this.withTimeout(
       this.provider.embedQuery(text),
       timeoutMs,
@@ -754,7 +779,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected getIndexConcurrency(): number {
-    return this.batch.enabled ? this.batch.concurrency : EMBEDDING_INDEX_CONCURRENCY;
+    return this.batch.enabled ? this.batch.concurrency : getEmbeddingIndexConcurrency();
   }
 
   private clearIndexedFileData(pathname: string, source: MemorySource): void {

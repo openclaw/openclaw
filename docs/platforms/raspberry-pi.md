@@ -246,6 +246,31 @@ random-I/O bottlenecks during cold starts.
 How `Restart=` policies help automated recovery:
 [systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
 
+### Adaptive Resource Profile
+
+OpenClaw automatically detects available memory and adjusts its behavior:
+
+| Profile      | RAM   | Behavior                                                  |
+| ------------ | ----- | --------------------------------------------------------- |
+| **low**      | < 2GB | Smaller image resize grids, lower concurrency, less cache |
+| **standard** | 2-8GB | Balanced defaults                                         |
+| **high**     | > 8GB | Full grids, max concurrency                               |
+
+Override with the `OPENCLAW_RESOURCE_PROFILE` environment variable:
+
+```bash
+# Force low-resource mode (useful for testing or shared Pis)
+export OPENCLAW_RESOURCE_PROFILE=low
+```
+
+Additional resource-tuning env vars:
+
+| Variable                         | Default (low profile) | Description                        |
+| -------------------------------- | --------------------- | ---------------------------------- |
+| `OPENCLAW_RESOURCE_PROFILE`      | auto-detected         | Force `low`, `standard`, or `high` |
+| `OPENCLAW_MEDIA_MAX_BUFFER`      | 4MB (low) / 10MB      | FFmpeg child process buffer limit  |
+| `OPENCLAW_EMBEDDING_CONCURRENCY` | 1 (low) / 4           | Parallel embedding index workers   |
+
 ### Reduce Memory Usage
 
 ```bash
@@ -286,6 +311,25 @@ Most OpenClaw features work on ARM64, but some external binaries may need ARM bu
 | Chromium (browser) | ✅           | `sudo apt install chromium-browser` |
 
 If a skill fails, check if its binary has an ARM build. Many Go/Rust tools do; some don't.
+
+### Verify ARM Optimizations
+
+Check that native dependencies use ARM NEON/SVE instructions for best performance:
+
+```bash
+# Verify Sharp (image processing) uses ARM-optimized libvips
+node -e "const s = require('sharp'); console.log(s.versions)"
+
+# Verify Node.js uses hardware-accelerated crypto (ARM crypto extensions)
+node -e "console.log('openssl_no_asm:', process.config?.variables?.openssl_no_asm)"
+# Should be undefined or false
+
+# Verify NEON support on your Pi
+grep -q neon /proc/cpuinfo && echo "NEON supported" || echo "No NEON"
+
+# Check FFmpeg hardware acceleration
+ffmpeg -hwaccels 2>/dev/null
+```
 
 ### 32-bit vs 64-bit
 

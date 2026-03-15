@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { detectResourceProfile } from "../infra/platform-profile.js";
 import { runExec } from "../process/exec.js";
 
 type Sharp = typeof import("sharp");
@@ -12,8 +13,23 @@ export type ImageMetadata = {
 
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
 
+/** On low-memory devices, skip the highest quality steps to reduce encode iterations. */
+export function getEffectiveQualitySteps(): readonly number[] {
+  const profile = detectResourceProfile();
+  if (profile === "low") {
+    return [65, 55, 45, 35];
+  }
+  return IMAGE_REDUCE_QUALITY_STEPS;
+}
+
 export function buildImageResizeSideGrid(maxSide: number, sideStart: number): number[] {
-  return [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
+  const profile = detectResourceProfile();
+  // On low-memory devices, start from a lower resolution ceiling
+  const fullGrid =
+    profile === "low"
+      ? [sideStart, 1200, 1000, 800]
+      : [sideStart, 1800, 1600, 1400, 1200, 1000, 800];
+  return fullGrid
     .map((value) => Math.min(maxSide, value))
     .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
     .toSorted((a, b) => b - a);
@@ -417,8 +433,10 @@ export async function optimizeImageToPng(
 }> {
   // Try a grid of sizes/compression levels until under the limit.
   // PNG uses compression levels 0-9 (higher = smaller but slower).
-  const sides = [2048, 1536, 1280, 1024, 800];
-  const compressionLevels = [6, 7, 8, 9];
+  // On low-memory devices, use smaller grids and skip level 9 (very slow).
+  const profile = detectResourceProfile();
+  const sides = profile === "low" ? [1280, 1024, 800] : [2048, 1536, 1280, 1024, 800];
+  const compressionLevels = profile === "low" ? [6, 7, 8] : [6, 7, 8, 9];
   let smallest: {
     buffer: Buffer;
     size: number;

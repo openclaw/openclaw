@@ -7,6 +7,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import nodeos from "node:os";
 import type * as LanceDB from "@lancedb/lancedb";
 import { Type } from "@sinclair/typebox";
 import OpenAI from "openai";
@@ -32,7 +33,9 @@ const loadLanceDB = async (): Promise<typeof import("@lancedb/lancedb")> => {
     return await lancedbImportPromise;
   } catch (err) {
     // Common on macOS today: upstream package may not ship darwin native bindings.
-    throw new Error(`memory-lancedb: failed to load LanceDB. ${String(err)}`, { cause: err });
+    throw new Error(`memory-lancedb: failed to load LanceDB. ${String(err)}`, {
+      cause: err,
+    });
   }
 };
 
@@ -65,6 +68,12 @@ class MemoryDB {
     private readonly dbPath: string,
     private readonly vectorDim: number,
   ) {}
+
+  /** Lower default search limit on memory-constrained devices. */
+  private defaultSearchLimit(): number {
+    const totalMB = Math.floor(nodeos.totalmem() / 1024 / 1024);
+    return totalMB < 2048 ? 3 : 5;
+  }
 
   private async ensureInitialized(): Promise<void> {
     if (this.table) {
@@ -113,10 +122,12 @@ class MemoryDB {
     return fullEntry;
   }
 
-  async search(vector: number[], limit = 5, minScore = 0.5): Promise<MemorySearchResult[]> {
+  async search(vector: number[], limit?: number, minScore = 0.5): Promise<MemorySearchResult[]> {
+    // Default limit adapts to system resources (lower on constrained devices)
+    const effectiveLimit = limit ?? this.defaultSearchLimit();
     await this.ensureInitialized();
 
-    const results = await this.table!.vectorSearch(vector).limit(limit).toArray();
+    const results = await this.table!.vectorSearch(vector).limit(effectiveLimit).toArray();
 
     // LanceDB uses L2 distance by default; convert to similarity score
     const mapped = results.map((row) => {
@@ -322,7 +333,10 @@ const memoryPlugin = {
           limit: Type.Optional(Type.Number({ description: "Max results (default: 5)" })),
         }),
         async execute(_toolCallId, params) {
-          const { query, limit = 5 } = params as { query: string; limit?: number };
+          const { query, limit = 5 } = params as {
+            query: string;
+            limit?: number;
+          };
 
           const vector = await embeddings.embed(query);
           const results = await db.search(vector, limit, 0.1);
@@ -351,7 +365,12 @@ const memoryPlugin = {
           }));
 
           return {
-            content: [{ type: "text", text: `Found ${results.length} memories:\n\n${text}` }],
+            content: [
+              {
+                type: "text",
+                text: `Found ${results.length} memories:\n\n${text}`,
+              },
+            ],
             details: { count: results.length, memories: sanitizedResults },
           };
         },
@@ -432,7 +451,10 @@ const memoryPlugin = {
           memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
         }),
         async execute(_toolCallId, params) {
-          const { query, memoryId } = params as { query?: string; memoryId?: string };
+          const { query, memoryId } = params as {
+            query?: string;
+            memoryId?: string;
+          };
 
           if (memoryId) {
             await db.delete(memoryId);
@@ -456,7 +478,12 @@ const memoryPlugin = {
             if (results.length === 1 && results[0].score > 0.9) {
               await db.delete(results[0].entry.id);
               return {
-                content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}"` }],
+                content: [
+                  {
+                    type: "text",
+                    text: `Forgotten: "${results[0].entry.text}"`,
+                  },
+                ],
                 details: { action: "deleted", id: results[0].entry.id },
               };
             }
@@ -480,7 +507,10 @@ const memoryPlugin = {
                   text: `Found ${results.length} candidates. Specify memoryId:\n${list}`,
                 },
               ],
-              details: { action: "candidates", candidates: sanitizedCandidates },
+              details: {
+                action: "candidates",
+                candidates: sanitizedCandidates,
+              },
             };
           }
 
@@ -562,7 +592,10 @@ const memoryPlugin = {
 
           return {
             prependContext: formatRelevantMemoriesContext(
-              results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
+              results.map((r) => ({
+                category: r.entry.category,
+                text: r.entry.text,
+              })),
             ),
           };
         } catch (err) {
