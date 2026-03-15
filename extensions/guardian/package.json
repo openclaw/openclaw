@@ -5,7 +5,7 @@
   "description": "OpenClaw guardian plugin — LLM-based intent-alignment review for tool calls",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.55.3"
+    "@mariozechner/pi-ai": "0.58.0"
   },
   "devDependencies": {
     "openclaw": "workspace:*"

@@ -1,6 +1,5 @@
 import { getModels as piGetModels } from "@mariozechner/pi-ai";
-import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { callGuardian } from "./guardian-client.js";
 import {
   getAllTurns,
