@@ -800,6 +800,10 @@ export type OpenClawPluginApi = {
 
 export type PluginOrigin = "bundled" | "global" | "workspace" | "config";
 
+export type PluginFormat = "openclaw" | "bundle";
+
+export type PluginBundleFormat = "codex" | "claude" | "cursor";
+
 export type PluginDiagnostic = {
   level: "warn" | "error";
   message: string;
