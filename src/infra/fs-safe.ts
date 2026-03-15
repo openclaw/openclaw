@@ -17,6 +17,18 @@ import {
   isSymlinkOpenError,
 } from "./path-guards.js";
 
+/**
+ * Safely close a file handle, logging any errors without throwing.
+ * Use this in finally blocks and error handlers to avoid resource leaks.
+ */
+async function safeCloseHandle(handle: FileHandle, context?: string): Promise<void> {
+  try {
+    await handle.close();
+  } catch (err) {
+    logWarn(`fs-safe: failed to close handle${context ? ` (${context})` : ""}`, { error: err });
+  }
+}
+
 export type SafeOpenErrorCode =
   | "invalid-path"
   | "not-found"
@@ -141,7 +153,7 @@ async function openVerifiedLocalFile(
 
     return { handle, realPath, stat };
   } catch (err) {
-    await handle.close().catch(() => {});
+    await safeCloseHandle(handle, "error cleanup");
     if (err instanceof SafeOpenError) {
       throw err;
     }
@@ -197,12 +209,12 @@ export async function openFileWithinRoot(params: {
   }
 
   if (params.rejectHardlinks !== false && opened.stat.nlink > 1) {
-    await opened.handle.close().catch(() => {});
+    await safeCloseHandle(opened.handle, "hardlink rejection");
     throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
   }
 
   if (!isPathInside(rootWithSep, opened.realPath)) {
-    await opened.handle.close().catch(() => {});
+    await safeCloseHandle(opened.handle, "workspace boundary check");
     throw new SafeOpenError("outside-workspace", "file is outside workspace root");
   }
 
@@ -223,7 +235,7 @@ export async function readFileWithinRoot(params: {
   try {
     return await readOpenedFileSafely({ opened, maxBytes: params.maxBytes });
   } finally {
-    await opened.handle.close().catch(() => {});
+    await safeCloseHandle(opened.handle, "readFileWithinRoot cleanup");
   }
 }
 
@@ -271,7 +283,7 @@ export async function readLocalFileSafely(params: {
   try {
     return await readOpenedFileSafely({ opened, maxBytes: params.maxBytes });
   } finally {
-    await opened.handle.close().catch(() => {});
+    await safeCloseHandle(opened.handle, "readLocalFileSafely cleanup");
   }
 }
 
@@ -345,7 +357,7 @@ async function verifyAtomicWriteResult(params: {
       throw new SafeOpenError("outside-workspace", "file is outside workspace root");
     }
   } finally {
-    await opened.handle.close().catch(() => {});
+    await safeCloseHandle(opened.handle, "verifyAtomicWriteResult cleanup");
   }
 }
 
@@ -706,7 +718,7 @@ async function resolvePinnedWriteTargetWithinRoot(params: {
         throw new SafeOpenError("outside-workspace", "file is outside workspace root");
       }
     } finally {
-      await opened.handle.close().catch(() => {});
+      await safeCloseHandle(opened.handle, "atomic write root check");
     }
   } catch (err) {
     if (!(err instanceof SafeOpenError) || err.code !== "not-found") {

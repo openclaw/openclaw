@@ -57,8 +57,16 @@ async function generateSelfSignedCert(params: {
     "-subj",
     "/CN=openclaw-gateway",
   ]);
-  await fs.chmod(params.keyPath, 0o600).catch(() => {});
-  await fs.chmod(params.certPath, 0o600).catch(() => {});
+  try {
+    await fs.chmod(params.keyPath, 0o600);
+  } catch (err) {
+    params.log?.info?.(`gateway tls: failed to restrict key file permissions (${String(err)})`);
+  }
+  try {
+    await fs.chmod(params.certPath, 0o600);
+  } catch (err) {
+    params.log?.info?.(`gateway tls: failed to restrict cert file permissions (${String(err)})`);
+  }
   params.log?.info?.(
     `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
   );
