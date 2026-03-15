@@ -159,16 +159,16 @@ async function resolveFeishuSenderName(params: {
   if (lookupCandidates.length === 0) return {};
 
   const now = Date.now();
+  const client = createFeishuClient(account);
+  let deferredPermissionError: PermissionError | undefined;
 
-  try {
-    const client = createFeishuClient(account);
+  for (const candidate of lookupCandidates) {
+    const cached = senderNameCache.get(candidate.id);
+    if (cached && cached.expireAt > now) {
+      return { name: cached.name };
+    }
 
-    for (const candidate of lookupCandidates) {
-      const cached = senderNameCache.get(candidate.id);
-      if (cached && cached.expireAt > now) {
-        return { name: cached.name };
-      }
-
+    try {
       // contact/v3/users/:user_id?user_id_type=<open_id|user_id|union_id>
       const res: any = await client.contact.user.get({
         path: { user_id: candidate.id },
@@ -185,28 +185,30 @@ async function resolveFeishuSenderName(params: {
         senderNameCache.set(candidate.id, { name, expireAt: now + SENDER_NAME_TTL_MS });
         return { name };
       }
-    }
-
-    return {};
-  } catch (err) {
-    // Check if this is a permission error
-    const permErr = extractPermissionError(err);
-    if (permErr) {
-      if (shouldSuppressPermissionErrorNotice(permErr)) {
-        log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
-        return {};
+    } catch (err) {
+      const permErr = extractPermissionError(err);
+      if (permErr) {
+        if (shouldSuppressPermissionErrorNotice(permErr)) {
+          log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
+          continue;
+        }
+        log(`feishu: permission error resolving sender name: code=${permErr.code}`);
+        deferredPermissionError ??= permErr;
+        continue;
       }
-      log(`feishu: permission error resolving sender name: code=${permErr.code}`);
-      return { permissionError: permErr };
-    }
 
-    // Best-effort. Don't fail message handling if name lookup fails.
-    const attempted = lookupCandidates
-      .map((candidate) => `${candidate.idType}:${candidate.id}`)
-      .join(", ");
-    log(`feishu: failed to resolve sender name for ${attempted}: ${String(err)}`);
-    return {};
+      // Best-effort per candidate. Continue lower-priority fallbacks if one path fails.
+      log(
+        `feishu: failed to resolve sender name for ${candidate.idType}:${candidate.id}: ${String(err)}`,
+      );
+    }
   }
+
+  if (deferredPermissionError) {
+    return { permissionError: deferredPermissionError };
+  }
+
+  return {};
 }
 
 export type FeishuMessageEvent = {

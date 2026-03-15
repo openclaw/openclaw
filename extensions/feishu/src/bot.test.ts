@@ -384,6 +384,63 @@ describe("handleFeishuMessage sender name resolution", () => {
       }),
     );
   });
+
+  it("continues to lower-priority fallbacks when a higher-priority lookup throws", async () => {
+    const getUser = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("user_id lookup failed"))
+      .mockResolvedValueOnce({ data: { user: { name: "同同" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: getUser,
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret",
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou_sender_open_after_error",
+            user_id: "0b1a2c3d_error_first",
+          },
+        },
+        message: {
+          message_id: "msg-open-id-fallback-after-user-id-error",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "你好" }),
+        },
+      },
+    });
+
+    expect(getUser).toHaveBeenNthCalledWith(1, {
+      path: { user_id: "0b1a2c3d_error_first" },
+      params: { user_id_type: "user_id" },
+    });
+    expect(getUser).toHaveBeenNthCalledWith(2, {
+      path: { user_id: "ou_sender_open_after_error" },
+      params: { user_id_type: "open_id" },
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("同同: 你好"),
+      }),
+    );
+  });
 });
 
 describe("handleFeishuMessage command authorization", () => {
