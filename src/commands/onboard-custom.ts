@@ -346,6 +346,8 @@ async function requestOpenAiVerification(params: {
       body: {
         model: params.modelId,
         messages: [{ role: "user", content: "Hi" }],
+        // Use a minimal token budget so the probe succeeds even when the
+        // model's context window is smaller than 1024.
         max_tokens: 1,
         stream: false,
       },
@@ -369,16 +371,31 @@ async function requestAnthropicVerification(params: {
     modelId: params.modelId,
     endpointPath: "messages",
   });
-  return await requestVerification({
+  const result = await requestVerification({
     endpoint,
     headers: buildAnthropicHeaders(params.apiKey),
     body: {
       model: params.modelId,
-      max_tokens: 1,
+      // Must be >= 1024 for Extended Thinking models (budget_tokens minimum).
+      // If the model/proxy rejects 1024, retry with 1 for small-cap models.
+      max_tokens: 1024,
       messages: [{ role: "user", content: "Hi" }],
       stream: false,
     },
   });
+  if (!result.ok && result.status === 400) {
+    return await requestVerification({
+      endpoint,
+      headers: buildAnthropicHeaders(params.apiKey),
+      body: {
+        model: params.modelId,
+        max_tokens: 1,
+        messages: [{ role: "user", content: "Hi" }],
+        stream: false,
+      },
+    });
+  }
+  return result;
 }
 
 async function promptBaseUrlAndKey(params: {
