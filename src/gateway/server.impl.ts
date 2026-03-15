@@ -33,6 +33,8 @@ import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { resolveHttpApprovalPolicy } from "../infra/http-approval-policy.js";
+import { resolveHttpAllowAlwaysPattern } from "../infra/http-approvals.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
@@ -85,6 +87,7 @@ import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
+import { createHttpApprovalHandlers } from "./server-methods/http-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
@@ -793,6 +796,63 @@ export async function startGatewayServer(
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,
   });
+  // HTTP approvals share the same manager type but use a separate instance
+  // so pending IDs do not collide between exec and HTTP approval namespaces.
+  const httpApprovalManager = new ExecApprovalManager();
+  const httpApprovalForwarder = createExecApprovalForwarder({ configKey: "http" });
+  // Serialization chain for allow-always config writes. Each write chains
+  // onto the previous one so concurrent resolutions read-modify-write
+  // sequentially, preventing lost allowlist entries.
+  let httpAllowAlwaysWriteChain: Promise<void> = Promise.resolve();
+  const httpApprovalHandlers = createHttpApprovalHandlers(httpApprovalManager, {
+    forwarder: httpApprovalForwarder,
+    onAllowAlways: (url, agentId) => {
+      const pattern = resolveHttpAllowAlwaysPattern(url);
+      if (!pattern) {
+        return;
+      }
+      // Chain the config write so concurrent allow-always decisions
+      // serialize their read-modify-write cycles.
+      httpAllowAlwaysWriteChain = httpAllowAlwaysWriteChain
+        .then(async () => {
+          const cfg = loadConfig();
+          const httpPolicy = cfg.approvals?.httpPolicy ?? {};
+          const target = agentId ?? undefined;
+          if (target) {
+            const agents: Record<string, { allowlist?: Array<{ pattern: string }> }> =
+              (httpPolicy.agents as Record<string, { allowlist?: Array<{ pattern: string }> }>) ??
+              {};
+            const agent = agents[target] ?? {};
+            // Start from the agent's effective (resolved) allowlist so global
+            // entries are preserved when creating the first per-agent override.
+            const resolved = resolveHttpApprovalPolicy({ cfg, agentId: target });
+            const allowlist = [...resolved.allowlist];
+            if (!allowlist.some((e) => e.pattern === pattern)) {
+              allowlist.push({ pattern });
+              agents[target] = { ...agent, allowlist };
+              await writeConfigFile({
+                ...cfg,
+                approvals: { ...cfg.approvals, httpPolicy: { ...httpPolicy, agents } },
+              });
+            }
+          } else {
+            const allowlist = Array.isArray(httpPolicy.allowlist) ? [...httpPolicy.allowlist] : [];
+            if (!allowlist.some((e) => e.pattern === pattern)) {
+              allowlist.push({ pattern });
+              await writeConfigFile({
+                ...cfg,
+                approvals: { ...cfg.approvals, httpPolicy: { ...httpPolicy, allowlist } },
+              });
+            }
+          }
+        })
+        .catch((err) => {
+          // Best-effort. Config write failure should not block the approval
+          // or crash the gateway via unhandled rejection.
+          log.warn(`Failed to persist HTTP allow-always pattern: ${String(err)}`);
+        });
+    },
+  });
   const secretsHandlers = createSecretsHandlers({
     reloadSecrets: async () => {
       const active = getActiveSecretsRuntimeSnapshot();
@@ -840,8 +900,21 @@ export async function startGatewayServer(
     nodeUnsubscribe,
     nodeUnsubscribeAll,
     hasConnectedMobileNode: hasMobileNodeConnected,
-    hasExecApprovalClients: () => {
+    hasExecApprovalClients: (excludeConnId?: string | null) => {
+      // Client modes that connect with approval scopes but never act on
+      // approval events. Excluding them avoids false-positive approver
+      // detection that would force the full wait timeout in headless setups.
+      const NON_APPROVER_MODES = new Set(["backend", "node", "probe", "test"]);
       for (const gatewayClient of clients) {
+        // Skip the requester's own connection so backend/self-connections
+        // don't falsely satisfy the "has approver" check.
+        if (excludeConnId && gatewayClient.connId === excludeConnId) {
+          continue;
+        }
+        const clientMode = gatewayClient.connect?.client?.mode;
+        if (clientMode && NON_APPROVER_MODES.has(clientMode)) {
+          continue;
+        }
         const scopes = Array.isArray(gatewayClient.connect.scopes)
           ? gatewayClient.connect.scopes
           : [];
@@ -895,6 +968,7 @@ export async function startGatewayServer(
     extraHandlers: {
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
+      ...httpApprovalHandlers,
       ...secretsHandlers,
     },
     broadcast,

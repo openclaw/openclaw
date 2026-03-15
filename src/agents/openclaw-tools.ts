@@ -24,6 +24,7 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
+import { withHttpApprovalGate } from "./tools/web-fetch-approval.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
@@ -115,11 +116,31 @@ export function createOpenClawTools(
     sandboxed: options?.sandboxed,
     runtimeWebSearch: runtimeWebTools?.search,
   });
-  const webFetchTool = createWebFetchTool({
+  const rawWebFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
     runtimeFirecrawl: runtimeWebTools?.fetch.firecrawl,
   });
+  // Resolve the effective agent ID for HTTP approval policy.
+  // Prefer requesterAgentIdOverride (used by cron/hook sessions that run without
+  // a session key) over session-key-derived agent ID.
+  const httpApprovalAgentId =
+    options?.requesterAgentIdOverride ??
+    resolveSessionAgentId({
+      sessionKey: options?.agentSessionKey,
+      config: options?.config,
+    });
+  const webFetchTool = rawWebFetchTool
+    ? withHttpApprovalGate(rawWebFetchTool, {
+        config: options?.config,
+        agentId: httpApprovalAgentId,
+        sessionKey: options?.agentSessionKey,
+        turnSourceChannel: options?.agentChannel,
+        turnSourceTo: options?.agentTo,
+        turnSourceAccountId: options?.agentAccountId,
+        turnSourceThreadId: options?.agentThreadId,
+      })
+    : null;
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({

@@ -50,6 +50,8 @@ export type ExecApprovalForwarderDeps = {
     cfg: OpenClawConfig;
     request: ExecApprovalRequest;
   }) => ExecApprovalForwardTarget | null;
+  /** Which `approvals.*` config section to read. Default: "exec". */
+  configKey?: "exec" | "http";
 };
 
 const DEFAULT_MODE = "session" as const;
@@ -439,11 +441,16 @@ export function createExecApprovalForwarder(
   const deliver = deps.deliver ?? deliverOutboundPayloads;
   const nowMs = deps.nowMs ?? Date.now;
   const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;
+  const configKey = deps.configKey ?? "exec";
+  // Discord's component-based exec approval handler only consumes
+  // exec.approval.* events. HTTP approvals have no Discord component handler,
+  // so the exec-only suppression logic must be skipped for HTTP forwarding.
+  const skipDiscordSuppression = configKey === "http";
   const pending = new Map<string, PendingApproval>();
 
   const handleRequested = async (request: ExecApprovalRequest): Promise<boolean> => {
     const cfg = getConfig();
-    const config = cfg.approvals?.exec;
+    const config = cfg.approvals?.[configKey];
     const filteredTargets = [
       ...(shouldForward({ config, request })
         ? resolveForwardTargets({
@@ -455,7 +462,7 @@ export function createExecApprovalForwarder(
         : []),
     ].filter(
       (target) =>
-        !shouldSkipDiscordForwarding(target, cfg) &&
+        (skipDiscordSuppression || !shouldSkipDiscordForwarding(target, cfg)) &&
         !shouldSkipTelegramForwarding({ target, cfg, request }),
     );
 
@@ -518,7 +525,7 @@ export function createExecApprovalForwarder(
         createdAtMs: resolved.ts,
         expiresAtMs: resolved.ts,
       };
-      const config = cfg.approvals?.exec;
+      const config = cfg.approvals?.[configKey];
       targets = [
         ...(shouldForward({ config, request })
           ? resolveForwardTargets({
@@ -530,7 +537,7 @@ export function createExecApprovalForwarder(
           : []),
       ].filter(
         (target) =>
-          !shouldSkipDiscordForwarding(target, cfg) &&
+          (skipDiscordSuppression || !shouldSkipDiscordForwarding(target, cfg)) &&
           !shouldSkipTelegramForwarding({ target, cfg, request }),
       );
     }
