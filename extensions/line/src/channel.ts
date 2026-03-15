@@ -347,6 +347,16 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         : [];
       const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
       const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
+      const sendMediaMessages = async () => {
+        for (const url of mediaUrls) {
+          lastResult = await runtime.channel.line.sendMessageLine(to, "", {
+            verbose: false,
+            mediaUrl: url,
+            cfg,
+            accountId: accountId ?? undefined,
+          });
+        }
+      };
 
       if (!shouldSendQuickRepliesInline) {
         if (lineData.flexMessage) {
@@ -391,14 +401,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
 
       const sendMediaAfterText = !(hasQuickReplies && chunks.length > 0);
       if (mediaUrls.length > 0 && !shouldSendQuickRepliesInline && !sendMediaAfterText) {
-        for (const url of mediaUrls) {
-          lastResult = await runtime.channel.line.sendMessageLine(to, "", {
-            verbose: false,
-            mediaUrl: url,
-            cfg,
-            accountId: accountId ?? undefined,
-          });
-        }
+        await sendMediaMessages();
       }
 
       if (chunks.length > 0) {
@@ -471,14 +474,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       }
 
       if (mediaUrls.length > 0 && !shouldSendQuickRepliesInline && sendMediaAfterText) {
-        for (const url of mediaUrls) {
-          lastResult = await runtime.channel.line.sendMessageLine(to, "", {
-            verbose: false,
-            mediaUrl: url,
-            cfg,
-            accountId: accountId ?? undefined,
-          });
-        }
+        await sendMediaMessages();
       }
 
       if (lastResult) {

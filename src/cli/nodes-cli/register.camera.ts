@@ -31,6 +31,12 @@ const parseFacing = (value: string): CameraFacing => {
   throw new Error(`invalid facing: ${value} (expected front|back)`);
 };
 
+function getGatewayInvokePayload(raw: unknown): unknown {
+  return typeof raw === "object" && raw !== null
+    ? (raw as { payload?: unknown }).payload
+    : undefined;
+}
+
 export function registerNodesCameraCommands(nodes: Command) {
   const camera = nodes.command("camera").description("Capture camera media from a paired node");
 
@@ -157,9 +163,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             });
 
             const raw = await callGatewayCli("node.invoke", opts, invokeParams);
-            const res =
-              typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-            const payload = parseCameraSnapPayload(res.payload);
+            const payload = parseCameraSnapPayload(getGatewayInvokePayload(raw));
             const filePath = cameraTempPath({
               kind: "snap",
               facing,
@@ -229,8 +233,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           });
 
           const raw = await callGatewayCli("node.invoke", opts, invokeParams);
-          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-          const payload = parseCameraClipPayload(res.payload);
+          const payload = parseCameraClipPayload(getGatewayInvokePayload(raw));
           const filePath = await writeCameraClipPayloadToFile({
             payload,
             facing,
