@@ -1,7 +1,8 @@
 #!/usr/bin/env -S node --import tsx
 
 import { execSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -164,6 +165,47 @@ export function collectBundledExtensionRootDependencyGapErrors(params: {
   return errors;
 }
 
+export function collectSkillShellScriptExecutableErrors(rootDir = resolve(".")): string[] {
+  if (process.platform === "win32") {
+    return [];
+  }
+
+  const skillsDir = join(rootDir, "skills");
+  const errors: string[] = [];
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(skillsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const scriptsDir = join(skillsDir, entry.name, "scripts");
+    let scriptEntries: Dirent[];
+    try {
+      scriptEntries = readdirSync(scriptsDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const scriptEntry of scriptEntries) {
+      if (!scriptEntry.isFile() || !scriptEntry.name.endsWith(".sh")) {
+        continue;
+      }
+      const scriptPath = join(scriptsDir, scriptEntry.name);
+      if ((statSync(scriptPath).mode & 0o111) === 0) {
+        errors.push(
+          `skill shell script is not executable: skills/${entry.name}/scripts/${scriptEntry.name}`,
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
 function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
   const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
@@ -202,6 +244,17 @@ function checkBundledExtensionRootDependencyMirrors() {
   });
   if (errors.length > 0) {
     console.error("release-check: bundled extension root dependency mirror validation failed:");
+    for (const error of errors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+}
+
+function checkSkillShellScriptsExecutable() {
+  const errors = collectSkillShellScriptExecutableErrors();
+  if (errors.length > 0) {
+    console.error("release-check: skill shell script permission validation failed:");
     for (const error of errors) {
       console.error(`  - ${error}`);
     }
@@ -419,6 +472,7 @@ function main() {
   checkAppcastSparkleVersions();
   checkPluginSdkExports();
   checkBundledExtensionRootDependencyMirrors();
+  checkSkillShellScriptsExecutable();
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);
