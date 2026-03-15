@@ -17,7 +17,8 @@ export const AGENT_TURN_SAFETY_TIMEOUT_MS = 60 * 60_000; // 60 minutes
 export function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
   const configuredTimeoutMs =
     (job.payload.kind === "agentTurn" || job.payload.kind === "script") &&
-    typeof job.payload.timeoutSeconds === "number"
+    typeof job.payload.timeoutSeconds === "number" &&
+    Number.isFinite(job.payload.timeoutSeconds)
       ? Math.floor(job.payload.timeoutSeconds * 1_000)
       : undefined;
   if (configuredTimeoutMs === undefined) {
