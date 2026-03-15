@@ -410,7 +410,7 @@ done
 ENV_FILE="$ROOT_DIR/.env"
 _write_kv() {
   local _k="$1" _v="$2" _file="$3"
-  if [[ "$_v" == *' '* || "$_v" == *$'\t'* ]]; then
+  if [[ "$_v" == *' '* || "$_v" == *$'\t'* || "$_v" == *'"'* ]]; then
     _v="${_v//\\/\\\\}"
     printf '%s="%s"\n' "$_k" "${_v//"/\\"}" >>"$_file"
   else
