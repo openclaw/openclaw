@@ -201,6 +201,27 @@
 
 ## Agent-Specific Notes
 
+- Pre-Live Telegram Check (REQUIRED):
+  - You MUST confirm the current git branch is named and NOT `HEAD`.
+  - You MUST confirm gateway runtime is owned by the current worktree path.
+  - If runtime path mismatches, you MUST restart gateway from the current worktree before any live Telegram test.
+  - If `.env.local` is missing, you MUST run `bash scripts/assign-bot.sh` before starting gateway.
+  - You MUST NOT print raw token values.
+  - You MUST record proof lines in the run log: `branch=<...>` and `runtime_worktree=<...>`.
+
+- Worktree credential bootstrap (Telegram live checks):
+  - Source of truth is the main checkout at `/Users/user/Programming_Projects/openclaw`.
+  - Preferred: run `bash scripts/bootstrap-worktree-telegram.sh` in each new worktree.
+  - For every new worktree, run:
+    - `cp /Users/user/Programming_Projects/openclaw/.env.bots ./.env.bots`
+    - `bash scripts/assign-bot.sh` (creates `.env.local` with this worktree's bot token)
+  - If Telegram userbot E2E is needed, copy local-only files (do not commit):
+    - `mkdir -p scripts/telegram-e2e/tmp`
+    - `cp /Users/user/Programming_Projects/openclaw/scripts/telegram-e2e/.env scripts/telegram-e2e/.env` (if present)
+    - `cp /Users/user/Programming_Projects/openclaw/scripts/telegram-e2e/.env.local scripts/telegram-e2e/.env.local` (if present)
+    - `cp /Users/user/Programming_Projects/openclaw/scripts/telegram-e2e/tmp/userbot.session scripts/telegram-e2e/tmp/userbot.session` (if present)
+  - Never print raw token values in logs, test output, or chat replies.
+
 - Vocabulary: "makeup" = "mac app".
 - Parallels macOS retests: use the snapshot most closely named like `macOS 26.3.1 fresh` when the user asks for a clean/fresh macOS rerun; avoid older Tahoe snapshots unless explicitly requested.
 - Parallels beta smoke: use `--target-package-spec openclaw@<beta-version>` for the beta artifact, and pin the stable side with both `--install-version <stable-version>` and `--latest-version <stable-version>` for upgrade runs. npm dist-tags can move mid-run.
