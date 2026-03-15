@@ -697,9 +697,9 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping memory file sync in FTS-only mode (no embedding provider)");
+    // FTS-only mode: still index for full-text search even without embeddings
+    if (!this.provider && !(this.fts.enabled && this.fts.available)) {
+      log.debug("Skipping memory file sync: no embedding provider and FTS unavailable");
       return;
     }
 
@@ -778,7 +778,7 @@ export abstract class MemoryManagerSyncOps {
         try {
           this.db
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "memory", this.provider.model);
+            .run(stale.path, "memory", this.provider?.model ?? "fts-only");
         } catch {}
       }
     }
@@ -789,9 +789,9 @@ export abstract class MemoryManagerSyncOps {
     targetSessionFiles?: string[];
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
+    // FTS-only mode: still index for full-text search even without embeddings
+    if (!this.provider && !(this.fts.enabled && this.fts.available)) {
+      log.debug("Skipping session file sync: no embedding provider and FTS unavailable");
       return;
     }
 
@@ -901,7 +901,7 @@ export abstract class MemoryManagerSyncOps {
         try {
           this.db
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "sessions", this.provider.model);
+            .run(stale.path, "sessions", this.provider?.model ?? "fts-only");
         } catch {}
       }
     }

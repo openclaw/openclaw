@@ -30,6 +30,14 @@ vi.mock("./embeddings.js", () => {
         model: options.model,
         outputDimensionality: options.outputDimensionality,
       });
+      // Simulate FTS-only mode: no embedding provider available
+      if (!options.provider) {
+        return {
+          requestedProvider: undefined,
+          provider: null,
+          providerUnavailableReason: "no API key configured",
+        };
+      }
       const providerId = options.provider === "gemini" ? "gemini" : "mock";
       const model = options.model ?? "mock-embed";
       return {
@@ -102,6 +110,7 @@ describe("memory index", () => {
   let indexStatusPath = "";
   let indexSourceChangePath = "";
   let indexModelPath = "";
+  let indexFtsOnlyPath = "";
   let sourceChangeStateDir = "";
   const sourceChangeSessionLogLines = [
     JSON.stringify({
@@ -136,6 +145,7 @@ describe("memory index", () => {
     indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
     indexSourceChangePath = path.join(workspaceDir, "index-source-change.sqlite");
     indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
+    indexFtsOnlyPath = path.join(workspaceDir, "index-fts-only.sqlite");
     sourceChangeStateDir = path.join(fixtureRoot, "state-source-change");
 
     await fs.mkdir(memoryDir, { recursive: true });
@@ -184,6 +194,7 @@ describe("memory index", () => {
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
     provider?: "openai" | "gemini";
+    noProvider?: boolean;
     model?: string;
     outputDimensionality?: number;
     multimodal?: {
@@ -201,7 +212,7 @@ describe("memory index", () => {
         defaults: {
           workspace: workspaceDir,
           memorySearch: {
-            provider: params.provider ?? "openai",
+            provider: params.noProvider ? undefined : (params.provider ?? "openai"),
             model: params.model ?? "mock-embed",
             outputDimensionality: params.outputDimensionality,
             store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
@@ -1110,5 +1121,32 @@ describe("memory index", () => {
         "path required",
       );
     }
+  });
+
+  it("indexes and searches memory files in FTS-only mode (no embedding provider)", async () => {
+    const cfg = createCfg({
+      storePath: indexFtsOnlyPath,
+      noProvider: true,
+      hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    const manager = result.manager as MemoryIndexManager;
+    managersForCleanup.add(manager);
+
+    const status = manager.status();
+    expect(status.fts?.available).toBe(true);
+
+    // Sync triggers FTS indexing without embeddings
+    await manager.sync();
+
+    // Keyword search should find the indexed memory content
+    const results = await manager.search("Alpha");
+    expect(results.length).toBeGreaterThan(0);
+    const firstResult = results[0];
+    expect(firstResult).toBeDefined();
+    // FTS results may use snippet instead of text
+    const content = firstResult.snippet ?? "";
+    expect(content).toContain("Alpha");
   });
 });
