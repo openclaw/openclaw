@@ -505,7 +505,17 @@ function validateConfigObjectWithPluginsBase(
 
   const defaultMemorySearch = config.agents?.defaults?.memorySearch;
   if (defaultMemorySearch) {
-    const knownPluginIds = getKnownPluginIds();
+    // Only load plugin registry if provider/fallback is not a known built-in
+    // This avoids loading plugin manifests when only using built-in memory providers
+    const provider = defaultMemorySearch.provider;
+    const fallback = defaultMemorySearch.fallback;
+    const knownPluginIds =
+      provider &&
+      !knownMemoryProviders.has(provider) &&
+      fallback &&
+      !knownMemoryFallbacks.has(fallback)
+        ? getKnownPluginIds()
+        : new Set<string>();
     validateMemorySearchProvider(
       defaultMemorySearch.provider,
       "agents.defaults.memorySearch.provider",
@@ -523,7 +533,15 @@ function validateConfigObjectWithPluginsBase(
       validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
       const memorySearch = entry?.memorySearch;
       if (memorySearch) {
-        const knownPluginIds = getKnownPluginIds();
+        const provider = memorySearch.provider;
+        const fallback = memorySearch.fallback;
+        const knownPluginIds =
+          provider &&
+          !knownMemoryProviders.has(provider) &&
+          fallback &&
+          !knownMemoryFallbacks.has(fallback)
+            ? getKnownPluginIds()
+            : new Set<string>();
         validateMemorySearchProvider(
           memorySearch.provider,
           `agents.list.${index}.memorySearch.provider`,
