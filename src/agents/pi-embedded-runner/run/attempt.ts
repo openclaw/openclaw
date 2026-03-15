@@ -59,6 +59,7 @@ import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
+  downgradeOpenAIReasoningBlocks,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
@@ -2111,7 +2112,18 @@ export async function runEmbeddedAttempt(
               tokenBudget: params.contextTokenBudget,
             });
             if (assembled.messages !== activeSession.messages) {
-              activeSession.agent.replaceMessages(assembled.messages);
+              // Re-run OpenAI transcript sanitizers on assembled messages.
+              // contextEngine.assemble() may re-introduce call_id/fc_id pairs
+              // that were stripped by sanitizeSessionHistory above.
+              const isOpenAIResponses =
+                params.model.api === "openai-responses" ||
+                params.model.api === "openai-codex-responses";
+              const sanitizedAssembled = isOpenAIResponses
+                ? downgradeOpenAIFunctionCallReasoningPairs(
+                    downgradeOpenAIReasoningBlocks(assembled.messages),
+                  )
+                : assembled.messages;
+              activeSession.agent.replaceMessages(sanitizedAssembled);
             }
             if (assembled.systemPromptAddition) {
               systemPromptText = prependSystemPromptAddition({
