@@ -90,6 +90,24 @@ describe("chunkText", () => {
     expect(chunks).toEqual(["Supercalif", "ragilistic", "expialidoc", "ious"]);
   });
 
+  it("breaks CJK text at sentence-ending punctuation instead of mid-character", () => {
+    const text = "這是第一句話。這是第二句話。這是第三句話。";
+    const chunks = chunkText(text, 10);
+    // Should break after 。 (7 chars including punctuation) rather than at hard limit
+    expect(chunks[0]).toBe("這是第一句話。");
+    expect(chunks[1]).toBe("這是第二句話。");
+    expect(chunks[2]).toBe("這是第三句話。");
+  });
+
+  it("prefers whitespace over CJK punctuation when both are available", () => {
+    const text = "Hello world。Goodbye world";
+    const chunks = chunkText(text, 15);
+    // Should break at whitespace, not at 。
+    expect(chunks[0]).toBe("Hello");
+    expect(chunks[1]).toBe("world。Goodbye");
+    expect(chunks[2]).toBe("world");
+  });
+
   runChunkCases(chunkText, [parentheticalCases[0]]);
 });
 

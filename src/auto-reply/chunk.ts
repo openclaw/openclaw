@@ -306,9 +306,14 @@ export function chunkText(text: string, limit: number): string[] {
   }
   return chunkTextByBreakResolver(text, limit, (window) => {
     // 1) Prefer a newline break inside the window (outside parentheses).
-    const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(window, 0, window.length);
+    const { lastNewline, lastWhitespace, lastCjkBreak } = scanParenAwareBreakpoints(
+      window,
+      0,
+      window.length,
+    );
     // 2) Otherwise prefer the last whitespace (word boundary) inside the window.
-    return lastNewline > 0 ? lastNewline : lastWhitespace;
+    // 3) For CJK text without whitespace, break at sentence-ending punctuation.
+    return lastNewline > 0 ? lastNewline : lastWhitespace > 0 ? lastWhitespace : lastCjkBreak;
   });
 }
 
@@ -426,8 +431,11 @@ function pickSafeBreakIndex(
   end: number,
   spans: ReturnType<typeof parseFenceSpans>,
 ): number {
-  const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(text, start, end, (index) =>
-    isSafeFenceBreak(spans, index),
+  const { lastNewline, lastWhitespace, lastCjkBreak } = scanParenAwareBreakpoints(
+    text,
+    start,
+    end,
+    (index) => isSafeFenceBreak(spans, index),
   );
 
   if (lastNewline > start) {
@@ -436,17 +444,24 @@ function pickSafeBreakIndex(
   if (lastWhitespace > start) {
     return lastWhitespace;
   }
+  if (lastCjkBreak > start) {
+    return lastCjkBreak;
+  }
   return -1;
 }
+
+/** CJK sentence-ending punctuation suitable as chunk break points. */
+const CJK_BREAK_PUNCTUATION = /[。！？；]/;
 
 function scanParenAwareBreakpoints(
   text: string,
   start: number,
   end: number,
   isAllowed: (index: number) => boolean = () => true,
-): { lastNewline: number; lastWhitespace: number } {
+): { lastNewline: number; lastWhitespace: number; lastCjkBreak: number } {
   let lastNewline = -1;
   let lastWhitespace = -1;
+  let lastCjkBreak = -1;
   let depth = 0;
 
   for (let i = start; i < end; i++) {
@@ -470,7 +485,11 @@ function scanParenAwareBreakpoints(
     } else if (/\s/.test(char)) {
       lastWhitespace = i;
     }
+    if (CJK_BREAK_PUNCTUATION.test(char)) {
+      // Break AFTER the punctuation mark so it stays with its sentence.
+      lastCjkBreak = i + 1;
+    }
   }
 
-  return { lastNewline, lastWhitespace };
+  return { lastNewline, lastWhitespace, lastCjkBreak };
 }
