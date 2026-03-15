@@ -66,6 +66,7 @@ export type EmbeddedPiSubscribeState = {
   pendingCommentarySegmentIds: Set<string>;
   deliveredCommentarySegmentIds: Set<string>;
   commentaryGeneration: number;
+  commentaryQueueVersion: number;
   commentaryAbortControllers: Set<AbortController>;
   assistantOutputIdState: AssistantOutputIdState;
 
@@ -134,6 +135,7 @@ export type EmbeddedPiSubscribeContext = {
   getCompactionCount: () => number;
   resolveCurrentAssistantFallbackMessageId: () => string;
   queueCommentaryDelivery: (segment: AssistantOutputEntry) => void;
+  waitForCommentaryDeliveryRound: () => Promise<boolean>;
   waitForCommentaryDelivery: () => Promise<void>;
   abortCommentaryDelivery: (reason?: unknown) => void;
 };

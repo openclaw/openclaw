@@ -218,6 +218,7 @@ function createSubscriptionMock() {
     unsubscribe: () => {},
     deliveredCommentarySegmentIds: () => [] as string[],
     getPendingCommentaryDeliveryCount: () => 1,
+    waitForCommentaryDeliveryRound: async () => true,
     waitForCommentaryDelivery: async () => {},
     abortCommentaryDelivery: () => {},
     waitForCompactionRetry: async () => {},
@@ -372,7 +373,7 @@ describe("runEmbeddedAttempt live commentary forwarding", () => {
     const abortCommentaryDelivery = vi.fn();
     hoisted.subscribeEmbeddedPiSessionMock.mockImplementation(() => ({
       ...createSubscriptionMock(),
-      waitForCommentaryDelivery: () => new Promise<void>(() => {}),
+      waitForCommentaryDeliveryRound: () => new Promise<boolean>(() => {}),
       abortCommentaryDelivery,
     }));
 
@@ -410,7 +411,7 @@ describe("runEmbeddedAttempt live commentary forwarding", () => {
     expect(abortCommentaryDelivery).toHaveBeenCalledTimes(1);
   });
 
-  it("scales the final commentary delivery wait by queued commentary sends", async () => {
+  it("retries commentary wait rounds when late commentary is enqueued", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commentary-queue-"));
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commentary-queue-agent-"));
     tempPaths.push(workspaceDir, agentDir);
@@ -445,13 +446,23 @@ describe("runEmbeddedAttempt live commentary forwarding", () => {
     });
 
     const abortCommentaryDelivery = vi.fn();
+    const waitForCommentaryDeliveryRound = vi
+      .fn<() => Promise<boolean>>()
+      .mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 10);
+        });
+        return false;
+      })
+      .mockResolvedValueOnce(true);
+    const getPendingCommentaryDeliveryCount = vi
+      .fn<() => number>()
+      .mockReturnValueOnce(3)
+      .mockReturnValueOnce(1);
     hoisted.subscribeEmbeddedPiSessionMock.mockImplementation(() => ({
       ...createSubscriptionMock(),
-      getPendingCommentaryDeliveryCount: () => 3,
-      waitForCommentaryDelivery: () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 10);
-        }),
+      getPendingCommentaryDeliveryCount,
+      waitForCommentaryDeliveryRound,
       abortCommentaryDelivery,
     }));
 
@@ -486,6 +497,8 @@ describe("runEmbeddedAttempt live commentary forwarding", () => {
     });
 
     expect(result.promptError).toBeNull();
+    expect(waitForCommentaryDeliveryRound).toHaveBeenCalledTimes(2);
+    expect(getPendingCommentaryDeliveryCount).toHaveBeenCalledTimes(2);
     expect(abortCommentaryDelivery).not.toHaveBeenCalled();
   });
 
@@ -527,9 +540,9 @@ describe("runEmbeddedAttempt live commentary forwarding", () => {
     const abortController = new AbortController();
     hoisted.subscribeEmbeddedPiSessionMock.mockImplementation(() => ({
       ...createSubscriptionMock(),
-      waitForCommentaryDelivery: () => {
+      waitForCommentaryDeliveryRound: () => {
         abortController.abort(new Error("user abort"));
-        return new Promise<void>(() => {});
+        return new Promise<boolean>(() => {});
       },
       abortCommentaryDelivery,
     }));

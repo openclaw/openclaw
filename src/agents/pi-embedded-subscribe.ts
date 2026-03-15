@@ -75,6 +75,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingCommentarySegmentIds: new Set(),
     deliveredCommentarySegmentIds: new Set(),
     commentaryGeneration: 0,
+    commentaryQueueVersion: 0,
     commentaryAbortControllers: new Set(),
     assistantOutputIdState: createAssistantOutputIdState(),
     compactionInFlight: false,
@@ -643,6 +644,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
   const abortCommentaryDelivery = (reason?: unknown) => {
     state.commentaryGeneration += 1;
+    state.commentaryQueueVersion += 1;
     for (const controller of state.commentaryAbortControllers) {
       controller.abort(
         createCommentaryAbortError("Commentary delivery aborted", reason ?? undefined),
@@ -666,6 +668,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     const abortController = new AbortController();
     state.pendingCommentarySegmentIds.add(segment.segmentId);
     state.commentaryAbortControllers.add(abortController);
+    state.commentaryQueueVersion += 1;
     commentaryDeliveryQueue = commentaryDeliveryQueue
       .then(async () => {
         if (generation !== state.commentaryGeneration || abortController.signal.aborted) {
@@ -696,7 +699,19 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         }
       });
   };
-  const waitForCommentaryDelivery = () => commentaryDeliveryQueue;
+  const waitForCommentaryDeliveryRound = async () => {
+    const queueVersion = state.commentaryQueueVersion;
+    const queue = commentaryDeliveryQueue;
+    await queue;
+    return (
+      queueVersion === state.commentaryQueueVersion && state.pendingCommentarySegmentIds.size === 0
+    );
+  };
+  const waitForCommentaryDelivery = async () => {
+    while (!(await waitForCommentaryDeliveryRound())) {
+      // Loop until no newer commentary work is appended while we wait.
+    }
+  };
 
   const ctx: EmbeddedPiSubscribeContext = {
     params,
@@ -730,6 +745,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getCompactionCount: () => compactionCount,
     resolveCurrentAssistantFallbackMessageId,
     queueCommentaryDelivery,
+    waitForCommentaryDeliveryRound,
     waitForCommentaryDelivery,
     abortCommentaryDelivery,
   };
@@ -793,6 +809,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getCompactionCount: () => compactionCount,
     deliveredCommentarySegmentIds: () => Array.from(state.deliveredCommentarySegmentIds),
     getPendingCommentaryDeliveryCount: () => state.pendingCommentarySegmentIds.size,
+    waitForCommentaryDeliveryRound,
     waitForCommentaryDelivery,
     abortCommentaryDelivery,
     waitForCompactionRetry: () => {

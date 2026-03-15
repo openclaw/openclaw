@@ -442,6 +442,77 @@ describe("subscribeEmbeddedPiSession commentary delivery", () => {
     expect(subscription.deliveredCommentarySegmentIds()).toEqual(["assistant:stream-0:segment:0"]);
   });
 
+  it("waits for commentary queued after the wait has already started", async () => {
+    const firstDelivery = createDeferred<void>();
+    const secondDelivery = createDeferred<void>();
+    const onCommentaryReply = vi
+      .fn()
+      .mockImplementationOnce(() => firstDelivery.promise)
+      .mockImplementationOnce(() => secondDelivery.promise);
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onCommentaryReply,
+    });
+
+    const firstMessage = buildAssistantMessage({
+      id: "assistant-1",
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "text",
+          text: "First step.",
+          textSignature: JSON.stringify({ id: "sig-1", phase: "commentary" }),
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    });
+    const secondMessage = buildAssistantMessage({
+      id: "assistant-2",
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "text",
+          text: "Second step.",
+          textSignature: JSON.stringify({ id: "sig-2", phase: "commentary" }),
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-2",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    });
+
+    emit({ type: "message_start", message: firstMessage });
+    emit({ type: "message_end", message: firstMessage });
+
+    let waitResolved = false;
+    const waitPromise = subscription.waitForCommentaryDelivery().then(() => {
+      waitResolved = true;
+    });
+
+    emit({ type: "message_start", message: secondMessage });
+    emit({ type: "message_end", message: secondMessage });
+
+    firstDelivery.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(waitResolved).toBe(false);
+
+    secondDelivery.resolve();
+    await waitPromise;
+
+    expect(onCommentaryReply).toHaveBeenCalledTimes(2);
+    expect(subscription.deliveredCommentarySegmentIds()).toEqual(["sig-1", "sig-2"]);
+  });
+
   it("does not duplicate unsigned outputs on repeated message_end events", async () => {
     const onCommentaryReply = vi.fn();
     const { emit, subscription } = createSubscribedSessionHarness({
