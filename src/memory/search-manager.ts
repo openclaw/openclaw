@@ -1,7 +1,8 @@
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
-import { resolveMemoryBackendConfig } from "./backend-config.js";
+import { checkQmdBinaryAvailable, resolveMemoryBackendConfig } from "./backend-config.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemorySearchManager,
@@ -10,10 +11,10 @@ import type {
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
-let managerRuntimePromise: Promise<typeof import("./manager-runtime.js")> | null = null;
+let managerRuntimePromise: Promise<typeof import("./manager.js")> | null = null;
 
 function loadManagerRuntime() {
-  managerRuntimePromise ??= import("./manager-runtime.js");
+  managerRuntimePromise ??= import("./manager.js");
   return managerRuntimePromise;
 }
 
@@ -30,48 +31,54 @@ export async function getMemorySearchManager(params: {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
-    let cacheKey: string | undefined;
+    const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
+
+    // Check cache first (fast path) before probing binary
     if (!statusOnly) {
-      cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
       const cached = QMD_MANAGER_CACHE.get(cacheKey);
       if (cached) {
         return { manager: cached };
       }
     }
-    try {
-      const { QmdMemoryManager } = await import("./qmd-manager.js");
-      const primary = await QmdMemoryManager.create({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        resolved,
-        mode: statusOnly ? "status" : "full",
-      });
-      if (primary) {
-        if (statusOnly) {
-          return { manager: primary };
-        }
-        const wrapper = new FallbackMemoryManager(
-          {
-            primary,
-            fallbackFactory: async () => {
-              const { MemoryIndexManager } = await loadManagerRuntime();
-              return await MemoryIndexManager.get(params);
+
+    // Check if QMD binary is available before attempting to create manager
+    // Use agent workspace as cwd to ensure relative paths (e.g., ./bin/qmd) resolve correctly
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    const qmdCheck = await checkQmdBinaryAvailable(resolved.qmd.command, 5000, workspaceDir);
+    if (!qmdCheck.available) {
+      log.warn(`QMD binary not available: ${qmdCheck.error}`);
+      log.warn("Falling back to builtin memory backend. To use QMD, install it and ensure it's on PATH.");
+      // Skip QMD creation and fall through to builtin backend
+    } else {
+      try {
+        const { QmdMemoryManager } = await import("./qmd-manager.js");
+        const primary = await QmdMemoryManager.create({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          resolved,
+          mode: statusOnly ? "status" : "full",
+        });
+        if (primary) {
+          if (statusOnly) {
+            return { manager: primary };
+          }
+          const wrapper = new FallbackMemoryManager(
+            {
+              primary,
+              fallbackFactory: async () => {
+                const { MemoryIndexManager } = await loadManagerRuntime();
+                return await MemoryIndexManager.get(params);
+              },
             },
-          },
-          () => {
-            if (cacheKey) {
-              QMD_MANAGER_CACHE.delete(cacheKey);
-            }
-          },
-        );
-        if (cacheKey) {
+            () => QMD_MANAGER_CACHE.delete(cacheKey),
+          );
           QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+          return { manager: wrapper };
         }
-        return { manager: wrapper };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
     }
   }
 
@@ -86,6 +93,7 @@ export async function getMemorySearchManager(params: {
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
+  // Close all cached QMD managers
   const managers = Array.from(QMD_MANAGER_CACHE.values());
   QMD_MANAGER_CACHE.clear();
   for (const manager of managers) {
@@ -95,6 +103,8 @@ export async function closeAllMemorySearchManagers(): Promise<void> {
       log.warn(`failed to close qmd memory manager: ${String(err)}`);
     }
   }
+
+  // Close all builtin memory index managers if runtime was loaded
   if (managerRuntimePromise !== null) {
     const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
     await closeAllMemoryIndexManagers();
@@ -247,7 +257,22 @@ class FallbackMemoryManager implements MemorySearchManager {
 }
 
 function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {
-  // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
-  // Fast stringify avoids deep key-sorting overhead on this hot path.
-  return `${agentId}:${JSON.stringify(config)}`;
+  return `${agentId}:${stableSerialize(config)}`;
+}
+
+function stableSerialize(value: unknown): string {
+  return JSON.stringify(sortValue(value));
+}
+
+function sortValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sortValue(entry));
+  }
+  if (value && typeof value === "object") {
+    const sortedEntries = Object.keys(value as Record<string, unknown>)
+      .toSorted((a, b) => a.localeCompare(b))
+      .map((key) => [key, sortValue((value as Record<string, unknown>)[key])]);
+    return Object.fromEntries(sortedEntries);
+  }
+  return value;
 }

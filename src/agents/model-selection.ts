@@ -31,6 +31,19 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
+// Lazy initialization to avoid TDZ issues during module loading
+// when parseModelRef is called before this module finishes initializing
+let _anthropicModelAliases: Record<string, string> | undefined;
+function getAnthropicModelAliases(): Record<string, string> {
+  return (_anthropicModelAliases ??= {
+    "opus-4.6": "claude-opus-4-6",
+    "opus-4.5": "claude-opus-4-5",
+    "sonnet-4.6": "claude-sonnet-4-6",
+    "sonnet-4.5": "claude-sonnet-4-5",
+  });
+}
+
+const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -144,6 +157,7 @@ function normalizeAnthropicModelId(model: string): string {
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
+<<<<<<< HEAD
   // Keep alias resolution local so bundled startup paths cannot trip a TDZ on
   // a module-level alias table while config parsing is still initializing.
   switch (lower) {
@@ -158,6 +172,9 @@ function normalizeAnthropicModelId(model: string): string {
     default:
       return trimmed;
   }
+=======
+  return getAnthropicModelAliases()[lower] ?? trimmed;
+>>>>>>> ccde1815f (fix: resolve ANTHROPIC_MODEL_ALIASES TDZ error on gateway start)
 }
 
 function normalizeProviderModelId(provider: string, model: string): string {

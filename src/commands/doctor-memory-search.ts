@@ -1,10 +1,17 @@
 import fsSync from "node:fs";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
+import {
+  checkQmdBinaryAvailable,
+  resolveMemoryBackendConfig,
+} from "../memory/backend-config.js";
 import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
 import { hasConfiguredMemorySecretInput } from "../memory/secret-input.js";
 import { note } from "../terminal/note.js";
@@ -35,9 +42,29 @@ export async function noteMemorySearchHealth(
   }
 
   // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
-  // separate embedding provider is needed. Skip the provider check entirely.
+  // separate embedding provider is needed. But we should check if qmd binary is available.
   const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
   if (backendConfig.backend === "qmd") {
+    const qmdCommand = backendConfig.qmd?.command ?? "qmd";
+    // Use agent workspace as cwd to ensure relative paths (e.g., ./bin/qmd) resolve correctly
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const checkResult = await checkQmdBinaryAvailable(qmdCommand, 5000, workspaceDir);
+    if (!checkResult.available) {
+      note(
+        [
+          `Memory backend is set to "qmd" but the QMD binary was not found.`,
+          `Error: ${checkResult.error}`,
+          "",
+          "Fix (pick one):",
+          `- Install QMD: https://github.com/openclaw/qmd#installation`,
+          `- Check your memory.qmd.command configuration`,
+          `- Switch to builtin backend: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
+          "",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ].join("\n"),
+        "Memory search",
+      );
+    }
     return;
   }
 
