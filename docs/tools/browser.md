@@ -114,6 +114,7 @@ Notes:
 - `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP reachability checks.
 - `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket reachability checks.
 - Browser navigation/open-tab is SSRF-guarded before navigation and best-effort re-checked on final `http(s)` URL after navigation.
+- In strict SSRF mode, remote CDP endpoint discovery/probes (`cdpUrl`, including `/json/version` lookups) are checked too.
 - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` (trusted-network model). Set it to `false` for strict public-only browsing.
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”

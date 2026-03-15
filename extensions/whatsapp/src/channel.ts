@@ -24,7 +24,7 @@ import {
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppGroupToolPolicy,
   resolveWhatsAppHeartbeatRecipients,
-  resolveWhatsAppMentionStripPatterns,
+  resolveWhatsAppMentionStripRegexes,
   WhatsAppConfigSchema,
   type ChannelMessageActionName,
   type ChannelPlugin,
@@ -214,7 +214,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
   },
   mentions: {
-    stripPatterns: ({ ctx }) => resolveWhatsAppMentionStripPatterns(ctx),
+    stripRegexes: ({ ctx }) => resolveWhatsAppMentionStripRegexes(ctx),
   },
   commands: {
     enforceOwnerForCommands: true,
