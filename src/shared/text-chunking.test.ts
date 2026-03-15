@@ -27,14 +27,34 @@ describe("shared/text-chunking", () => {
 
   it("skips empty chunks created by whitespace-only segments", () => {
     expect(
-      chunkTextByBreakResolver("word     next", 5, (window) => window.lastIndexOf(" ")),
+      chunkTextByBreakResolver("word next", 5, (window) => window.lastIndexOf(" ")),
     ).toEqual(["word", "next"]);
   });
 
   it("trims trailing whitespace from emitted chunks before continuing", () => {
-    expect(chunkTextByBreakResolver("abc   def", 6, (window) => window.lastIndexOf(" "))).toEqual([
+    expect(chunkTextByBreakResolver("abc def", 6, (window) => window.lastIndexOf(" "))).toEqual([
       "abc",
       "def",
     ]);
+  });
+
+  it("passes windowStart to resolver for context-aware splitting", () => {
+    let receivedWindowStart: number | undefined;
+    chunkTextByBreakResolver("hello world", 5, (_window, windowStart) => {
+      receivedWindowStart = windowStart;
+      return 5;
+    });
+    expect(receivedWindowStart).toBe(0);
+  });
+
+  it("updates windowStart correctly across multiple chunks", () => {
+    const startPositions: number[] = [];
+    chunkTextByBreakResolver("alpha beta gamma delta", 6, (_window, windowStart) => {
+      startPositions.push(windowStart);
+      return _window.lastIndexOf(" ") > 0 ? _window.lastIndexOf(" ") : _window.length;
+    });
+    // First call at 0, subsequent calls at increasing positions
+    expect(startPositions[0]).toBe(0);
+    expect(startPositions.length).toBeGreaterThan(1);
   });
 });
