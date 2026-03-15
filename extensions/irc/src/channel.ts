@@ -107,6 +107,8 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
           "host",
           "port",
           "tls",
+          "tlsInsecure",
+          "tlsFingerprints",
           "nick",
           "username",
           "realname",
@@ -162,6 +164,11 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
       if (!account.config.tls) {
         warnings.push(
           "- IRC TLS is disabled (channels.irc.tls=false); traffic and credentials are plaintext.",
+        );
+      }
+      if (account.tlsInsecure) {
+        warnings.push(
+          "- IRC TLS certificate verification is disabled (channels.irc.tlsInsecure=true); connection is vulnerable to MITM.",
         );
       }
       if (account.config.nickserv?.register) {

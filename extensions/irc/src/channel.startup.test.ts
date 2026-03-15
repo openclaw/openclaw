@@ -41,6 +41,8 @@ describe("ircPlugin gateway.startAccount", () => {
       realname: "OpenClaw",
       password: "",
       passwordSource: "none",
+      tlsInsecure: false,
+      tlsFingerprints: [],
       config: {} as ResolvedIrcAccount["config"],
     };
 

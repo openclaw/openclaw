@@ -66,6 +66,8 @@ export const IrcAccountSchemaBase = z
     mentionPatterns: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     ...ReplyRuntimeConfigSchemaShape,
+    tlsInsecure: z.boolean().optional(),
+    tlsFingerprints: z.array(z.string()).optional(),
   })
   .strict();
 
