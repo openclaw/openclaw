@@ -376,7 +376,9 @@ export async function sendMessageSlack(
       const response = await postSlackMessageBestEffort({
         client,
         channelId,
-        text: "",
+        // Slack requires non-empty text; use a space as fallback for
+        // table-only messages where all content is in attachments.
+        text: " ",
         threadTs: opts.threadTs,
         identity: opts.identity,
         attachments: tableAttachments,
@@ -386,7 +388,8 @@ export async function sendMessageSlack(
   } else {
     // Send text chunks. Attach Block Kit tables to the last chunk
     // so the table renders at the end of the message.
-    const allChunks = chunks.length ? chunks : [""];
+    const tableOnlyFallback = tableAttachments?.length ? " " : "";
+    const allChunks = chunks.length ? chunks : [tableOnlyFallback];
     for (let i = 0; i < allChunks.length; i++) {
       const isLastChunk = i === allChunks.length - 1;
       const response = await postSlackMessageBestEffort({
