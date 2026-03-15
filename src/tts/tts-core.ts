@@ -729,7 +729,7 @@ export async function edgeTTS(params: {
     ({ size } = statSync(outputPath));
 
     if (size === 0) {
-      throw new Error("Edge TTS produced empty audio file after retry.");
+      throw new Error("Edge TTS produced empty audio file after retry");
     }
   }
 }
