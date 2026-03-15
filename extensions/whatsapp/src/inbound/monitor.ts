@@ -466,12 +466,6 @@ export async function monitorWebInbox(options: {
       if (!resolvedFrom) continue;
       const from = resolvedFrom;
 
-      recordChannelActivity({
-        channel: "whatsapp",
-        accountId: options.accountId,
-        direction: "inbound",
-      });
-
       // Derive isFromMe from reactor identity, not key.fromMe.
       // key.fromMe on a reaction refers to whether the *reacted-to message* was from us,
       // not whether the reactor is us. Compare JIDs directly instead.
@@ -496,6 +490,14 @@ export async function monitorWebInbox(options: {
         remoteJid,
       });
       if (!access.allowed) continue;
+
+      // Only record activity for reactions that pass access control — consistent with
+      // handleMessagesUpsert and prevents blocked/self reactions from inflating inbound metrics.
+      recordChannelActivity({
+        channel: "whatsapp",
+        accountId: options.accountId,
+        direction: "inbound",
+      });
 
       const reactedMessageId = key?.id ?? undefined;
       const chatJid = remoteJid;
