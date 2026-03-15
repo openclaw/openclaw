@@ -66,6 +66,11 @@ export async function runSessionsSendA2AFlow(params: {
       let currentSessionKey = params.requesterSessionKey;
       let nextSessionKey = params.targetSessionKey;
       let incomingMessage = latestReply;
+      // Chain hook promises to preserve turn order without blocking the loop.
+      // Each turn's hook waits for the previous turn's hook to complete before
+      // dispatching, but the main loop continues immediately (not awaited).
+      // eslint-disable-next-line no-unused-vars
+      let _hookChain: Promise<void> = Promise.resolve();
       for (let turn = 1; turn <= params.maxPingPongTurns; turn += 1) {
         const currentRole =
           currentSessionKey === params.requesterSessionKey ? "requester" : "target";
@@ -94,26 +99,27 @@ export async function runSessionsSendA2AFlow(params: {
         }
         latestReply = replyText;
 
-        // Fire-and-forget: emit hook so channel plugins can forward A2A turns to users.
-        // Not awaited to avoid blocking the A2A exchange on plugin hook latency.
+        // Emit hook so channel plugins can forward A2A turns to users.
+        // Chained (not awaited) to preserve turn order without blocking the loop.
         const hookRunner = getGlobalHookRunner();
         if (hookRunner?.hasHooks("agent_to_agent_turn")) {
           const resolvedTargetChannel = targetChannel === "unknown" ? undefined : targetChannel;
-          void hookRunner.runAgentToAgentTurn(
-            {
-              turn,
-              maxTurns: params.maxPingPongTurns,
-              speakerSessionKey: currentSessionKey,
-              listenerSessionKey: nextSessionKey,
-              speakerRole: currentRole,
-              reply: replyText,
-              requesterChannel: params.requesterChannel,
-              targetChannel: resolvedTargetChannel,
-            },
-            {
-              requesterSessionKey: params.requesterSessionKey,
-              targetSessionKey: params.targetSessionKey,
-            },
+          const event = {
+            turn,
+            maxTurns: params.maxPingPongTurns,
+            speakerSessionKey: currentSessionKey,
+            listenerSessionKey: nextSessionKey,
+            speakerRole: currentRole,
+            reply: replyText,
+            requesterChannel: params.requesterChannel,
+            targetChannel: resolvedTargetChannel,
+          };
+          const ctx = {
+            requesterSessionKey: params.requesterSessionKey,
+            targetSessionKey: params.targetSessionKey,
+          };
+          _hookChain = _hookChain.then(() =>
+            hookRunner.runAgentToAgentTurn(event, ctx).catch(() => {}),
           );
         }
 
