@@ -405,10 +405,11 @@ export const dispatchTelegramMessage = async ({
       ? (replyQuoteMessageId ?? msg.message_id)
       : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
-  // Bot API 9.5 (March 2026) made sendMessageDraft available to all bots without
-  // requiring topics. Use native draft transport for DM answer lanes to enable
-  // smooth character-by-character streaming. Keep reasoning lane on message
-  // transport to avoid preview conflicts.
+  // The 3.8 "message" transport workaround was a hedge against a duplicate-flash
+  // bug caused by the draft→message materialize hop at finalize time. Bot API 9.5
+  // (March 2026) appears to have resolved this — no flash observed in testing.
+  // Use native draft transport for DM answer lanes to restore smooth streaming.
+  // Keep reasoning lane on message transport to avoid preview conflicts.
   const useMessagePreviewTransportForDmReasoning =
     threadSpec?.scope === "dm" && canStreamAnswerDraft;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);

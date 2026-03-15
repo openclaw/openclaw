@@ -2437,7 +2437,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     },
   );
 
-  it("uses native draft answer transport and message reasoning transport for DM lanes", async () => {
+  it("uses auto transport for DM answer lane and message transport for DM reasoning lane when streaming is active", async () => {
     setupDraftStreams({ answerMessageId: 999, reasoningMessageId: 111 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
