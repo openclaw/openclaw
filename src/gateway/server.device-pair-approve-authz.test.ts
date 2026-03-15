@@ -57,17 +57,21 @@ async function issuePairingScopedOperator(name: string): Promise<{
     clientId: GATEWAY_CLIENT_NAMES.TEST,
     clientMode: GATEWAY_CLIENT_MODES.TEST,
   });
-  await approveDevicePairing(request.request.requestId);
+  const approveResult = await approveDevicePairing(request.request.requestId);
+  expect(approveResult?.status).toBe("approved");
   const rotated = await rotateDeviceToken({
     deviceId: loaded.identity.deviceId,
     role: "operator",
     scopes: ["operator.pairing"],
   });
-  expect(rotated.ok ? rotated.entry.token : "").toBeTruthy();
+  expect(rotated.ok).toBe(true);
+  if (!rotated.ok) {
+    throw new Error("expected rotated pairing token");
+  }
   return {
     identityPath: loaded.identityPath,
     deviceId: loaded.identity.deviceId,
-    token: rotated.ok ? rotated.entry.token : "",
+    token: rotated.entry.token,
   };
 }
 

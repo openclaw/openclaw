@@ -161,6 +161,9 @@ async function approvePairingWithFallback(
     if (!approved) {
       return null;
     }
+    if (approved.status === "forbidden") {
+      throw new Error(`missing scope: ${approved.missingScope}`);
+    }
     return {
       requestId,
       device: redactLocalPairedDevice(approved.device),

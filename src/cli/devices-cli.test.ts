@@ -260,6 +260,7 @@ describe("devices cli local fallback", () => {
       paired: [],
     });
     approveDevicePairing.mockResolvedValueOnce({
+      status: "approved",
       requestId: "req-latest",
       device: {
         deviceId: "device-1",
@@ -275,6 +276,22 @@ describe("devices cli local fallback", () => {
     expect(approveDevicePairing).toHaveBeenCalledWith("req-latest");
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+  });
+
+  it("surfaces missing scope from local approve fallback", async () => {
+    callGateway
+      .mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"))
+      .mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    listDevicePairing.mockResolvedValueOnce({
+      pending: [{ requestId: "req-latest", deviceId: "device-1", publicKey: "pk", ts: 2 }],
+      paired: [],
+    });
+    approveDevicePairing.mockResolvedValueOnce({
+      status: "forbidden",
+      missingScope: "operator.admin",
+    });
+
+    await expect(runDevicesApprove(["--latest"])).rejects.toThrow("missing scope: operator.admin");
   });
 
   it("does not use local fallback when an explicit --url is provided", async () => {
