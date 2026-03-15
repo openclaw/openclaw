@@ -853,7 +853,7 @@ function isJsonApiInternalServerError(raw: string): boolean {
   const value = raw.toLowerCase();
   // Anthropic often wraps transient 500s in JSON payloads like:
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
-  return value.includes('"type":"api_error"') && value.includes("internal server error");
+  return value.includes("api_error") && value.includes("internal server error");
 }
 
 export function parseImageDimensionError(raw: string): {
@@ -1007,7 +1007,7 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "timeout";
   }
   if (isJsonApiInternalServerError(raw)) {
-    return "timeout";
+    return "overloaded";
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return "format";

@@ -853,11 +853,18 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
     expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
   });
-  it("classifies JSON api_error internal server failures as timeout", () => {
+  it("classifies api_error internal server failures as overloaded regardless of format", () => {
+    // JSON format (raw API response body)
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
       ),
-    ).toBe("timeout");
+    ).toBe("overloaded");
+    // SDK format (after describeUnknownError)
+    expect(classifyFailoverReason("LLM error api_error: Internal server error")).toBe("overloaded");
+  });
+  it("preserves timeout classification for raw HTTP 500 without api_error", () => {
+    // Raw HTTP format should still go through isTransientHttpError → "timeout"
+    expect(classifyFailoverReason("500 Internal Server Error")).toBe("timeout");
   });
 });
