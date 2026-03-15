@@ -20,6 +20,26 @@ function isOpenAINativeEndpoint(baseUrl: string): boolean {
   }
 }
 
+/**
+ * Local LLM servers (llama.cpp, LM Studio, Ollama, etc.) expose an
+ * OpenAI-compatible API and typically support `stream_options.include_usage`.
+ * Detect these by checking for localhost/loopback hostnames.
+ */
+function isLocalEndpoint(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      host === "[::1]" ||
+      host === "0.0.0.0"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
   return model.api === "anthropic-messages";
 }
@@ -69,8 +89,14 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   // true in their model definition, they know their endpoint supports it.
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
   const forcedUsageStreaming = compat?.supportsUsageInStreaming === true;
+  // Local LLM servers (llama.cpp, LM Studio, Ollama) support usage in
+  // streaming; default to true for local endpoints so token tracking works
+  // out of the box without requiring explicit compat config.
+  // Only apply as a default — respect explicit user opt-out.
+  const explicitUsageOpt = typeof compat?.supportsUsageInStreaming === "boolean";
+  const localUsageDefault = !explicitUsageOpt && isLocalEndpoint(baseUrl);
 
-  if (forcedDeveloperRole && forcedUsageStreaming) {
+  if (forcedDeveloperRole && (forcedUsageStreaming || localUsageDefault)) {
     return model;
   }
 
@@ -81,8 +107,8 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
       ? {
           ...compat,
           supportsDeveloperRole: forcedDeveloperRole || false,
-          supportsUsageInStreaming: forcedUsageStreaming || false,
+          supportsUsageInStreaming: forcedUsageStreaming || localUsageDefault,
         }
-      : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
+      : { supportsDeveloperRole: false, supportsUsageInStreaming: localUsageDefault },
   } as typeof model;
 }
