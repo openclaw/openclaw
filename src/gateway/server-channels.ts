@@ -493,6 +493,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const next = { ...current, accountId: id };
         next.enabled = enabled;
         next.configured = typeof configured === "boolean" ? configured : (next.configured ?? true);
+        if (described?.mode) {
+          next.mode = described.mode;
+        }
         if (!next.running) {
           if (!enabled) {
             next.lastError ??= plugin.config.disabledReason?.(account, cfg) ?? "disabled";

@@ -108,6 +108,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
       configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
       secretSource: account.secretSource,
       baseUrl: account.baseUrl ? "[set]" : "[missing]",
+      mode: "webhook",
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
       mapAllowFromEntries(

@@ -141,6 +141,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       enabled: account.enabled,
       configured: Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
       tokenSource: account.tokenSource ?? undefined,
+      mode: "webhook",
     }),
     ...lineConfigAccessors,
   },
