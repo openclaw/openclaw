@@ -199,8 +199,13 @@ async function requestToolApproval(params: {
       { id: params.id },
     );
     return normalizeDecision(decisionResult?.decision);
-  } catch {
-    // Network/gateway error: block (deny) to avoid failing open.
+  } catch (err) {
+    // Timeout/cleanup path: treat missing/expired as no decision so askFallback applies.
+    const message = String(err).toLowerCase();
+    if (message.includes("approval expired or not found")) {
+      return null;
+    }
+    // Other network/gateway errors: block (deny) to avoid failing open.
     return "deny";
   }
 }
