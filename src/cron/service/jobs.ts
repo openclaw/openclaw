@@ -556,8 +556,8 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     payload: input.payload,
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
-    onSuccessJobId: input.onSuccessJobId ?? undefined,
-    onFailureJobId: input.onFailureJobId ?? undefined,
+    onSuccessJobId: input.onSuccessJobId?.trim() || undefined,
+    onFailureJobId: input.onFailureJobId?.trim() || undefined,
     state: {
       ...input.state,
     },
@@ -653,10 +653,10 @@ export function applyJobPatch(
     job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
   }
   if ("onSuccessJobId" in patch) {
-    job.onSuccessJobId = patch.onSuccessJobId ?? undefined;
+    job.onSuccessJobId = patch.onSuccessJobId?.trim() || undefined;
   }
   if ("onFailureJobId" in patch) {
-    job.onFailureJobId = patch.onFailureJobId ?? undefined;
+    job.onFailureJobId = patch.onFailureJobId?.trim() || undefined;
   }
   assertSupportedJobSpec(job);
   assertMainSessionAgentId(job, opts?.defaultAgentId);
