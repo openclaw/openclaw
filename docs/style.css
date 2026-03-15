@@ -1,4 +1,4 @@
-#content > h1:first-of-type {
+#content>h1:first-of-type {
   display: none !important;
 }
 
@@ -6,7 +6,7 @@
   position: relative;
 }
 
-.nav-tabs-item > div {
+.nav-tabs-item>div {
   opacity: 0;
 }
 
@@ -34,4 +34,13 @@ html.dark .nav-tabs-underline {
 
 .nav-tabs-underline-ready .nav-tabs-underline {
   opacity: 1;
+}
+
+/* Sponsor logos: invert in light mode for visibility */
+.sponsor-logo {
+  filter: invert(100%);
+}
+
+html.dark .sponsor-logo {
+  filter: none;
 }

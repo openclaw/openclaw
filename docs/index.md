@@ -190,3 +190,15 @@ Example:
     Project origins, contributors, and license.
   </Card>
 </Columns>
+
+## Sponsors
+
+<p align="center">
+  <a href="https://openai.com/">
+    <img src="/assets/sponsors/openai.svg" alt="OpenAI" class="sponsor-logo" height="40" />
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://blacksmith.sh/">
+    <img src="/assets/sponsors/blacksmith.svg" alt="Blacksmith" class="sponsor-logo" height="40" />
+  </a>
+</p>
