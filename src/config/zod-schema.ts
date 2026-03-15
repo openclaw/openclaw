@@ -653,6 +653,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        voiceConnectUi: z
+          .object({
+            enabled: z.boolean().optional(),
+            basePath: z.string().optional(),
+            root: z.string().optional(),
+          })
+          .strict()
+          .optional(),
         auth: z
           .object({
             mode: z

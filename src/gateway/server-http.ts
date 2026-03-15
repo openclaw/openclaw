@@ -72,6 +72,9 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import { handleVoiceConnectApiHttpRequest } from "./voice-connect-api.js";
+import { handleVoiceConnectUiHttpRequest } from "./voice-connect-ui.js";
+import { VOICE_CONNECT_WS_PATH } from "./voice-connect-ws.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -883,6 +886,26 @@ export function createGatewayHttpServer(opts: {
         }),
       );
 
+      // Voice Connect API routes must run BEFORE the Voice Connect UI SPA handler, otherwise
+      // the SPA will return index.html for /voice-connect/api/*.
+      requestStages.push({
+        name: "voice-connect-api-http",
+        run: () => handleVoiceConnectApiHttpRequest(req, res),
+      });
+
+      // Voice Connect UI: separate SPA mounted under /voice-connect (or configured basePath).
+      // Must run BEFORE the Control UI SPA catch-all, otherwise Control UI will swallow /voice-connect/* routes.
+      if (configSnapshot.gateway?.voiceConnectUi?.enabled !== false) {
+        requestStages.push({
+          name: "voice-connect-ui-http",
+          run: () =>
+            handleVoiceConnectUiHttpRequest(req, res, {
+              basePath: configSnapshot.gateway?.voiceConnectUi?.basePath,
+              config: configSnapshot,
+            }),
+        });
+      }
+
       if (controlUiEnabled) {
         requestStages.push({
           name: "control-ui-avatar",
@@ -937,13 +960,14 @@ export function createGatewayHttpServer(opts: {
 export function attachGatewayUpgradeHandler(opts: {
   httpServer: HttpServer;
   wss: WebSocketServer;
+  voiceConnectWss: WebSocketServer;
   canvasHost: CanvasHostHandler | null;
   clients: Set<GatewayWsClient>;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
 }) {
-  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
+  const { httpServer, wss, voiceConnectWss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
@@ -955,6 +979,37 @@ export function attachGatewayUpgradeHandler(opts: {
       if (scopedCanvas.rewrittenUrl) {
         req.url = scopedCanvas.rewrittenUrl;
       }
+
+      // Voice Connect WS uses a different protocol than the main Gateway WS.
+      {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        if (url.pathname === VOICE_CONNECT_WS_PATH) {
+          const configSnapshot = loadConfig();
+          const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+          const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+
+          const authResult = await authorizeCanvasRequest({
+            req,
+            auth: resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+            clients,
+            rateLimiter,
+          });
+
+          if (!authResult.ok) {
+            writeUpgradeAuthFailure(socket, authResult);
+            socket.destroy();
+            return;
+          }
+
+          voiceConnectWss.handleUpgrade(req, socket, head, (ws) => {
+            voiceConnectWss.emit("connection", ws, req);
+          });
+          return;
+        }
+      }
+
       if (canvasHost) {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === CANVAS_WS_PATH) {
