@@ -214,6 +214,34 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
   totals.totalCost += costTotal;
 };
 
+/**
+ * Check whether a filename is a JSONL transcript (active or reset-archived).
+ * Active files end in `.jsonl`.
+ * Reset archives match exactly `<id>.jsonl.reset.<ISO-timestamp>` where the
+ * timestamp uses hyphens instead of colons (filesystem-safe ISO 8601), e.g.
+ * `2026-03-14T09-05-00.000Z`. The pattern is anchored to `$` to exclude any
+ * further-archived variants such as `*.jsonl.reset.<ts>.deleted.<ts>`.
+ */
+const RESET_ARCHIVE_RE = /\.jsonl\.reset\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d+Z$/;
+const isTranscriptFile = (name: string): boolean =>
+  name.endsWith(".jsonl") || RESET_ARCHIVE_RE.test(name);
+
+/**
+ * Extract the session ID from a transcript filename.
+ * - Active: `<sessionId>.jsonl` → `<sessionId>`
+ * - Reset:  `<sessionId>.jsonl.reset.<timestamp>` → `<sessionId>`
+ */
+const extractSessionId = (name: string): string => {
+  // Use lastIndexOf to find the rightmost ".jsonl" marker.
+  // This correctly handles both:
+  //   active:  "<id>.jsonl"               → "<id>"
+  //   reset:   "<id>.jsonl.reset.<ts>"     → "<id>"
+  // Including session IDs that themselves contain ".jsonl.reset." substrings
+  // (indexOf would truncate too early; a regex with .* would greedily over-match).
+  const idx = name.lastIndexOf(".jsonl");
+  return idx !== -1 ? name.slice(0, idx) : name;
+};
+
 async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
   const fileStream = fs.createReadStream(filePath, { encoding: "utf-8" });
   const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
@@ -318,7 +346,7 @@ export async function loadCostUsageSummary(params?: {
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .filter((entry) => entry.isFile() && isTranscriptFile(entry.name))
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -393,7 +421,7 @@ export async function discoverAllSessions(params?: {
   const discovered: DiscoveredSession[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+    if (!entry.isFile() || !isTranscriptFile(entry.name)) {
       continue;
     }
 
@@ -409,8 +437,8 @@ export async function discoverAllSessions(params?: {
     }
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
 
-    // Extract session ID from filename (remove .jsonl)
-    const sessionId = entry.name.slice(0, -6);
+    // Extract session ID from filename
+    const sessionId = extractSessionId(entry.name);
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
@@ -455,8 +483,19 @@ export async function discoverAllSessions(params?: {
     });
   }
 
+  // Deduplicate by sessionId: when both an active .jsonl and a .jsonl.reset.*
+  // exist for the same session (the common post-reset state), keep the entry
+  // with the latest mtime (the active file) to avoid duplicate rows in the UI.
+  const bySessionId = new Map<string, DiscoveredSession>();
+  for (const session of discovered) {
+    const existing = bySessionId.get(session.sessionId);
+    if (!existing || session.mtime > existing.mtime) {
+      bySessionId.set(session.sessionId, session);
+    }
+  }
+
   // Sort by mtime descending (most recent first)
-  return discovered.toSorted((a, b) => b.mtime - a.mtime);
+  return [...bySessionId.values()].toSorted((a, b) => b.mtime - a.mtime);
 }
 
 export async function loadSessionCostSummary(params: {

@@ -390,6 +390,119 @@ example
     expect(logs?.[0]?.content).toBe("hello there");
   });
 
+  it("includes reset archive files in cost usage summary", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-reset-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const now = new Date();
+    const entry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 100,
+          output: 200,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 300,
+          cost: { total: 0.05 },
+        },
+      },
+    };
+
+    // Write an active session file
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-active.jsonl"),
+      JSON.stringify(entry),
+      "utf-8",
+    );
+
+    // Write a reset archive file (same format, different naming)
+    const resetEntry = {
+      ...entry,
+      message: {
+        ...entry.message,
+        usage: {
+          input: 500,
+          output: 1000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 1500,
+          cost: { total: 0.25 },
+        },
+      },
+    };
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-active.jsonl.reset.2026-03-01T10-00-00.000Z"),
+      JSON.stringify(resetEntry),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30 });
+      // Should include both active (300 tokens) and reset archive (1500 tokens)
+      expect(summary.totals.totalTokens).toBe(1800);
+      expect(summary.totals.totalCost).toBeCloseTo(0.30, 5);
+    });
+  });
+
+  it("discovers reset archive sessions", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-reset-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    // Write a reset archive file only (no active .jsonl)
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-archived.jsonl.reset.2026-03-01T10-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-03-01T10:00:00.000Z",
+        message: { role: "user", content: "archived message" },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions();
+      expect(sessions.length).toBe(1);
+      expect(sessions[0]?.sessionId).toBe("sess-archived");
+      expect(sessions[0]?.firstUserMessage).toBe("archived message");
+    });
+  });
+
+  it("deduplicates sessions when both active .jsonl and reset archive coexist", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-dedup-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const userMsg = { type: "message", timestamp: "2026-03-12T10:00:00.000Z", message: { role: "user", content: "hello" } };
+
+    // Write both a reset archive AND a fresh active file for the same session ID
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-dup.jsonl.reset.2026-03-12T09-00-00.000Z"),
+      JSON.stringify(userMsg),
+      "utf-8",
+    );
+    // Active file has a later mtime — written after
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-dup.jsonl"),
+      JSON.stringify({ ...userMsg, message: { role: "user", content: "resumed" } }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions();
+      // Must deduplicate: only one entry for sess-dup
+      expect(sessions.filter((s) => s.sessionId === "sess-dup").length).toBe(1);
+      // Should keep the active file (later mtime) — firstUserMessage from it
+      expect(sessions.find((s) => s.sessionId === "sess-dup")?.firstUserMessage).toBe("resumed");
+    });
+  });
+
   it("preserves totals and cumulative values when downsampling timeseries", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-timeseries-downsample-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
