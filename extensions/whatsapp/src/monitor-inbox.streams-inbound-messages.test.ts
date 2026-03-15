@@ -17,6 +17,7 @@ describe("web monitor inbox", () => {
   async function tick() {
     await new Promise((resolve) => setImmediate(resolve));
   }
+  const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
 
   async function startInboxMonitor(onMessage: InboxOnMessage) {
     const listener = await monitorWebInbox({
@@ -249,6 +250,120 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("forwards append group messages through the inbound path", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const upsert = {
+      type: "append",
+      messages: [
+        {
+          key: {
+            id: "append-group",
+            fromMe: false,
+            remoteJid: "123@g.us",
+            participant: "444@s.whatsapp.net",
+          },
+          message: { conversation: "ping" },
+          messageTimestamp: nowSeconds(),
+          pushName: "Tester",
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await tick();
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "ping",
+        from: "123@g.us",
+        senderE164: "+444",
+        chatType: "group",
+      }),
+    );
+
+    await listener.close();
+  });
+
+  it("skips historical append group messages while still marking them read", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const upsert = {
+      type: "append",
+      messages: [
+        {
+          key: {
+            id: "append-group-history",
+            fromMe: false,
+            remoteJid: "123@g.us",
+            participant: "444@s.whatsapp.net",
+          },
+          message: { conversation: "old ping" },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await tick();
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(sock.readMessages).toHaveBeenCalledWith([
+      {
+        remoteJid: "123@g.us",
+        id: "append-group-history",
+        participant: "444@s.whatsapp.net",
+        fromMe: false,
+      },
+    ]);
+
+    await listener.close();
+  });
+
+  it("skips untimestamped append group messages while still marking them read", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const upsert = {
+      type: "append",
+      messages: [
+        {
+          key: {
+            id: "append-group-no-ts",
+            fromMe: false,
+            remoteJid: "123@g.us",
+            participant: "444@s.whatsapp.net",
+          },
+          message: { conversation: "old ping" },
+          pushName: "Tester",
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await tick();
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(sock.readMessages).toHaveBeenCalledWith([
+      {
+        remoteJid: "123@g.us",
+        id: "append-group-no-ts",
+        participant: "444@s.whatsapp.net",
+        fromMe: false,
+      },
+    ]);
+
+    await listener.close();
+  });
   it("does not block follow-up messages when handler is pending", async () => {
     let resolveFirst: (() => void) | null = null;
     const onMessage = vi.fn(async () => {

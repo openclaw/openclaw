@@ -42,6 +42,7 @@ export async function monitorWebInbox(options: {
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
+  const APPEND_HISTORY_GRACE_MS = 30_000;
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -411,13 +412,16 @@ export async function monitorWebInbox(options: {
 
       await maybeMarkInboundAsRead(inbound);
 
-      // If this is history/offline catch-up, mark read above but skip auto-reply.
       if (upsert.type === "append") {
-        const APPEND_RECENT_GRACE_MS = 60_000;
-        const msgTsRaw = msg.messageTimestamp;
-        const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : NaN;
-        const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
-        if (msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS) {
+        // Keep history/catch-up DMs from replaying through the agent on reconnect.
+        if (!inbound.group) {
+          continue;
+        }
+        // Groups can legitimately arrive as append, but skip older or untimestamped history sync payloads.
+        if (
+          typeof inbound.messageTimestampMs !== "number" ||
+          inbound.messageTimestampMs < connectedAtMs - APPEND_HISTORY_GRACE_MS
+        ) {
           continue;
         }
       }

@@ -252,7 +252,7 @@ describe("web monitor inbox", () => {
     });
   });
 
-  it("handles append messages by marking them read but skipping auto-reply", async () => {
+  it("handles append DM messages by marking them read but skipping auto-reply", async () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
 
     const upsert = {
@@ -284,7 +284,6 @@ describe("web monitor inbox", () => {
       },
     ]);
 
-    // Verify it WAS NOT passed to onMessage
     expect(onMessage).not.toHaveBeenCalled();
 
     await listener.close();
