@@ -102,7 +102,8 @@ export type CronPayload =
 export type CronPayloadPatch =
   | { kind: "systemEvent"; text?: string }
   | CronAgentTurnPayloadPatch
-  | Partial<CronScriptPayload>;
+  // Require the discriminant so runtime patch routing can switch on kind reliably.
+  | ({ kind: "script" } & Partial<Omit<CronScriptPayload, "kind">>);
 
 type CronAgentTurnPayloadFields = {
   message: string;

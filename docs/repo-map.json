@@ -6,85 +6,51 @@
     "openclaw.mjs": {
       "purpose": "Node entry point — version guard, compile cache, loads dist/entry.js",
       "exports": [],
-      "dependencies": [
-        "dist/entry.js"
-      ]
+      "dependencies": ["dist/entry.js"]
     },
     "src/agents/": {
       "purpose": "Agent spawning, process management, event handling (546 files)",
-      "exports": [
-        "spawnAgent",
-        "AgentProcess"
-      ],
-      "dependencies": [
-        "src/config/",
-        "src/infra/",
-        "src/process/"
-      ]
+      "exports": ["spawnAgent", "AgentProcess"],
+      "dependencies": ["src/config/", "src/infra/", "src/process/"]
     },
     "src/channels/allowlists/": {
       "purpose": "Allowlist matching and allow-from policy for channels",
-      "exports": [
-        "matchAllowlist"
-      ],
+      "exports": ["matchAllowlist"],
       "dependencies": []
     },
     "src/channels/channel-config.ts": {
       "purpose": "Channel configuration loading and validation",
-      "exports": [
-        "loadChannelConfig"
-      ],
-      "dependencies": [
-        "src/config/"
-      ]
+      "exports": ["loadChannelConfig"],
+      "dependencies": ["src/config/"]
     },
     "src/channels/dock.ts": {
       "purpose": "Channel dock — registration and lifecycle for built-in channels",
-      "exports": [
-        "ChannelDock"
-      ],
-      "dependencies": [
-        "src/channels/channel-config.ts"
-      ]
+      "exports": ["ChannelDock"],
+      "dependencies": ["src/channels/channel-config.ts"]
     },
     "src/cli/acp-cli.ts": {
       "purpose": "ACP (Anthropic Control Plane) CLI bindings",
       "exports": [],
-      "dependencies": [
-        "src/acp/"
-      ]
+      "dependencies": ["src/acp/"]
     },
     "src/cli/argv.ts": {
       "purpose": "CLI argument parsing, help/version detection",
-      "exports": [
-        "isRootHelpInvocation",
-        "isRootVersionInvocation"
-      ],
+      "exports": ["isRootHelpInvocation", "isRootVersionInvocation"],
       "dependencies": []
     },
     "src/cli/banner.ts": {
       "purpose": "CLI startup banner display",
-      "exports": [
-        "printBanner"
-      ],
-      "dependencies": [
-        "src/version.ts"
-      ]
+      "exports": ["printBanner"],
+      "dependencies": ["src/version.ts"]
     },
     "src/cli/channels-cli.ts": {
       "purpose": "Channel management CLI commands",
       "exports": [],
-      "dependencies": [
-        "src/channels/"
-      ]
+      "dependencies": ["src/channels/"]
     },
     "src/cli/cron-cli/register.cron-add.ts": {
       "purpose": "",
-      "exports": [
-        "registerCronAddCommand",
-        "registerCronListCommand",
-        "registerCronStatusCommand"
-      ],
+      "exports": ["registerCronAddCommand", "registerCronListCommand", "registerCronStatusCommand"],
       "dependencies": [
         "src/cli/cron-cli/shared.js",
         "src/cli/gateway-rpc.js",
@@ -96,50 +62,28 @@
     },
     "src/cli/deps.ts": {
       "purpose": "Dependency injection — createDefaultDeps factory for CLI commands",
-      "exports": [
-        "createDefaultDeps"
-      ],
-      "dependencies": [
-        "src/config/",
-        "src/infra/"
-      ]
+      "exports": ["createDefaultDeps"],
+      "dependencies": ["src/config/", "src/infra/"]
     },
     "src/config/config.ts": {
       "purpose": "Configuration loading, merging, validation (openclaw.json + env)",
-      "exports": [
-        "loadConfig"
-      ],
-      "dependencies": [
-        "src/infra/"
-      ]
+      "exports": ["loadConfig"],
+      "dependencies": ["src/infra/"]
     },
     "src/config/sessions.ts": {
       "purpose": "Session store — persist/load session state per channel+account",
-      "exports": [
-        "loadSessionStore",
-        "saveSessionStore",
-        "resolveSessionKey",
-        "deriveSessionKey"
-      ],
+      "exports": ["loadSessionStore", "saveSessionStore", "resolveSessionKey", "deriveSessionKey"],
       "dependencies": []
     },
     "src/cron/": {
       "purpose": "Cron scheduling — job definitions, execution, run history",
       "exports": [],
-      "dependencies": [
-        "src/config/"
-      ]
+      "dependencies": ["src/config/"]
     },
     "src/cron/exec-script.ts": {
       "purpose": "",
-      "exports": [
-        "execCronScript",
-        "ExecCronScriptParams"
-      ],
-      "dependencies": [
-        "src/cron/types.js",
-        "src/utils.js"
-      ]
+      "exports": ["execCronScript", "ExecCronScriptParams"],
+      "dependencies": ["src/cron/types.js", "src/utils.js"]
     },
     "src/cron/hooks.ts": {
       "purpose": "",
@@ -155,6 +99,20 @@
         "src/cron/service/state.js",
         "src/cron/types.js",
         "src/hooks/module-loader.js",
+        "src/utils.js"
+      ]
+    },
+    "src/cron/normalize.ts": {
+      "purpose": "",
+      "exports": ["normalizeCronJobCreate", "normalizeCronJobInput", "normalizeCronJobPatch"],
+      "dependencies": [
+        "src/cron/legacy-delivery.js",
+        "src/cron/parse.js",
+        "src/cron/payload-migration.js",
+        "src/cron/service/normalize.js",
+        "src/cron/stagger.js",
+        "src/cron/types.js",
+        "src/routing/session-key.js",
         "src/utils.js"
       ]
     },
@@ -216,6 +174,32 @@
         "src/process/lanes.js"
       ]
     },
+    "src/cron/service/state.ts": {
+      "purpose": "",
+      "exports": [
+        "createCronServiceState",
+        "CronAddInput",
+        "CronAddResult",
+        "CronEvent",
+        "CronListResult",
+        "CronRemoveResult",
+        "CronRunMode",
+        "CronRunResult",
+        "CronServiceDeps",
+        "CronServiceDepsInternal",
+        "CronServiceState",
+        "CronStatusSummary",
+        "CronUpdateInput",
+        "CronUpdateResult",
+        "CronWakeMode",
+        "Logger"
+      ],
+      "dependencies": [
+        "src/config/types.cron.js",
+        "src/cron/types.js",
+        "src/infra/heartbeat-wake.js"
+      ]
+    },
     "src/cron/service/timer.ts": {
       "purpose": "",
       "exports": [
@@ -249,6 +233,39 @@
         "src/routing/session-key.js"
       ]
     },
+    "src/cron/types.ts": {
+      "purpose": "",
+      "exports": [
+        "CronDelivery",
+        "CronDeliveryMode",
+        "CronDeliveryPatch",
+        "CronDeliveryStatus",
+        "CronFailureAlert",
+        "CronFailureDestination",
+        "CronJob",
+        "CronJobCreate",
+        "CronJobPatch",
+        "CronJobState",
+        "CronMessageChannel",
+        "CronPayload",
+        "CronPayloadPatch",
+        "CronRunOutcome",
+        "CronRunStatus",
+        "CronRunTelemetry",
+        "CronSchedule",
+        "CronScriptPayload",
+        "CronSessionTarget",
+        "CronStoreFile",
+        "CronUsageSummary",
+        "CronWakeMode"
+      ],
+      "dependencies": [
+        "src/agents/pi-embedded-helpers.js",
+        "src/channels/plugins/types.js",
+        "src/config/types.cron.js",
+        "src/cron/types-shared.js"
+      ]
+    },
     "src/entry.ts": {
       "purpose": "CLI bootstrap — respawn logic, profile env, warning filter, runs CLI program",
       "exports": [],
@@ -263,51 +280,28 @@
     },
     "src/extensionAPI.ts": {
       "purpose": "Plugin SDK surface — public API exported to extensions",
-      "exports": [
-        "extensionAPI"
-      ],
-      "dependencies": [
-        "src/plugin-sdk/"
-      ]
+      "exports": ["extensionAPI"],
+      "dependencies": ["src/plugin-sdk/"]
     },
     "src/gateway/agent-prompt.ts": {
       "purpose": "Builds agent system prompt from config, skills, and context",
-      "exports": [
-        "buildAgentPrompt"
-      ],
-      "dependencies": [
-        "src/config/",
-        "src/gateway/assistant-identity.ts"
-      ]
+      "exports": ["buildAgentPrompt"],
+      "dependencies": ["src/config/", "src/gateway/assistant-identity.ts"]
     },
     "src/gateway/auth.ts": {
       "purpose": "Gateway authentication — rate limiting, mode policy, install policy",
       "exports": [],
-      "dependencies": [
-        "src/gateway/auth-rate-limit.ts",
-        "src/gateway/auth-mode-policy.ts"
-      ]
+      "dependencies": ["src/gateway/auth-rate-limit.ts", "src/gateway/auth-mode-policy.ts"]
     },
     "src/gateway/boot.ts": {
       "purpose": "Gateway startup — initialization, port binding, channel probe",
-      "exports": [
-        "bootGateway"
-      ],
-      "dependencies": [
-        "src/config/",
-        "src/infra/ports.ts",
-        "src/channels/"
-      ]
+      "exports": ["bootGateway"],
+      "dependencies": ["src/config/", "src/infra/ports.ts", "src/channels/"]
     },
     "src/gateway/call.ts": {
       "purpose": "Gateway call handler — routes incoming messages to agent",
-      "exports": [
-        "handleCall"
-      ],
-      "dependencies": [
-        "src/agents/",
-        "src/gateway/agent-prompt.ts"
-      ]
+      "exports": ["handleCall"],
+      "dependencies": ["src/agents/", "src/gateway/agent-prompt.ts"]
     },
     "src/gateway/protocol/schema/cron.ts": {
       "purpose": "",
@@ -331,16 +325,41 @@
         "CronStatusParamsSchema",
         "CronUpdateParamsSchema"
       ],
+      "dependencies": ["src/gateway/protocol/schema/primitives.js"]
+    },
+    "src/gateway/server-cron.ts": {
+      "purpose": "",
+      "exports": ["buildGatewayCronService", "GatewayCronState"],
       "dependencies": [
-        "src/gateway/protocol/schema/primitives.js"
+        "src/agents/agent-scope.js",
+        "src/cli/deps.js",
+        "src/cli/outbound-send-deps.js",
+        "src/config/config.js",
+        "src/config/sessions.js",
+        "src/config/sessions/paths.js",
+        "src/cron/delivery.js",
+        "src/cron/isolated-agent.js",
+        "src/cron/isolated-agent/delivery-target.js",
+        "src/cron/run-log.js",
+        "src/cron/service.js",
+        "src/cron/store.js",
+        "src/cron/webhook-url.js",
+        "src/infra/errors.js",
+        "src/infra/heartbeat-runner.js",
+        "src/infra/heartbeat-wake.js",
+        "src/infra/net/fetch-guard.js",
+        "src/infra/net/ssrf.js",
+        "src/infra/outbound/deliver.js",
+        "src/infra/system-events.js",
+        "src/logging.js",
+        "src/routing/session-key.js",
+        "src/runtime.js"
       ]
     },
     "src/hooks/": {
       "purpose": "Lifecycle hooks system — pre/post execution hooks for commands",
       "exports": [],
-      "dependencies": [
-        "src/config/"
-      ]
+      "dependencies": ["src/config/"]
     },
     "src/index.ts": {
       "purpose": "Web provider entry — auto-reply, channel monitoring, session management, config loading",
@@ -362,138 +381,92 @@
     },
     "src/infra/binaries.ts": {
       "purpose": "Binary dependency resolution (ffmpeg, chromium, etc.)",
-      "exports": [
-        "ensureBinary"
-      ],
+      "exports": ["ensureBinary"],
       "dependencies": []
     },
     "src/infra/env.ts": {
       "purpose": "Environment variable normalization and truthy checks",
-      "exports": [
-        "normalizeEnv",
-        "isTruthyEnvValue"
-      ],
+      "exports": ["normalizeEnv", "isTruthyEnvValue"],
       "dependencies": []
     },
     "src/infra/errors.ts": {
       "purpose": "Error formatting and uncaught error handlers",
-      "exports": [
-        "formatUncaughtError"
-      ],
+      "exports": ["formatUncaughtError"],
       "dependencies": []
     },
     "src/infra/ports.ts": {
       "purpose": "Port availability checks and ownership detection",
-      "exports": [
-        "ensurePortAvailable",
-        "PortInUseError",
-        "describePortOwner"
-      ],
+      "exports": ["ensurePortAvailable", "PortInUseError", "describePortOwner"],
       "dependencies": []
     },
     "src/logging.ts": {
       "purpose": "Structured logging setup — console capture, log levels",
-      "exports": [
-        "enableConsoleCapture"
-      ],
+      "exports": ["enableConsoleCapture"],
       "dependencies": []
     },
     "src/media-understanding/": {
       "purpose": "Media analysis providers — Anthropic, Google, Deepgram for image/audio/video",
       "exports": [],
-      "dependencies": [
-        "src/media/"
-      ]
+      "dependencies": ["src/media/"]
     },
     "src/media/audio.ts": {
       "purpose": "Audio processing — transcoding, duration, format detection",
       "exports": [],
-      "dependencies": [
-        "src/media/ffmpeg-exec.ts"
-      ]
+      "dependencies": ["src/media/ffmpeg-exec.ts"]
     },
     "src/media/fetch.ts": {
       "purpose": "Media download — fetch remote media with retry and content-type detection",
-      "exports": [
-        "fetchMedia"
-      ],
-      "dependencies": [
-        "src/media/constants.ts"
-      ]
+      "exports": ["fetchMedia"],
+      "dependencies": ["src/media/constants.ts"]
     },
     "src/memory/": {
       "purpose": "Memory plugin system — storage backends for conversation memory",
       "exports": [],
-      "dependencies": [
-        "src/config/"
-      ]
+      "dependencies": ["src/config/"]
     },
     "src/plugin-sdk/index.ts": {
       "purpose": "Plugin SDK — types and helpers for extension authors",
-      "exports": [
-        "PluginSDK"
-      ],
+      "exports": ["PluginSDK"],
       "dependencies": []
     },
     "src/routing/account-id.ts": {
       "purpose": "Account ID normalization and lookup",
-      "exports": [
-        "normalizeAccountId"
-      ],
+      "exports": ["normalizeAccountId"],
       "dependencies": []
     },
     "src/routing/resolve-route.ts": {
       "purpose": "Message routing — resolves account + channel to target agent/model",
-      "exports": [
-        "resolveRoute"
-      ],
-      "dependencies": [
-        "src/routing/account-id.ts",
-        "src/routing/bindings.ts"
-      ]
+      "exports": ["resolveRoute"],
+      "dependencies": ["src/routing/account-id.ts", "src/routing/bindings.ts"]
     },
     "src/secrets/": {
       "purpose": "Secrets management — encryption, credential storage, audit",
       "exports": [],
-      "dependencies": [
-        "src/config/"
-      ]
+      "dependencies": ["src/config/"]
     },
     "src/security/": {
       "purpose": "Security policy enforcement — sandbox, host env, credential scoping",
       "exports": [],
-      "dependencies": [
-        "src/config/"
-      ]
+      "dependencies": ["src/config/"]
     },
     "src/terminal/palette.ts": {
       "purpose": "Shared CLI color palette — ANSI colors for TTY output",
-      "exports": [
-        "palette"
-      ],
+      "exports": ["palette"],
       "dependencies": []
     },
     "src/terminal/table.ts": {
       "purpose": "ANSI-safe table rendering for status output",
       "exports": [],
-      "dependencies": [
-        "src/terminal/palette.ts"
-      ]
+      "dependencies": ["src/terminal/palette.ts"]
     },
     "src/utils.ts": {
       "purpose": "Shared utilities — JID normalization, E164 phone parsing, assertions",
-      "exports": [
-        "normalizeE164",
-        "toWhatsappJid",
-        "assertWebChannel"
-      ],
+      "exports": ["normalizeE164", "toWhatsappJid", "assertWebChannel"],
       "dependencies": []
     },
     "src/version.ts": {
       "purpose": "Version string from package.json",
-      "exports": [
-        "version"
-      ],
+      "exports": ["version"],
       "dependencies": []
     }
   },
@@ -512,12 +485,7 @@
     "extensions/ollama/": "Ollama LLM provider extension",
     "extensions/copilot-proxy/": "GitHub Copilot proxy extension"
   },
-  "entry_points": [
-    "openclaw.mjs",
-    "src/entry.ts",
-    "src/index.ts",
-    "src/extensionAPI.ts"
-  ],
+  "entry_points": ["openclaw.mjs", "src/entry.ts", "src/index.ts", "src/extensionAPI.ts"],
   "test_conventions": "Vitest, colocated *.test.ts, V8 coverage 70% (lines/branches/functions/statements)",
   "build": {
     "bundler": "tsdown",

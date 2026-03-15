@@ -247,12 +247,7 @@ export function registerCronAddCommand(cron: Command) {
           const sessionSource = optionSource("session");
           const sessionTargetRaw = typeof opts.session === "string" ? opts.session.trim() : "";
           // Scripts don't use a session; default to "isolated" for bookkeeping.
-          const inferredSessionTarget =
-            payload.kind === "agentTurn"
-              ? "isolated"
-              : payload.kind === "script"
-                ? "isolated"
-                : "main";
+          const inferredSessionTarget = payload.kind === "systemEvent" ? "main" : "isolated";
           const sessionTarget =
             sessionSource === "cli" ? sessionTargetRaw || "" : inferredSessionTarget;
           const isCustomSessionTarget =

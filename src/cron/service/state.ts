@@ -103,6 +103,15 @@ export type CronServiceDeps = {
     } & CronRunOutcome &
       CronRunTelemetry
   >;
+  /**
+   * Announce script output text to the job's configured delivery channel.
+   * Only called when job.payload.kind === "script" && job.payload.deliver === true.
+   * Optional — if not provided, script output delivery silently no-ops.
+   */
+  announceScriptOutput?: (params: {
+    job: CronJob;
+    text: string;
+  }) => Promise<{ delivered: boolean; deliveryAttempted: boolean }>;
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;
