@@ -582,19 +582,13 @@ export async function runEmbeddedPiAgent(
           message,
           profileIds: profileCandidates,
         });
-        if (fallbackConfigured) {
-          throw new FailoverError(message, {
-            reason,
-            provider,
-            model: modelId,
-            status: resolveFailoverStatus(reason),
-            cause: params.error,
-          });
-        }
-        if (params.error instanceof Error) {
-          throw params.error;
-        }
-        throw new Error(message);
+        throw new FailoverError(message, {
+          reason,
+          provider,
+          model: modelId,
+          status: resolveFailoverStatus(reason),
+          cause: params.error,
+        });
       };
 
       const resolveApiKeyForCandidate = async (candidate?: string) => {
@@ -1340,10 +1334,11 @@ export async function runEmbeddedPiAgent(
               thinkLevel = fallbackThinking;
               continue;
             }
-            // Throw FailoverError for prompt-side failover reasons when fallbacks
-            // are configured so outer model fallback can continue on overload,
-            // rate-limit, auth, or billing failures.
-            if (fallbackConfigured && promptFailoverFailure) {
+            // Always throw FailoverError for prompt-side failover reasons so
+            // the outer runWithModelFallback loop can try the next candidate.
+            // Previously gated on fallbackConfigured, which could be stale when
+            // FollowupRun snapshots an older config before hot-reload.
+            if (promptFailoverFailure) {
               const status = resolveFailoverStatus(promptFailoverReason ?? "unknown");
               logPromptFailoverDecision("fallback_model", { status });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
@@ -1358,7 +1353,7 @@ export async function runEmbeddedPiAgent(
                 })
               );
             }
-            if (promptFailoverFailure || promptFailoverReason) {
+            if (promptFailoverReason) {
               logPromptFailoverDecision("surface_error");
             }
             throw promptError;
@@ -1462,10 +1457,14 @@ export async function runEmbeddedPiAgent(
               continue;
             }
 
+            // Throw FailoverError when fallbacks are configured so the outer
+            // runWithModelFallback loop can try the next candidate.  When no
+            // fallbacks exist, fall through to the normal payload-return path
+            // so callers still receive the isError payload instead of an
+            // unhandled exception (see model-fallback.ts:187-189).
             if (fallbackConfigured) {
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
-              // Prefer formatted error message (user-friendly) over raw errorMessage
-              const message =
+              const failoverMessage =
                 (lastAssistant
                   ? formatAssistantErrorText(lastAssistant, {
                       cfg: params.config,
@@ -1487,16 +1486,16 @@ export async function runEmbeddedPiAgent(
                       : authFailure
                         ? "LLM request unauthorized."
                         : "LLM request failed.");
-              const status =
+              const failoverStatus =
                 resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
-                (isTimeoutErrorMessage(message) ? 408 : undefined);
-              logAssistantFailoverDecision("fallback_model", { status });
-              throw new FailoverError(message, {
+                (isTimeoutErrorMessage(failoverMessage) ? 408 : undefined);
+              logAssistantFailoverDecision("fallback_model", { status: failoverStatus });
+              throw new FailoverError(failoverMessage, {
                 reason: assistantFailoverReason ?? "unknown",
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
                 profileId: lastProfileId,
-                status,
+                status: failoverStatus,
               });
             }
             logAssistantFailoverDecision("surface_error");
