@@ -24,6 +24,7 @@ import {
 } from "./commands-info.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handlePluginCommand } from "./commands-plugin.js";
+import { handleResumeCommand } from "./commands-session-resume.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
@@ -199,6 +200,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleModelsCommand,
       handleStopCommand,
       handleCompactCommand,
+      handleResumeCommand,
       handleAbortTrigger,
     ];
   }

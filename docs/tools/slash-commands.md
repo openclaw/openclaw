@@ -101,6 +101,7 @@ Text + native (when enabled):
 - `/dock-slack` (alias: `/dock_slack`) (switch replies to Slack)
 - `/activation mention|always` (groups only)
 - `/send on|off|inherit` (owner-only)
+- `/resume [id|#]` (resume a previous session; omit arg to list recent sessions, provide 8-char session ID or list index to switch)
 - `/reset` or `/new [model]` (optional model hint; remainder is passed through)
 - `/think <off|minimal|low|medium|high|xhigh>` (dynamic choices by model/provider; aliases: `/thinking`, `/t`)
 - `/fast status|on|off` (omitting the arg shows the current effective fast-mode state)

@@ -559,6 +559,21 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "session",
     }),
     defineChatCommand({
+      key: "resume",
+      nativeName: "resume",
+      description: "Resume a previous session by ID, or list recent sessions.",
+      textAlias: "/resume",
+      acceptsArgs: true,
+      category: "session",
+      args: [
+        {
+          name: "session-id",
+          description: "8-char session ID or list index to resume (omit to list recent sessions)",
+          type: "string",
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "compact",
       nativeName: "compact",
       description: "Compact the session context.",
