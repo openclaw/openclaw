@@ -226,7 +226,12 @@ export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
   };
 }
 
-// Alibaba Cloud Model Studio Coding Plan
+// Alibaba Cloud Model Studio (百炼)
+// Standard (pay-as-you-go) endpoints
+export const MODELSTUDIO_STANDARD_CN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+export const MODELSTUDIO_STANDARD_GLOBAL_BASE_URL =
+  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+// Coding Plan (subscription) endpoints
 export const MODELSTUDIO_CN_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1";
 export const MODELSTUDIO_GLOBAL_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
 export const MODELSTUDIO_DEFAULT_MODEL_ID = "qwen3.5-plus";

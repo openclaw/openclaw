@@ -12,6 +12,13 @@ import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-tok
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
+  applyKilocodeConfig,
+  applyQianfanConfig,
+  applyModelStudioConfig,
+  applyModelStudioConfigCn,
+  applyModelStudioStandardConfig,
+  applyModelStudioStandardConfigCn,
+  applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiConfigCn,
   applyZaiConfig,
@@ -312,6 +319,411 @@ export async function applyNonInteractiveAuthChoice(params: {
       endpoint,
       ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
     });
+  }
+
+  if (authChoice === "xiaomi-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "xiaomi",
+      cfg: baseConfig,
+      flagValue: opts.xiaomiApiKey,
+      flagName: "--xiaomi-api-key",
+      envVar: "XIAOMI_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setXiaomiApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "xiaomi:default",
+      provider: "xiaomi",
+      mode: "api_key",
+    });
+    return applyXiaomiConfig(nextConfig);
+  }
+
+  if (authChoice === "xai-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "xai",
+      cfg: baseConfig,
+      flagValue: opts.xaiApiKey,
+      flagName: "--xai-api-key",
+      envVar: "XAI_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setXaiApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "xai:default",
+      provider: "xai",
+      mode: "api_key",
+    });
+    return applyXaiConfig(nextConfig);
+  }
+
+  if (authChoice === "mistral-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "mistral",
+      cfg: baseConfig,
+      flagValue: opts.mistralApiKey,
+      flagName: "--mistral-api-key",
+      envVar: "MISTRAL_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setMistralApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "mistral:default",
+      provider: "mistral",
+      mode: "api_key",
+    });
+    return applyMistralConfig(nextConfig);
+  }
+
+  if (authChoice === "volcengine-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "volcengine",
+      cfg: baseConfig,
+      flagValue: opts.volcengineApiKey,
+      flagName: "--volcengine-api-key",
+      envVar: "VOLCANO_ENGINE_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setVolcengineApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "volcengine:default",
+      provider: "volcengine",
+      mode: "api_key",
+    });
+    return applyPrimaryModel(nextConfig, "volcengine-plan/ark-code-latest");
+  }
+
+  if (authChoice === "byteplus-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "byteplus",
+      cfg: baseConfig,
+      flagValue: opts.byteplusApiKey,
+      flagName: "--byteplus-api-key",
+      envVar: "BYTEPLUS_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setByteplusApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "byteplus:default",
+      provider: "byteplus",
+      mode: "api_key",
+    });
+    return applyPrimaryModel(nextConfig, "byteplus-plan/ark-code-latest");
+  }
+
+  if (authChoice === "qianfan-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "qianfan",
+      cfg: baseConfig,
+      flagValue: opts.qianfanApiKey,
+      flagName: "--qianfan-api-key",
+      envVar: "QIANFAN_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setQianfanApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "qianfan:default",
+      provider: "qianfan",
+      mode: "api_key",
+    });
+    return applyQianfanConfig(nextConfig);
+  }
+
+  if (authChoice === "modelstudio-standard-api-key-cn") {
+    const resolved = await resolveApiKey({
+      provider: "modelstudio",
+      cfg: baseConfig,
+      flagValue: opts.modelstudioStandardApiKeyCn,
+      flagName: "--modelstudio-standard-api-key-cn",
+      envVar: "MODELSTUDIO_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setModelStudioApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "modelstudio:default",
+      provider: "modelstudio",
+      mode: "api_key",
+    });
+    return applyModelStudioStandardConfigCn(nextConfig);
+  }
+
+  if (authChoice === "modelstudio-standard-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "modelstudio",
+      cfg: baseConfig,
+      flagValue: opts.modelstudioStandardApiKey,
+      flagName: "--modelstudio-standard-api-key",
+      envVar: "MODELSTUDIO_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setModelStudioApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "modelstudio:default",
+      provider: "modelstudio",
+      mode: "api_key",
+    });
+    return applyModelStudioStandardConfig(nextConfig);
+  }
+
+  if (authChoice === "modelstudio-api-key-cn") {
+    const resolved = await resolveApiKey({
+      provider: "modelstudio",
+      cfg: baseConfig,
+      flagValue: opts.modelstudioApiKeyCn,
+      flagName: "--modelstudio-api-key-cn",
+      envVar: "MODELSTUDIO_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setModelStudioApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "modelstudio:default",
+      provider: "modelstudio",
+      mode: "api_key",
+    });
+    return applyModelStudioConfigCn(nextConfig);
+  }
+
+  if (authChoice === "modelstudio-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "modelstudio",
+      cfg: baseConfig,
+      flagValue: opts.modelstudioApiKey,
+      flagName: "--modelstudio-api-key",
+      envVar: "MODELSTUDIO_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setModelStudioApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "modelstudio:default",
+      provider: "modelstudio",
+      mode: "api_key",
+    });
+    return applyModelStudioConfig(nextConfig);
+  }
+
+  if (authChoice === "openai-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "openai",
+      cfg: baseConfig,
+      flagValue: opts.openaiApiKey,
+      flagName: "--openai-api-key",
+      envVar: "OPENAI_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setOpenaiApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "openai:default",
+      provider: "openai",
+      mode: "api_key",
+    });
+    return applyOpenAIConfig(nextConfig);
+  }
+
+  if (authChoice === "openrouter-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "openrouter",
+      cfg: baseConfig,
+      flagValue: opts.openrouterApiKey,
+      flagName: "--openrouter-api-key",
+      envVar: "OPENROUTER_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setOpenrouterApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "openrouter:default",
+      provider: "openrouter",
+      mode: "api_key",
+    });
+    return applyOpenrouterConfig(nextConfig);
+  }
+
+  if (authChoice === "kilocode-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "kilocode",
+      cfg: baseConfig,
+      flagValue: opts.kilocodeApiKey,
+      flagName: "--kilocode-api-key",
+      envVar: "KILOCODE_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setKilocodeApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "kilocode:default",
+      provider: "kilocode",
+      mode: "api_key",
+    });
+    return applyKilocodeConfig(nextConfig);
+  }
+
+  if (authChoice === "litellm-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "litellm",
+      cfg: baseConfig,
+      flagValue: opts.litellmApiKey,
+      flagName: "--litellm-api-key",
+      envVar: "LITELLM_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setLitellmApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "litellm:default",
+      provider: "litellm",
+      mode: "api_key",
+    });
+    return applyLitellmConfig(nextConfig);
+  }
+
+  if (authChoice === "ai-gateway-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "vercel-ai-gateway",
+      cfg: baseConfig,
+      flagValue: opts.aiGatewayApiKey,
+      flagName: "--ai-gateway-api-key",
+      envVar: "AI_GATEWAY_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setVercelAiGatewayApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "vercel-ai-gateway:default",
+      provider: "vercel-ai-gateway",
+      mode: "api_key",
+    });
+    return applyVercelAiGatewayConfig(nextConfig);
   }
 
   if (authChoice === "cloudflare-ai-gateway-api-key") {

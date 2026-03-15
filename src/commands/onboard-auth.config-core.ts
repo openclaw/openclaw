@@ -82,6 +82,8 @@ import {
   XAI_DEFAULT_MODEL_ID,
   MODELSTUDIO_CN_BASE_URL,
   MODELSTUDIO_GLOBAL_BASE_URL,
+  MODELSTUDIO_STANDARD_CN_BASE_URL,
+  MODELSTUDIO_STANDARD_GLOBAL_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_REF,
 } from "./onboard-auth.models.js";
 
@@ -669,5 +671,25 @@ export function applyModelStudioConfig(cfg: OpenClawConfig): OpenClawConfig {
 
 export function applyModelStudioConfigCn(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyModelStudioProviderConfigCn(cfg);
+  return applyAgentDefaultModelPrimary(next, MODELSTUDIO_DEFAULT_MODEL_REF);
+}
+
+// Alibaba Cloud Model Studio Standard (pay-as-you-go)
+
+export function applyModelStudioStandardProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return applyModelStudioProviderConfigWithBaseUrl(cfg, MODELSTUDIO_STANDARD_GLOBAL_BASE_URL);
+}
+
+export function applyModelStudioStandardProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+  return applyModelStudioProviderConfigWithBaseUrl(cfg, MODELSTUDIO_STANDARD_CN_BASE_URL);
+}
+
+export function applyModelStudioStandardConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyModelStudioStandardProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, MODELSTUDIO_DEFAULT_MODEL_REF);
+}
+
+export function applyModelStudioStandardConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyModelStudioStandardProviderConfigCn(cfg);
   return applyAgentDefaultModelPrimary(next, MODELSTUDIO_DEFAULT_MODEL_REF);
 }

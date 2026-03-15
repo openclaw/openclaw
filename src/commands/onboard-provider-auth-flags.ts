@@ -24,6 +24,8 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "modelstudioStandardApiKeyCn"
+  | "modelstudioStandardApiKey"
   | "modelstudioApiKeyCn"
   | "modelstudioApiKey"
   | "volcengineApiKey"
@@ -193,6 +195,20 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--qianfan-api-key",
     cliOption: "--qianfan-api-key <key>",
     description: "QIANFAN API key",
+  },
+  {
+    optionKey: "modelstudioStandardApiKeyCn",
+    authChoice: "modelstudio-standard-api-key-cn",
+    cliFlag: "--modelstudio-standard-api-key-cn",
+    cliOption: "--modelstudio-standard-api-key-cn <key>",
+    description: "Alibaba Cloud Model Studio API key (China, pay-as-you-go)",
+  },
+  {
+    optionKey: "modelstudioStandardApiKey",
+    authChoice: "modelstudio-standard-api-key",
+    cliFlag: "--modelstudio-standard-api-key",
+    cliOption: "--modelstudio-standard-api-key <key>",
+    description: "Alibaba Cloud Model Studio API key (Global/Intl, pay-as-you-go)",
   },
   {
     optionKey: "modelstudioApiKeyCn",

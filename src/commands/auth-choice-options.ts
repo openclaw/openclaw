@@ -117,9 +117,14 @@ const AUTH_CHOICE_GROUP_DEFS: {
   },
   {
     value: "modelstudio",
-    label: "Alibaba Cloud Model Studio",
-    hint: "Coding Plan API key (CN / Global)",
-    choices: ["modelstudio-api-key-cn", "modelstudio-api-key"],
+    label: "Qwen (Alibaba Cloud Model Studio)",
+    hint: "Standard / Coding Plan (CN / Global)",
+    choices: [
+      "modelstudio-standard-api-key-cn",
+      "modelstudio-standard-api-key",
+      "modelstudio-api-key-cn",
+      "modelstudio-api-key",
+    ],
   },
   {
     value: "copilot",
@@ -303,6 +308,16 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     hint: "Claude, GPT, Gemini via opencode.ai/zen",
   },
   { value: "qianfan-api-key", label: "Qianfan API key" },
+  {
+    value: "modelstudio-standard-api-key-cn",
+    label: "Standard API Key for China (pay-as-you-go)",
+    hint: "Endpoint: dashscope.aliyuncs.com",
+  },
+  {
+    value: "modelstudio-standard-api-key",
+    label: "Standard API Key for Global/Intl (pay-as-you-go)",
+    hint: "Endpoint: dashscope-intl.aliyuncs.com",
+  },
   {
     value: "modelstudio-api-key-cn",
     label: "Coding Plan API Key for China (subscription)",
