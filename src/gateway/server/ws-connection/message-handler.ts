@@ -981,6 +981,7 @@ export function attachGatewayWsMessageHandler(params: {
           connId,
           presenceKey,
           clientIp: reportedClientIp,
+          authMethod,
           canvasHostUrl,
           canvasCapability,
           canvasCapabilityExpiresAtMs,

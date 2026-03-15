@@ -1,12 +1,21 @@
 import {
   ensureExecApprovals,
+  getTrustWindow,
+  grantTrustWindow,
+  isTrustWindowActive,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
+  normalizeExecApprovalAgentId,
   readExecApprovalsSnapshot,
+  revokeTrustWindow,
   saveExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
+import { cleanupTrustAudit } from "../../infra/trust-audit.js";
+import { isGatewayCliClient } from "../../utils/message-channel.js";
+import { isLoopbackAddress } from "../net.js";
+import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -14,6 +23,9 @@ import {
   validateExecApprovalsNodeGetParams,
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
+  validateExecApprovalsTrustParams,
+  validateExecApprovalsTrustStatusParams,
+  validateExecApprovalsUntrustParams,
 } from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
@@ -21,7 +33,12 @@ import {
   respondUnavailableOnThrow,
   safeParseJson,
 } from "./nodes.helpers.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function requireApprovalsBaseHash(
@@ -93,6 +110,54 @@ function resolveNodeIdOrRespond(nodeId: string, respond: RespondFn): string | nu
     return null;
   }
   return id;
+}
+
+function isTrustGrantCallerAllowed(client: GatewayClient | null): boolean {
+  if (!isGatewayCliClient(client?.connect?.client)) {
+    return false;
+  }
+  if (client?.connect?.client?.id !== GATEWAY_CLIENT_IDS.CLI) {
+    return false;
+  }
+  const hasDeviceIdentity =
+    typeof client?.connect?.device?.id === "string" && client.connect.device.id.trim() !== "";
+  if (hasDeviceIdentity) {
+    return true;
+  }
+  // Localhost token/password gateway calls intentionally omit device identity,
+  // so allow that authenticated path for trusted CLI usage.
+  const sharedAuthMethod = client?.authMethod;
+  const usesSharedAuth = sharedAuthMethod === "token" || sharedAuthMethod === "password";
+  return usesSharedAuth && isLoopbackAddress(client?.clientIp);
+}
+
+function requireTrustCaller(params: {
+  client: GatewayClient | null;
+  method: string;
+  respond: RespondFn;
+  context: GatewayRequestContext;
+}): boolean {
+  if (isTrustGrantCallerAllowed(params.client)) {
+    return true;
+  }
+  const callerId = params.client?.connect?.client?.id ?? "unknown";
+  const callerMode = params.client?.connect?.client?.mode ?? "unknown";
+  params.context.logGateway.warn(
+    `${params.method} denied for non-CLI caller (id=${callerId} mode=${callerMode})`,
+  );
+  params.respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, "trust operations require an interactive CLI caller"),
+  );
+  return false;
+}
+
+function resolveTrustGrantActor(client: GatewayClient | null): string {
+  const clientId = client?.connect?.client?.id ?? "unknown-client";
+  const clientMode = client?.connect?.client?.mode ?? "unknown-mode";
+  const connId = client?.connId ?? "unknown-conn";
+  return `${clientId}:${clientMode}:${connId}`.slice(0, 256);
 }
 
 export const execApprovalsHandlers: GatewayRequestHandlers = {
@@ -189,5 +254,106 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       const payload = safeParseJson(res.payloadJSON ?? null);
       respond(true, payload, undefined);
     });
+  },
+  "exec.approvals.trust.status": ({ params, respond, client, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateExecApprovalsTrustStatusParams,
+        "exec.approvals.trust.status",
+        respond,
+      )
+    ) {
+      return;
+    }
+    if (!requireTrustCaller({ client, method: "exec.approvals.trust.status", respond, context })) {
+      return;
+    }
+    const agentId = normalizeExecApprovalAgentId((params as { agentId?: string }).agentId);
+    const trustWindow = getTrustWindow(agentId);
+    const now = Date.now();
+    if (!isTrustWindowActive(trustWindow, now)) {
+      respond(true, { agentId, trustWindow: null }, undefined);
+      return;
+    }
+    respond(
+      true,
+      {
+        agentId,
+        trustWindow: {
+          status: trustWindow.status,
+          expiresAt: trustWindow.expiresAt,
+          grantedAt: trustWindow.grantedAt,
+          grantedBy: trustWindow.grantedBy,
+          security: trustWindow.security,
+          ask: trustWindow.ask,
+          remainingMs: Math.max(0, trustWindow.expiresAt - now),
+        },
+      },
+      undefined,
+    );
+  },
+  "exec.approvals.trust": ({ params, respond, client, context }) => {
+    if (
+      !assertValidParams(params, validateExecApprovalsTrustParams, "exec.approvals.trust", respond)
+    ) {
+      return;
+    }
+    if (!requireTrustCaller({ client, method: "exec.approvals.trust", respond, context })) {
+      return;
+    }
+    const trustParams = params as {
+      agentId?: string;
+      minutes: number;
+      force?: boolean;
+    };
+    const result = grantTrustWindow({
+      agentId: trustParams.agentId,
+      minutes: trustParams.minutes,
+      grantedBy: resolveTrustGrantActor(client),
+      force: trustParams.force,
+    });
+    if (!result.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));
+      return;
+    }
+    respond(true, { ok: true, agentId: result.agentId, expiresAt: result.expiresAt }, undefined);
+  },
+  "exec.approvals.untrust": ({ params, respond, client, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateExecApprovalsUntrustParams,
+        "exec.approvals.untrust",
+        respond,
+      )
+    ) {
+      return;
+    }
+    if (!requireTrustCaller({ client, method: "exec.approvals.untrust", respond, context })) {
+      return;
+    }
+    const untrustParams = params as { agentId?: string; keepAudit?: boolean };
+    const result = revokeTrustWindow({
+      agentId: untrustParams.agentId,
+      allowExpired: true,
+      allowMissing: true,
+    });
+    if (!result.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));
+      return;
+    }
+    if (untrustParams.keepAudit !== true) {
+      cleanupTrustAudit(result.agentId);
+    }
+    respond(
+      true,
+      {
+        ok: true,
+        agentId: result.agentId,
+        summary: result.summary ?? null,
+      },
+      undefined,
+    );
   },
 };
