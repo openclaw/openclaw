@@ -199,6 +199,10 @@ describe("CronService read ops while job is running", () => {
       await expect(
         withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during cron.run"),
       ).resolves.toBeTypeOf("object");
+      const running = await cron.list({ includeDisabled: true });
+      expect(running[0]?.state.currentStatus).toBe("running");
+      expect(running[0]?.state.lastRunStatus).toBeUndefined();
+      expect(running[0]?.state.lastStatus).toBeUndefined();
       await expect(withTimeout(cron.status(), 300, "cron.status during cron.run")).resolves.toEqual(
         expect.objectContaining({ enabled: true, storePath: store.storePath }),
       );
@@ -208,7 +212,67 @@ describe("CronService read ops while job is running", () => {
 
       const completed = await cron.list({ includeDisabled: true });
       expect(completed[0]?.state.lastStatus).toBe("ok");
+      expect(completed[0]?.state.currentStatus).toBeUndefined();
       expect(completed[0]?.state.runningAtMs).toBeUndefined();
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
+  it("preserves the last completed error while a manual run is in progress", async () => {
+    const store = await makeStorePath();
+    const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
+
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [
+        {
+          id: "manual-running-error",
+          name: "manual running error",
+          enabled: true,
+          createdAtMs: nowMs - 60_000,
+          updatedAtMs: nowMs - 60_000,
+          schedule: { kind: "at", at: new Date("2030-01-01T00:00:00.000Z").toISOString() },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "manual run" },
+          delivery: { mode: "none" },
+          state: { lastRunStatus: "error", lastStatus: "error", lastRunAtMs: nowMs - 1_000 },
+        },
+      ],
+    });
+
+    const isolatedRun = createDeferredIsolatedRun();
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
+    });
+
+    try {
+      await cron.start();
+      const runPromise = cron.run("manual-running-error", "force");
+      await isolatedRun.runStarted;
+
+      const running = await cron.list({ includeDisabled: true });
+      expect(running[0]?.state.currentStatus).toBe("running");
+      expect(running[0]?.state.lastRunStatus).toBe("error");
+      expect(running[0]?.state.lastStatus).toBe("error");
+      expect(running[0]?.state.lastCompletedRunStatus).toBe("error");
+      expect(running[0]?.state.lastCompletedStatus).toBe("error");
+
+      isolatedRun.completeRun({ status: "error", error: "still failing" });
+      await expect(runPromise).resolves.toEqual({ ok: true, ran: true });
+
+      const completed = await cron.list({ includeDisabled: true });
+      expect(completed[0]?.state.currentStatus).toBeUndefined();
+      expect(completed[0]?.state.lastRunStatus).toBe("error");
+      expect(completed[0]?.state.lastStatus).toBe("error");
     } finally {
       cron.stop();
       await store.cleanup();

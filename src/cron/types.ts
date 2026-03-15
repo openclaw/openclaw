@@ -42,6 +42,7 @@ export type CronDeliveryPatch = Partial<CronDelivery>;
 
 export type CronRunStatus = "ok" | "error" | "skipped";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronCurrentStatus = "running";
 
 export type CronUsageSummary = {
   input_tokens?: number;
@@ -141,6 +142,16 @@ export type CronJob = CronJobBase<
   CronFailureAlert | false
 > & {
   state: CronJobState;
+};
+
+export type CronJobReadState = CronJobState & {
+  currentStatus?: CronCurrentStatus;
+  lastCompletedRunStatus?: CronRunStatus;
+  lastCompletedStatus?: CronRunStatus;
+};
+
+export type CronReadJob = Omit<CronJob, "state"> & {
+  state: CronJobReadState;
 };
 
 export type CronStoreFile = {

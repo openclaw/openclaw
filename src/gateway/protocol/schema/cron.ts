@@ -229,9 +229,12 @@ export const CronJobStateSchema = Type.Object(
   {
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    currentStatus: Type.Optional(Type.Literal("running")),
     lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunStatus: Type.Optional(CronRunStatusSchema),
     lastStatus: Type.Optional(CronRunStatusSchema),
+    lastCompletedRunStatus: Type.Optional(CronRunStatusSchema),
+    lastCompletedStatus: Type.Optional(CronRunStatusSchema),
     lastError: Type.Optional(Type.String()),
     lastErrorReason: Type.Optional(CronFailoverReasonSchema),
     lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
