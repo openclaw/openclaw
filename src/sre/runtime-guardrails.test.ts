@@ -72,6 +72,25 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     expect(context).toContain("Resolver mismatch detected");
   });
 
+  it("allows overriding the single-vault helper path via env", () => {
+    vi.stubEnv(
+      "SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH",
+      "/tmp/custom-single-vault-graphql-evidence.sh",
+    );
+
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"This is wrong. query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } sentryEventId=abc123"}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "look into this vault v2 graphql apy issue",
+      transcriptText,
+    });
+
+    expect(context).toContain("/tmp/custom-single-vault-graphql-evidence.sh");
+  });
+
   it("requires explicit retraction when new evidence contradicts an older theory", () => {
     const transcriptText = `
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}

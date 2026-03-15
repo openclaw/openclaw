@@ -11,7 +11,7 @@ type GuardrailFailureFamily = "shell" | "rbac" | "git_auth" | "model_auth";
 const RETRIEVAL_DOC_RE =
   /(knowledge-index\.md|runbook-map\.md|repo-root-model\.md|notion-postmortem-index\.md|incident-dossier)/i;
 const DB_DATA_PLAYBOOK_RE = /db-data-incident-playbook\.md$/i;
-const SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT =
+const DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT =
   "/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh";
 const HUMAN_CORRECTION_RE =
   /\b(wrong|actual issue|current lead is|we confirmed|this is connected|my only explanation|outdated|not the issue)\b/i;
@@ -51,6 +51,13 @@ function cleanLine(text: string, maxChars = 220): string {
 
 function isErrnoCode(err: unknown, code: string): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === code;
+}
+
+function singleVaultGraphqlEvidenceScriptPath(): string {
+  return (
+    process.env.SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH ??
+    DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT
+  );
 }
 
 export function buildSreRuntimeGuardrailContextFromTranscript(params: {
@@ -162,11 +169,12 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
   }
 
   if (latestUserArtifact && hasDataIncidentSignal) {
+    const singleVaultGraphqlEvidenceScript = singleVaultGraphqlEvidenceScriptPath();
     guidance.push(
       "- For single-vault API/data incidents, compare one healthy same-chain control vault, direct onchain values, and public surfaces (`vaultV2ByAddress`, `vaultV2s`, `vaultV2transactions`) before calling it chain-wide.",
     );
     guidance.push(
-      `- Use \`${SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT}\` when possible so the exact query replay, healthy control, and public-surface split are captured before RCA ranking.`,
+      `- Use \`${singleVaultGraphqlEvidenceScript}\` when possible so the exact query replay, healthy control, and public-surface split are captured before RCA ranking.`,
     );
     guidance.push(
       "- Do not call an ingestion/provenance root cause confirmed until you add one DB row/provenance fact and one job-path or simulation fact for the affected entity.",
