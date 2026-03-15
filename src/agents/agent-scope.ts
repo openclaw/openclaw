@@ -187,7 +187,7 @@ export function resolveAgentEffectiveModelPrimary(
 
 // Backward-compatible alias. Prefer explicit/effective helpers at new call sites.
 export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
-  return resolveAgentExplicitModelPrimary(cfg, agentId);
+  return resolveAgentEffectiveModelPrimary(cfg, agentId);
 }
 
 export function resolveAgentModelFallbacksOverride(
