@@ -335,7 +335,11 @@ export async function sendMessageSlack(
   }
 
   if (!chunks.length && trimmedMessage) {
-    chunks.push(trimmedMessage);
+    // When block-mode tables consumed all content, don't fall back to raw
+    // pipe-delimited markdown — the tables will render via attachments.
+    if (!(tableMode === "block" && tableAttachments?.length)) {
+      chunks.push(trimmedMessage);
+    }
   }
   const mediaMaxBytes =
     typeof account.config.mediaMaxMb === "number"

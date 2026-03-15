@@ -173,3 +173,53 @@ describe("sendMessageSlack blocks", () => {
     expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("sendMessageSlack Block Kit table attachments", () => {
+  it("does not send raw pipe-table markdown for table-only messages", async () => {
+    const client = createSlackSendTestClient();
+    await sendMessageSlack("channel:C123", "| A | B |\n|---|---|\n| 1 | 2 |", {
+      token: "xoxb-test",
+      client,
+    });
+
+    const calls = client.chat.postMessage.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    // The text should NOT contain raw pipe-table markdown
+    for (const call of calls) {
+      const text = (call[0] as { text?: string }).text ?? "";
+      expect(text).not.toContain("| A |");
+      expect(text).not.toContain("| 1 |");
+    }
+  });
+
+  it("includes table attachments for messages with tables", async () => {
+    const client = createSlackSendTestClient();
+    await sendMessageSlack(
+      "channel:C123",
+      "Here is a table:\n\n| Name | Age |\n|------|-----|\n| Alice | 30 |",
+      { token: "xoxb-test", client },
+    );
+
+    const calls = client.chat.postMessage.mock.calls;
+    // At least one call should have attachments
+    const hasAttachments = calls.some((call) => {
+      const payload = call[0] as { attachments?: unknown[] };
+      return payload.attachments && payload.attachments.length > 0;
+    });
+    expect(hasAttachments).toBe(true);
+  });
+
+  it("preserves surrounding text when tables are extracted", async () => {
+    const client = createSlackSendTestClient();
+    await sendMessageSlack(
+      "channel:C123",
+      "Before the table\n\n| X |\n|---|\n| 1 |\n\nAfter the table",
+      { token: "xoxb-test", client },
+    );
+
+    const calls = client.chat.postMessage.mock.calls;
+    const allText = calls.map((c) => (c[0] as { text?: string }).text ?? "").join(" ");
+    expect(allText).toContain("Before the table");
+    expect(allText).toContain("After the table");
+  });
+});
