@@ -8,7 +8,10 @@ import type {
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type {
+  ChannelHealthMonitorConfig,
+  ChannelHeartbeatVisibilityConfig,
+} from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
@@ -297,6 +300,8 @@ export type DiscordAccountConfig = {
   guilds?: Record<string, DiscordGuildEntry>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Channel health monitor overrides for this channel/account. */
+  healthMonitor?: ChannelHealthMonitorConfig;
   /** Exec approval forwarding configuration. */
   execApprovals?: DiscordExecApprovalConfig;
   /** Agent-controlled interactive components (buttons, select menus). */
