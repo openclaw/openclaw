@@ -1428,6 +1428,7 @@ export async function runEmbeddedAttempt(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      containerSkillsMount: sandbox?.enabled ? sandbox.skillsMount : undefined,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
