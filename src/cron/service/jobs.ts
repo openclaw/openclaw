@@ -21,6 +21,7 @@ import type {
   CronPayload,
   CronPayloadPatch,
 } from "../types.js";
+import { validateScheduleTimestamp } from "../validate-timestamp.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
 import {
@@ -511,6 +512,16 @@ export function nextWakeAtMs(state: CronServiceState) {
 
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
+
+  // Defense-in-depth: reject kind="at" schedules with past timestamps.
+  // The gateway already validates via validateScheduleTimestamp, but this
+  // guard catches any code path that bypasses the gateway (e.g. direct
+  // service calls, store migrations, or future internal callers).
+  const tsValidation = validateScheduleTimestamp(input.schedule, now);
+  if (!tsValidation.ok) {
+    throw new Error(tsValidation.message);
+  }
+
   const id = crypto.randomUUID();
   const schedule =
     input.schedule.kind === "every"
