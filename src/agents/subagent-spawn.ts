@@ -2,6 +2,9 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
+
+/** Gateway call timeout for sub-agent spawn operations (30 seconds). */
+const SPAWN_GATEWAY_TIMEOUT_MS = 30_000;
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -146,7 +149,7 @@ async function cleanupProvisionalSession(
         emitLifecycleHooks: options?.emitLifecycleHooks === true,
         deleteTranscript: options?.deleteTranscript === true,
       },
-      timeoutMs: 10_000,
+      timeoutMs: SPAWN_GATEWAY_TIMEOUT_MS,
     });
   } catch {
     // Best-effort cleanup only.
@@ -430,7 +433,7 @@ export async function spawnSubagentDirect(
       await callGateway({
         method: "sessions.patch",
         params: { key: childSessionKey, ...patch },
-        timeoutMs: 10_000,
+        timeoutMs: SPAWN_GATEWAY_TIMEOUT_MS,
       });
       return undefined;
     } catch (err) {
@@ -494,7 +497,7 @@ export async function spawnSubagentDirect(
         await callGateway({
           method: "sessions.delete",
           params: { key: childSessionKey, emitLifecycleHooks: false },
-          timeoutMs: 10_000,
+          timeoutMs: SPAWN_GATEWAY_TIMEOUT_MS,
         });
       } catch {
         // Best-effort cleanup only.
@@ -627,7 +630,7 @@ export async function spawnSubagentDirect(
         label: label || undefined,
         ...publicSpawnedMetadata,
       },
-      timeoutMs: 10_000,
+      timeoutMs: SPAWN_GATEWAY_TIMEOUT_MS,
     });
     if (typeof response?.runId === "string" && response.runId) {
       childRunId = response.runId;
@@ -677,7 +680,7 @@ export async function spawnSubagentDirect(
             deleteTranscript: true,
             emitLifecycleHooks: !endedHookEmitted,
           },
-          timeoutMs: 10_000,
+          timeoutMs: SPAWN_GATEWAY_TIMEOUT_MS,
         });
       } catch {
         // Best-effort only.
@@ -724,7 +727,7 @@ export async function spawnSubagentDirect(
       await callGateway({
         method: "sessions.delete",
         params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
-        timeoutMs: 10_000,
+        timeoutMs: SPAWN_GATEWAY_TIMEOUT_MS,
       });
     } catch {
       // Best-effort cleanup only.
