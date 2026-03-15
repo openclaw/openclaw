@@ -1,8 +1,8 @@
 # web-control-ui 项目记忆与状态
 - 定位：通过对话共创自定义前端页面的产品，不是普通控制台
 - 核心方向：专属前端 agent、用户偏好记忆、对话驱动改代码、上游功能跟踪与推荐
-- 当前版本：v0.1（已落地核心骨架）
-- 状态：已可实际使用
+- 当前版本：v0.2（主线已完成两层壳层 + 四种 usage-mode 初次整合）
+- 状态：主工作区可直接切换 USE / CONTROL，并可验收 Native / Mission / Star / Blank 四种使用态
 ---
 ## 2026-03-15 核心产品定义（已收敛）
 1. **输入单位 = 聊天**
@@ -83,6 +83,13 @@
    - 长消息折叠
    - 消息分类显示：reply/status/build/command
    - 视图切换：全部/回复/操作日志
+7. **两层壳层 + 四种 usage-mode 主线整合**（2026-03-15 16:20-16:29）
+   - 已把 Claude Code 产出的三条并行工位成果收口进主工作区：
+     - `cc-shell-split` → USE / CONTROL 两层壳层
+     - `cc-usage-native-blank` → Native / Blank
+     - `cc-usage-mission-star` → Mission / Star
+   - 当前主线已支持：顶部切换 USE / CONTROL，侧边切换 Native / Mission / Star / Blank
+   - 已实际验证：主工作区 `node ./node_modules/vite/bin/vite.js build` 通过；浏览器中可见 Native 与 Mission 视图正常切换
 ---
 ## 项目文件结构
 ```

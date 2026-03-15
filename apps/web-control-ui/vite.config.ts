@@ -10,6 +10,9 @@ export default defineConfig({
     outDir: path.resolve(here, "dist"),
     emptyOutDir: true,
     sourcemap: true,
+    rollupOptions: {
+      external: ["@noble/ed25519"],
+    },
   },
   server: {
     host: true,
