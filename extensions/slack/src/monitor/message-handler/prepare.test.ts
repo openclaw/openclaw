@@ -416,6 +416,90 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.MessageThreadId).toBeUndefined();
   });
 
+  it("per-channel replyToMode overrides account-level replyToMode", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, replyToMode: "off", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+      channelsConfig: { C123: { replyToMode: "all" } } as never,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({ channel: "C123", channel_type: "channel" }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.replyToMode).toBe("all");
+  });
+
+  it("per-channel replyToMode overrides replyToModeByChatType", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, replyToMode: "off", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+      channelsConfig: { C123: { replyToMode: "first" } } as never,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "off", replyToModeByChatType: { channel: "all" } }),
+      createSlackMessage({ channel: "C123", channel_type: "channel" }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.replyToMode).toBe("first");
+  });
+
+  it("falls through to account-level when per-channel replyToMode is unset", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+      replyToMode: "all",
+      channelsConfig: { C123: {} } as never,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({ channel: "C123", channel_type: "channel" }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.replyToMode).toBe("all");
+  });
+
+  it("DM channelConfig is null so per-channel replyToMode does not apply", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, replyToMode: "all" } },
+      } as OpenClawConfig,
+      replyToMode: "all",
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({}),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.replyToMode).toBe("all");
+  });
+
   it("marks first thread turn and injects thread history for a new thread session", async () => {
     const { storePath } = makeTmpStorePath();
     const replies = vi

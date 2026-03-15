@@ -820,6 +820,7 @@ export const SlackChannelSchema = z
     users: z.array(z.union([z.string(), z.number()])).optional(),
     skills: z.array(z.string()).optional(),
     systemPrompt: z.string().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
   })
   .strict();
 
