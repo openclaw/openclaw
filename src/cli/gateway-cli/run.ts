@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
 import { readSecretFromFile } from "../../acp/secret-file.js";
+import { attemptConfigRollback } from "../../config/config-backup-restore.js";
 import type {
   GatewayAuthMode,
   GatewayBindMode,
@@ -9,11 +10,13 @@ import type {
 } from "../../config/config.js";
 import {
   CONFIG_PATH,
+  isNixMode,
   loadConfig,
   readConfigFileSnapshot,
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
+import { formatConfigIssueLines } from "../../config/issue-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
@@ -299,6 +302,56 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
 
   gatewayLog.info("loading configuration…");
+
+  // Pre-flight config validation with automatic rollback support.
+  // This must happen before loadConfig() because loadConfig() throws on invalid config.
+  {
+    const preflightSnapshot = await readConfigFileSnapshot();
+    if (preflightSnapshot.exists && !preflightSnapshot.valid) {
+      const issues =
+        preflightSnapshot.issues.length > 0
+          ? formatConfigIssueLines(preflightSnapshot.issues, "", { normalizeRoot: true }).join("\n")
+          : "Unknown validation issue.";
+
+      // Attempt automatic rollback if config backup is enabled
+      const configBackupSettings = preflightSnapshot.config?.gateway?.configBackup;
+      const autoRollbackEnabled = configBackupSettings?.autoRollback !== false; // default true
+
+      if (autoRollbackEnabled) {
+        gatewayLog.warn("gateway: config validation failed, attempting automatic rollback...");
+        const rollbackResult = await attemptConfigRollback(preflightSnapshot.path);
+        if (rollbackResult.restored) {
+          gatewayLog.info(`gateway: rolled back config from ${rollbackResult.backupPath}`);
+          const rollbackSnapshot = await readConfigFileSnapshot();
+          if (rollbackSnapshot.valid) {
+            gatewayLog.info("gateway: config rollback successful, continuing startup");
+          } else {
+            const rollbackIssues =
+              rollbackSnapshot.issues.length > 0
+                ? formatConfigIssueLines(rollbackSnapshot.issues, "", { normalizeRoot: true }).join(
+                    "\n",
+                  )
+                : "Unknown validation issue.";
+            defaultRuntime.error(
+              `Config still invalid after rollback from ${rollbackResult.backupPath}.\n${rollbackIssues}\nRun "${formatCliCommand("openclaw doctor")}" to repair.`,
+            );
+            defaultRuntime.exit(1);
+            return;
+          }
+        } else {
+          gatewayLog.warn(`gateway: rollback failed: ${rollbackResult.error}`);
+          defaultRuntime.error(`Invalid config at ${preflightSnapshot.path}.\n${issues}`);
+          defaultRuntime.exit(1);
+          return;
+        }
+      } else {
+        defaultRuntime.error(`Invalid config at ${preflightSnapshot.path}.\n${issues}`);
+        defaultRuntime.exit(1);
+        return;
+      }
+    }
+  }
+
   const cfg = loadConfig();
   maybeLogPendingControlUiBuild(cfg);
   const portOverride = parsePort(opts.port);
