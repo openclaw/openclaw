@@ -7,6 +7,7 @@ import type { ContextEngine } from "./types.js";
  * Supports async creation for engines that need DB connections etc.
  */
 export type ContextEngineFactory = () => ContextEngine | Promise<ContextEngine>;
+export type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
 
 // ---------------------------------------------------------------------------
 // Registry (module-level singleton)
@@ -15,7 +16,13 @@ export type ContextEngineFactory = () => ContextEngine | Promise<ContextEngine>;
 const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistryState");
 
 type ContextEngineRegistryState = {
-  engines: Map<string, ContextEngineFactory>;
+  engines: Map<
+    string,
+    {
+      factory: ContextEngineFactory;
+      owner: string;
+    }
+  >;
 };
 
 // Keep context-engine registrations process-global so duplicated dist chunks
@@ -26,7 +33,7 @@ function getContextEngineRegistryState(): ContextEngineRegistryState {
   };
   if (!globalState[CONTEXT_ENGINE_REGISTRY_STATE]) {
     globalState[CONTEXT_ENGINE_REGISTRY_STATE] = {
-      engines: new Map<string, ContextEngineFactory>(),
+      engines: new Map(),
     };
   }
   return globalState[CONTEXT_ENGINE_REGISTRY_STATE];
@@ -35,15 +42,26 @@ function getContextEngineRegistryState(): ContextEngineRegistryState {
 /**
  * Register a context engine implementation under the given id.
  */
-export function registerContextEngine(id: string, factory: ContextEngineFactory): void {
-  getContextEngineRegistryState().engines.set(id, factory);
+export function registerContextEngine(
+  id: string,
+  factory: ContextEngineFactory,
+  opts?: { owner?: string },
+): ContextEngineRegistrationResult {
+  const owner = opts?.owner?.trim() || "core";
+  const registry = getContextEngineRegistryState().engines;
+  const existing = registry.get(id);
+  if (existing && existing.owner !== owner) {
+    return { ok: false, existingOwner: existing.owner };
+  }
+  registry.set(id, { factory, owner });
+  return { ok: true };
 }
 
 /**
  * Return the factory for a registered engine, or undefined.
  */
 export function getContextEngineFactory(id: string): ContextEngineFactory | undefined {
-  return getContextEngineRegistryState().engines.get(id);
+  return getContextEngineRegistryState().engines.get(id)?.factory;
 }
 
 /**
@@ -73,13 +91,13 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
       ? slotValue.trim()
       : defaultSlotIdForKey("contextEngine");
 
-  const factory = getContextEngineRegistryState().engines.get(engineId);
-  if (!factory) {
+  const entry = getContextEngineRegistryState().engines.get(engineId);
+  if (!entry) {
     throw new Error(
       `Context engine "${engineId}" is not registered. ` +
         `Available engines: ${listContextEngineIds().join(", ") || "(none)"}`,
     );
   }
 
-  return factory();
+  return entry.factory();
 }
