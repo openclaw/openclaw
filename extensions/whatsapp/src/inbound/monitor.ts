@@ -451,6 +451,10 @@ export async function monitorWebInbox(options: {
       const from = group ? remoteJid : (senderE164 ?? reactorJid ?? remoteJid);
       if (!from) continue;
 
+      // Deduplicate reaction events (e.g. reconnect re-delivery).
+      const dedupeKey = `${options.accountId}:${remoteJid}:${reactorJid ?? ""}:${emoji}:${key?.id ?? ""}`;
+      if (isRecentInboundMessage(dedupeKey)) continue;
+
       const access = await checkInboundAccessControl({
         accountId: options.accountId,
         from,
@@ -458,7 +462,7 @@ export async function monitorWebInbox(options: {
         senderE164,
         group,
         pushName: undefined,
-        isFromMe: false,
+        isFromMe: Boolean(key?.fromMe),
         messageTimestampMs: Date.now(),
         connectedAtMs,
         sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
@@ -474,7 +478,7 @@ export async function monitorWebInbox(options: {
       );
 
       const reactionMessage: WebInboundMessage = {
-        id: reactedMessageId,
+        id: undefined,
         from,
         conversationId: group ? remoteJid : from,
         to: selfE164 ?? "me",
@@ -487,7 +491,7 @@ export async function monitorWebInbox(options: {
         senderE164: senderE164 ?? undefined,
         selfJid,
         selfE164,
-        fromMe: false,
+        fromMe: Boolean(key?.fromMe),
         reactionEmoji: emoji,
         reactionMessageId: reactedMessageId,
         sendComposing: async () => {
