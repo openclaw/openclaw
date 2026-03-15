@@ -30,11 +30,14 @@ export function resolve2TonySharedSecret(): string | null {
 }
 
 function resolveDelegatedTransportBaseUrl(): string | null {
-  return normalizeBaseUrl(process.env.OPENCLAW_OPERATOR_ANGELA_URL);
+  return normalizeBaseUrl(
+    process.env.OPENCLAW_OPERATOR_INTERNAL_CONTROL_URL ?? process.env.OPENCLAW_OPERATOR_ANGELA_URL,
+  );
 }
 
 function resolveDelegatedTransportSharedSecret(): string | null {
   const secret =
+    process.env.OPENCLAW_OPERATOR_INTERNAL_CONTROL_SHARED_SECRET?.trim() ||
     process.env.OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET?.trim() ||
     process.env.OPENCLAW_ANGELA_SHARED_SECRET?.trim();
   return secret || null;
@@ -188,7 +191,7 @@ export function getOperatorDelegatedTransportStatus(): OperatorDelegatedTranspor
     configured: Boolean(baseUrl),
     baseUrl,
     authScheme: "bearer",
-    authEnv: "OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET",
+    authEnv: "OPENCLAW_OPERATOR_INTERNAL_CONTROL_SHARED_SECRET",
     authConfigured: Boolean(sharedSecret),
     globalDefaultAlias: domains.globalDefaultAlias,
     servedTeams: domains.servedTeams,

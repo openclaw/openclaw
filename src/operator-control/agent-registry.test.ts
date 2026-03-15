@@ -25,7 +25,7 @@ describe("compileOperatorAgentRegistry", () => {
           [
             "operator_runtime:",
             "  transports:",
-            "    angela_http:",
+            "    delegated_http:",
             "      global_default_alias: tonya",
             "agents:",
             "  - id: tonya",
@@ -165,7 +165,7 @@ describe("compileOperatorAgentRegistry", () => {
           [
             "operator_runtime:",
             "  transports:",
-            "    angela_http:",
+            "    delegated_http:",
             "      global_default_alias: tonys-angels",
             "agents:",
             "  - id: tonys-angels",
@@ -253,7 +253,7 @@ describe("compileOperatorAgentRegistry", () => {
           [
             "operator_runtime:",
             "  transports:",
-            "    angela_http:",
+            "    delegated_http:",
             "      global_default_alias: tonys-angels",
             "agents:",
             "  - id: tonya",
@@ -264,7 +264,7 @@ describe("compileOperatorAgentRegistry", () => {
         );
 
         expect(() => compileOperatorAgentRegistry({ sourcePath })).toThrow(
-          "operator_runtime angela_http global_default_alias references unknown agent: tonys-angels",
+          "operator_runtime delegated_http global_default_alias references unknown agent: tonys-angels",
         );
       });
     });

@@ -29,6 +29,11 @@ import {
   issueNoVncObserverToken,
 } from "./novnc-auth.js";
 import { readBrowserRegistry, updateBrowserRegistry } from "./registry.js";
+import {
+  collectTranslatedSandboxBindSourceRoots,
+  translateContainerPathToHostPath,
+  translateSandboxDockerConfigToHost,
+} from "./runtime-path-map.js";
 import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
@@ -151,8 +156,16 @@ export async function ensureSandboxBrowser(params: {
     docker: params.cfg.docker,
     browser: { ...params.cfg.browser, image: browserImage },
   });
+  const hostWorkspaceDir = translateContainerPathToHostPath(params.workspaceDir);
+  const hostAgentWorkspaceDir = translateContainerPathToHostPath(params.agentWorkspaceDir);
+  const hostBrowserDockerCfg = translateSandboxDockerConfigToHost(browserDockerCfg);
+  const allowedBindSourceRoots = [
+    hostWorkspaceDir,
+    hostAgentWorkspaceDir,
+    ...collectTranslatedSandboxBindSourceRoots(browserDockerCfg.binds),
+  ];
   const expectedHash = computeSandboxBrowserConfigHash({
-    docker: browserDockerCfg,
+    docker: hostBrowserDockerCfg,
     browser: {
       cdpPort: params.cfg.browser.cdpPort,
       vncPort: params.cfg.browser.vncPort,
@@ -163,8 +176,8 @@ export async function ensureSandboxBrowser(params: {
     },
     securityEpoch: SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
     workspaceAccess: params.cfg.workspaceAccess,
-    workspaceDir: params.workspaceDir,
-    agentWorkspaceDir: params.agentWorkspaceDir,
+    workspaceDir: hostWorkspaceDir,
+    agentWorkspaceDir: hostAgentWorkspaceDir,
   });
 
   const now = Date.now();
@@ -218,13 +231,14 @@ export async function ensureSandboxBrowser(params: {
     if (noVncEnabled) {
       noVncPassword = generateNoVncPassword();
     }
-    await ensureDockerNetwork(browserDockerCfg.network, {
-      allowContainerNamespaceJoin: browserDockerCfg.dangerouslyAllowContainerNamespaceJoin === true,
+    await ensureDockerNetwork(hostBrowserDockerCfg.network, {
+      allowContainerNamespaceJoin:
+        hostBrowserDockerCfg.dangerouslyAllowContainerNamespaceJoin === true,
     });
     await ensureSandboxBrowserImage(browserImage);
     const args = buildSandboxCreateArgs({
       name: containerName,
-      cfg: browserDockerCfg,
+      cfg: hostBrowserDockerCfg,
       scopeKey: params.scopeKey,
       labels: {
         "openclaw.sandboxBrowser": "1",
@@ -232,17 +246,17 @@ export async function ensureSandboxBrowser(params: {
       },
       configHash: expectedHash,
       includeBinds: false,
-      bindSourceRoots: [params.workspaceDir, params.agentWorkspaceDir],
+      bindSourceRoots: [...new Set(allowedBindSourceRoots)],
     });
     appendWorkspaceMountArgs({
       args,
-      workspaceDir: params.workspaceDir,
-      agentWorkspaceDir: params.agentWorkspaceDir,
+      workspaceDir: hostWorkspaceDir,
+      agentWorkspaceDir: hostAgentWorkspaceDir,
       workdir: params.cfg.docker.workdir,
       workspaceAccess: params.cfg.workspaceAccess,
     });
-    if (browserDockerCfg.binds?.length) {
-      for (const bind of browserDockerCfg.binds) {
+    if (hostBrowserDockerCfg.binds?.length) {
+      for (const bind of hostBrowserDockerCfg.binds) {
         args.push("-v", bind);
       }
     }

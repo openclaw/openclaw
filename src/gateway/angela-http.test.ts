@@ -361,7 +361,7 @@ describe("delegated task request handler", () => {
     expect(response.getBody()).toContain("Unauthorized");
   });
 
-  it("rejects unauthenticated requests when only the operator delegated secret env is configured", async () => {
+  it("rejects unauthenticated requests when only the internal control secret env is configured", async () => {
     const handler = createDelegatedTaskRequestHandler({
       log: { warn: vi.fn() },
       runTask: vi.fn(() => "run-angela-operator-secret"),
@@ -372,7 +372,7 @@ describe("delegated task request handler", () => {
 
     await withEnvAsync(
       {
-        OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET: "top-secret-angela",
+        OPENCLAW_OPERATOR_INTERNAL_CONTROL_SHARED_SECRET: "top-secret-angela",
       },
       async () => {
         const handled = await handler(req, response.res);

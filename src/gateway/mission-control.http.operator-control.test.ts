@@ -1,6 +1,10 @@
+import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { invalidateRegistryCache } from "../operator-control/agent-registry.js";
+import { resolveOperatorReferenceSourcePath } from "../operator-control/reference-paths.js";
 import { processPendingReceipts } from "../operator-control/task-store.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -12,6 +16,7 @@ function createRequest(params: {
   url: string;
   body?: unknown;
   contentType?: string;
+  headers?: Record<string, string>;
 }): IncomingMessage {
   const rawBody =
     params.body === undefined
@@ -26,12 +31,17 @@ function createRequest(params: {
   };
   req.method = params.method;
   req.url = params.url;
-  req.headers = rawBody
-    ? {
-        "content-type": params.contentType ?? "application/json",
-        "content-length": String(Buffer.byteLength(rawBody)),
-      }
-    : {};
+  req.headers = {
+    ...Object.fromEntries(
+      Object.entries(params.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value]),
+    ),
+    ...(rawBody
+      ? {
+          "content-type": params.contentType ?? "application/json",
+          "content-length": String(Buffer.byteLength(rawBody)),
+        }
+      : {}),
+  };
   req.destroyed = false;
   req.destroy = () => {
     req.destroyed = true;
@@ -44,6 +54,7 @@ async function requestMissionControl(params: {
   method: string;
   url: string;
   body?: unknown;
+  headers?: Record<string, string>;
 }): Promise<{
   statusCode: number;
   body?: string;
@@ -58,11 +69,96 @@ async function requestMissionControl(params: {
   };
 }
 
+async function seedOperatorRegistryFixture(): Promise<void> {
+  const sourcePath = resolveOperatorReferenceSourcePath("agents.yaml");
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(
+    sourcePath,
+    [
+      "operator_runtime:",
+      "  transports:",
+      "    delegated_http:",
+      "      global_default_alias: tonys-angels",
+      "agents:",
+      "  - id: raekwon",
+      "    name: Raekwon",
+      "    specialty: Backend",
+      "    triggers: [backend]",
+      "  - id: deb",
+      "    name: Deb",
+      "    specialty: Project Ops",
+      "    triggers: [sprint, status, project-ops]",
+      "  - id: jeffy",
+      "    name: Jeffy",
+      "    specialty: Kanban",
+      "    triggers: [kanban, board_hygiene_packet]",
+      "  - id: tonys-angels",
+      "    name: Tony's Angels",
+      "    specialty: Marketing",
+      "    triggers: [marketing]",
+      "  - id: bobby-digital",
+      "    name: Bobby Digital",
+      "    specialty: Engineering",
+      "    triggers: [backend, engineering]",
+      "teams:",
+      "  - id: execution-fleet",
+      "    name: Execution Fleet",
+      "    lead: raekwon",
+      "    route_via_lead: true",
+      "    members: [raekwon]",
+      "    dispatch_transport: 2tony-http",
+      "  - id: project-ops",
+      "    name: Project Ops",
+      "    lead: deb",
+      "    members: [deb, jeffy]",
+      "    dispatch_transport: deb-http",
+      "  - id: marketing",
+      "    name: Marketing",
+      "    lead: tonys-angels",
+      "    route_via_lead: true",
+      "    members: [tonys-angels]",
+      "    dispatch_transport: delegated-http",
+      "    dispatch_default_alias: tonys-angels",
+      "  - id: engineering",
+      "    name: Engineering",
+      "    lead: bobby-digital",
+      "    route_via_lead: true",
+      "    members: [bobby-digital, raekwon]",
+      "    dispatch_transport: delegated-http",
+      "    dispatch_default_alias: bobby-digital",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  invalidateRegistryCache({ sourcePath });
+}
+
+function getFetchMockCall(
+  fetchMock: ReturnType<typeof vi.fn>,
+  index: number,
+): {
+  url: string;
+  init: RequestInit | undefined;
+} {
+  const call = fetchMock.mock.calls[index];
+  const input = call?.[0];
+  return {
+    url:
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : (input?.url ?? ""),
+    init: call?.[1] as RequestInit | undefined,
+  };
+}
+
 describe.sequential("mission-control operator control routes", () => {
   const originalFetch = globalThis.fetch;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
+    await seedOperatorRegistryFixture();
   });
 
   afterEach(() => {
@@ -326,7 +422,7 @@ describe.sequential("mission-control operator control routes", () => {
     });
   });
 
-  it("forwards operator task lifecycle snapshots to Deb when sync is configured", async () => {
+  it("forwards operator task lifecycle snapshots through the Tonya project-ops control plane when configured", async () => {
     await withStateDirEnv("openclaw-mc-operator-deb-sync-", async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
@@ -341,8 +437,8 @@ describe.sequential("mission-control operator control routes", () => {
 
       await withEnvAsync(
         {
-          OPENCLAW_OPERATOR_DEB_URL: "http://deb.internal:3010",
-          OPENCLAW_OPERATOR_DEB_SHARED_SECRET: "deb-sync-secret",
+          OPENCLAW_OPERATOR_CONTROL_PLANE_URL: "http://tonya.internal:18789",
+          OPENCLAW_OPERATOR_CONTROL_PLANE_SHARED_SECRET: "tonya-control-secret",
         },
         async () => {
           const created = await requestMissionControl({
@@ -370,9 +466,13 @@ describe.sequential("mission-control operator control routes", () => {
       );
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://deb.internal:3010/operator/events");
-      expect((init.headers as Record<string, string>).authorization).toBe("Bearer deb-sync-secret");
+      const { url, init } = getFetchMockCall(fetchMock, 0);
+      expect(url).toBe(
+        "http://tonya.internal:18789/mission-control/api/project-ops/operator/events",
+      );
+      expect((init.headers as Record<string, string>).authorization).toBe(
+        "Bearer tonya-control-secret",
+      );
       expect(
         JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
       ).toMatchObject({
@@ -382,6 +482,71 @@ describe.sequential("mission-control operator control routes", () => {
         state: "accepted",
         team_id: "marketing",
         capability: "marketing",
+      });
+    });
+  });
+
+  it("proxies project-ops update calls to the internal Deb service", async () => {
+    await withStateDirEnv("openclaw-mc-project-ops-proxy-", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: new Headers({
+          "content-type": "application/json; charset=utf-8",
+        }),
+        text: async () =>
+          JSON.stringify({
+            ok: true,
+            message: "stored",
+          }),
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await withEnvAsync(
+        {
+          OPENCLAW_OPERATOR_DEB_URL: "http://deb.internal:3010",
+          OPENCLAW_OPERATOR_DEB_SHARED_SECRET: "deb-upstream-secret",
+          OPENCLAW_OPERATOR_CONTROL_PLANE_SHARED_SECRET: "tonya-control-secret",
+        },
+        async () => {
+          const proxied = await requestMissionControl({
+            method: "POST",
+            url: "/mission-control/api/project-ops/update",
+            body: {
+              item_url: "https://github.com/sasan1200/openclaw/issues/1",
+              set: {
+                status: "Done",
+              },
+              clear: ["curr"],
+            },
+            headers: {
+              authorization: "Bearer tonya-control-secret",
+            },
+          });
+
+          expect(proxied.statusCode).toBe(200);
+          expect(JSON.parse(String(proxied.body))).toMatchObject({
+            ok: true,
+            message: "stored",
+          });
+        },
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const { url, init } = getFetchMockCall(fetchMock, 0);
+      expect(url).toBe("http://deb.internal:3010/update");
+      expect((init.headers as Record<string, string>).authorization).toBe(
+        "Bearer deb-upstream-secret",
+      );
+      expect(
+        JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body ?? "")),
+      ).toMatchObject({
+        item_url: "https://github.com/sasan1200/openclaw/issues/1",
+        set: {
+          status: "Done",
+        },
+        clear: ["curr"],
       });
     });
   });

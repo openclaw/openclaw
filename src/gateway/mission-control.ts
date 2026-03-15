@@ -21,6 +21,11 @@ import {
 } from "../operator-control/memory-store.js";
 import { getOperatorControlStatus } from "../operator-control/operator-status.js";
 import {
+  resolveDirectDebBaseUrl,
+  resolveDirectDebSharedSecret,
+  resolveInboundProjectOpsProxySharedSecret,
+} from "../operator-control/project-ops-target.js";
+import {
   acceptOperatorExternalReceipt,
   getOperatorTask,
   listOperatorTasks,
@@ -35,11 +40,14 @@ import {
   isOperatorWorkerClientError,
   listOperatorWorkerTasks,
 } from "../operator-control/worker-client.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { buildControlUiCspHeader } from "./control-ui-csp.js";
 import { isReadHttpMethod, respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
+import { sendUnauthorized } from "./http-common.js";
+import { getBearerToken } from "./http-utils.js";
 import {
   getMissionControlAcpxSessionsSnapshot,
   ingestMissionControlAcpxEvents,
@@ -327,12 +335,139 @@ function isMissionControlMemoryRoute(routePath: string): boolean {
   );
 }
 
+function isMissionControlProjectOpsRoute(routePath: string): boolean {
+  return (
+    routePath === "/project-ops/ready" ||
+    routePath === "/project-ops/status" ||
+    routePath === "/project-ops/sync" ||
+    routePath === "/project-ops/update" ||
+    routePath === "/project-ops/task" ||
+    routePath === "/project-ops/operator/events"
+  );
+}
+
 function isMissionControlWorkerRoute(routePath: string): boolean {
   return (
     routePath === "/worker/ready" ||
     routePath === "/worker/tasks" ||
     routePath.startsWith("/worker/tasks/")
   );
+}
+
+async function authorizeProjectOpsProxyRequest(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  authContext?: MissionControlHttpAuthContext;
+}): Promise<boolean> {
+  const { req, res, authContext } = params;
+  const expectedSecret = resolveInboundProjectOpsProxySharedSecret();
+  if (expectedSecret) {
+    if (!safeEqualSecret(getBearerToken(req), expectedSecret)) {
+      sendUnauthorized(res);
+      return false;
+    }
+    return true;
+  }
+  if (!authContext) {
+    return true;
+  }
+  return await authorizeGatewayBearerRequestOrReply({
+    req,
+    res,
+    auth: authContext.auth,
+    trustedProxies: authContext.trustedProxies,
+    allowRealIpFallback: authContext.allowRealIpFallback,
+    rateLimiter: authContext.rateLimiter,
+  });
+}
+
+function projectOpsAllowHeader(routePath: string): string {
+  return routePath === "/project-ops/ready" ? "GET, HEAD" : "POST";
+}
+
+async function handleMissionControlProjectOpsProxyRequest(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  routePath: string;
+  authContext?: MissionControlHttpAuthContext;
+}): Promise<boolean> {
+  const { req, res, routePath, authContext } = params;
+
+  if (!isMissionControlProjectOpsRoute(routePath)) {
+    return false;
+  }
+
+  const allow = projectOpsAllowHeader(routePath);
+  const isReadRoute = routePath === "/project-ops/ready";
+  if (isReadRoute ? req.method !== "GET" && req.method !== "HEAD" : req.method !== "POST") {
+    res.statusCode = 405;
+    res.setHeader("Allow", allow);
+    res.end();
+    return true;
+  }
+
+  if (!(await authorizeProjectOpsProxyRequest({ req, res, authContext }))) {
+    return true;
+  }
+
+  const debBaseUrl = resolveDirectDebBaseUrl();
+  if (!debBaseUrl) {
+    respondJson(res, 503, req, {
+      error: {
+        message: "Project-ops upstream not configured",
+      },
+    });
+    return true;
+  }
+
+  const upstreamEndpoint = `${debBaseUrl}${routePath.slice("/project-ops".length)}`;
+
+  try {
+    const rawBody =
+      req.method === "POST"
+        ? await readRequestBodyWithLimit(req, {
+            maxBytes: MISSION_CONTROL_DEB_MAX_BODY_BYTES,
+          })
+        : undefined;
+    const contentType = headerToString(req.headers["content-type"]);
+    const response = await fetch(upstreamEndpoint, {
+      method: req.method,
+      headers: {
+        accept: "application/json",
+        ...(contentType && rawBody !== undefined
+          ? {
+              "content-type": contentType,
+            }
+          : {}),
+        ...(resolveDirectDebSharedSecret()
+          ? {
+              authorization: `Bearer ${resolveDirectDebSharedSecret()}`,
+            }
+          : {}),
+      },
+      body: rawBody,
+    });
+    const payload = await response.text();
+    res.statusCode = response.status;
+    res.setHeader(
+      "Content-Type",
+      response.headers.get("content-type") ?? "application/json; charset=utf-8",
+    );
+    res.setHeader("Cache-Control", "no-store");
+    if (req.method === "HEAD") {
+      res.end();
+      return true;
+    }
+    res.end(payload);
+    return true;
+  } catch (error) {
+    respondJson(res, 502, req, {
+      error: {
+        message: error instanceof Error ? error.message : "Project-ops proxy request failed",
+      },
+    });
+    return true;
+  }
 }
 
 async function readJsonRequestBody(req: IncomingMessage, maxBytes: number): Promise<unknown> {
@@ -691,6 +826,15 @@ async function handleMissionControlApiRequest(params: {
       });
       return true;
     }
+  }
+
+  if (isMissionControlProjectOpsRoute(routePath)) {
+    return await handleMissionControlProjectOpsProxyRequest({
+      req,
+      res,
+      routePath,
+      authContext,
+    });
   }
 
   if (isMissionControlTaskRoute(routePath)) {

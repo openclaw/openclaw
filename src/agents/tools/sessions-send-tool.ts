@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
@@ -17,6 +18,7 @@ import {
   extractAssistantText,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
+  resolveSandboxedSessionToolContext,
   resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";

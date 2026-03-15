@@ -158,6 +158,54 @@ export function containsEnvVarReference(value: string): boolean {
   return false;
 }
 
+function collectStringEnvVarReferences(value: string, refs: Set<string>): void {
+  if (!value.includes("$")) {
+    return;
+  }
+
+  for (let i = 0; i < value.length; i += 1) {
+    if (value[i] !== "$") {
+      continue;
+    }
+
+    const token = parseEnvTokenAt(value, i);
+    if (token?.kind === "escaped") {
+      i = token.end;
+      continue;
+    }
+    if (token?.kind === "substitution") {
+      refs.add(token.name);
+      i = token.end;
+    }
+  }
+}
+
+function collectAnyEnvVarReferences(value: unknown, refs: Set<string>): void {
+  if (typeof value === "string") {
+    collectStringEnvVarReferences(value, refs);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectAnyEnvVarReferences(entry, refs);
+    }
+    return;
+  }
+
+  if (isPlainObject(value)) {
+    for (const entry of Object.values(value)) {
+      collectAnyEnvVarReferences(entry, refs);
+    }
+  }
+}
+
+export function collectEnvVarReferences(value: unknown): string[] {
+  const refs = new Set<string>();
+  collectAnyEnvVarReferences(value, refs);
+  return [...refs];
+}
+
 function substituteAny(
   value: unknown,
   env: NodeJS.ProcessEnv,

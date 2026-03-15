@@ -102,7 +102,7 @@ describe("operator status", () => {
       configured: true,
       baseUrl: "http://tonya.internal:18789",
       authScheme: "bearer",
-      authEnv: "OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET",
+      authEnv: "OPENCLAW_OPERATOR_INTERNAL_CONTROL_SHARED_SECRET",
       authConfigured: true,
       globalDefaultAlias: "tonys-angels",
       servedTeams: ["engineering", "marketing"],

@@ -168,6 +168,11 @@ import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
 import { readRegistry, updateRegistry } from "./registry.js";
+import {
+  collectTranslatedSandboxBindSourceRoots,
+  translateContainerPathToHostPath,
+  translateSandboxDockerConfigToHost,
+} from "./runtime-path-map.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
@@ -445,32 +450,40 @@ async function createSandboxContainer(params: {
   configHash?: string;
 }) {
   const { name, cfg, workspaceDir, scopeKey } = params;
-  await ensureDockerImage(cfg.image);
+  const hostWorkspaceDir = translateContainerPathToHostPath(workspaceDir);
+  const hostAgentWorkspaceDir = translateContainerPathToHostPath(params.agentWorkspaceDir);
+  const hostDockerCfg = translateSandboxDockerConfigToHost(cfg);
+  const allowedBindSourceRoots = [
+    hostWorkspaceDir,
+    hostAgentWorkspaceDir,
+    ...collectTranslatedSandboxBindSourceRoots(cfg.binds),
+  ];
+  await ensureDockerImage(hostDockerCfg.image);
 
   const args = buildSandboxCreateArgs({
     name,
-    cfg,
+    cfg: hostDockerCfg,
     scopeKey,
     configHash: params.configHash,
     includeBinds: false,
-    bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
+    bindSourceRoots: [...new Set(allowedBindSourceRoots)],
   });
-  args.push("--workdir", cfg.workdir);
+  args.push("--workdir", hostDockerCfg.workdir);
   appendWorkspaceMountArgs({
     args,
-    workspaceDir,
-    agentWorkspaceDir: params.agentWorkspaceDir,
-    workdir: cfg.workdir,
+    workspaceDir: hostWorkspaceDir,
+    agentWorkspaceDir: hostAgentWorkspaceDir,
+    workdir: hostDockerCfg.workdir,
     workspaceAccess: params.workspaceAccess,
   });
-  appendCustomBinds(args, cfg);
-  args.push(cfg.image, "sleep", "infinity");
+  appendCustomBinds(args, hostDockerCfg);
+  args.push(hostDockerCfg.image, "sleep", "infinity");
 
   await execDocker(args);
   await execDocker(["start", name]);
 
-  if (cfg.setupCommand?.trim()) {
-    await execDocker(["exec", "-i", name, "/bin/sh", "-lc", cfg.setupCommand]);
+  if (hostDockerCfg.setupCommand?.trim()) {
+    await execDocker(["exec", "-i", name, "/bin/sh", "-lc", hostDockerCfg.setupCommand]);
   }
 }
 
@@ -499,11 +512,14 @@ export async function ensureSandboxContainer(params: {
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
   const name = `${params.cfg.docker.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
+  const hostWorkspaceDir = translateContainerPathToHostPath(params.workspaceDir);
+  const hostAgentWorkspaceDir = translateContainerPathToHostPath(params.agentWorkspaceDir);
+  const hostDockerCfg = translateSandboxDockerConfigToHost(params.cfg.docker);
   const expectedHash = computeSandboxConfigHash({
-    docker: params.cfg.docker,
+    docker: hostDockerCfg,
     workspaceAccess: params.cfg.workspaceAccess,
-    workspaceDir: params.workspaceDir,
-    agentWorkspaceDir: params.agentWorkspaceDir,
+    workspaceDir: hostWorkspaceDir,
+    agentWorkspaceDir: hostAgentWorkspaceDir,
   });
   const now = Date.now();
   const state = await dockerContainerState(containerName);

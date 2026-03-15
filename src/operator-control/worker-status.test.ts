@@ -56,8 +56,8 @@ describe("operator worker status", () => {
   it("reports all delegated first-class-agent teams", async () => {
     const snapshot = await withEnvAsync(
       {
-        OPENCLAW_OPERATOR_ANGELA_URL: "http://tonya.internal:18789",
-        OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET: "shared-secret",
+        OPENCLAW_OPERATOR_INTERNAL_CONTROL_URL: "http://tonya.internal:18789",
+        OPENCLAW_OPERATOR_INTERNAL_CONTROL_SHARED_SECRET: "shared-secret",
         OPENCLAW_ENGINEERING_GATEWAY_URL: "http://gateway-k8s.internal:18789",
         OPENCLAW_ENGINEERING_GATEWAY_SECRET: "eng-secret",
       },

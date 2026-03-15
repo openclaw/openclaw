@@ -1,8 +1,80 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { beforeEach, describe, expect, it } from "vitest";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { invalidateRegistryCache } from "./agent-registry.js";
+import { resolveOperatorReferenceSourcePath } from "./reference-paths.js";
 import { resolveOperatorTaskEnvelope } from "./team-routing.js";
 
+async function seedOperatorRegistryFixture(): Promise<void> {
+  const sourcePath = resolveOperatorReferenceSourcePath("agents.yaml");
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(
+    sourcePath,
+    [
+      "operator_runtime:",
+      "  transports:",
+      "    delegated_http:",
+      "      global_default_alias: tonys-angels",
+      "agents:",
+      "  - id: raekwon",
+      "    name: Raekwon",
+      "    specialty: Backend",
+      "    triggers: [backend]",
+      "  - id: deb",
+      "    name: Deb",
+      "    specialty: Project Ops",
+      "    triggers: [sprint, status, project-ops]",
+      "  - id: jeffy",
+      "    name: Jeffy",
+      "    specialty: Kanban",
+      "    triggers: [kanban, board_hygiene_packet]",
+      "  - id: tonys-angels",
+      "    name: Tony's Angels",
+      "    specialty: Marketing",
+      "    triggers: [marketing]",
+      "  - id: bobby-digital",
+      "    name: Bobby Digital",
+      "    specialty: Engineering",
+      "    triggers: [backend, engineering]",
+      "teams:",
+      "  - id: execution-fleet",
+      "    name: Execution Fleet",
+      "    lead: raekwon",
+      "    route_via_lead: true",
+      "    members: [raekwon]",
+      "    dispatch_transport: 2tony-http",
+      "  - id: project-ops",
+      "    name: Project Ops",
+      "    lead: deb",
+      "    members: [deb, jeffy]",
+      "    dispatch_transport: deb-http",
+      "  - id: marketing",
+      "    name: Marketing",
+      "    lead: tonys-angels",
+      "    route_via_lead: true",
+      "    members: [tonys-angels]",
+      "    dispatch_transport: delegated-http",
+      "    dispatch_default_alias: tonys-angels",
+      "  - id: engineering",
+      "    name: Engineering",
+      "    lead: bobby-digital",
+      "    route_via_lead: true",
+      "    members: [bobby-digital, raekwon]",
+      "    dispatch_transport: delegated-http",
+      "    dispatch_default_alias: bobby-digital",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  invalidateRegistryCache({ sourcePath });
+}
+
 describe("operator team routing", () => {
+  beforeEach(async () => {
+    await seedOperatorRegistryFixture();
+  });
+
   it("resolves execution-fleet backend work to raekwon", async () => {
     await withStateDirEnv("operator-team-routing-exec-", async () => {
       const envelope = resolveOperatorTaskEnvelope({

@@ -221,12 +221,12 @@ function compileTeamRecord(entry: unknown): CompiledOperatorTeamRecord {
 function compileOperatorRuntime(record: RawAgentRegistry): CompiledOperatorRuntimeConfig {
   const operatorRuntime = asRecord(record.operator_runtime);
   const transports = asRecord(operatorRuntime?.transports);
-  const angelaHttp = asRecord(transports?.angela_http);
+  const delegatedHttp = asRecord(transports?.delegated_http) ?? asRecord(transports?.angela_http);
 
   return {
     transports: {
       angelaHttp: {
-        globalDefaultAlias: asString(angelaHttp?.global_default_alias),
+        globalDefaultAlias: asString(delegatedHttp?.global_default_alias),
       },
     },
   };
@@ -401,7 +401,7 @@ export function compileOperatorAgentRegistry(params?: {
   if (operatorRuntime.transports.angelaHttp.globalDefaultAlias) {
     if (!agentIds.has(operatorRuntime.transports.angelaHttp.globalDefaultAlias.toLowerCase())) {
       throw new Error(
-        `operator_runtime angela_http global_default_alias references unknown agent: ${operatorRuntime.transports.angelaHttp.globalDefaultAlias}`,
+        `operator_runtime delegated_http global_default_alias references unknown agent: ${operatorRuntime.transports.angelaHttp.globalDefaultAlias}`,
       );
     }
   }

@@ -38,6 +38,7 @@ function describeTaskDomain(task: DelegatedTaskEnvelope): string {
 
 function resolveDelegatedTransportSharedSecret(): string | null {
   const secret =
+    process.env.OPENCLAW_OPERATOR_INTERNAL_CONTROL_SHARED_SECRET?.trim() ||
     process.env.OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET?.trim() ||
     process.env.OPENCLAW_ANGELA_SHARED_SECRET?.trim();
   return secret || null;

@@ -1,12 +1,9 @@
+import {
+  resolveProjectOpsEventTarget,
+  resolveProjectOpsControlPlaneBaseUrl,
+  resolveDirectDebBaseUrl,
+} from "./project-ops-target.js";
 import type { OperatorTaskRecord } from "./task-store.js";
-
-function normalizeBaseUrl(value: string | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.replace(/\/+$/u, "");
-}
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
@@ -16,12 +13,15 @@ export type OperatorDebSyncReason = "submit" | "patch" | "receipt";
 
 export type OperatorDebSyncStatusSnapshot = {
   mode: "task-lifecycle";
+  targetMode: "control-plane-proxy" | "direct-deb" | null;
   configured: boolean;
   baseUrl: string | null;
   eventEndpoint: string | null;
   authScheme: "bearer" | null;
   authEnv: string | null;
   authConfigured: boolean;
+  controlPlaneConfigured: boolean;
+  directDebConfigured: boolean;
 };
 
 export type OperatorDebSyncResult = {
@@ -33,36 +33,30 @@ export type OperatorDebSyncResult = {
 };
 
 export function resolveDebBaseUrl(): string | null {
-  return normalizeBaseUrl(process.env.OPENCLAW_OPERATOR_DEB_URL);
+  return resolveProjectOpsEventTarget()?.baseUrl ?? null;
 }
 
 export function resolveDebSharedSecret(): string | null {
-  const secret =
-    process.env.OPENCLAW_OPERATOR_DEB_SHARED_SECRET?.trim() ||
-    process.env.OPENCLAW_DEB_SHARED_SECRET?.trim() ||
-    process.env.DEB_SHARED_SECRET?.trim();
-  return secret || null;
+  return resolveProjectOpsEventTarget()?.authToken ?? null;
 }
 
 export function resolveDebOperatorEventEndpoint(): string | null {
-  const baseUrl = resolveDebBaseUrl();
-  if (!baseUrl) {
-    return null;
-  }
-  return `${baseUrl}/operator/events`;
+  return resolveProjectOpsEventTarget()?.endpoint ?? null;
 }
 
 export function getOperatorDebSyncStatus(): OperatorDebSyncStatusSnapshot {
-  const baseUrl = resolveDebBaseUrl();
-  const sharedSecret = resolveDebSharedSecret();
+  const target = resolveProjectOpsEventTarget();
   return {
     mode: "task-lifecycle",
-    configured: Boolean(baseUrl),
-    baseUrl,
+    targetMode: target?.mode ?? null,
+    configured: Boolean(target),
+    baseUrl: target?.baseUrl ?? null,
     eventEndpoint: resolveDebOperatorEventEndpoint(),
     authScheme: "bearer",
-    authEnv: "OPENCLAW_OPERATOR_DEB_SHARED_SECRET",
-    authConfigured: Boolean(sharedSecret),
+    authEnv: target?.authEnv ?? null,
+    authConfigured: Boolean(target?.authToken),
+    controlPlaneConfigured: Boolean(resolveProjectOpsControlPlaneBaseUrl()),
+    directDebConfigured: Boolean(resolveDirectDebBaseUrl()),
   };
 }
 
@@ -131,7 +125,8 @@ export async function syncOperatorTaskToDeb(
   task: OperatorTaskRecord | null,
   reason: OperatorDebSyncReason,
 ): Promise<OperatorDebSyncResult> {
-  const endpoint = resolveDebOperatorEventEndpoint();
+  const target = resolveProjectOpsEventTarget();
+  const endpoint = target?.endpoint ?? null;
   if (!task || !endpoint) {
     return {
       attempted: false,
@@ -148,9 +143,9 @@ export async function syncOperatorTaskToDeb(
       headers: {
         "content-type": "application/json",
         accept: "application/json",
-        ...(resolveDebSharedSecret()
+        ...(target?.authToken
           ? {
-              authorization: `Bearer ${resolveDebSharedSecret()}`,
+              authorization: `Bearer ${target.authToken}`,
             }
           : {}),
       },

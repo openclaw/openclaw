@@ -121,4 +121,20 @@ describe("classifyMissionControlRequest", () => {
 
     expect(workerCancel).toEqual({ kind: "serve" });
   });
+
+  it("allows project-ops proxy routes under mission-control api", () => {
+    const projectOpsUpdate = classifyMissionControlRequest({
+      pathname: `${MISSION_CONTROL_BASE_PATH}/api/project-ops/update`,
+      search: "",
+      method: "POST",
+    });
+    const projectOpsReady = classifyMissionControlRequest({
+      pathname: `${MISSION_CONTROL_BASE_PATH}/api/project-ops/ready`,
+      search: "",
+      method: "GET",
+    });
+
+    expect(projectOpsUpdate).toEqual({ kind: "serve" });
+    expect(projectOpsReady).toEqual({ kind: "serve" });
+  });
 });

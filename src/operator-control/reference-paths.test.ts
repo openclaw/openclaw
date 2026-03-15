@@ -69,4 +69,39 @@ describe("operator reference paths", () => {
       clearConfigCache();
     });
   });
+
+  it("does not hydrate repo dotenv when resolving isolated test reference paths", async () => {
+    await withTempDir("operator-reference-dotenv-cwd-", async (cwdDir) => {
+      await fs.writeFile(path.join(cwdDir, ".env"), "OPENCLAW_PROFILE=dotenv-profile\n", "utf8");
+
+      const previousCwd = process.cwd();
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+      await withEnvAsync(
+        {
+          OPENCLAW_PROFILE: undefined,
+        },
+        async () => {
+          process.chdir(cwdDir);
+          try {
+            expect(resolveOperatorReferenceSourcePath("agents.yaml")).toBe(
+              path.join(
+                process.env.HOME ?? "",
+                ".openclaw",
+                "workspace",
+                "memory",
+                "reference",
+                "agents.yaml",
+              ),
+            );
+            expect(process.env.OPENCLAW_PROFILE).toBeUndefined();
+          } finally {
+            process.chdir(previousCwd);
+          }
+        },
+      );
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+    });
+  });
 });

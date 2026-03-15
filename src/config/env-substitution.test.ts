@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectEnvVarReferences,
   type EnvSubstitutionWarning,
   MissingEnvVarError,
   containsEnvVarReference,
@@ -340,6 +341,48 @@ describe("resolveConfigEnvVars", () => {
     it("detects references mixed with escaped placeholders", () => {
       expect(containsEnvVarReference("$${ESCAPED} ${REAL}")).toBe(true);
       expect(containsEnvVarReference("${REAL} $${ESCAPED}")).toBe(true);
+    });
+  });
+
+  describe("collectEnvVarReferences", () => {
+    it("collects unique env var references across nested structures", () => {
+      expect(
+        collectEnvVarReferences({
+          gateway: {
+            auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" },
+          },
+          channels: {
+            discord: {
+              accounts: {
+                default: { token: "${DISCORD_BOT_TOKEN}" },
+                ops: { token: "${DISCORD_BOT_TOKEN}" },
+              },
+            },
+          },
+          sandbox: {
+            env: {
+              PATH: "./node_modules/.bin:${PATH}",
+            },
+          },
+          array: ["${OPENAI_API_KEY}", "$${ESCAPED}", "prefix-${BRAVE_API_KEY}-suffix"],
+        }),
+      ).toEqual([
+        "OPENCLAW_GATEWAY_TOKEN",
+        "DISCORD_BOT_TOKEN",
+        "PATH",
+        "OPENAI_API_KEY",
+        "BRAVE_API_KEY",
+      ]);
+    });
+
+    it("ignores escaped and invalid placeholders", () => {
+      expect(
+        collectEnvVarReferences({
+          escaped: "$${ESCAPED}",
+          invalid: "${lowercase}",
+          mixed: "prefix-$${NOPE}-${REAL_ONE}",
+        }),
+      ).toEqual(["REAL_ONE"]);
     });
   });
 

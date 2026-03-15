@@ -46,6 +46,14 @@ describe("Dockerfile", () => {
     );
   });
 
+  it("ships root source files needed by source-loaded bundled extensions", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    expect(dockerfile).toContain("COPY --from=runtime-assets --chown=node:node /app/src ./src");
+    expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/extensions ./extensions",
+    );
+  });
+
   it("normalizes plugin and agent paths permissions in image layers", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("for dir in /app/extensions /app/.agent /app/.agents");

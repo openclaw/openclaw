@@ -3,8 +3,10 @@ import {
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { collectEnvVarReferences } from "../config/env-substitution.js";
 import { collectConfigServiceEnvVars } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { isSecretRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
@@ -23,28 +25,46 @@ export type GatewayInstallPlan = {
   environment: Record<string, string | undefined>;
 };
 
-function collectAuthProfileServiceEnvVars(params: {
-  env: Record<string, string | undefined>;
-  authStore?: AuthProfileStore;
-}): Record<string, string> {
-  const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
-  const entries: Record<string, string> = {};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-  for (const credential of Object.values(authStore.profiles)) {
-    const ref =
-      credential.type === "api_key"
-        ? credential.keyRef
-        : credential.type === "token"
-          ? credential.tokenRef
-          : undefined;
-    if (!ref || ref.source !== "env") {
-      continue;
+function collectEnvBackedSecretRefIds(value: unknown, refs: Set<string>): void {
+  if (isSecretRef(value)) {
+    if (value.source === "env") {
+      refs.add(value.id);
     }
-    const value = params.env[ref.id]?.trim();
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectEnvBackedSecretRefIds(entry, refs);
+    }
+    return;
+  }
+
+  if (isRecord(value)) {
+    for (const entry of Object.values(value)) {
+      collectEnvBackedSecretRefIds(entry, refs);
+    }
+  }
+}
+
+function collectReferencedServiceEnvVars(params: {
+  env: Record<string, string | undefined>;
+  value: unknown;
+}): Record<string, string> {
+  const entries: Record<string, string> = {};
+  const refs = new Set<string>(collectEnvVarReferences(params.value));
+  collectEnvBackedSecretRefIds(params.value, refs);
+
+  for (const refId of refs) {
+    const value = params.env[refId]?.trim();
     if (!value) {
       continue;
     }
-    entries[ref.id] = value;
+    entries[refId] = value;
   }
 
   return entries;
@@ -88,14 +108,19 @@ export async function buildGatewayInstallPlan(params: {
         ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
         : undefined,
   });
+  const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
 
   // Merge config env vars into the service environment (vars + inline env keys).
   // Config env vars are added first so service-specific vars take precedence.
   const environment: Record<string, string | undefined> = {
     ...collectConfigServiceEnvVars(params.config),
-    ...collectAuthProfileServiceEnvVars({
+    ...collectReferencedServiceEnvVars({
       env: params.env,
-      authStore: params.authStore,
+      value: params.config,
+    }),
+    ...collectReferencedServiceEnvVars({
+      env: params.env,
+      value: authStore,
     }),
   };
   Object.assign(environment, serviceEnvironment);

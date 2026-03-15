@@ -10,7 +10,7 @@ export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_PO
 export const ACPX_AUTH_POLICIES = ["skip", "fail"] as const;
 export type AcpxAuthPolicy = (typeof ACPX_AUTH_POLICIES)[number];
 
-export const ACPX_PINNED_VERSION = "0.2.0";
+export const ACPX_PINNED_VERSION = "0.3.0";
 export const ACPX_VERSION_ANY = "any";
 const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
 export const ACPX_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

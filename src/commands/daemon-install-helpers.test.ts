@@ -277,6 +277,88 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
   });
 
+  it("merges env-template config refs into the service environment", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {
+        DISCORD_BOT_TOKEN: "discord-token",
+        GOOGLE_PLACES_API_KEY: "google-places-key",
+        PATH: "/usr/local/bin:/usr/bin:/bin",
+      },
+      port: 3000,
+      runtime: "node",
+      config: {
+        channels: {
+          discord: {
+            accounts: {
+              default: { token: "${DISCORD_BOT_TOKEN}" },
+            },
+          },
+        },
+        skills: {
+          entries: {
+            goplaces: {
+              apiKey: "${GOOGLE_PLACES_API_KEY}",
+            },
+          },
+        },
+        env: {
+          vars: {
+            PATH: "./node_modules/.bin:${PATH}",
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.DISCORD_BOT_TOKEN).toBe("discord-token");
+    expect(plan.environment.GOOGLE_PLACES_API_KEY).toBe("google-places-key");
+    expect(plan.environment.PATH).toBeDefined();
+    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+  });
+
+  it("merges env-backed SecretRef config refs into the service environment", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {
+        TELEGRAM_BOT_TOKEN: "telegram-token",
+        ELEVENLABS_API_KEY: "elevenlabs-key",
+      },
+      port: 3000,
+      runtime: "node",
+      config: {
+        channels: {
+          telegram: {
+            botToken: {
+              source: "env",
+              provider: "default",
+              id: "TELEGRAM_BOT_TOKEN",
+            },
+          },
+        },
+        talk: {
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "ELEVENLABS_API_KEY",
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.TELEGRAM_BOT_TOKEN).toBe("telegram-token");
+    expect(plan.environment.ELEVENLABS_API_KEY).toBe("elevenlabs-key");
+  });
+
   it("skips unresolved auth-profile env refs", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
@@ -301,6 +383,43 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it("skips unresolved config refs", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {},
+      port: 3000,
+      runtime: "node",
+      config: {
+        channels: {
+          discord: {
+            accounts: {
+              default: { token: "${DISCORD_BOT_TOKEN}" },
+            },
+          },
+        },
+        skills: {
+          entries: {
+            goplaces: {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "GOOGLE_PLACES_API_KEY",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.DISCORD_BOT_TOKEN).toBeUndefined();
+    expect(plan.environment.GOOGLE_PLACES_API_KEY).toBeUndefined();
   });
 });
 

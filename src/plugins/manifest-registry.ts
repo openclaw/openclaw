@@ -233,12 +233,17 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      // Suppress the warning when the existing (winning) candidate is bundled — a global
+      // install of the same plugin ID is silently overridden by design. The loader will
+      // mark it as "overridden by bundled plugin" without any user action needed.
+      if (existing.candidate.origin !== "bundled") {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }

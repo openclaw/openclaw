@@ -10,13 +10,18 @@ services:
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      OPENCLAW_LOCAL_PATH_MAP: /shared-workspace/config/openclaw/local/path-map.json
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CONFIG_DIR:-/Users/franco/.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_SHARED_WORKSPACE_HOST:-/Users/franco/.openclaw/workspace}:/shared-workspace
+      - ${OPENCLAW_AGENT_HOME_TONY_HOST:-/Users/franco/.openclaw/workspace-tony}:/agent-homes/tony
+      - ${OPENCLAW_AGENT_HOME_BOBBY_DIGITAL_HOST:-/Users/franco/.openclaw/workspace-bobby-digital}:/agent-homes/bobby-digital
+      - ${OPENCLAW_AGENT_HOME_ANGELA_HOST:-/Users/franco/.openclaw/workspace-angela}:/agent-homes/angela
+      - ${OPENCLAW_AGENT_HOME_REVEREND_RUN_HOST:-/Users/franco/.openclaw/workspace-reverend-run}:/agent-homes/reverend-run
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -35,7 +40,7 @@ services:
     command:
       [
         "node",
-        "dist/index.js",
+        "openclaw.mjs",
         "gateway",
         "--bind",
         "${OPENCLAW_GATEWAY_BIND:-lan}",
@@ -68,17 +73,22 @@ services:
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      OPENCLAW_LOCAL_PATH_MAP: /shared-workspace/config/openclaw/local/path-map.json
       BROWSER: echo
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CONFIG_DIR:-/Users/franco/.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_SHARED_WORKSPACE_HOST:-/Users/franco/.openclaw/workspace}:/shared-workspace
+      - ${OPENCLAW_AGENT_HOME_TONY_HOST:-/Users/franco/.openclaw/workspace-tony}:/agent-homes/tony
+      - ${OPENCLAW_AGENT_HOME_BOBBY_DIGITAL_HOST:-/Users/franco/.openclaw/workspace-bobby-digital}:/agent-homes/bobby-digital
+      - ${OPENCLAW_AGENT_HOME_ANGELA_HOST:-/Users/franco/.openclaw/workspace-angela}:/agent-homes/angela
+      - ${OPENCLAW_AGENT_HOME_REVEREND_RUN_HOST:-/Users/franco/.openclaw/workspace-reverend-run}:/agent-homes/reverend-run
     stdin_open: true
     tty: true
     init: true
-    entrypoint: ["node", "dist/index.js"]
+    entrypoint: ["node", "openclaw.mjs"]
     depends_on:
       - openclaw-gateway

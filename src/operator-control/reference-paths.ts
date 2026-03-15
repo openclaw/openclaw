@@ -12,6 +12,10 @@ function isInvalidConfigError(error: unknown): boolean {
   );
 }
 
+function shouldUseIsolatedTestWorkspaceFallback(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.VITEST === "true" && env.OPENCLAW_TEST_FAST === "1";
+}
+
 export function resolveOperatorReferenceWorkspaceDir(params?: { workspaceDir?: string }): string {
   if (params?.workspaceDir?.trim()) {
     return path.resolve(params.workspaceDir);
@@ -20,6 +24,10 @@ export function resolveOperatorReferenceWorkspaceDir(params?: { workspaceDir?: s
   const runtimeConfig = getRuntimeConfigSnapshot();
   if (runtimeConfig) {
     return resolveAgentWorkspaceDir(runtimeConfig, resolveDefaultAgentId(runtimeConfig));
+  }
+
+  if (shouldUseIsolatedTestWorkspaceFallback()) {
+    return path.resolve(resolveDefaultAgentWorkspaceDir(process.env));
   }
 
   try {

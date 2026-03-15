@@ -3,6 +3,7 @@ FROM ${OPENCLAW_TONY_BASE_IMAGE}
 USER root
 
 # ─── Core system tools + Docker CLI ──────────────────────────────────────────
+ARG OPENCLAW_DOCKER_GPG_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -10,9 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     gnupg \
   && install -m 0755 -d /etc/apt/keyrings \
-  && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+  && curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc \
+  && expected_fingerprint="$(printf '%s' "$OPENCLAW_DOCKER_GPG_FINGERPRINT" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')" \
+  && actual_fingerprint="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == "fpr" { print toupper($10); exit }')" \
+  && if [ -z "$actual_fingerprint" ] || [ "$actual_fingerprint" != "$expected_fingerprint" ]; then \
+       echo "ERROR: Docker apt key fingerprint mismatch (expected $expected_fingerprint, got ${actual_fingerprint:-<empty>})" >&2; \
+       exit 1; \
+     fi \
+  && gpg --dearmor -o /etc/apt/keyrings/docker.gpg /tmp/docker.gpg.asc \
+  && rm -f /tmp/docker.gpg.asc \
   && chmod a+r /etc/apt/keyrings/docker.gpg \
-  && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list \
+  && printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable\n' \
+       "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/docker.list \
   && apt-get update \
   && apt-get install -y --no-install-recommends docker-ce-cli \
   && apt-get clean \
@@ -58,12 +68,16 @@ ARG OPENCLAW_ACPX_VERSION=0.1.15
 RUN npm install -g "acpx@${OPENCLAW_ACPX_VERSION}" vercel \
   && acpx --version
 # ─── kubectl ─────────────────────────────────────────────────────────────────
-RUN curl -LO "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl" \
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    curl -LO "https://dl.k8s.io/release/v1.30.0/bin/linux/${ARCH}/kubectl" \
   && install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl \
   && rm kubectl
 
 # ─── kustomize ───────────────────────────────────────────────────────────────
-RUN curl -Lo kustomize.tar.gz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.1/kustomize_v5.4.1_linux_amd64.tar.gz" \
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    curl -Lo kustomize.tar.gz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.1/kustomize_v5.4.1_linux_${ARCH}.tar.gz" \
   && tar xzf kustomize.tar.gz \
   && install kustomize /usr/local/bin/kustomize \
   && rm kustomize kustomize.tar.gz

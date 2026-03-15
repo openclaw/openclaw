@@ -4,6 +4,7 @@ export const MISSION_CONTROL_BASE_PATH = "/mission-control" as const;
 const MISSION_CONTROL_ACPX_EVENTS_PATH = `${MISSION_CONTROL_BASE_PATH}/api/acpx-events`;
 const MISSION_CONTROL_DEB_API_PREFIX = `${MISSION_CONTROL_BASE_PATH}/api/deb`;
 const MISSION_CONTROL_MEMORY_API_PREFIX = `${MISSION_CONTROL_BASE_PATH}/api/memory`;
+const MISSION_CONTROL_PROJECT_OPS_API_PREFIX = `${MISSION_CONTROL_BASE_PATH}/api/project-ops`;
 const MISSION_CONTROL_TASKS_API_PREFIX = `${MISSION_CONTROL_BASE_PATH}/api/tasks`;
 const MISSION_CONTROL_WORKER_API_PREFIX = `${MISSION_CONTROL_BASE_PATH}/api/worker`;
 
@@ -61,6 +62,17 @@ export function classifyMissionControlRequest(params: {
       pathname === MISSION_CONTROL_MEMORY_API_PREFIX ||
       pathname === `${MISSION_CONTROL_MEMORY_API_PREFIX}/promote` ||
       pathname === `${MISSION_CONTROL_MEMORY_API_PREFIX}/service-context`
+    ) {
+      return { kind: "serve" };
+    }
+
+    if (
+      pathname === `${MISSION_CONTROL_PROJECT_OPS_API_PREFIX}/ready` ||
+      pathname === `${MISSION_CONTROL_PROJECT_OPS_API_PREFIX}/status` ||
+      pathname === `${MISSION_CONTROL_PROJECT_OPS_API_PREFIX}/sync` ||
+      pathname === `${MISSION_CONTROL_PROJECT_OPS_API_PREFIX}/update` ||
+      pathname === `${MISSION_CONTROL_PROJECT_OPS_API_PREFIX}/task` ||
+      pathname === `${MISSION_CONTROL_PROJECT_OPS_API_PREFIX}/operator/events`
     ) {
       return { kind: "serve" };
     }

@@ -6,6 +6,7 @@ import {
   canonicalizeOperatorExecutionTransport,
   type OperatorBlockerCode,
 } from "./contracts.js";
+import { resolveProjectOpsCommandTarget, type ProjectOpsTargetMode } from "./project-ops-target.js";
 import { resolveOperatorRuntimeFreshness } from "./runtime-freshness.js";
 import { getOperatorTask, patchOperatorTask, submitOperatorTask } from "./task-store.js";
 import type { OperatorTaskRecord } from "./task-store.js";
@@ -379,23 +380,15 @@ function build2TonyPayload(task: OperatorTaskRecord) {
   };
 }
 
-function resolveDebBaseUrl(): string | null {
-  return normalizeBaseUrl(process.env.OPENCLAW_OPERATOR_DEB_URL);
-}
-
-function resolveDebSharedSecret(): string | null {
-  const secret =
-    process.env.OPENCLAW_OPERATOR_DEB_SHARED_SECRET?.trim() ||
-    process.env.OPENCLAW_DEB_SHARED_SECRET?.trim();
-  return secret || null;
-}
-
 function resolveDelegatedTransportBaseUrl(): string | null {
-  return normalizeBaseUrl(process.env.OPENCLAW_OPERATOR_ANGELA_URL);
+  return normalizeBaseUrl(
+    process.env.OPENCLAW_OPERATOR_INTERNAL_CONTROL_URL ?? process.env.OPENCLAW_OPERATOR_ANGELA_URL,
+  );
 }
 
 function resolveDelegatedTransportSharedSecret(): string | null {
   const secret =
+    process.env.OPENCLAW_OPERATOR_INTERNAL_CONTROL_SHARED_SECRET?.trim() ||
     process.env.OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET?.trim() ||
     process.env.OPENCLAW_ANGELA_SHARED_SECRET?.trim();
   return secret || null;
@@ -471,12 +464,22 @@ function resolveExplicitDebCommand(inputs: Record<string, unknown>): string | nu
   return command ? command.toLowerCase() : null;
 }
 
-function shouldDispatchDogpoundTask(
+function shouldDispatchPawAndOrderTask(
   task: OperatorTaskRecord,
   team: ReturnType<typeof getResolvedOperatorTaskTeam>,
   inputs: Record<string, unknown>,
 ): boolean {
-  if (readStringField(inputs, "dog_role", "dogRole", "artifact_type", "artifactType")) {
+  if (
+    readStringField(
+      inputs,
+      "specialist_role",
+      "specialistRole",
+      "dog_role",
+      "dogRole",
+      "artifact_type",
+      "artifactType",
+    )
+  ) {
     return true;
   }
   if (readStringField(inputs, "delivery_mode", "deliveryMode", "channel_target", "channelTarget")) {
@@ -493,36 +496,36 @@ function shouldDispatchDogpoundTask(
 function buildDebPayload(task: OperatorTaskRecord): {
   baseUrl: string;
   endpoint: string;
+  readyEndpoint: string;
   init: RequestInit;
   owner: string;
   successState: "completed";
   command: "status" | "sync" | "task" | "update";
+  targetMode: ProjectOpsTargetMode;
 } {
   const inputs = asRecord(task.envelope.inputs) ?? {};
   const team = getResolvedOperatorTaskTeam(task.envelope);
-  const dispatchConfig = resolveTeamDispatchConfig(team, {
-    baseUrl: resolveDebBaseUrl,
-    authToken: resolveDebSharedSecret,
-  });
-  const baseUrl = dispatchConfig.baseUrl;
-  if (!baseUrl) {
-    throw new Error("Deb base URL not configured");
-  }
   const command =
     resolveExplicitDebCommand(inputs) ??
-    (shouldDispatchDogpoundTask(task, team, inputs) ? "task" : "update");
+    (shouldDispatchPawAndOrderTask(task, team, inputs) ? "task" : "update");
+  const projectOpsTarget = resolveProjectOpsCommandTarget(command);
+  if (!projectOpsTarget) {
+    throw new Error("project-ops transport not configured");
+  }
+  const baseUrl = projectOpsTarget.baseUrl;
 
   if (command === "status" || command === "sync") {
     return {
       baseUrl,
-      endpoint: joinEndpoint(baseUrl, command),
+      endpoint: projectOpsTarget.endpoint,
+      readyEndpoint: projectOpsTarget.readyEndpoint,
       init: {
         method: "POST",
         headers: {
           accept: "application/json",
-          ...(dispatchConfig.authToken
+          ...(projectOpsTarget.authToken
             ? {
-                authorization: `Bearer ${dispatchConfig.authToken}`,
+                authorization: `Bearer ${projectOpsTarget.authToken}`,
               }
             : {}),
         },
@@ -530,31 +533,33 @@ function buildDebPayload(task: OperatorTaskRecord): {
       owner: "deb",
       successState: "completed",
       command,
+      targetMode: projectOpsTarget.mode,
     };
   }
 
   if (command === "task") {
-    const dogRole =
+    const specialistRole =
       task.envelope.target.alias?.trim() ||
-      readStringField(inputs, "dog_role", "dogRole", "role") ||
+      readStringField(inputs, "specialist_role", "specialistRole", "dog_role", "dogRole", "role") ||
       "deb";
 
     return {
       baseUrl,
-      endpoint: joinEndpoint(baseUrl, "/task"),
+      endpoint: projectOpsTarget.endpoint,
+      readyEndpoint: projectOpsTarget.readyEndpoint,
       init: {
         method: "POST",
         headers: {
           "content-type": "application/json",
           accept: "application/json",
-          ...(dispatchConfig.authToken
+          ...(projectOpsTarget.authToken
             ? {
-                authorization: `Bearer ${dispatchConfig.authToken}`,
+                authorization: `Bearer ${projectOpsTarget.authToken}`,
               }
             : {}),
         },
         body: JSON.stringify({
-          schema: "DebDogpoundTaskV1",
+          schema: "PawAndOrderTaskV1",
           task_id: task.envelope.task_id,
           run_id: task.receipt.run_id,
           objective: task.envelope.objective,
@@ -562,7 +567,8 @@ function buildDebPayload(task: OperatorTaskRecord): {
           team_id: task.envelope.target.team_id ?? null,
           team_lead: team?.lead ?? null,
           alias: task.envelope.target.alias ?? null,
-          dog_role: dogRole,
+          specialist_role: specialistRole,
+          dog_role: specialistRole,
           artifact_type: readStringField(inputs, "artifact_type", "artifactType"),
           channel_target: readStringField(inputs, "channel_target", "channelTarget"),
           delivery_mode: readStringField(inputs, "delivery_mode", "deliveryMode"),
@@ -573,9 +579,10 @@ function buildDebPayload(task: OperatorTaskRecord): {
           inputs,
         }),
       },
-      owner: dogRole,
+      owner: specialistRole,
       successState: "completed",
       command,
+      targetMode: projectOpsTarget.mode,
     };
   }
 
@@ -593,15 +600,16 @@ function buildDebPayload(task: OperatorTaskRecord): {
 
   return {
     baseUrl,
-    endpoint: joinEndpoint(baseUrl, team?.dispatchPath ?? "/update"),
+    endpoint: projectOpsTarget.endpoint,
+    readyEndpoint: projectOpsTarget.readyEndpoint,
     init: {
       method: "POST",
       headers: {
         "content-type": "application/json",
         accept: "application/json",
-        ...(dispatchConfig.authToken
+        ...(projectOpsTarget.authToken
           ? {
-              authorization: `Bearer ${dispatchConfig.authToken}`,
+              authorization: `Bearer ${projectOpsTarget.authToken}`,
             }
           : {}),
       },
@@ -614,6 +622,7 @@ function buildDebPayload(task: OperatorTaskRecord): {
     owner: "deb",
     successState: "completed",
     command: "update",
+    targetMode: projectOpsTarget.mode,
   };
 }
 
@@ -684,13 +693,13 @@ function buildDelegatedTransportPayload(task: OperatorTaskRecord): {
 
 async function assertHttpDelegateReady(
   delegateName: string,
-  baseUrl: string,
+  readyEndpoint: string,
   authorizationHeader: string | null,
   policy: DelegateReadinessPolicy,
 ): Promise<void> {
   let response: Response;
   try {
-    response = await fetch(joinEndpoint(baseUrl, "/ready"), {
+    response = await fetch(readyEndpoint, {
       method: "GET",
       headers: {
         accept: "application/json",
@@ -754,7 +763,9 @@ async function dispatchTo2Tony(task: OperatorTaskRecord): Promise<DispatchResult
         `2Tony not ready (pending=${readiness.pending}, active=${readiness.active}, shuttingDown=${String(readiness.shuttingDown)})`,
       );
     }
-    const workerFreshness = resolveOperatorWorkerFreshness({ ready: readiness });
+    const workerFreshness = resolveOperatorWorkerFreshness({
+      ready: readiness,
+    });
     if (!workerFreshness.ready) {
       throw new DispatchBlockError(
         "stale_runtime",
@@ -837,8 +848,8 @@ function blockOperatorTask(
 async function dispatchToDeb(task: OperatorTaskRecord): Promise<DispatchResult> {
   const request = buildDebPayload(task);
   await assertHttpDelegateReady(
-    "Deb",
-    request.baseUrl,
+    request.targetMode === "control-plane-proxy" ? "Tonya project-ops control plane" : "Deb",
+    request.readyEndpoint,
     readAuthorizationHeader(request.init.headers),
     {
       label: "Deb",
@@ -875,13 +886,13 @@ async function dispatchToDelegatedTransport(task: OperatorTaskRecord): Promise<D
   const request = buildDelegatedTransportPayload(task);
   await assertHttpDelegateReady(
     request.delegateName,
-    request.baseUrl,
+    joinEndpoint(request.baseUrl, "/ready"),
     readAuthorizationHeader(request.init.headers),
     {
       label: "Delegated first-class-agent boundary",
-      maxAgeEnv: "OPENCLAW_OPERATOR_ANGELA_MAX_AGE_HOURS",
-      approvedRefsEnv: "OPENCLAW_OPERATOR_ANGELA_APPROVED_REFS",
-      requireIdentityEnv: "OPENCLAW_OPERATOR_REQUIRE_ANGELA_IDENTITY",
+      maxAgeEnv: "OPENCLAW_OPERATOR_INTERNAL_CONTROL_MAX_AGE_HOURS",
+      approvedRefsEnv: "OPENCLAW_OPERATOR_INTERNAL_CONTROL_APPROVED_REFS",
+      requireIdentityEnv: "OPENCLAW_OPERATOR_REQUIRE_INTERNAL_CONTROL_IDENTITY",
     },
   );
   const response = await fetch(request.endpoint, request.init);
@@ -914,7 +925,7 @@ function resolveDispatchFailureEndpoint(task: OperatorTaskRecord): string {
       try {
         return buildDebPayload(task).endpoint;
       } catch {
-        return `${resolveDebBaseUrl() ?? "<unconfigured>"}/update`;
+        return resolveProjectOpsCommandTarget("update")?.endpoint ?? "<unconfigured>";
       }
     case "delegated-http":
     case "angela-http":
@@ -950,7 +961,9 @@ export async function dispatchOperatorTask(taskId: string): Promise<DispatchResu
     throw new Error(`unknown operator task: ${taskId}`);
   }
 
-  const runtimeFreshness = resolveOperatorRuntimeFreshness({ moduleUrl: import.meta.url });
+  const runtimeFreshness = resolveOperatorRuntimeFreshness({
+    moduleUrl: import.meta.url,
+  });
   if (!runtimeFreshness.ready) {
     throw new DispatchBlockError(
       "stale_runtime",
