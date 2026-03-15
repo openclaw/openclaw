@@ -211,11 +211,17 @@ const NodesToolSchema = Type.Object({
   ),
   // run
   command: Type.Optional(
-    Type.Array(Type.String(), { description: "Command and arguments to execute on the node." }),
+    Type.Array(Type.String(), {
+      description: "Command and arguments to execute on the node.",
+      maxItems: 100,
+    }),
   ),
   cwd: Type.Optional(Type.String({ description: "Working directory for command execution." })),
   env: Type.Optional(
-    Type.Array(Type.String(), { description: "Environment variables as KEY=VALUE pairs." }),
+    Type.Array(Type.String(), {
+      description: "Environment variables as KEY=VALUE pairs.",
+      maxItems: 50,
+    }),
   ),
   commandTimeoutMs: Type.Optional(
     Type.Number({
