@@ -572,6 +572,11 @@ export async function sendVoiceMessageDiscord(
     throw err;
   } finally {
     await unlinkIfExists(oggCleanup ? oggPath : null);
+    if (oggCleanup && oggPath) {
+      // ensureVoiceFormat writes into a dedicated voice-fmt-* subdirectory;
+      // remove it too so no empty temp directories accumulate.
+      await fs.rm(path.dirname(oggPath), { recursive: true, force: true }).catch(() => {});
+    }
     await unlinkIfExists(localInputPath);
   }
 }
