@@ -307,6 +307,24 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(normalized)).toBe(false);
     expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
+
+  it("defaults supportsUsageInStreaming to true for local endpoints", () => {
+    for (const url of [
+      "http://localhost:8080/v1",
+      "http://127.0.0.1:1234/v1",
+      "http://0.0.0.0:11434/v1",
+    ]) {
+      const model = {
+        ...baseModel(),
+        provider: "custom-local" as string,
+        baseUrl: url,
+      };
+      delete (model as { compat?: unknown }).compat;
+      const normalized = normalizeModelCompat(model);
+      expect(supportsUsageInStreaming(normalized)).toBe(true);
+      expect(supportsDeveloperRole(normalized)).toBe(false);
+    }
+  });
 });
 
 describe("isModernModelRef", () => {
