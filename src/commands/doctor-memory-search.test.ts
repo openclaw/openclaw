@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -5,9 +6,11 @@ import type { OpenClawConfig } from "../config/config.js";
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
+const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const resolveMemoryBackendConfig = vi.hoisted(() => vi.fn());
+const resolveUserPath = vi.hoisted(() => vi.fn((input: string) => input));
 
 vi.mock("../terminal/note.js", () => ({
   note,
@@ -16,6 +19,7 @@ vi.mock("../terminal/note.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
   resolveAgentDir,
+  resolveAgentWorkspaceDir,
 }));
 
 vi.mock("../agents/memory-search.js", () => ({
@@ -29,6 +33,14 @@ vi.mock("../agents/model-auth.js", () => ({
 vi.mock("../memory/backend-config.js", () => ({
   resolveMemoryBackendConfig,
 }));
+
+vi.mock("../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
+  return {
+    ...actual,
+    resolveUserPath,
+  };
+});
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import { detectLegacyWorkspaceDirs } from "./doctor-workspace.js";
@@ -53,11 +65,15 @@ describe("noteMemorySearchHealth", () => {
     note.mockClear();
     resolveDefaultAgentId.mockClear();
     resolveAgentDir.mockClear();
+    resolveAgentWorkspaceDir.mockClear();
     resolveMemorySearchConfig.mockReset();
     resolveApiKeyForProvider.mockReset();
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
     resolveMemoryBackendConfig.mockReset();
     resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
+    resolveUserPath.mockReset();
+    resolveUserPath.mockImplementation((input: string) => input);
+    vi.restoreAllMocks();
   });
 
   it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
@@ -289,6 +305,58 @@ describe("noteMemorySearchHealth", () => {
     const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
     expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
+  });
+
+  it("warns when configured memory extraPaths do not exist", async () => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      local: {},
+      remote: { apiKey: "from-config" },
+      extraPaths: ["/tmp/workspace/memory", "/tmp/workspace/MEMORY.md"],
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("extraPaths that do not exist");
+    expect(message).toContain("/tmp/workspace/memory");
+    expect(message).toContain("/tmp/workspace/MEMORY.md");
+  });
+
+  it("does not warn when configured memory extraPaths exist", async () => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      local: {},
+      remote: { apiKey: "from-config" },
+      extraPaths: ["/tmp/workspace/memory"],
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when configured memory extraPaths use tilde-prefixed paths that exist", async () => {
+    resolveUserPath.mockImplementation((input: string) =>
+      input === "~/notes" ? "/home/test/notes" : input,
+    );
+    const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return candidate === "/home/test/notes";
+    });
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      local: {},
+      remote: { apiKey: "from-config" },
+      extraPaths: ["~/notes"],
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(existsSync).toHaveBeenCalledWith("/home/test/notes");
+    expect(note).not.toHaveBeenCalled();
   });
 });
 
