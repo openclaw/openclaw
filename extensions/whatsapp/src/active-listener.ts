@@ -1,6 +1,7 @@
 import { formatCliCommand } from "../../../src/cli/command-format.js";
 import type { PollInput } from "../../../src/polls.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 
 export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
@@ -30,7 +31,7 @@ export type ActiveWebListener = {
 
 let _currentListener: ActiveWebListener | null = null;
 
-const listeners = new Map<string, ActiveWebListener>();
+const listeners = resolveGlobalMap<string, ActiveWebListener>(Symbol.for("openclaw.wa-listeners"));
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
