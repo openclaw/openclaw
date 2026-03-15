@@ -50,6 +50,7 @@ import { executePollAction, executeSendAction } from "./outbound-send-service.js
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
+import { extractDeliveryInfo } from "../../config/sessions/delivery-info.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -60,6 +61,21 @@ export type MessageActionRunnerGateway = {
   mode: GatewayClientMode;
 };
 
+/** Get fallback threadId from session deliveryContext */
+function getSessionFallbackThreadId(sessionKey?: string): string | undefined {
+  if (!sessionKey) return undefined;
+  try {
+    const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+    // Prefer explicitly parsed threadId from sessionKey, fallback to deliveryContext.threadId
+    if (threadId) return threadId;
+    const dc = deliveryContext as { threadId?: number | string } | undefined;
+    if (dc?.threadId) return String(dc.threadId);
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveAndApplyOutboundThreadId(
   params: Record<string, unknown>,
   ctx: {
@@ -67,6 +83,8 @@ function resolveAndApplyOutboundThreadId(
     to: string;
     toolContext?: ChannelThreadingToolContext;
     allowSlackAutoThread: boolean;
+    /** Fallback threadId from session deliveryContext */
+    fallbackThreadId?: string;
   },
 ): string | undefined {
   const threadId = readStringParam(params, "threadId");
@@ -76,7 +94,11 @@ function resolveAndApplyOutboundThreadId(
       : undefined;
   const telegramAutoThreadId =
     ctx.channel === "telegram" && !threadId
-      ? resolveTelegramAutoThreadId({ to: ctx.to, toolContext: ctx.toolContext })
+      ? resolveTelegramAutoThreadId({
+          to: ctx.to,
+          toolContext: ctx.toolContext,
+          fallbackThreadId: ctx.fallbackThreadId,
+        })
       : undefined;
   const resolved = threadId ?? slackAutoThreadId ?? telegramAutoThreadId;
   // Write auto-resolved threadId back into params so downstream dispatch
@@ -483,11 +505,13 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const silent = readBooleanParam(params, "silent");
 
   const replyToId = readStringParam(params, "replyTo");
+  const fallbackThreadId = getSessionFallbackThreadId(input.sessionKey);
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
     channel,
     to,
     toolContext: input.toolContext,
     allowSlackAutoThread: channel === "slack" && !replyToId,
+    fallbackThreadId,
   });
   const outboundRoute =
     agentId && !dryRun
@@ -606,6 +630,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     to,
     toolContext: input.toolContext,
     allowSlackAutoThread: channel === "slack",
+    fallbackThreadId: getSessionFallbackThreadId(input.sessionKey),
   });
 
   const base = typeof params.message === "string" ? params.message : "";
