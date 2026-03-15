@@ -94,10 +94,21 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
               `Headless mode is not supported with extension-based profile "${profileCtx.profile.name}". Use an openclaw-managed profile instead.`,
             );
           }
-          const current = ctx.state();
+        }
+
+        // Scope headless override to this start operation only — don't permanently
+        // mutate shared resolved state, otherwise a subsequent start without
+        // ?headless=true would still launch headless.
+        const current = ctx.state();
+        const previousHeadless = current.resolved.headless;
+        if (headlessParam) {
           current.resolved.headless = true;
         }
-        await profileCtx.ensureBrowserAvailable();
+        try {
+          await profileCtx.ensureBrowserAvailable();
+        } finally {
+          current.resolved.headless = previousHeadless;
+        }
         res.json({ ok: true, profile: profileCtx.profile.name });
       },
     });
