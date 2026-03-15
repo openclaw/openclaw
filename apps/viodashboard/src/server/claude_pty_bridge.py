@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
+import fcntl
+import json
 import os
 import pty
 import select
 import signal
+import struct
 import sys
+import termios
 import time
 from typing import Optional
 
@@ -56,6 +60,7 @@ def parse_args(argv):
     log_path = None
     stdin_path = None
     status_path = None
+    resize_path = None
     idx = 0
     while idx < len(argv):
         token = argv[idx]
@@ -78,11 +83,15 @@ def parse_args(argv):
             status_path = argv[idx + 1]
             idx += 2
             continue
+        if token == '--resize' and idx + 1 < len(argv):
+            resize_path = argv[idx + 1]
+            idx += 2
+            continue
         return None
     command = argv[idx:]
     if not cwd or not log_path or not stdin_path or not command:
         return None
-    return cwd, log_path, stdin_path, status_path, command
+    return cwd, log_path, stdin_path, status_path, resize_path, command
 
 
 def main() -> int:
@@ -90,7 +99,7 @@ def main() -> int:
     if parsed is None:
         return usage()
 
-    cwd, log_path, stdin_path, status_path, command = parsed
+    cwd, log_path, stdin_path, status_path, resize_path, command = parsed
     state = BridgeState(log_path=log_path, status_path=status_path)
 
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -125,8 +134,10 @@ def main() -> int:
     state.write_status('running')
 
     fifo_fd = None
+    fifo_keepalive_fd = None
     try:
-        fifo_fd = os.open(stdin_path, os.O_RDWR | os.O_NONBLOCK)
+        fifo_fd = os.open(stdin_path, os.O_RDONLY | os.O_NONBLOCK)
+        fifo_keepalive_fd = os.open(stdin_path, os.O_WRONLY | os.O_NONBLOCK)
         while True:
             read_fds = [master_fd]
             if fifo_fd is not None:
@@ -155,6 +166,18 @@ def main() -> int:
                     except OSError:
                         pass
 
+            # Apply pending PTY resize if Node wrote a resize file.
+            if resize_path and os.path.exists(resize_path):
+                try:
+                    with open(resize_path, 'r') as f:
+                        sz = json.load(f)
+                    os.unlink(resize_path)
+                    cols = max(1, min(500, int(sz.get('cols', 80))))
+                    rows = max(1, min(200, int(sz.get('rows', 24))))
+                    fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+                except Exception:
+                    pass
+
             if not state.child_exited:
                 try:
                     waited_pid, status = os.waitpid(pid, os.WNOHANG)
@@ -176,6 +199,11 @@ def main() -> int:
         state.write_status(final_status, exit_code=exit_code)
         return exit_code
     finally:
+        if fifo_keepalive_fd is not None:
+            try:
+                os.close(fifo_keepalive_fd)
+            except OSError:
+                pass
         if fifo_fd is not None:
             try:
                 os.close(fifo_fd)
