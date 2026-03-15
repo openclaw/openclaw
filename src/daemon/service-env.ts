@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../version.js";
@@ -78,13 +79,19 @@ function appendSubdir(base: string | undefined, subdir: string): string | undefi
   return base.endsWith(`/${subdir}`) ? base : path.posix.join(base, subdir);
 }
 
+function addDirIfExists(dirs: string[], dir: string): void {
+  if (fs.existsSync(dir)) {
+    dirs.push(dir);
+  }
+}
+
 function addCommonUserBinDirs(dirs: string[], home: string): void {
-  dirs.push(`${home}/.local/bin`);
-  dirs.push(`${home}/.npm-global/bin`);
-  dirs.push(`${home}/bin`);
-  dirs.push(`${home}/.volta/bin`);
-  dirs.push(`${home}/.asdf/shims`);
-  dirs.push(`${home}/.bun/bin`);
+  addDirIfExists(dirs, `${home}/.local/bin`);
+  addDirIfExists(dirs, `${home}/.npm-global/bin`);
+  addDirIfExists(dirs, `${home}/bin`);
+  addDirIfExists(dirs, `${home}/.volta/bin`);
+  addDirIfExists(dirs, `${home}/.asdf/shims`);
+  addDirIfExists(dirs, `${home}/.bun/bin`);
 }
 
 function addCommonEnvConfiguredBinDirs(
@@ -143,11 +150,11 @@ export function resolveDarwinUserBinDirs(
   // Node version managers - macOS specific paths
   // nvm: no stable default path, depends on user's shell configuration
   // fnm: macOS default is ~/Library/Application Support/fnm, not ~/.fnm
-  dirs.push(`${home}/Library/Application Support/fnm/aliases/default/bin`); // fnm default
-  dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm if customized to ~/.fnm
+  addDirIfExists(dirs, `${home}/Library/Application Support/fnm/aliases/default/bin`); // fnm default
+  addDirIfExists(dirs, `${home}/.fnm/aliases/default/bin`); // fnm if customized to ~/.fnm
   // pnpm: macOS default is ~/Library/pnpm, not ~/.local/share/pnpm
-  dirs.push(`${home}/Library/pnpm`); // pnpm default
-  dirs.push(`${home}/.local/share/pnpm`); // pnpm XDG fallback
+  addDirIfExists(dirs, `${home}/Library/pnpm`); // pnpm default
+  addDirIfExists(dirs, `${home}/.local/share/pnpm`); // pnpm XDG fallback
 
   return dirs;
 }
@@ -175,9 +182,9 @@ export function resolveLinuxUserBinDirs(
   addCommonUserBinDirs(dirs, home);
 
   // Node version managers
-  dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
-  dirs.push(`${home}/.fnm/current/bin`); // fnm
-  dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
+  addDirIfExists(dirs, `${home}/.nvm/current/bin`); // nvm with current symlink
+  addDirIfExists(dirs, `${home}/.fnm/current/bin`); // fnm
+  addDirIfExists(dirs, `${home}/.local/share/pnpm`); // pnpm global bin
 
   return dirs;
 }
