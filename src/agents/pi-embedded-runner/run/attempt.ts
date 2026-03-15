@@ -133,7 +133,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
-import { dropThinkingBlocks } from "../thinking.js";
+import { convertThinkingBlocksToText, dropThinkingBlocks } from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
@@ -482,6 +482,19 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
         return options?.onPayload?.(payload, model);
       },
     });
+}
+
+function modelRequiresThinkingAsText(model: { api?: unknown; compat?: unknown }): boolean {
+  if (model.api !== "openai-completions") {
+    return false;
+  }
+  if (!model.compat || typeof model.compat !== "object") {
+    return false;
+  }
+  if (!("requiresThinkingAsText" in model.compat)) {
+    return false;
+  }
+  return (model.compat as { requiresThinkingAsText?: unknown }).requiresThinkingAsText === true;
 }
 
 function resolveCaseInsensitiveAllowedToolName(
@@ -2312,6 +2325,28 @@ export async function runEmbeddedAttempt(
             return inner(model, context, options);
           }
           const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
+          if (sanitized === messages) {
+            return inner(model, context, options);
+          }
+          const nextContext = {
+            ...(context as unknown as Record<string, unknown>),
+            messages: sanitized,
+          } as unknown;
+          return inner(model, nextContext as typeof context, options);
+        };
+      }
+
+      // Work around openai-completions adapter paths that can convert assistant
+      // content to a string and then `unshift` thinking-as-text into it.
+      if (modelRequiresThinkingAsText(params.model)) {
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const ctx = context as unknown as { messages?: unknown };
+          const messages = ctx?.messages;
+          if (!Array.isArray(messages)) {
+            return inner(model, context, options);
+          }
+          const sanitized = convertThinkingBlocksToText(messages as unknown as AgentMessage[]);
           if (sanitized === messages) {
             return inner(model, context, options);
           }

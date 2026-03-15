@@ -51,3 +51,49 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   }
   return touched ? out : messages;
 }
+
+/**
+ * For providers that require "thinking as text", convert assistant thinking
+ * blocks into a leading text block and remove the original thinking blocks.
+ *
+ * This avoids downstream adapter paths that assume `assistant.content` is an
+ * array and call `unshift` on it, even when provider compat can force string
+ * content in the outgoing payload.
+ */
+export function convertThinkingBlocksToText(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!isAssistantMessageWithContent(msg)) {
+      out.push(msg);
+      continue;
+    }
+    const thinkingTexts: string[] = [];
+    const nextContent: AssistantContentBlock[] = [];
+    for (const block of msg.content) {
+      if (block && typeof block === "object" && (block as { type?: unknown }).type === "thinking") {
+        touched = true;
+        const thinkingValue = (block as { thinking?: unknown }).thinking;
+        if (typeof thinkingValue === "string" && thinkingValue.trim().length > 0) {
+          thinkingTexts.push(thinkingValue);
+        }
+        continue;
+      }
+      nextContent.push(block);
+    }
+    if (thinkingTexts.length > 0) {
+      nextContent.unshift({
+        type: "text",
+        text: thinkingTexts.join("\n\n"),
+      } as AssistantContentBlock);
+    }
+    if (nextContent.length === msg.content.length && thinkingTexts.length === 0) {
+      out.push(msg);
+      continue;
+    }
+    const content =
+      nextContent.length > 0 ? nextContent : [{ type: "text", text: "" } as AssistantContentBlock];
+    out.push({ ...msg, content });
+  }
+  return touched ? out : messages;
+}

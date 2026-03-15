@@ -1,7 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
-import { dropThinkingBlocks, isAssistantMessageWithContent } from "./thinking.js";
+import {
+  convertThinkingBlocksToText,
+  dropThinkingBlocks,
+  isAssistantMessageWithContent,
+} from "./thinking.js";
 
 function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
   const messages: AgentMessage[] = [
@@ -59,5 +63,69 @@ describe("dropThinkingBlocks", () => {
       { type: "thinking", thinking: "internal-only" },
     ]);
     expect(assistant.content).toEqual([{ type: "text", text: "" }]);
+  });
+});
+
+describe("convertThinkingBlocksToText", () => {
+  it("returns the original reference when no thinking blocks are present", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hello" }),
+      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
+    ];
+
+    const result = convertThinkingBlocksToText(messages);
+    expect(result).toBe(messages);
+  });
+
+  it("prepends joined thinking text and removes thinking blocks", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "first thought" },
+          { type: "text", text: "final answer" },
+          { type: "thinking", thinking: "second thought" },
+        ],
+      }),
+    ];
+
+    const result = convertThinkingBlocksToText(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(result).not.toBe(messages);
+    expect(assistant.content).toEqual([
+      { type: "text", text: "first thought\n\nsecond thought" },
+      { type: "text", text: "final answer" },
+    ]);
+  });
+
+  it("keeps assistant turn structure when thinking was the only content", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "internal-only" }],
+      }),
+    ];
+
+    const result = convertThinkingBlocksToText(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "internal-only" }]);
+  });
+
+  it("drops empty thinking blocks and preserves non-thinking blocks", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "   " },
+          { type: "toolCall", id: "c1", name: "read", arguments: {} },
+        ],
+      }),
+    ];
+
+    const result = convertThinkingBlocksToText(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([
+      { type: "toolCall", id: "c1", name: "read", arguments: {} },
+    ]);
   });
 });
