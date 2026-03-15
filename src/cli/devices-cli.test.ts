@@ -139,6 +139,75 @@ describe("devices cli remove", () => {
       }),
     );
   });
+
+  it("resolves a unique alias and removes the matched device", async () => {
+    callGateway
+      .mockRejectedValueOnce(new Error("unknown deviceId"))
+      .mockResolvedValueOnce({
+        paired: [
+          { deviceId: "device-1", displayName: "Office iPad" },
+          { deviceId: "device-2", displayName: "Lab Node" },
+        ],
+        pending: [],
+      })
+      .mockResolvedValueOnce({ deviceId: "device-1" });
+
+    await runDevicesCommand(["remove", "Office iPad"]);
+
+    expect(callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "device.pair.remove",
+        params: { deviceId: "Office iPad" },
+      }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "device.pair.list",
+      }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        method: "device.pair.remove",
+        params: { deviceId: "device-1" },
+      }),
+    );
+  });
+
+  it("aborts removal when alias matches multiple devices", async () => {
+    callGateway.mockRejectedValueOnce(new Error("unknown deviceId")).mockResolvedValueOnce({
+      paired: [
+        { deviceId: "device-1", displayName: "Office iPad" },
+        { deviceId: "device-2", displayName: "Office iPad" },
+      ],
+      pending: [],
+    });
+
+    await runDevicesCommand(["remove", "Office iPad"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Multiple paired devices match alias "Office iPad". Use an exact deviceId from `openclaw devices list`.',
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(callGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts removal when alias matches no devices", async () => {
+    callGateway.mockRejectedValueOnce(new Error("unknown deviceId")).mockResolvedValueOnce({
+      paired: [{ deviceId: "device-1", displayName: "Office iPad" }],
+      pending: [],
+    });
+
+    await runDevicesCommand(["remove", "Unknown Device"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      'No paired device matches alias "Unknown Device". Use an exact deviceId from `openclaw devices list`.',
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(callGateway).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("devices cli clear", () => {

@@ -197,6 +197,32 @@ function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
   return parts.join(", ");
 }
 
+function isUnknownDeviceIdError(error: unknown): boolean {
+  return normalizeErrorMessage(error).toLowerCase().includes("unknown deviceid");
+}
+
+function resolvePairedDeviceIdByAlias(
+  paired: PairedDevice[] | undefined,
+  alias: string,
+): { deviceId?: string; error?: string } {
+  const normalizedAlias = alias.trim();
+  const pairedDevices = Array.isArray(paired) ? paired : [];
+  const matchedDevices = pairedDevices.filter(
+    (device) => (device.displayName ?? "").trim() === normalizedAlias,
+  );
+  if (matchedDevices.length === 1) {
+    return { deviceId: matchedDevices[0]?.deviceId?.trim() };
+  }
+  if (matchedDevices.length > 1) {
+    return {
+      error: `Multiple paired devices match alias "${normalizedAlias}". Use an exact deviceId from \`openclaw devices list\`.`,
+    };
+  }
+  return {
+    error: `No paired device matches alias "${normalizedAlias}". Use an exact deviceId from \`openclaw devices list\`.`,
+  };
+}
+
 function resolveRequiredDeviceRole(
   opts: DevicesRpcOpts,
 ): { deviceId: string; role: string } | null {
@@ -285,20 +311,49 @@ export function registerDevicesCli(program: Command) {
     devices
       .command("remove")
       .description("Remove a paired device entry")
-      .argument("<deviceId>", "Paired device id")
-      .action(async (deviceId: string, opts: DevicesRpcOpts) => {
-        const trimmed = deviceId.trim();
+      .argument("<identifier>", "Paired deviceId or unique alias/display name")
+      .action(async (identifier: string, opts: DevicesRpcOpts) => {
+        const trimmed = identifier.trim();
         if (!trimmed) {
-          defaultRuntime.error("deviceId is required");
+          defaultRuntime.error("deviceId or alias is required");
           defaultRuntime.exit(1);
           return;
         }
-        const result = await callGatewayCli("device.pair.remove", opts, { deviceId: trimmed });
+        let resolvedDeviceId = trimmed;
+        try {
+          const result = await callGatewayCli("device.pair.remove", opts, {
+            deviceId: resolvedDeviceId,
+          });
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+          defaultRuntime.log(`${theme.warn("Removed")} ${theme.command(resolvedDeviceId)}`);
+          return;
+        } catch (error) {
+          if (!isUnknownDeviceIdError(error)) {
+            throw error;
+          }
+        }
+
+        const list = await listPairingWithFallback(opts);
+        const resolved = resolvePairedDeviceIdByAlias(list.paired, trimmed);
+        if (!resolved.deviceId) {
+          defaultRuntime.error(resolved.error ?? "Unable to resolve paired device alias");
+          defaultRuntime.exit(1);
+          return;
+        }
+        resolvedDeviceId = resolved.deviceId;
+        const result = await callGatewayCli("device.pair.remove", opts, {
+          deviceId: resolvedDeviceId,
+        });
         if (opts.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        defaultRuntime.log(`${theme.warn("Removed")} ${theme.command(trimmed)}`);
+        defaultRuntime.log(
+          `${theme.warn("Removed")} ${theme.command(resolvedDeviceId)}${theme.muted(` (from alias: ${trimmed})`)}`,
+        );
       }),
   );
 
