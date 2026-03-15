@@ -35,9 +35,29 @@ const log = createSubsystemLogger("gateway/boot");
 const BOOT_FILENAME = "BOOT.md";
 
 export type BootRunResult =
-  | { status: "skipped"; reason: "missing" | "empty" }
+  | { status: "skipped"; reason: "missing" | "empty" | "already-ran" }
   | { status: "ran" }
   | { status: "failed"; reason: string };
+
+/**
+ * Module-level flag that tracks whether the startup notification has already been
+ * sent within the current gateway process lifecycle.
+ *
+ * When the gateway restarts repeatedly (e.g. due to an invalid config), each restart
+ * calls `startGatewaySidecars`, which fires the `gateway:startup` hook and ultimately
+ * calls `runBootOnce`. Without dedup, every completed boot session sends its own
+ * notification, flooding the user with duplicate messages.
+ *
+ * Using a module-level variable achieves a natural reset on full process restart
+ * (i.e. when the gateway daemon is stopped and re-launched), while deduplicating
+ * within a single OS process.
+ */
+let _bootNotificationSent = false;
+
+/** Reset the dedup flag. Intended for use in tests only. */
+export function _resetBootDedup(): void {
+  _bootNotificationSent = false;
+}
 
 function buildBootPrompt(content: string) {
   return [
@@ -141,6 +161,21 @@ export async function runBootOnce(params: {
   workspaceDir: string;
   agentId?: string;
 }): Promise<BootRunResult> {
+  // Dedup: skip if a boot notification was already sent during this process lifecycle.
+  // This prevents duplicate notifications when the gateway restarts multiple times
+  // in quick succession (e.g. after recovering from a config-invalid loop) and
+  // several in-flight boot sessions all complete around the same time.
+  //
+  // The flag is set synchronously (before any `await`) once we decide to proceed,
+  // so concurrent calls that arrive between event-loop ticks are blocked without
+  // a separate lock. Because Node.js is single-threaded, the read-then-write below
+  // is atomic at the JS level.
+  if (_bootNotificationSent) {
+    log.debug("boot: skipping — startup notification already sent in this process lifecycle");
+    return { status: "skipped", reason: "already-ran" };
+  }
+  _bootNotificationSent = true;
+
   const bootRuntime: RuntimeEnv = {
     log: () => {},
     error: (message) => log.error(String(message)),

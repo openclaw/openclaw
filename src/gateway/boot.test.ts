@@ -11,7 +11,7 @@ vi.mock("../commands/agent.js", () => ({
   agentCommandFromIngress: agentCommand,
 }));
 
-const { runBootOnce } = await import("./boot.js");
+const { runBootOnce, _resetBootDedup } = await import("./boot.js");
 const { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey, resolveMainSessionKey } =
   await import("../config/sessions/main-session.js");
 const { resolveStorePath } = await import("../config/sessions/paths.js");
@@ -37,6 +37,7 @@ describe("runBootOnce", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    _resetBootDedup();
     const { storePath } = resolveMainStore();
     await fs.rm(storePath, { force: true });
   });
@@ -258,6 +259,67 @@ describe("runBootOnce", () => {
       });
 
       expectMainSessionRestored({ storePath, sessionKey });
+    });
+  });
+
+  describe("startup notification deduplication", () => {
+    it("sends notification on the first boot run", async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-boot-"));
+      await fs.writeFile(path.join(workspaceDir, "BOOT.md"), "Say hello.", "utf-8");
+
+      agentCommand.mockResolvedValue(undefined);
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "ran",
+      });
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    });
+
+    it("skips notification on subsequent boot runs within the same process lifecycle", async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-boot-"));
+      await fs.writeFile(path.join(workspaceDir, "BOOT.md"), "Say hello.", "utf-8");
+
+      agentCommand.mockResolvedValue(undefined);
+
+      // First run should proceed normally.
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "ran",
+      });
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+
+      // Second run (simulating a second gateway restart within the same OS process)
+      // must be skipped — the user should not receive a duplicate notification.
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "skipped",
+        reason: "already-ran",
+      });
+      // agentCommand must NOT have been called a second time.
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    });
+
+    it("dedup flag is reset by _resetBootDedup (simulates fresh process)", async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-boot-"));
+      await fs.writeFile(path.join(workspaceDir, "BOOT.md"), "Say hello.", "utf-8");
+
+      agentCommand.mockResolvedValue(undefined);
+
+      // First run.
+      await runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir });
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+
+      // Simulate a full process restart (gateway daemon stopped and re-launched).
+      _resetBootDedup();
+
+      // After reset, the next run should be allowed.
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "ran",
+      });
+      expect(agentCommand).toHaveBeenCalledTimes(2);
+
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     });
   });
 });
