@@ -204,7 +204,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       let requestTimer: ReturnType<typeof setTimeout> | undefined;
       if (extractTelegramApiMethod(input) === "getUpdates") {
         requestTimer = setTimeout(
-          () => controller.abort(new Error("getUpdates request timeout")),
+          () => controller.abort(new DOMException("getUpdates request timeout", "TimeoutError")),
           GET_UPDATES_REQUEST_TIMEOUT_MS,
         );
       }
