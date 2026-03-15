@@ -1,19 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { createReadStream, createWriteStream, constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { createGzip } from "node:zlib";
 import * as tar from "tar";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
   buildBackupArchiveRoot,
+  listArchiveEntries,
   type BackupAsset,
+  type BackupManifestBase,
+  type ExcludedStats,
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { buildExcludeFilter, resolveExcludePatterns, type ExcludeSpec } from "./backup-exclude.js";
 
 export type BackupCreateOptions = {
   output?: string;
@@ -23,6 +29,13 @@ export type BackupCreateOptions = {
   verify?: boolean;
   json?: boolean;
   nowMs?: number;
+  // Exclude options
+  smartExclude?: boolean;
+  exclude?: string[];
+  excludeFile?: string;
+  includeAll?: boolean;
+  allowExcludeProtected?: boolean;
+  nonInteractive?: boolean;
 };
 
 type BackupManifestAsset = {
@@ -31,16 +44,14 @@ type BackupManifestAsset = {
   archivePath: string;
 };
 
-type BackupManifest = {
+// P2-012: Writer manifest extends shared base with strict types.
+type BackupManifest = BackupManifestBase & {
   schemaVersion: 1;
-  createdAt: string;
-  archiveRoot: string;
-  runtimeVersion: string;
   platform: NodeJS.Platform;
-  nodeVersion: string;
   options: {
     includeWorkspace: boolean;
     onlyConfig?: boolean;
+    smartExclude?: boolean;
   };
   paths: {
     stateDir: string;
@@ -55,6 +66,7 @@ type BackupManifest = {
     reason: string;
     coveredBy?: string;
   }>;
+  excludedStats?: ExcludedStats;
 };
 
 export type BackupCreateResult = {
@@ -73,6 +85,7 @@ export type BackupCreateResult = {
     reason: string;
     coveredBy?: string;
   }>;
+  excludedStats?: ExcludedStats;
 };
 
 async function resolveOutputPath(params: {
@@ -192,14 +205,16 @@ function buildManifest(params: {
   archiveRoot: string;
   includeWorkspace: boolean;
   onlyConfig: boolean;
+  smartExclude: boolean;
   assets: BackupAsset[];
   skipped: BackupCreateResult["skipped"];
   stateDir: string;
   configPath: string;
   oauthDir: string;
   workspaceDirs: string[];
+  excludedStats?: ExcludedStats;
 }): BackupManifest {
-  return {
+  const manifest: BackupManifest = {
     schemaVersion: 1,
     createdAt: params.createdAt,
     archiveRoot: params.archiveRoot,
@@ -209,6 +224,7 @@ function buildManifest(params: {
     options: {
       includeWorkspace: params.includeWorkspace,
       onlyConfig: params.onlyConfig,
+      ...(params.smartExclude ? { smartExclude: true } : {}),
     },
     paths: {
       stateDir: params.stateDir,
@@ -228,6 +244,10 @@ function buildManifest(params: {
       coveredBy: entry.coveredBy,
     })),
   };
+  if (params.excludedStats) {
+    manifest.excludedStats = params.excludedStats;
+  }
+  return manifest;
 }
 
 export function formatBackupCreateSummary(result: BackupCreateResult): string[] {
@@ -245,6 +265,10 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
         lines.push(`- ${entry.kind}: ${entry.displayPath} (${entry.reason})`);
       }
     }
+  }
+  if (result.excludedStats && result.excludedStats.totalFiles > 0) {
+    const mb = (result.excludedStats.totalBytes / (1024 * 1024)).toFixed(1);
+    lines.push(`Excluded ${result.excludedStats.totalFiles} files (${mb} MB)`);
   }
   if (result.dryRun) {
     lines.push("Dry run only; archive was not written.");
@@ -276,6 +300,7 @@ export async function createBackupArchive(
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
+  const smartExclude = Boolean(opts.smartExclude);
   const plan = await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs });
   const outputPath = await resolveOutputPath({
     output: opts.output,
@@ -302,6 +327,30 @@ export async function createBackupArchive(
     );
   }
 
+  // Pre-flight: resolve exclude patterns BEFORE any archive I/O.
+  const excludeSpec: ExcludeSpec = {
+    exclude: opts.exclude ?? [],
+    excludeFile: opts.excludeFile,
+    includeAll: Boolean(opts.includeAll),
+    smartExclude,
+    allowExcludeProtected: Boolean(opts.allowExcludeProtected),
+    nonInteractive: Boolean(opts.nonInteractive),
+  };
+  const { patterns: excludePatterns, sources: patternSources } = await resolveExcludePatterns(
+    excludeSpec,
+    plan.stateDir,
+  );
+
+  // Build the filter once (pre-compiled, outside the hot path).
+  // Canonicalize stateDir so short-path aliases (e.g. RUNNER~1 on Windows)
+  // don't cause relative() mismatches against realpath'd asset.sourcePath.
+  const canonicalStateDir = await fs.realpath(plan.stateDir).catch(() => plan.stateDir);
+  const { filter: excludeFilter, getExcludedStats } = buildExcludeFilter(
+    excludePatterns,
+    patternSources,
+    canonicalStateDir,
+  );
+
   if (!opts.dryRun) {
     await assertOutputPathReady(outputPath);
   }
@@ -320,6 +369,19 @@ export async function createBackupArchive(
   };
 
   if (opts.dryRun) {
+    // For dry-run, populate excludedStats with zero-count patterns if active.
+    if (excludePatterns.length > 0) {
+      result.excludedStats = {
+        totalFiles: 0,
+        totalBytes: 0,
+        byPattern: excludePatterns.map((p) => ({
+          pattern: p,
+          files: 0,
+          bytes: 0,
+          source: patternSources.get(p) ?? "cli",
+        })),
+      };
+    }
     return result;
   }
 
@@ -327,39 +389,129 @@ export async function createBackupArchive(
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
+  // Bug B fix: declared outside try/finally so cleanup can reach it.
+  let uncompressedTarPath: string | undefined;
   try {
-    const manifest = buildManifest({
+    const hasExcludes = excludePatterns.length > 0;
+
+    const manifestBuildParams = {
       createdAt,
       archiveRoot,
       includeWorkspace,
       onlyConfig,
+      smartExclude,
       assets: result.assets,
       skipped: result.skipped,
       stateDir: plan.stateDir,
       configPath: plan.configPath,
       oauthDir: plan.oauthDir,
       workspaceDirs: plan.workspaceDirs,
-    });
-    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    };
 
-    await tar.c(
-      {
-        file: tempArchivePath,
-        gzip: true,
-        portable: true,
-        preservePaths: true,
-        onWriteEntry: (entry) => {
-          entry.path = remapArchiveEntryPath({
-            entryPath: entry.path,
-            manifestPath,
-            archiveRoot,
-          });
-        },
+    // Shared tar options — single source of truth so the two archive paths
+    // cannot diverge (divergence caused the Windows CI failures in Finding 9).
+    const baseTarOpts = {
+      portable: true,
+      preservePaths: true,
+      follow: false,
+      onWriteEntry: (entry: tar.WriteEntry) => {
+        entry.path = remapArchiveEntryPath({
+          entryPath: entry.path,
+          manifestPath,
+          archiveRoot,
+        });
       },
-      [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
-    );
+    } as const;
+
+    if (hasExcludes) {
+      // Two-step archive creation: create uncompressed tar with payload only,
+      // collect excludedStats via filter side-effect, write the final
+      // manifest (with excludedStats) and append it, then gzip.
+      // This ensures the in-archive manifest accurately records what was excluded.
+      uncompressedTarPath = `${tempArchivePath}.tar`;
+
+      await tar.c(
+        {
+          ...baseTarOpts,
+          file: uncompressedTarPath,
+          filter: (entryPath: string, stat: { size?: number }) => {
+            return excludeFilter(entryPath, stat);
+          },
+        },
+        result.assets.map((asset) => asset.sourcePath),
+      );
+
+      // Collect per-pattern exclusion stats from filter side-effect.
+      const excludedStats = getExcludedStats();
+      if (excludedStats.totalFiles > 0) {
+        result.excludedStats = excludedStats;
+      }
+
+      // Write final manifest WITH excludedStats.
+      const manifest = buildManifest({
+        ...manifestBuildParams,
+        excludedStats: result.excludedStats,
+      });
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+      // Append manifest to uncompressed tar (single entry, no duplicates).
+      await tar.r(
+        {
+          file: uncompressedTarPath,
+          cwd: path.dirname(manifestPath),
+          onWriteEntry: (entry) => {
+            entry.path = path.posix.join(archiveRoot, "manifest.json");
+          },
+        },
+        [path.basename(manifestPath)],
+      );
+
+      // Gzip the uncompressed tar to produce the final .tar.gz.
+      await pipeline(
+        createReadStream(uncompressedTarPath),
+        createGzip(),
+        createWriteStream(tempArchivePath),
+      );
+      await fs.rm(uncompressedTarPath, { force: true });
+    } else {
+      // Simple path: no excludes — write manifest and create gzipped tar in one step.
+      const manifest = buildManifest(manifestBuildParams);
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+      await tar.c(
+        {
+          ...baseTarOpts,
+          file: tempArchivePath,
+          gzip: true,
+        },
+        [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
+      );
+    }
+
+    // P3-016: Post-tar cross-check — verify archive contains expected assets.
+    // excludedStats provides auditability only; asset presence is verified unconditionally
+    {
+      const archiveEntries = await listArchiveEntries(tempArchivePath);
+      const entrySet = new Set(archiveEntries);
+      for (const asset of result.assets) {
+        const expectedPath = buildBackupArchivePath(archiveRoot, asset.sourcePath);
+        // Check for exact match or nested entries under this path.
+        const found =
+          entrySet.has(expectedPath) ||
+          archiveEntries.some((e) => e.startsWith(`${expectedPath}/`));
+        if (!found) {
+          throw new Error(
+            `Archive integrity check failed: missing payload for asset "${asset.sourcePath}" (expected "${expectedPath}")`,
+          );
+        }
+      }
+    }
+
     await publishTempArchive({ tempArchivePath, outputPath });
   } finally {
+    if (uncompressedTarPath) {
+      await fs.rm(uncompressedTarPath, { force: true }).catch(() => undefined);
+    }
     await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }

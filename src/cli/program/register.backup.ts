@@ -6,6 +6,7 @@ import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
+import { collectOption } from "./helpers.js";
 
 export function registerBackupCommand(program: Command) {
   const backup = program
@@ -26,6 +27,29 @@ export function registerBackupCommand(program: Command) {
     .option("--verify", "Verify the archive after writing it", false)
     .option("--only-config", "Back up only the active JSON config file", false)
     .option("--no-include-workspace", "Exclude workspace directories from the backup")
+    .option(
+      "--smart-exclude",
+      "Apply default exclude patterns (venvs/, models/, logs/, completions/)",
+      false,
+    )
+    .option(
+      "--exclude <pattern>",
+      "Glob pattern to exclude (repeatable, gitignore syntax)",
+      collectOption,
+      [],
+    )
+    .option("--exclude-file <path>", "File of exclude patterns, one per line (gitignore syntax)")
+    .option("--include-all", "Disable all excludes including smart defaults", false)
+    .option(
+      "--allow-exclude-protected",
+      "Allow excluding protected paths (credentials/, extensions/, cron/)",
+      false,
+    )
+    .option(
+      "--non-interactive",
+      "Fail with an error instead of warning when a protected path is excluded",
+      false,
+    )
     .addHelpText(
       "after",
       () =>
@@ -48,6 +72,22 @@ export function registerBackupCommand(program: Command) {
             "Back up state/config without agent workspace files.",
           ],
           ["openclaw backup create --only-config", "Back up only the active JSON config file."],
+          [
+            "openclaw backup create --smart-exclude",
+            "Exclude venvs/, models/, logs/, completions/ from the backup.",
+          ],
+          [
+            'openclaw backup create --exclude "*.log" --exclude "**/__pycache__"',
+            "Exclude files matching custom glob patterns.",
+          ],
+          [
+            "openclaw backup create --exclude-file ~/.openclaw/.backupignore",
+            "Load exclude patterns from a file (gitignore syntax).",
+          ],
+          [
+            "openclaw backup create --smart-exclude --include-all",
+            "Override smart-exclude and include everything.",
+          ],
         ])}`,
     )
     .action(async (opts) => {
@@ -59,6 +99,12 @@ export function registerBackupCommand(program: Command) {
           verify: Boolean(opts.verify),
           onlyConfig: Boolean(opts.onlyConfig),
           includeWorkspace: opts.includeWorkspace as boolean,
+          smartExclude: Boolean(opts.smartExclude),
+          exclude: (opts.exclude ?? []) as string[],
+          excludeFile: opts.excludeFile as string | undefined,
+          includeAll: Boolean(opts.includeAll),
+          allowExcludeProtected: Boolean(opts.allowExcludeProtected),
+          nonInteractive: Boolean(opts.nonInteractive),
         });
       });
     });

@@ -378,6 +378,7 @@
     "grammy": "^1.41.1",
     "hono": "4.12.7",
     "https-proxy-agent": "^8.0.0",
+    "ignore": "^7.0.5",
     "ipaddr.js": "^2.3.0",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",

@@ -101,4 +101,59 @@ describe("registerBackupCommand", () => {
       }),
     );
   });
+
+  it("forwards --smart-exclude to backup create", async () => {
+    await runCli(["backup", "create", "--smart-exclude"]);
+
+    expect(backupCreateCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        smartExclude: true,
+      }),
+    );
+  });
+
+  it("forwards --exclude patterns (repeatable)", async () => {
+    await runCli(["backup", "create", "--exclude", "*.log", "--exclude", "**/__pycache__"]);
+
+    expect(backupCreateCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        exclude: ["*.log", "**/__pycache__"],
+      }),
+    );
+  });
+
+  it("forwards --exclude-file to backup create", async () => {
+    await runCli(["backup", "create", "--exclude-file", "/tmp/ignores.txt"]);
+
+    expect(backupCreateCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        excludeFile: "/tmp/ignores.txt",
+      }),
+    );
+  });
+
+  it("forwards --include-all to backup create", async () => {
+    await runCli(["backup", "create", "--include-all"]);
+
+    expect(backupCreateCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        includeAll: true,
+      }),
+    );
+  });
+
+  it("forwards --allow-exclude-protected to backup create", async () => {
+    await runCli(["backup", "create", "--allow-exclude-protected"]);
+
+    expect(backupCreateCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        allowExcludeProtected: true,
+      }),
+    );
+  });
 });
