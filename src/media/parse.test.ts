@@ -50,4 +50,15 @@ describe("splitMediaFromOutput", () => {
     const result = splitMediaFromOutput("MEDIA:screenshot");
     expect(result.mediaUrls).toBeUndefined();
   });
+
+  it("preserves indentation for plain text without media tokens", () => {
+    const input = "START\n  alpha\n    beta\n  gamma\nEND";
+    expect(splitMediaFromOutput(input)).toEqual({ text: input });
+  });
+
+  it("preserves indentation after stripping media tokens", () => {
+    const result = splitMediaFromOutput("MEDIA:https://x.test/a.png\n  hello\n    world");
+    expect(result.mediaUrls).toEqual(["https://x.test/a.png"]);
+    expect(result.text).toBe("  hello\n    world");
+  });
 });

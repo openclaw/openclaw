@@ -1219,6 +1219,28 @@ describe("normalizeOutboundPayloadsForJson", () => {
           },
         ],
       },
+      {
+        input: [{ text: "START\n  alpha\n    beta\n  gamma\nEND" }],
+        expected: [
+          {
+            text: "START\n  alpha\n    beta\n  gamma\nEND",
+            mediaUrl: null,
+            mediaUrls: undefined,
+            channelData: undefined,
+          },
+        ],
+      },
+      {
+        input: [{ text: "[[reply_to_current]]\nSTART\n  alpha\n    beta\n  gamma\nEND" }],
+        expected: [
+          {
+            text: "START\n  alpha\n    beta\n  gamma\nEND",
+            mediaUrl: null,
+            mediaUrls: undefined,
+            channelData: undefined,
+          },
+        ],
+      },
     ]);
 
     for (const testCase of cases) {

@@ -17,11 +17,25 @@ type InlineDirectiveParseOptions = {
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
-function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+function getDirectiveReplacement(source: string, offset: number, length: number): string {
+  const previous = offset > 0 ? source[offset - 1] : "";
+  const next = source[offset + length] ?? "";
+  const touchesLeadingWhitespace = previous === "" || /\s/.test(previous);
+  const touchesTrailingWhitespace = next === "" || /\s/.test(next);
+
+  // Avoid placeholder spaces when a stripped directive already sits on a
+  // whitespace boundary. That prevents fake indentation on later lines while
+  // still preserving inline word separation when a tag appears inside prose.
+  return touchesLeadingWhitespace || touchesTrailingWhitespace ? "" : " ";
+}
+
+function collapseSingleLineDirectiveWhitespace(text: string): string {
+  if (text.includes("\n")) {
+    // Multiline directive stripping should keep meaningful indentation intact,
+    // but still drop trailing horizontal whitespace introduced right before a newline.
+    return text.replace(/[ \t]+\n/g, "\n");
+  }
+  return text.replace(/[^\S\n]+/g, " ");
 }
 
 type StripInlineDirectiveTagsResult = {
@@ -98,7 +112,7 @@ export function parseInlineDirectives(
   }
   if (!text.includes("[[")) {
     return {
-      text: normalizeDirectiveWhitespace(text),
+      text,
       audioAsVoice: false,
       replyToCurrent: false,
       hasAudioTag: false,
@@ -113,13 +127,13 @@ export function parseInlineDirectives(
   let sawCurrent = false;
   let lastExplicitId: string | undefined;
 
-  cleaned = cleaned.replace(AUDIO_TAG_RE, (match) => {
+  cleaned = cleaned.replace(AUDIO_TAG_RE, (match, offset, source) => {
     audioAsVoice = true;
     hasAudioTag = true;
-    return stripAudioTag ? " " : match;
+    return stripAudioTag ? getDirectiveReplacement(source, offset, match.length) : match;
   });
 
-  cleaned = cleaned.replace(REPLY_TAG_RE, (match, idRaw: string | undefined) => {
+  cleaned = cleaned.replace(REPLY_TAG_RE, (match, idRaw: string | undefined, offset, source) => {
     hasReplyTag = true;
     if (idRaw === undefined) {
       sawCurrent = true;
@@ -129,10 +143,10 @@ export function parseInlineDirectives(
         lastExplicitId = id;
       }
     }
-    return stripReplyTags ? " " : match;
+    return stripReplyTags ? getDirectiveReplacement(source, offset, match.length) : match;
   });
 
-  cleaned = normalizeDirectiveWhitespace(cleaned);
+  cleaned = collapseSingleLineDirectiveWhitespace(cleaned.trim());
 
   const replyToId =
     lastExplicitId ?? (sawCurrent ? currentMessageId?.trim() || undefined : undefined);
