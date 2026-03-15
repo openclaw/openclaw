@@ -61,4 +61,13 @@ describe("isPermanentDeliveryError", () => {
   it("returns false for timeout errors", () => {
     expect(isPermanentDeliveryError("request timed out")).toBe(false);
   });
+
+  // 408 should NOT be permanent (request timeout = transient)
+  it("does NOT treat HTTP 408 as permanent", () => {
+    expect(isPermanentDeliveryError("status 408")).toBe(false);
+  });
+
+  it("does NOT treat HTTP 408 Request Timeout as permanent", () => {
+    expect(isPermanentDeliveryError("HTTP 408 Request Timeout")).toBe(false);
+  });
 });
