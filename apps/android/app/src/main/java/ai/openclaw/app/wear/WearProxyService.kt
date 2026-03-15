@@ -8,8 +8,11 @@ import com.google.android.gms.wearable.WearableListenerService
 import ai.openclaw.app.NodeApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.json.Json
@@ -34,14 +37,12 @@ class WearProxyService : WearableListenerService() {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val json = Json { ignoreUnknownKeys = true }
   private val messageClient: MessageClient by lazy { Wearable.getMessageClient(this) }
-  private var watchNodeId: String? = null
-  private var eventForwardingJob: kotlinx.coroutines.Job? = null
+  private var eventForwardingJob: Job? = null
 
   private val runtime get() = (application as NodeApp).runtime
 
   override fun onMessageReceived(event: MessageEvent) {
     Log.i(TAG, "onMessageReceived: path=${event.path} from=${event.sourceNodeId}")
-    watchNodeId = event.sourceNodeId
     when (event.path) {
       PING_PATH -> handlePing(event.sourceNodeId)
       RPC_PATH -> handleRpcRequest(event.sourceNodeId, event.data)
@@ -110,22 +111,13 @@ class WearProxyService : WearableListenerService() {
   private fun startEventForwarding(nodeId: String) {
     eventForwardingJob?.cancel()
     Log.i(TAG, "Starting event forwarding to $nodeId")
-    eventForwardingJob = scope.launch {
-      sendEvent(
-        nodeId = watchNodeId ?: nodeId,
-        event = "mainSessionKey",
-        payloadJson = runtime.mainSessionKey.value.takeIf { it.isNotBlank() },
-      )
-      runtime.wearProxyEvents.collect { (event, payloadJson) ->
-        try {
-          val targetNodeId = watchNodeId ?: nodeId
-          sendEvent(nodeId = targetNodeId, event = event, payloadJson = payloadJson)
-          Log.d(TAG, "Forwarded event: $event")
-        } catch (e: Throwable) {
-          Log.w(TAG, "Failed to forward event to watch: ${e.message}")
-        }
-      }
-    }
+    eventForwardingJob =
+      WearProxyEventForwarder(
+        nodeId = nodeId,
+        mainSessionKey = runtime.mainSessionKey,
+        events = runtime.wearProxyEvents,
+        sendEvent = ::sendEvent,
+      ).startIn(scope)
   }
 
   private suspend fun sendEvent(nodeId: String, event: String, payloadJson: String?) {
@@ -148,5 +140,26 @@ class WearProxyService : WearableListenerService() {
     Log.i(TAG, "WearProxyService destroyed")
     scope.cancel()
     super.onDestroy()
+  }
+}
+
+internal class WearProxyEventForwarder(
+  private val nodeId: String,
+  private val mainSessionKey: StateFlow<String>,
+  private val events: Flow<Pair<String, String?>>,
+  private val sendEvent: suspend (String, String, String?) -> Unit,
+) {
+  fun startIn(scope: CoroutineScope): Job {
+    return scope.launch {
+      sendEvent(nodeId, "mainSessionKey", mainSessionKey.value.takeIf { it.isNotBlank() })
+      events.collect { (event, payloadJson) ->
+        try {
+          sendEvent(nodeId, event, payloadJson)
+          Log.d(TAG, "Forwarded event: $event")
+        } catch (e: Throwable) {
+          Log.w(TAG, "Failed to forward event to watch: ${e.message}")
+        }
+      }
+    }
   }
 }
