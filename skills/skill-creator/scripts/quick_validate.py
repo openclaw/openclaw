@@ -146,6 +146,24 @@ def validate_skill(skill_path):
                 f"Description is too long ({len(description)} characters). Maximum is 1024 characters.",
             )
 
+    allowed_tools = frontmatter.get("allowed-tools")
+    if allowed_tools is not None:
+        # When PyYAML is available it parses YAML sequences into lists;
+        # the fallback parser returns a plain string which we cannot
+        # structurally validate, so only enforce list shape when the
+        # value is already parsed as a rich type.
+        if isinstance(allowed_tools, list):
+            for i, entry in enumerate(allowed_tools):
+                if not isinstance(entry, str):
+                    return (
+                        False,
+                        f"allowed-tools[{i}] must be a string, got {type(entry).__name__}",
+                    )
+                if not entry.strip():
+                    return False, f"allowed-tools[{i}] cannot be empty"
+        elif not isinstance(allowed_tools, str):
+            return False, f"allowed-tools must be a list, got {type(allowed_tools).__name__}"
+
     return True, "Skill is valid!"
 
 
