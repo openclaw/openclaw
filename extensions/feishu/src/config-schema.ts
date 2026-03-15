@@ -229,6 +229,9 @@ export const FeishuConfigSchema = z
     // Optimization flags
     typingIndicator: z.boolean().optional().default(true),
     resolveSenderNames: z.boolean().optional().default(true),
+    // Auto bind: when enabled, agent tools will use account configured in channels.bindings
+    // based on agentId + "feishu" channel match, instead of always using defaultAccount
+    autoBindAgentAccount: z.boolean().optional().default(true),
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })

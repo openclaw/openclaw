@@ -173,7 +173,10 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
 
   api.registerTool(
     (ctx) => {
+      // Capture context in closure so client creation doesn't need extra parameters
       const defaultAccountId = ctx.agentAccountId;
+      const agentId = ctx.agentId;
+
       return {
         name: "feishu_wiki",
         label: "Feishu Wiki",
@@ -187,6 +190,7 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
               api,
               executeParams: p,
               defaultAccountId,
+              agentId,
             });
             switch (p.action) {
               case "spaces":
