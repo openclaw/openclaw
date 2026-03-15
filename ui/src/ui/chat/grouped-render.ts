@@ -59,9 +59,13 @@ function extractImages(message: unknown): ImageBlock[] {
   return images;
 }
 
-export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {
+export function renderReadingIndicatorGroup(
+  assistant?: AssistantIdentity,
+  basePath?: string,
+  blockId?: string,
+) {
   return html`
-    <div class="chat-group assistant">
+    <div class="chat-group assistant" data-chat-block data-chat-block-id=${blockId ?? ""}>
       ${renderAvatar("assistant", assistant, basePath)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
@@ -80,6 +84,7 @@ export function renderStreamingGroup(
   onOpenSidebar?: (content: string) => void,
   assistant?: AssistantIdentity,
   basePath?: string,
+  blockId?: string,
 ) {
   const timestamp = new Date(startedAt).toLocaleTimeString([], {
     hour: "numeric",
@@ -88,7 +93,12 @@ export function renderStreamingGroup(
   const name = assistant?.name ?? "Assistant";
 
   return html`
-    <div class="chat-group assistant">
+    <div
+      class="chat-group assistant"
+      data-chat-block
+      data-chat-streaming
+      data-chat-block-id=${blockId ?? ""}
+    >
       ${renderAvatar("assistant", assistant, basePath)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
@@ -119,6 +129,7 @@ export function renderMessageGroup(
     basePath?: string;
     contextWindow?: number | null;
     onDelete?: () => void;
+    blockId?: string;
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
@@ -149,7 +160,11 @@ export function renderMessageGroup(
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
 
   return html`
-    <div class="chat-group ${roleClass}">
+    <div
+      class="chat-group ${roleClass}"
+      data-chat-block
+      data-chat-block-id=${opts.blockId ?? ""}
+    >
       ${renderAvatar(
         group.role,
         {

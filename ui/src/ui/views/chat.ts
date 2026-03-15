@@ -914,7 +914,7 @@ export function renderChat(props: ChatProps) {
             `;
           }
           if (item.kind === "reading-indicator") {
-            return renderReadingIndicatorGroup(assistantIdentity, props.basePath);
+            return renderReadingIndicatorGroup(assistantIdentity, props.basePath, item.key);
           }
           if (item.kind === "stream") {
             return renderStreamingGroup(
@@ -923,6 +923,7 @@ export function renderChat(props: ChatProps) {
               props.onOpenSidebar,
               assistantIdentity,
               props.basePath,
+              item.key,
             );
           }
           if (item.kind === "group") {
@@ -935,6 +936,7 @@ export function renderChat(props: ChatProps) {
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
               basePath: props.basePath,
+              blockId: item.key,
               contextWindow:
                 activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
               onDelete: () => {

@@ -1,5 +1,5 @@
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
-import { scheduleChatScroll } from "./app-scroll.ts";
+import { scheduleChatScroll, type ChatAutoScrollMode } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
@@ -24,6 +24,10 @@ export type ChatHost = {
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
+  chatUserNearBottom: boolean;
+  chatAutoScrollMode: ChatAutoScrollMode;
+  chatSuppressedBlockId: string | null;
+  chatNewMessagesBelow: boolean;
   lastError?: string | null;
   sessionKey: string;
   basePath: string;
@@ -121,6 +125,11 @@ async function sendChatMessageNow(
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+  // A local send is an explicit intent to watch the latest activity.
+  host.chatUserNearBottom = true;
+  host.chatAutoScrollMode = "bottom";
+  host.chatSuppressedBlockId = null;
+  host.chatNewMessagesBelow = false;
   const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {
