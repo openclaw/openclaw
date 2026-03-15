@@ -831,6 +831,57 @@ Example:
 - Host-only tools like browser/camera/canvas are blocked by default.
 - Allowing `browser` in sandbox **breaks isolation** (browser runs on host).
 
+## RISC-V (linux/riscv64)
+
+Experimental riscv64 images are published alongside amd64/arm64:
+
+```bash
+docker pull ghcr.io/openclaw/openclaw:<version>-riscv64
+```
+
+These images use a dedicated `Dockerfile.riscv64` with `debian:trixie` as base
+(riscv64 is not available in bookworm) and Node.js from
+[unofficial-builds](https://unofficial-builds.nodejs.org).
+
+### Quick start (riscv64)
+
+```bash
+docker run -d \
+  --name openclaw \
+  --memory=6g \
+  --network host \
+  ghcr.io/openclaw/openclaw:<version>-riscv64 \
+  sh -c 'node openclaw.mjs config set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback true && node openclaw.mjs gateway --allow-unconfigured --bind lan'
+```
+
+Then open `http://<board-ip>:18789` in a browser. Startup takes about 2 minutes
+on typical riscv64 hardware.
+
+### riscv64 notes
+
+- **Memory**: use `--memory=6g` minimum. WASM components (used by `openclaw
+  doctor` and HTTP internals) fail with out-of-memory at 4g.
+- **Network**: many riscv64 kernels lack the iptables `raw` table. Use
+  `--network host` to bypass Docker networking, or set `"iptables": false` in
+  `/etc/docker/daemon.json`.
+- **LAN bind**: `--bind lan` requires the
+  `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback` config flag.
+  Without it the gateway exits silently.
+- **Startup time**: expect ~2 minutes on boards like BananaPi F3 or SiFive
+  Unmatched. The gateway is ready when logs show `listening on ws://0.0.0.0:18789`.
+- **No slim variant**: the riscv64 image does not have a slim variant.
+- **No Playwright**: Chromium has no riscv64 binaries; browser automation is
+  unavailable.
+- **Build tools**: `cmake`, `g++`, and `make` are included for native
+  compilation of `node-llama-cpp`.
+
+### Tested hardware
+
+| Board | RAM | Status |
+|---|---|---|
+| BananaPi F3 (SpacemiT K1) | 4 GB | Works with `--memory=4g --network host` (tight) |
+| SiFive Unmatched (U740) | 8 GB | Works with `--memory=6g` |
+
 ## Troubleshooting
 
 - Image missing: build with [`scripts/sandbox-setup.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/sandbox-setup.sh) or set `agents.defaults.sandbox.docker.image`.
