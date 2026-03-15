@@ -94,30 +94,27 @@ export async function runSessionsSendA2AFlow(params: {
         }
         latestReply = replyText;
 
-        // Emit hook so channel plugins can forward A2A turns to users.
+        // Fire-and-forget: emit hook so channel plugins can forward A2A turns to users.
+        // Not awaited to avoid blocking the A2A exchange on plugin hook latency.
         const hookRunner = getGlobalHookRunner();
         if (hookRunner?.hasHooks("agent_to_agent_turn")) {
-          try {
-            await hookRunner.runAgentToAgentTurn(
-              {
-                turn,
-                maxTurns: params.maxPingPongTurns,
-                speakerSessionKey: currentSessionKey,
-                listenerSessionKey: nextSessionKey,
-                speakerRole: currentRole,
-                reply: replyText,
-                requesterChannel:
-                  typeof params.requesterChannel === "string" ? params.requesterChannel : undefined,
-                targetChannel,
-              },
-              {
-                requesterSessionKey: params.requesterSessionKey,
-                targetSessionKey: params.targetSessionKey,
-              },
-            );
-          } catch {
-            // Hook failures must not interrupt the A2A exchange.
-          }
+          const resolvedTargetChannel = targetChannel === "unknown" ? undefined : targetChannel;
+          void hookRunner.runAgentToAgentTurn(
+            {
+              turn,
+              maxTurns: params.maxPingPongTurns,
+              speakerSessionKey: currentSessionKey,
+              listenerSessionKey: nextSessionKey,
+              speakerRole: currentRole,
+              reply: replyText,
+              requesterChannel: params.requesterChannel,
+              targetChannel: resolvedTargetChannel,
+            },
+            {
+              requesterSessionKey: params.requesterSessionKey,
+              targetSessionKey: params.targetSessionKey,
+            },
+          );
         }
 
         incomingMessage = replyText;
