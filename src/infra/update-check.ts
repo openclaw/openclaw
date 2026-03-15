@@ -3,6 +3,9 @@ import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import { detectDockerEnvironment, type DockerEnvironment } from "./docker-detect.js";
+import { queryRegistryVersions } from "./docker-registry.js";
+import { parseSemver } from "./runtime-guard.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
 export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
@@ -39,13 +42,23 @@ export type NpmTagStatus = {
   error?: string;
 };
 
+export type DockerRegistryStatus = {
+  latestVersion: string | null;
+  latestTag: string | null;
+  currentTag: string | null;
+  imageRepo: string | null;
+  error?: string;
+};
+
 export type UpdateCheckResult = {
   root: string | null;
-  installKind: "git" | "package" | "unknown";
+  installKind: "git" | "package" | "docker" | "unknown";
   packageManager: PackageManager;
   git?: GitUpdateStatus;
   deps?: DepsStatus;
   registry?: RegistryStatus;
+  docker?: DockerRegistryStatus;
+  dockerEnv?: DockerEnvironment;
 };
 
 export function formatGitInstallLabel(update: UpdateCheckResult): string | null {
@@ -446,6 +459,47 @@ function comparePrerelease(a: string[] | null, b: string[] | null): number {
   return 0;
 }
 
+/**
+ * Check the ghcr.io container registry for available Docker image versions.
+ *
+ * @param params.channel - Update channel to filter tags by
+ * @param params.dockerEnv - Pre-detected Docker environment (avoids re-detection)
+ * @param params.timeoutMs - HTTP timeout in milliseconds
+ */
+export async function fetchDockerRegistryStatus(params: {
+  channel: UpdateChannel;
+  dockerEnv: DockerEnvironment;
+  timeoutMs?: number;
+}): Promise<DockerRegistryStatus> {
+  const timeoutMs = params.timeoutMs ?? 3500;
+  const imageName = params.dockerEnv.imageRepo
+    ? params.dockerEnv.imageRepo.replace(/^ghcr\.io\//, "")
+    : undefined;
+
+  try {
+    const result = await queryRegistryVersions({
+      channel: params.channel,
+      imageName,
+      timeoutMs,
+    });
+    return {
+      latestVersion: result.latestVersion,
+      latestTag: result.latestTag,
+      currentTag: params.dockerEnv.currentTag,
+      imageRepo: params.dockerEnv.imageRepo,
+      error: result.error,
+    };
+  } catch (err) {
+    return {
+      latestVersion: null,
+      latestTag: null,
+      currentTag: params.dockerEnv.currentTag,
+      imageRepo: params.dockerEnv.imageRepo,
+      error: String(err),
+    };
+  }
+}
+
 export async function checkUpdateStatus(params: {
   root: string | null;
   timeoutMs?: number;
@@ -453,6 +507,19 @@ export async function checkUpdateStatus(params: {
   includeRegistry?: boolean;
 }): Promise<UpdateCheckResult> {
   const timeoutMs = params.timeoutMs ?? 6000;
+
+  // Docker detection takes priority — if we're in a container, the install kind
+  // is "docker" regardless of whether git/npm artifacts also exist in the image.
+  const dockerEnv = await detectDockerEnvironment();
+  if (dockerEnv.isDocker) {
+    return {
+      root: params.root ? path.resolve(params.root) : null,
+      installKind: "docker",
+      packageManager: "unknown",
+      dockerEnv,
+    };
+  }
+
   const root = params.root ? path.resolve(params.root) : null;
   if (!root) {
     return {

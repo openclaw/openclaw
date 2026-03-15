@@ -79,6 +79,13 @@ export type OpenClawConfig = {
       /** Beta channel check cadence. Default: 1 hour. */
       betaCheckIntervalHours?: number;
     };
+    /** Docker-specific update settings (used when running in a container). */
+    docker?: {
+      /** Override the image repository (e.g. "ghcr.io/openclaw/openclaw"). */
+      image?: string;
+      /** Override the Docker socket path (default: /var/run/docker.sock). */
+      socketPath?: string;
+    };
   };
   browser?: BrowserConfig;
   ui?: {

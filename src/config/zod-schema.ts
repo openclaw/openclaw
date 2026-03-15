@@ -323,6 +323,23 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        docker: z
+          .object({
+            /** Override the image repository (e.g. "ghcr.io/openclaw/openclaw"). */
+            image: z
+              .string()
+              .regex(
+                /^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]{1,5})?(\/[a-zA-Z0-9][a-zA-Z0-9._-]*)+$/,
+                "Must be a valid Docker image reference (e.g. ghcr.io/org/repo)",
+              )
+              .optional(),
+            /** Override the Docker socket path (default: /var/run/docker.sock). */
+            socketPath: z.string().optional(),
+            /** Path for the Docker update marker file (default: /tmp/openclaw-docker-update-available). */
+            markerPath: z.string().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

@@ -9,7 +9,12 @@ import { VERSION } from "../version.js";
 import { writeJsonAtomic } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
-import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
+import {
+  compareSemverStrings,
+  resolveNpmChannelTag,
+  checkUpdateStatus,
+  fetchDockerRegistryStatus,
+} from "./update-check.js";
 
 type UpdateCheckState = {
   lastCheckedAt?: string;
@@ -65,6 +70,52 @@ const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
 const AUTO_STABLE_DELAY_HOURS_DEFAULT = 6;
 const AUTO_STABLE_JITTER_HOURS_DEFAULT = 12;
 const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
+
+/**
+ * Default marker file path written when a Docker update is available.
+ * External orchestrators (Watchtower, custom scripts, compose wrappers)
+ * can watch this file to trigger image pulls and container recreation.
+ *
+ * Override via config: `update.docker.markerPath`
+ */
+export const DEFAULT_DOCKER_UPDATE_MARKER_PATH = "/tmp/openclaw-docker-update-available";
+
+export type DockerUpdateMarker = {
+  version: string;
+  tag: string | null;
+  imageRepo: string | null;
+  image: string;
+  channel: string;
+  detectedAt: string;
+};
+
+async function writeDockerUpdateMarker(params: {
+  version: string;
+  tag: string | null;
+  imageRepo: string | null;
+  channel: string;
+  markerPath: string;
+}): Promise<void> {
+  const marker: DockerUpdateMarker = {
+    version: params.version,
+    tag: params.tag,
+    imageRepo: params.imageRepo,
+    image: params.imageRepo
+      ? `${params.imageRepo}:${params.tag ?? params.version}`
+      : `ghcr.io/openclaw/openclaw:${params.tag ?? params.version}`,
+    channel: params.channel,
+    detectedAt: new Date().toISOString(),
+  };
+  await fs.writeFile(params.markerPath, JSON.stringify(marker, null, 2), "utf-8");
+}
+
+async function removeDockerUpdateMarker(markerPath: string): Promise<void> {
+  try {
+    await fs.unlink(markerPath);
+  } catch {
+    // Marker may not exist — that's fine.
+  }
+}
 
 function shouldSkipCheck(allowInTests: boolean): boolean {
   if (allowInTests) {
@@ -360,6 +411,86 @@ export async function runGatewayUpdateCheck(params: {
     ...state,
     lastCheckedAt: new Date(now).toISOString(),
   };
+
+  if (status.installKind === "docker" && status.dockerEnv) {
+    // Docker installs: check the container registry instead of npm
+    const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+    const markerPath =
+      params.cfg.update?.docker?.markerPath?.trim() || DEFAULT_DOCKER_UPDATE_MARKER_PATH;
+    const dockerStatus = await fetchDockerRegistryStatus({
+      channel,
+      dockerEnv: status.dockerEnv,
+      timeoutMs: 2500,
+    });
+
+    if (!dockerStatus.latestVersion) {
+      await writeState(statePath, nextState);
+      return;
+    }
+
+    const cmp = compareSemverStrings(VERSION, dockerStatus.latestVersion);
+    if (cmp != null && cmp < 0) {
+      const dockerTag = dockerStatus.latestTag ?? channel;
+      const nextAvailable: UpdateAvailable = {
+        currentVersion: VERSION,
+        latestVersion: dockerStatus.latestVersion,
+        channel: dockerTag,
+      };
+      if (shouldRunUpdateHints) {
+        setUpdateAvailableCache({
+          next: nextAvailable,
+          onUpdateAvailableChange: params.onUpdateAvailableChange,
+        });
+      }
+      nextState.lastAvailableVersion = dockerStatus.latestVersion;
+      nextState.lastAvailableTag = dockerTag;
+      const shouldNotify =
+        state.lastNotifiedVersion !== dockerStatus.latestVersion ||
+        state.lastNotifiedTag !== dockerTag;
+      if (shouldRunUpdateHints && shouldNotify) {
+        const imageRef = dockerStatus.imageRepo
+          ? `${dockerStatus.imageRepo}:${dockerStatus.latestTag ?? dockerStatus.latestVersion}`
+          : `v${dockerStatus.latestVersion}`;
+        params.log.info(
+          `Docker update available: v${dockerStatus.latestVersion} (current v${VERSION}). Pull: docker pull ${imageRef}`,
+        );
+        nextState.lastNotifiedVersion = dockerStatus.latestVersion;
+        nextState.lastNotifiedTag = dockerTag;
+      }
+
+      // Docker auto-update: write a marker file so an external orchestrator
+      // (e.g. Watchtower, a compose wrapper, or the user's own script)
+      // can pick up the new version. We intentionally do NOT pull/restart
+      // from inside the container — that requires the Docker socket which
+      // is a security concern, and compose recreate is better handled externally.
+      if (auto.enabled && (channel === "stable" || channel === "beta")) {
+        await writeDockerUpdateMarker({
+          version: dockerStatus.latestVersion,
+          tag: dockerStatus.latestTag,
+          imageRepo: dockerStatus.imageRepo,
+          channel,
+          markerPath,
+        });
+        params.log.info("docker update marker written", {
+          version: dockerStatus.latestVersion,
+          markerPath,
+        });
+      }
+    } else {
+      delete nextState.lastAvailableVersion;
+      delete nextState.lastAvailableTag;
+      clearAutoState(nextState);
+      setUpdateAvailableCache({
+        next: null,
+        onUpdateAvailableChange: params.onUpdateAvailableChange,
+      });
+      // Clean up stale marker if we're now up to date
+      await removeDockerUpdateMarker(markerPath);
+    }
+
+    await writeState(statePath, nextState);
+    return;
+  }
 
   if (status.installKind !== "package") {
     delete nextState.lastAvailableVersion;

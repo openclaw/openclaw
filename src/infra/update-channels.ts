@@ -36,7 +36,7 @@ export function isStableTag(tag: string): boolean {
 
 export function resolveEffectiveUpdateChannel(params: {
   configChannel?: UpdateChannel | null;
-  installKind: "git" | "package" | "unknown";
+  installKind: "git" | "package" | "docker" | "unknown";
   git?: { tag?: string | null; branch?: string | null };
 }): { channel: UpdateChannel; source: UpdateChannelSource } {
   if (params.configChannel) {
@@ -53,6 +53,10 @@ export function resolveEffectiveUpdateChannel(params: {
       return { channel: "dev", source: "git-branch" };
     }
     return { channel: DEFAULT_GIT_CHANNEL, source: "default" };
+  }
+
+  if (params.installKind === "docker") {
+    return { channel: DEFAULT_PACKAGE_CHANNEL, source: "default" };
   }
 
   if (params.installKind === "package") {
@@ -84,7 +88,7 @@ export function formatUpdateChannelLabel(params: {
 
 export function resolveUpdateChannelDisplay(params: {
   configChannel?: UpdateChannel | null;
-  installKind: "git" | "package" | "unknown";
+  installKind: "git" | "package" | "docker" | "unknown";
   gitTag?: string | null;
   gitBranch?: string | null;
 }): { channel: UpdateChannel; source: UpdateChannelSource; label: string } {
