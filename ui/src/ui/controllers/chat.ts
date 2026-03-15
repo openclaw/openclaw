@@ -283,6 +283,15 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
 
   if (payload.state === "delta") {
+    // Defensive recovery: if the UI cleared chatRunId due to a lifecycle:error
+    // (e.g. primary model 401) but the backend kept the run alive for fallback,
+    // restore the run state so the fallback model's deltas are processed.
+    if (!state.chatRunId && state.lastError && payload.runId) {
+      state.chatRunId = payload.runId;
+      state.lastError = null;
+      state.chatStream = "";
+      state.chatStreamStartedAt = Date.now();
+    }
     const next = extractText(payload.message);
     if (typeof next === "string" && !isSilentReplyStream(next)) {
       const current = state.chatStream ?? "";
