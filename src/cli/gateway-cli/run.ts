@@ -22,6 +22,7 @@ import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.j
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveUsableRuntimeVersion, VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
@@ -164,6 +165,14 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.error("Use --reset with --dev.");
     defaultRuntime.exit(1);
     return;
+  }
+
+  // Refresh OPENCLAW_SERVICE_VERSION so the gateway reports the correct
+  // version even when the wrapper script (gateway.cmd / systemd / launchd)
+  // still carries the value baked in at install time (#36301).
+  const runtimeVersion = resolveUsableRuntimeVersion(VERSION);
+  if (runtimeVersion) {
+    process.env.OPENCLAW_SERVICE_VERSION = runtimeVersion;
   }
 
   setConsoleTimestampPrefix(true);
