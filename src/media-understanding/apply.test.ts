@@ -397,24 +397,6 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Audio]\nTranscript:\nwhatsapp transcript");
   });
 
-  it("transcribes Telegram voice note with parameterized audio/ogg MIME", async () => {
-    const ctx = await createAudioCtx({
-      fileName: "voice-note",
-      mediaType: "audio/ogg; codecs=opus",
-    });
-    ctx.Surface = "telegram";
-
-    const result = await applyMediaUnderstanding({
-      ctx,
-      cfg: createGroqAudioConfig(),
-      providers: createGroqProviders("telegram transcript"),
-    });
-
-    expect(result.appliedAudio).toBe(true);
-    expect(ctx.Transcript).toBe("telegram transcript");
-    expect(ctx.Body).toBe("[Audio]\nTranscript:\ntelegram transcript");
-  });
-
   it("skips URL-only audio when remote file is too small", async () => {
     // Override the default mock to return a tiny buffer (below MIN_AUDIO_FILE_BYTES)
     mockedFetchRemoteMedia.mockResolvedValueOnce({

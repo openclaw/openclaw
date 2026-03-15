@@ -9,8 +9,9 @@ export function mediaKindFromMime(mime?: string | null): MediaKind | undefined {
   if (!mime) {
     return undefined;
   }
-  // Strip MIME parameters (e.g. "; codecs=opus") and normalize casing so
-  // parameterized values like "Audio/Ogg; codecs=opus" are classified correctly.
+  // Normalize casing and strip MIME parameters (e.g. "; codecs=opus") so
+  // mixed-case values like "Audio/Ogg" match startsWith checks and
+  // parameterized values like "application/pdf; charset=utf-8" match exact equality.
   const normalized = mime.split(";")[0]?.trim().toLowerCase();
   if (!normalized) {
     return undefined;
