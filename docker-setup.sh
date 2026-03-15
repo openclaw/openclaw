@@ -4,10 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Load .env if present so variables like OPENCLAW_DOCKER_APT_PACKAGES are available
 if [[ -f "$ROOT_DIR/.env" ]]; then
-set -a
-# shellcheck source=/dev/null
-source "$ROOT_DIR/.env"
-set +a
+  set -a
+  # shellcheck source=/dev/null
+  source "$ROOT_DIR/.env"
+  set +a
 fi
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
@@ -392,7 +392,7 @@ upsert_env() {
   _write_kv() {
     local _k="$1" _v="$2"
     if [[ "$_v" == *' '* || "$_v" == *$'\t'* ]]; then
-      printf '%s="%s"\n' "$_k" "$_v" >>"$tmp"
+      printf '%s="%s"\n' "$_k" "${_v//"/\\"}" >>"$tmp"
     else
       printf '%s=%s\n' "$_k" "$_v" >>"$tmp"
     fi
