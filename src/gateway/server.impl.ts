@@ -820,61 +820,65 @@ export async function startGatewayServer(
 
   const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
-  const gatewayRequestContext: import("./server-methods/types.js").GatewayRequestContext = {
-    deps,
-    cron,
-    cronStorePath,
-    execApprovalManager,
-    loadGatewayModelCatalog,
-    getHealthCache,
-    refreshHealthSnapshot: refreshGatewayHealthSnapshot,
-    logHealth,
-    logGateway: log,
-    incrementPresenceVersion,
-    getHealthVersion,
-    broadcast,
-    broadcastToConnIds,
-    nodeSendToSession,
-    nodeSendToAllSubscribed,
-    nodeSubscribe,
-    nodeUnsubscribe,
-    nodeUnsubscribeAll,
-    hasConnectedMobileNode: hasMobileNodeConnected,
-    hasExecApprovalClients: () => {
-      for (const gatewayClient of clients) {
-        const scopes = Array.isArray(gatewayClient.connect.scopes)
-          ? gatewayClient.connect.scopes
-          : [];
-        if (scopes.includes("operator.admin") || scopes.includes("operator.approvals")) {
-          return true;
+  function getGatewayRequestContext(): import("./server-methods/types.js").GatewayRequestContext {
+    return {
+      deps,
+      cron,
+      cronStorePath,
+      execApprovalManager,
+      loadGatewayModelCatalog,
+      getHealthCache,
+      refreshHealthSnapshot: refreshGatewayHealthSnapshot,
+      logHealth,
+      logGateway: log,
+      incrementPresenceVersion,
+      getHealthVersion,
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      nodeSendToAllSubscribed,
+      nodeSubscribe,
+      nodeUnsubscribe,
+      nodeUnsubscribeAll,
+      hasConnectedMobileNode: hasMobileNodeConnected,
+      hasExecApprovalClients: () => {
+        for (const gatewayClient of clients) {
+          const scopes = Array.isArray(gatewayClient.connect.scopes)
+            ? gatewayClient.connect.scopes
+            : [];
+          if (scopes.includes("operator.admin") || scopes.includes("operator.approvals")) {
+            return true;
+          }
         }
-      }
-      return false;
-    },
-    nodeRegistry,
-    agentRunSeq,
-    chatAbortControllers,
-    chatAbortedRuns: chatRunState.abortedRuns,
-    chatRunBuffers: chatRunState.buffers,
-    chatDeltaSentAt: chatRunState.deltaSentAt,
-    addChatRun,
-    removeChatRun,
-    registerToolEventRecipient: toolEventRecipients.add,
-    dedupe,
-    wizardSessions,
-    findRunningWizard,
-    purgeWizardSession,
-    getRuntimeSnapshot,
-    startChannel,
-    stopChannel,
-    markChannelLoggedOut,
-    wizardRunner,
-    broadcastVoiceWakeChanged,
-  };
+        return false;
+      },
+      nodeRegistry,
+      agentRunSeq,
+      chatAbortControllers,
+      chatAbortedRuns: chatRunState.abortedRuns,
+      chatRunBuffers: chatRunState.buffers,
+      chatDeltaSentAt: chatRunState.deltaSentAt,
+      addChatRun,
+      removeChatRun,
+      registerToolEventRecipient: toolEventRecipients.add,
+      dedupe,
+      wizardSessions,
+      findRunningWizard,
+      purgeWizardSession,
+      getRuntimeSnapshot,
+      startChannel,
+      stopChannel,
+      markChannelLoggedOut,
+      wizardRunner,
+      broadcastVoiceWakeChanged,
+    };
+  }
+
+  const gatewayRequestContext = getGatewayRequestContext();
 
   // Store the gateway context as a fallback for plugin subagent dispatch
   // in non-WS paths (Telegram polling, WhatsApp, etc.) where no per-request
-  // scope is set via AsyncLocalStorage.
+  // scope is set via AsyncLocalStorage. Updated on hot reload via onAfterHotReload.
   setFallbackGatewayContext(gatewayRequestContext);
 
   attachGatewayWsHandlers({
@@ -1001,6 +1005,7 @@ export async function startGatewayServer(
                 maxRestartsPerHour: opts.maxRestartsPerHour,
               }),
             }),
+          onAfterHotReload: () => setFallbackGatewayContext(getGatewayRequestContext()),
         });
 
         return startGatewayConfigReloader({
