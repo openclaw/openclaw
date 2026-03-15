@@ -124,6 +124,10 @@
     "target": "网络模型"
   },
   {
+    "source": "Doctor",
+    "target": "Doctor"
+  },
+  {
     "source": "for full details",
     "target": "了解详情"
   },

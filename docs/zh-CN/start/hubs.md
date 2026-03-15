@@ -1,10 +1,10 @@
 ---
 read_when:
-  - 你想要查看完整的文档地图
-summary: 链接到所有 OpenClaw 文档的中心页
-title: 文档中心
+  - 你想要一份完整的文档地图
+summary: 链接到所有 OpenClaw 文档的导航中心
+title: 文档导航中心
 x-i18n:
-  generated_at: "2026-03-15T19:23:43Z"
+  generated_at: "2026-03-15T19:29:16Z"
   model: claude-opus-4-6
   provider: pi
   source_hash: e12e8b7881311fdaf08cd297392911dfa30dc46031a7038b6bb9011d166b1669
@@ -12,13 +12,13 @@ x-i18n:
   workflow: 15
 ---
 
-# 文档中心
+# 文档导航中心
 
 <Note>
 如果你是 OpenClaw 新用户，请从[入门指南](/start/getting-started)开始。
 </Note>
 
-使用这些中心页来发现每一个页面，包括深入探讨和参考文档中未出现在左侧导航栏中的内容。
+使用这些导航中心发现每一个页面，包括深入解析和参考文档——它们可能不会出现在左侧导航栏中。
 
 ## 从这里开始
 
@@ -57,7 +57,7 @@ x-i18n:
 - [多智能体路由](/concepts/multi-agent)
 - [压缩](/concepts/compaction)
 - [会话](/concepts/session)
-- [会话裁剪](/concepts/session-pruning)
+- [会话修剪](/concepts/session-pruning)
 - [会话工具](/concepts/session-tool)
 - [队列](/concepts/queue)
 - [斜杠命令](/tools/slash-commands)
@@ -95,11 +95,11 @@ x-i18n:
 - [Gateway 网关运维手册](/gateway)
 - [网络模型](/gateway/network-model)
 - [Gateway 网关配对](/gateway/pairing)
-- [Gateway 网关锁定](/gateway/gateway-lock)
+- [Gateway 网关锁](/gateway/gateway-lock)
 - [后台进程](/gateway/background-process)
 - [健康检查](/gateway/health)
 - [心跳](/gateway/heartbeat)
-- [诊断工具](/gateway/doctor)
+- [Doctor](/gateway/doctor)
 - [日志](/gateway/logging)
 - [沙箱隔离](/gateway/sandboxing)
 - [仪表盘](/web/dashboard)
@@ -120,14 +120,14 @@ x-i18n:
 - [提权模式](/tools/elevated)
 - [定时任务](/automation/cron-jobs)
 - [定时任务 vs 心跳](/automation/cron-vs-heartbeat)
-- [思考 + 详细模式](/tools/thinking)
+- [思考 + 详细输出](/tools/thinking)
 - [模型](/concepts/models)
 - [子智能体](/tools/subagents)
 - [智能体发送 CLI](/tools/agent-send)
 - [终端界面](/web/tui)
 - [浏览器控制](/tools/browser)
 - [浏览器（Linux 故障排除）](/tools/browser-linux-troubleshooting)
-- [投票](/automation/poll)
+- [轮询](/automation/poll)
 
 ## 节点、媒体、语音
 
@@ -154,7 +154,7 @@ x-i18n:
 - [macOS 开发环境配置](/platforms/mac/dev-setup)
 - [macOS 菜单栏](/platforms/mac/menu-bar)
 - [macOS 语音唤醒](/platforms/mac/voicewake)
-- [macOS 语音覆盖层](/platforms/mac/voice-overlay)
+- [macOS 语音悬浮窗](/platforms/mac/voice-overlay)
 - [macOS WebChat](/platforms/mac/webchat)
 - [macOS Canvas](/platforms/mac/canvas)
 - [macOS 子进程](/platforms/mac/child-process)
