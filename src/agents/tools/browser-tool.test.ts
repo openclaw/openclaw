@@ -138,6 +138,7 @@ vi.mock("./common.js", async () => {
 });
 
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { createBrowserTool } from "./browser-tool.js";
 
 function mockSingleBrowserProxyNode() {
@@ -792,5 +793,52 @@ describe("browser tool act stale target recovery", () => {
     ).rejects.toThrow(/Run action=tabs profile="user"/i);
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("browser tool screenshot image sanitization", () => {
+  it("passes imageSanitization config to screenshot results", async () => {
+    const testConfig: OpenClawConfig = {
+      agents: { defaults: { imageMaxDimensionPx: 2000 } },
+    } as OpenClawConfig;
+    const tool = createBrowserTool({
+      config: testConfig,
+    });
+
+    toolCommonMocks.imageResultFromFile.mockResolvedValue({
+      content: [{ type: "text", text: "screenshot" }],
+    });
+
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      profile: "openclaw",
+    });
+
+    expect(toolCommonMocks.imageResultFromFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "browser:screenshot",
+        imageSanitization: { maxDimensionPx: 2000 },
+      }),
+    );
+  });
+
+  it("uses default imageSanitization when no config provided", async () => {
+    const tool = createBrowserTool();
+
+    toolCommonMocks.imageResultFromFile.mockResolvedValue({
+      content: [{ type: "text", text: "screenshot" }],
+    });
+
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      profile: "openclaw",
+    });
+
+    expect(toolCommonMocks.imageResultFromFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "browser:screenshot",
+        imageSanitization: {},
+      }),
+    );
   });
 });
