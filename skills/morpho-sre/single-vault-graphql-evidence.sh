@@ -22,8 +22,8 @@ Usage:
   single-vault-graphql-evidence.sh \
     --address 0x... \
     --chain-id 999 \
-    --query-file /tmp/query.graphql \
-    --variables-file /tmp/variables.json \
+    (--query 'query { ... }' | --query-file /tmp/query.graphql) \
+    [--variables-json '{"address":"0x...","chainId":999}' | --variables-file /tmp/variables.json] \
     [--control-address 0x...] \
     [--rpc-url https://...] \
     [--list-query-file /tmp/list.graphql] \
@@ -179,6 +179,12 @@ graphql_request() {
 response_summary() {
   local name="${1:?name required}"
   local response="${2:?response required}"
+  if ! jq -e . >/dev/null 2>&1 <<<"$response"; then
+    jq -nc \
+      --arg name "$name" \
+      '{name: $name, ok: "invalid_json_response", error_count: 1, first_error: "response was not valid JSON", data: null}'
+    return 0
+  fi
   jq -nc \
     --arg name "$name" \
     --argjson response "$response" \
@@ -195,12 +201,25 @@ run_probe() {
   local name="${1:?name required}"
   local query_text="${2:?query required}"
   local variables_text="${3:?variables required}"
-  local raw
-  if raw="$(graphql_request "$query_text" "$variables_text" 2>/dev/null)"; then
+  local raw stderr_file err
+  stderr_file="$(mktemp)"
+  if raw="$(graphql_request "$query_text" "$variables_text" 2>"$stderr_file")"; then
+    rm -f "$stderr_file"
     response_summary "$name" "$raw"
     return 0
   fi
-  jq -nc --arg name "$name" '{name: $name, ok: "request_failed", error_count: 1, first_error: "request_failed", data: null}'
+  err="$(cat "$stderr_file")"
+  rm -f "$stderr_file"
+  jq -nc \
+    --arg name "$name" \
+    --arg err "$err" \
+    '{
+      name: $name,
+      ok: "request_failed",
+      error_count: 1,
+      first_error: (if $err == "" then "request_failed" else $err end),
+      data: null
+    }'
 }
 
 same_chain_control_variables() {
@@ -209,6 +228,30 @@ same_chain_control_variables() {
 
 list_variables() {
   jq -nc --arg address "$ADDRESS" --argjson chainId "$CHAIN_ID" '{addresses: [$address], chainIds: [$chainId]}'
+}
+
+run_cast_probe() {
+  local selector="${1:?selector required}"
+  local value stderr_file err status
+  stderr_file="$(mktemp)"
+  if value="$(cast call --rpc-url "$RPC_URL" "$ADDRESS" "$selector" 2>"$stderr_file")"; then
+    err=""
+    status="ok"
+  else
+    value=""
+    err="$(cat "$stderr_file")"
+    status="failed"
+  fi
+  rm -f "$stderr_file"
+  jq -nc \
+    --arg status "$status" \
+    --arg value "$value" \
+    --arg err "$err" \
+    '{
+      status: $status,
+      value: (if $value == "" then null else $value end),
+      error: (if $err == "" then null else $err end)
+    }'
 }
 
 if [[ -n "$LIST_QUERY_FILE" ]]; then
@@ -231,15 +274,18 @@ transactions_probe="$(run_probe "vaultV2transactions" "$TRANSACTIONS_QUERY_DEFAU
 
 rpc_probe='{"status":"skipped","note":"rpc_url_missing_or_cast_unavailable"}'
 if [[ -n "$RPC_URL" ]] && command -v cast >/dev/null 2>&1; then
-  total_assets="$(cast call --rpc-url "$RPC_URL" "$ADDRESS" 'totalAssets()(uint256)' 2>/dev/null || true)"
-  total_supply="$(cast call --rpc-url "$RPC_URL" "$ADDRESS" 'totalSupply()(uint256)' 2>/dev/null || true)"
+  total_assets_probe="$(run_cast_probe 'totalAssets()(uint256)')"
+  total_supply_probe="$(run_cast_probe 'totalSupply()(uint256)')"
   rpc_probe="$(jq -nc \
-    --arg total_assets "$total_assets" \
-    --arg total_supply "$total_supply" \
+    --argjson total_assets "$total_assets_probe" \
+    --argjson total_supply "$total_supply_probe" \
     '{
-      status: (if $total_assets != "" or $total_supply != "" then "ok" else "failed" end),
-      totalAssets: (if $total_assets == "" then null else $total_assets end),
-      totalSupply: (if $total_supply == "" then null else $total_supply end)
+      status: (if $total_assets.value != null or $total_supply.value != null then "ok" else "failed" end),
+      totalAssets: $total_assets.value,
+      totalSupply: $total_supply.value,
+      totalAssetsError: $total_assets.error,
+      totalSupplyError: $total_supply.error,
+      first_error: ($total_assets.error // $total_supply.error)
     }')"
 fi
 

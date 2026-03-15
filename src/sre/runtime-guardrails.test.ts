@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { buildSreRuntimeGuardrailContextFromTranscript } from "./runtime-guardrails.js";
+import fs from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildSreRuntimeGuardrailContext,
+  buildSreRuntimeGuardrailContextFromTranscript,
+} from "./runtime-guardrails.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
   it("surfaces human corrections, repeated failures, and retrieval gate", () => {
@@ -140,5 +148,42 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     });
 
     expect(context).toContain("Latest user-supplied exact artifact detected");
+  });
+
+  it("suppresses missing transcript files", async () => {
+    vi.spyOn(fs, "readFile").mockRejectedValueOnce(
+      Object.assign(new Error("missing"), { code: "ENOENT" }),
+    );
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      buildSreRuntimeGuardrailContext({
+        agentId: "sre",
+        prompt: "investigate",
+        sessionFile: "/tmp/missing.jsonl",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(consoleSpy).not.toHaveBeenCalled();
+  });
+
+  it("logs unexpected transcript read failures", async () => {
+    vi.spyOn(fs, "readFile").mockRejectedValueOnce(
+      Object.assign(new Error("permission denied"), { code: "EACCES" }),
+    );
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      buildSreRuntimeGuardrailContext({
+        agentId: "sre",
+        prompt: "investigate",
+        sessionFile: "/tmp/blocked.jsonl",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(consoleSpy).toHaveBeenCalledWith("sre-guardrail-context-build-failed", {
+      sessionFile: "/tmp/blocked.jsonl",
+      error: "Error: permission denied",
+    });
   });
 });

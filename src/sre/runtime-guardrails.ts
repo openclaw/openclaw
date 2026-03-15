@@ -47,6 +47,10 @@ function cleanLine(text: string, maxChars = 220): string {
   return normalized.length <= maxChars ? normalized : `${normalized.slice(0, maxChars - 1)}…`;
 }
 
+function isErrnoCode(err: unknown, code: string): err is NodeJS.ErrnoException {
+  return err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === code;
+}
+
 export function buildSreRuntimeGuardrailContextFromTranscript(params: {
   agentId: string;
   prompt: string;
@@ -237,7 +241,14 @@ export async function buildSreRuntimeGuardrailContext(params: {
       prompt: params.prompt,
       transcriptText,
     });
-  } catch {
+  } catch (err) {
+    if (isErrnoCode(err, "ENOENT")) {
+      return undefined;
+    }
+    console.error("sre-guardrail-context-build-failed", {
+      sessionFile: params.sessionFile,
+      error: String(err),
+    });
     return undefined;
   }
 }

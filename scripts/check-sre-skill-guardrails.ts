@@ -175,12 +175,8 @@ function defaultSkillPath(): string {
 function printHelp(): void {
   console.log(`Usage: node --import tsx scripts/check-sre-skill-guardrails.ts [skill-path]
 
-Validates that the Morpho SRE skill keeps the required guardrails:
-- hard preflight
-- shell portability
-- blocked mode contract
-- RBAC fallback
-- retrieval-before-repo rules
+Validates that the Morpho SRE skill contains all required guardrail rules.
+Run without args to see the full rule set enforced against the default skill path.
 
 Default path:
   skills/morpho-sre/SKILL.md`);
