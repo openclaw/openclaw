@@ -231,6 +231,7 @@ export interface ResponseCreateEvent {
   top_p?: number;
   metadata?: Record<string, string>;
   reasoning?: { effort?: "low" | "medium" | "high"; summary?: "auto" | "concise" | "detailed" };
+  text?: { verbosity?: "low" | "medium" | "high"; [key: string]: unknown };
   truncation?: "auto" | "disabled";
   [key: string]: unknown;
 }
