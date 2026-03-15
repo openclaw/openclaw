@@ -392,11 +392,11 @@ export async function getHealthSnapshot(params?: {
     if (!runtime) {
       return undefined;
     }
-    const channelAccounts = runtime.channelAccounts[channelId as keyof typeof runtime.channelAccounts];
+    const channelAccounts =
+      runtime.channelAccounts[channelId as keyof typeof runtime.channelAccounts];
     const defaultRuntime = runtime.channels[channelId as keyof typeof runtime.channels];
     return (
-      channelAccounts?.[accountId] ??
-      (accountId === defaultAccountId ? defaultRuntime : undefined)
+      channelAccounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntime : undefined)
     );
   };
 

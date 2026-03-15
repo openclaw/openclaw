@@ -1,8 +1,8 @@
 import { getStatusSummary } from "../../commands/status.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
-import { isGatewayHealthCacheStale } from "../server/health-state.js";
 import { formatError } from "../server-utils.js";
+import { isGatewayHealthCacheStale } from "../server/health-state.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
