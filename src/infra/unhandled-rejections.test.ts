@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isAbortError, isTransientNetworkError } from "./unhandled-rejections.js";
+import {
+  isAbortError,
+  isPlaywrightWorkerTargetAssertion,
+  isTransientNetworkError,
+} from "./unhandled-rejections.js";
 
 describe("isAbortError", () => {
   it("returns true for error with name AbortError", () => {
@@ -186,4 +190,67 @@ describe("isTransientNetworkError", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
   });
+});
+
+describe("isPlaywrightWorkerTargetAssertion", () => {
+  it("returns true for shared_worker assertion with targetInfo in message", () => {
+    const error = new Error(
+      'targetInfo: {"type":"shared_worker","url":"https://www.facebook.com/sw.js"}',
+    );
+    error.stack = `Error: targetInfo: ...
+    at assert (playwright-core/lib/utils/isomorphic/assert.js:1:1)
+    at CRBrowser._onAttachedToTarget (playwright-core/lib/server/chromium/crBrowser.js:147:5)`;
+    expect(isPlaywrightWorkerTargetAssertion(error)).toBe(true);
+  });
+
+  it("returns true for service_worker assertion with targetInfo in message", () => {
+    const error = new Error('targetInfo: {"type":"service_worker","url":"https://x.com/sw.js"}');
+    error.stack = `Error: targetInfo: ...
+    at assert (playwright-core/lib/utils/isomorphic/assert.js:1:1)
+    at CRBrowser._onAttachedToTarget (playwright-core/lib/server/chromium/crBrowser.js:147:5)`;
+    expect(isPlaywrightWorkerTargetAssertion(error)).toBe(true);
+  });
+
+  it("returns true when message has worker type and Playwright stack (no targetInfo keyword)", () => {
+    const error = new Error('unexpected target type: "shared_worker"');
+    error.stack = `Error: unexpected target type
+    at CRBrowser._onAttachedToTarget (crBrowser.js:147:5)`;
+    expect(isPlaywrightWorkerTargetAssertion(error)).toBe(true);
+  });
+
+  it("returns true when message has worker type and crBrowser in stack", () => {
+    const error = new Error("unexpected type shared_worker");
+    error.stack = `Error: unexpected
+    at Object.crBrowser (lib/server/chromium/crBrowser.js:150:3)`;
+    expect(isPlaywrightWorkerTargetAssertion(error)).toBe(true);
+  });
+
+  it("returns false for regular errors", () => {
+    expect(isPlaywrightWorkerTargetAssertion(new Error("Something went wrong"))).toBe(false);
+  });
+
+  it("returns false for errors with worker type but no Playwright context", () => {
+    const error = new Error("shared_worker failed to load");
+    expect(isPlaywrightWorkerTargetAssertion(error)).toBe(false);
+  });
+
+  it("returns false when targetInfo is in message but no Playwright stack frames are present", () => {
+    const error = new Error('targetInfo: {"type":"shared_worker"} failed in custom CDP handler');
+    error.stack = "Error: targetInfo ...\n    at customCDP.handleTarget (custom-cdp.js:10:1)";
+    expect(isPlaywrightWorkerTargetAssertion(error)).toBe(false);
+  });
+
+  it("returns false for Playwright errors without worker types", () => {
+    const error = new Error('targetInfo: {"type":"page","url":"https://example.com"}');
+    error.stack = `Error: targetInfo: ...
+    at CRBrowser._onAttachedToTarget (crBrowser.js:147:5)`;
+    expect(isPlaywrightWorkerTargetAssertion(error)).toBe(false);
+  });
+
+  it.each([null, undefined, "string error", 42, { message: "plain object" }])(
+    "returns false for non-error input %#",
+    (value) => {
+      expect(isPlaywrightWorkerTargetAssertion(value)).toBe(false);
+    },
+  );
 });
