@@ -7,6 +7,7 @@ import {
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import { AVIAN_BASE_URL, discoverAvianModels } from "./avian-models.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
@@ -80,6 +81,15 @@ type SecretDefaults = {
   file?: string;
   exec?: string;
 };
+
+export async function buildAvianProvider(): Promise<ProviderConfig> {
+  const models = await discoverAvianModels();
+  return {
+    baseUrl: AVIAN_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -689,6 +699,10 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("nvidia", async ({ apiKey }) => ({ ...buildNvidiaProvider(), apiKey })),
   withApiKey("kilocode", async ({ apiKey }) => ({
     ...(await buildKilocodeProviderWithDiscovery()),
+    apiKey,
+  })),
+  withApiKey("avian", async ({ apiKey }) => ({
+    ...(await buildAvianProvider()),
     apiKey,
   })),
 ];
