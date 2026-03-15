@@ -63,6 +63,7 @@ export const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   "graph.microsoft.us",
   "graph.microsoft.de",
   "graph.microsoft.cn",
+  "trafficmanager.net",
 ] as const;
 
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";

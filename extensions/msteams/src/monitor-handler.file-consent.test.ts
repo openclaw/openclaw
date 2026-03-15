@@ -14,6 +14,10 @@ import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const fileConsentMockState = vi.hoisted(() => ({
   uploadToConsentUrl: vi.fn(),
+  hookRunner: {
+    hasHooks: vi.fn(),
+    runChannelDeleted: vi.fn(),
+  },
 }));
 
 vi.mock("./file-consent.js", async () => {
@@ -21,6 +25,16 @@ vi.mock("./file-consent.js", async () => {
   return {
     ...actual,
     uploadToConsentUrl: fileConsentMockState.uploadToConsentUrl,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/msteams", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/msteams")>(
+    "openclaw/plugin-sdk/msteams",
+  );
+  return {
+    ...actual,
+    getGlobalHookRunner: () => fileConsentMockState.hookRunner,
   };
 });
 
@@ -149,6 +163,9 @@ describe("msteams file consent invoke authz", () => {
     clearPendingUploads();
     fileConsentMockState.uploadToConsentUrl.mockReset();
     fileConsentMockState.uploadToConsentUrl.mockResolvedValue(undefined);
+    fileConsentMockState.hookRunner.hasHooks.mockReset();
+    fileConsentMockState.hookRunner.runChannelDeleted.mockReset();
+    fileConsentMockState.hookRunner.hasHooks.mockReturnValue(false);
   });
 
   it("uploads when invoke conversation matches pending upload conversation", async () => {
@@ -217,5 +234,69 @@ describe("msteams file consent invoke authz", () => {
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
     expect(getPendingUpload(uploadId)).toBeDefined();
     expect(sendActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards Teams channelDeleted conversationUpdate events to plugin hooks", async () => {
+    const deps = createDeps();
+    const handler = registerMSTeamsHandlers(createActivityHandler(), deps);
+    fileConsentMockState.hookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "channel_deleted",
+    );
+
+    const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
+    await handler.run?.({
+      activity: {
+        type: "conversationUpdate",
+        conversation: { id: "19:team-runtime@thread.tacv2", tenantId: "tenant-1" },
+        channelData: {
+          eventType: "channelDeleted",
+          tenant: { id: "tenant-1" },
+          team: {
+            id: "19:team-runtime@thread.tacv2",
+            aadGroupId: "00000000-0000-0000-0000-000000000123",
+            name: "Ops",
+          },
+          channel: {
+            id: "19:deleted-channel@thread.tacv2",
+            name: "alerts",
+          },
+        },
+      },
+      sendActivity,
+      sendActivities: async () => [],
+    } as unknown as MSTeamsTurnContext);
+
+    expect(fileConsentMockState.hookRunner.runChannelDeleted).toHaveBeenCalledWith(
+      {
+        conversationId: "19:deleted-channel@thread.tacv2",
+        timestamp: expect.any(Number),
+        metadata: {
+          provider: "msteams",
+          eventType: "channelDeleted",
+          tenantId: "tenant-1",
+          teamId: "00000000-0000-0000-0000-000000000123",
+          teamRuntimeId: "19:team-runtime@thread.tacv2",
+          teamName: "Ops",
+          channelId: "19:deleted-channel@thread.tacv2",
+          channelName: "alerts",
+        },
+      },
+      {
+        channelId: "msteams",
+        conversationId: "19:deleted-channel@thread.tacv2",
+      },
+    );
+    expect(deps.log.info).toHaveBeenCalledWith("msteams channelDeleted event", {
+      rawConversationId: "19:team-runtime@thread.tacv2",
+      emittedConversationId: "19:deleted-channel@thread.tacv2",
+      activityChannelId: undefined,
+      deletedChannelId: "19:deleted-channel@thread.tacv2",
+      deletedChannelName: "alerts",
+      teamAadGroupId: "00000000-0000-0000-0000-000000000123",
+      teamRuntimeId: "19:team-runtime@thread.tacv2",
+      teamName: "Ops",
+      tenantId: "tenant-1",
+      hasChannelDeletedHooks: true,
+    });
   });
 });

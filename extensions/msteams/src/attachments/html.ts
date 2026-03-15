@@ -3,6 +3,7 @@ import {
   extractHtmlFromAttachment,
   extractInlineImageCandidates,
   IMG_SRC_RE,
+  isDownloadableAttachment,
   isLikelyImageAttachment,
   safeHostForUrl,
 } from "./shared.js";
@@ -85,6 +86,8 @@ export function buildMSTeamsAttachmentPlaceholder(
   if (totalImages > 0) {
     return `<media:image>${totalImages > 1 ? ` (${totalImages} images)` : ""}`;
   }
-  const count = list.length;
-  return `<media:document>${count > 1 ? ` (${count} files)` : ""}`;
+  // Only count actually downloadable file attachments (have contentUrl or downloadUrl).
+  // text/html and card-type attachments represent the message body, not user-uploaded files.
+  const count = list.filter(isDownloadableAttachment).length;
+  return count > 0 ? `<media:document>${count > 1 ? ` (${count} files)` : ""}` : "";
 }

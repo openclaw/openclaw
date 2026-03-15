@@ -86,6 +86,30 @@ describe("msteams policy", () => {
       expect(res.channelConfig?.requireMention).toBe(false);
       expect(res.allowed).toBe(true);
     });
+
+    it("matches legacy runtime team ids before alternate Graph team ids", () => {
+      const cfg: MSTeamsConfig = {
+        teams: {
+          "19:runtime-team@thread.tacv2": {
+            requireMention: false,
+          },
+          "00000000-0000-0000-0000-000000000123": {
+            requireMention: true,
+          },
+        },
+      };
+
+      const res = resolveMSTeamsRouteConfig({
+        cfg,
+        teamId: "19:runtime-team@thread.tacv2",
+        alternateTeamIds: ["00000000-0000-0000-0000-000000000123"],
+        conversationId: "ignored",
+      });
+
+      expect(res.teamConfig?.requireMention).toBe(false);
+      expect(res.teamKey).toBe("19:runtime-team@thread.tacv2");
+      expect(res.allowed).toBe(true);
+    });
   });
 
   describe("resolveMSTeamsReplyPolicy", () => {

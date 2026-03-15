@@ -27,6 +27,7 @@ import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookChannelDeletedEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -67,6 +68,7 @@ export type {
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
   PluginHookAfterCompactionEvent,
+  PluginHookChannelDeletedEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -393,6 +395,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookMessageContext,
   ): Promise<void> {
     return runVoidHook("message_received", event, ctx);
+  }
+
+  /**
+   * Run channel_deleted hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runChannelDeleted(
+    event: PluginHookChannelDeletedEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("channel_deleted", event, ctx);
   }
 
   /**
@@ -735,6 +748,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeReset,
     // Message hooks
     runMessageReceived,
+    runChannelDeleted,
     runMessageSending,
     runMessageSent,
     // Tool hooks

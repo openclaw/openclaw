@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/msteams-channel-archive",
+  "version": "2026.3.9",
+  "private": true,
+  "description": "OpenClaw persistent archive plugin for Microsoft Teams channel history",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

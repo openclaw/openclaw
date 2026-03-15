@@ -118,6 +118,8 @@ export type MsgContext = {
   GroupSystemPrompt?: string;
   /** Untrusted metadata that must not be treated as system instructions. */
   UntrustedContext?: string[];
+  /** Provider-specific metadata forwarded to hooks/tools as untrusted event data. */
+  ProviderMetadata?: Record<string, unknown>;
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */

@@ -436,6 +436,12 @@ importers:
         specifier: ^5.2.1
         version: 5.2.1
 
+  extensions/msteams-channel-archive:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+
   extensions/nextcloud-talk:
     dependencies:
       zod:

@@ -378,6 +378,14 @@ type GraphMediaSuccessCase = LabeledCase & {
 const EMPTY_ATTACHMENT_PLACEHOLDER_CASES: AttachmentPlaceholderCase[] = [
   withLabel("returns empty string when no attachments", { attachments: undefined, expected: "" }),
   withLabel("returns empty string when attachments are empty", { attachments: [], expected: "" }),
+  withLabel("returns empty string for text/html body attachment with no inline images", {
+    attachments: [createHtmlAttachment("<p>Hello world</p>")],
+    expected: "",
+  }),
+  withLabel("returns empty string for text/html body attachment with plain text only", {
+    attachments: [createHtmlAttachment("<p><b>Bold text</b> and <em>italic</em></p>")],
+    expected: "",
+  }),
 ];
 const COUNTED_ATTACHMENT_PLACEHOLDER_CASE_DEFS: CountedAttachmentPlaceholderCaseDef[] = [
   withLabel("returns image placeholder for one image attachment", {
