@@ -43,7 +43,7 @@ if [ "${#lint_files[@]}" -gt 0 ]; then
 fi
 
 if [ "${#format_files[@]}" -gt 0 ]; then
-  "$RUN_NODE_TOOL" oxfmt --write -- "${format_files[@]}"
+  "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern -- "${format_files[@]}"
 fi
 
 git add -- "${files[@]}"
