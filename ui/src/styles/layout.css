@@ -909,6 +909,7 @@
 }
 
 .page-title {
+  margin: 0;
   font-size: 22px;
   font-weight: 650;
   letter-spacing: -0.03em;
@@ -920,7 +921,7 @@
   color: var(--muted);
   font-size: 13px;
   font-weight: 400;
-  margin-top: 4px;
+  margin: 4px 0 0;
   letter-spacing: -0.005em;
 }
 
