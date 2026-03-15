@@ -111,8 +111,11 @@ Preferred: Tailscale/VPN.
 Fallback: SSH tunnel.
 
 ```bash
-ssh -N -L 18789:127.0.0.1:18789 user@host
+ssh -N -L 127.0.0.1:18789:127.0.0.1:18789 user@host
 ```
+
+Use the explicit local bind address so only localhost can reach the forwarded port.
+Using `-L 18789:127.0.0.1:18789` can expose network-level access to the forwarded Gateway port depending on SSH bind behavior, which is unnecessary because the next step connects locally to `ws://127.0.0.1:18789`.
 
 Then connect clients to `ws://127.0.0.1:18789` locally.
 
