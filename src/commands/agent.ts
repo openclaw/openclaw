@@ -15,7 +15,7 @@ import {
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../agents/bootstrap-budget.js";
 import { runCliAgent } from "../agents/cli-runner.js";
@@ -317,7 +317,7 @@ async function persistAcpTurnTranscript(params: {
   return sessionEntry;
 }
 
-function runAgentAttempt(params: {
+async function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
   cfg: ReturnType<typeof loadConfig>;
@@ -344,7 +344,7 @@ function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
-}) {
+}): Promise<Awaited<ReturnType<typeof runEmbeddedPiAgent>>> {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
@@ -434,6 +434,29 @@ function runAgentAttempt(params: {
                 params.providerOverride,
                 result.meta.agentMeta.sessionId,
               );
+              if (params.providerOverride === params.primaryProvider) {
+                try {
+                  const authStore = ensureAuthProfileStore();
+                  const providerKey = normalizeProviderId(params.primaryProvider);
+                  const winningProfileId =
+                    result.finalAuthProfileId?.trim() || authStore.lastGood?.[providerKey]?.trim();
+                  if (winningProfileId) {
+                    updatedEntry.authProfileOverride = winningProfileId;
+                    updatedEntry.authProfileOverrideSource = "auto";
+                    delete updatedEntry.authProfileOverrideCompactionCount;
+                    const winningProfile = authStore.profiles[winningProfileId];
+                    if (winningProfile) {
+                      authStore.lastGood = {
+                        ...authStore.lastGood,
+                        [providerKey]: winningProfileId,
+                      };
+                      saveAuthProfileStore(authStore, params.agentDir);
+                    }
+                  }
+                } catch {
+                  // Best-effort sync only; session persistence remains authoritative for this path.
+                }
+              }
               updatedEntry.updatedAt = Date.now();
 
               await persistSessionEntry({
@@ -455,7 +478,7 @@ function runAgentAttempt(params: {
     params.providerOverride === params.primaryProvider
       ? params.sessionEntry?.authProfileOverride
       : undefined;
-  return runEmbeddedPiAgent({
+  const result = await runEmbeddedPiAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
@@ -499,6 +522,31 @@ function runAgentAttempt(params: {
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
   });
+  if (
+    params.providerOverride === params.primaryProvider &&
+    params.sessionStore &&
+    params.sessionKey &&
+    params.storePath
+  ) {
+    const finalAuthProfileId = result.finalAuthProfileId?.trim();
+    if (finalAuthProfileId) {
+      const entry = params.sessionStore[params.sessionKey];
+      if (entry) {
+        const updatedEntry = { ...entry };
+        updatedEntry.authProfileOverride = finalAuthProfileId;
+        updatedEntry.authProfileOverrideSource = "auto";
+        delete updatedEntry.authProfileOverrideCompactionCount;
+        updatedEntry.updatedAt = Date.now();
+        await persistSessionEntry({
+          sessionStore: params.sessionStore,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          entry: updatedEntry,
+        });
+      }
+    }
+  }
+  return result;
 }
 
 async function prepareAgentCommandExecution(
@@ -1200,6 +1248,10 @@ async function agentCommandInternal(
         fallbackModel,
         result,
       });
+
+      // Note: authProfileOverride is now persisted in runAgentAttempt using
+      // finalAuthProfileId from the run result. This ensures the session
+      // remembers which profile actually succeeded after any fallback rotation.
     }
 
     const payloads = result.payloads ?? [];
