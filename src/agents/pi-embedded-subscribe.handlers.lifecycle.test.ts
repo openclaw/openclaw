@@ -149,6 +149,66 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("sanitizes Codex-prefixed raw payloads before emitting lifecycle errors", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage:
+          'Codex error: {"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
+        content: [{ type: "text", text: "" }],
+      },
+      { onAgentEvent },
+    );
+
+    handleAgentEnd(ctx);
+
+    const warn = vi.mocked(ctx.log.warn);
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      event: "embedded_run_agent_end",
+      error: "LLM error server_error: Something exploded",
+      providerErrorType: "server_error",
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "LLM error server_error: Something exploded",
+      },
+    });
+  });
+
+  it("hides provider boilerplate before emitting lifecycle errors", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage:
+          'Codex error: {"type":"error","error":{"type":"server_error","message":"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID req_123 in your message."}}',
+        content: [{ type: "text", text: "" }],
+      },
+      { onAgentEvent },
+    );
+
+    handleAgentEnd(ctx);
+
+    const warn = vi.mocked(ctx.log.warn);
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      event: "embedded_run_agent_end",
+      error: "The AI service returned a server error. Please try again in a moment.",
+      providerErrorType: "server_error",
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "The AI service returned a server error. Please try again in a moment.",
+      },
+    });
+  });
+
   it("keeps non-error run-end logging on debug only", () => {
     const ctx = createContext(undefined);
 

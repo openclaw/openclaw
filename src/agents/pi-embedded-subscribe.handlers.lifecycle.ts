@@ -43,7 +43,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     });
     const rawError = lastAssistant.errorMessage?.trim();
     const failoverReason = classifyFailoverReason(rawError ?? "");
-    const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
+    const errorText = (friendlyError || "LLM request failed.").trim();
     const observedError = buildApiErrorObservationFields(rawError);
     const safeErrorText =
       buildTextObservationFields(errorText).textPreview ?? "LLM request failed.";

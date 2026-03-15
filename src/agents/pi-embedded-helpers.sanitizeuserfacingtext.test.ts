@@ -74,6 +74,22 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("sanitizes Codex-prefixed raw API error payloads", () => {
+    const raw =
+      'Codex error: {"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(
+      "LLM error server_error: Something exploded",
+    );
+  });
+
+  it("hides provider boilerplate for Codex server errors", () => {
+    const raw =
+      'Codex error: {"type":"error","error":{"type":"server_error","message":"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID req_123 in your message."}}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(
+      "The AI service returned a server error. Please try again in a moment.",
+    );
+  });
+
   it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
     expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
       "⚠️ API rate limit reached. Please try again later.",
