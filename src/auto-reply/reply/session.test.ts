@@ -1428,6 +1428,164 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("clears model/provider overrides on bare /new and /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-model-clear-");
+    const sessionKey = "agent:main:telegram:dm:user-model-clear";
+    const existingSessionId = "existing-session-model-clear";
+    const overrides = {
+      verboseLevel: "on",
+      thinkingLevel: "high",
+      modelOverride: "claude-opus-4.6",
+      providerOverride: "github-copilot",
+    };
+    const cases = [
+      { name: "bare /new clears model overrides", body: "/new" },
+      { name: "bare /reset clears model overrides", body: "/reset" },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...overrides },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-model-clear",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      // Behavior overrides are preserved.
+      expect(result.sessionEntry.verboseLevel, testCase.name).toBe("on");
+      expect(result.sessionEntry.thinkingLevel, testCase.name).toBe("high");
+      // Model/provider overrides are cleared.
+      expect(result.sessionEntry.modelOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.providerOverride, testCase.name).toBeUndefined();
+    }
+  });
+
+  it("/new with model argument preserves model override from argument", async () => {
+    const storePath = await createStorePath("openclaw-reset-model-keep-");
+    const sessionKey = "agent:main:telegram:dm:user-model-keep";
+    const existingSessionId = "existing-session-model-keep";
+    const overrides = {
+      modelOverride: "claude-opus-4.6",
+      providerOverride: "github-copilot",
+    };
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: { ...overrides },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new minimax",
+        RawBody: "/new minimax",
+        CommandBody: "/new minimax",
+        From: "user-model-keep",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.bodyStripped).toBe("minimax");
+    // Model/provider overrides are carried over (applyResetModelOverride will
+    // replace them with the resolved model from "minimax" in get-reply.ts).
+    expect(result.sessionEntry.modelOverride).toBe("claude-opus-4.6");
+    expect(result.sessionEntry.providerOverride).toBe("github-copilot");
+  });
+
+  it("does not carry fallbackNotice fields across bare /new and /reset", async () => {
+    // Addresses reviewer question: fallbackNotice fields should not bleed into
+    // a new session after a reset.  They are not persisted by initSessionState
+    // at all (agent-runner clears them at run start), but this test documents
+    // the contract explicitly so it is visible in the test suite.
+    const storePath = await createStorePath("openclaw-reset-fallback-notice-");
+    const sessionKey = "agent:main:telegram:dm:user-fallback-notice";
+    const existingSessionId = "existing-session-fallback-notice";
+    const overrides = {
+      verboseLevel: "on",
+      fallbackNoticeSelectedModel: "github-copilot/claude-opus-4.6",
+      fallbackNoticeActiveModel: "deepinfra/zai-org/GLM-5",
+      fallbackNoticeReason: "rate limit",
+    };
+    const cases = [
+      { name: "bare /new does not carry fallbackNotice", body: "/new" },
+      { name: "bare /reset does not carry fallbackNotice", body: "/reset" },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...overrides },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-fallback-notice",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      // Behavior overrides are preserved.
+      expect(result.sessionEntry.verboseLevel, testCase.name).toBe("on");
+      // fallbackNotice fields are NOT carried over — they belong to the old
+      // session's runtime state and must not pin a fallback provider into the
+      // new session.
+      expect(result.sessionEntry.fallbackNoticeSelectedModel, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeActiveModel, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeReason, testCase.name).toBeUndefined();
+    }
+  });
+
   it("archives the old session store entry on /new", async () => {
     const storePath = await createStorePath("openclaw-archive-old-");
     const sessionKey = "agent:main:telegram:dm:user-archive";
