@@ -102,6 +102,7 @@ export type HeartbeatSummary = {
 };
 
 const DEFAULT_HEARTBEAT_TARGET = "none";
+const FORCE_HEARTBEAT_AFTER_MS = 5 * 60 * 1000; // 5 minutes
 export { isCronSystemEvent };
 
 type HeartbeatAgentState = {
@@ -110,6 +111,7 @@ type HeartbeatAgentState = {
   intervalMs: number;
   lastRunMs?: number;
   nextDueMs: number;
+  firstSkippedMs?: number;
 };
 
 export type HeartbeatRunner = {
@@ -1224,11 +1226,50 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
+        // Track first skip time for timeout enforcement
+        if (!agent.firstSkippedMs) {
+          const updated = { ...agent, firstSkippedMs: now };
+          state.agents.set(agent.agentId, updated);
+          agent = updated;
+        }
+        const skippedDuration = now - (agent.firstSkippedMs ?? now);
+        
+        if (skippedDuration >= FORCE_HEARTBEAT_AFTER_MS) {
+          // Force execution after prolonged queue contention
+          log.warn("heartbeat: forcing execution after prolonged queue contention", {
+            agentId: agent.agentId,
+            skippedDurationMs: skippedDuration,
+          });
+          const cleared = { ...agent, firstSkippedMs: undefined };
+          state.agents.set(agent.agentId, cleared);
+          agent = cleared;
+          
+          // Force execution by bypassing queue check
+          const forceRes = await runOnce({
+            cfg: state.cfg,
+            agentId: agent.agentId,
+            heartbeat: agent.heartbeat,
+            reason,
+            deps: { ...(state.runtime ? { runtime: state.runtime } : {}), getQueueSize: () => 0 },
+          });
+          advanceAgentSchedule(agent, now);
+          scheduleNext();
+          if (forceRes.status === "ran") {
+            ran = true;
+          }
+          continue;
+        }
+        
         // Do not advance the schedule — the main lane is busy and the wake
         // layer will retry shortly (DEFAULT_RETRY_MS = 1 s).  Calling
         // scheduleNext() here would register a 0 ms timer that races with
         // the wake layer's 1 s retry and wins, bypassing the cooldown.
         return res;
+      }
+      
+      // Clear skip tracking on successful run or other skip reasons
+      if (agent.firstSkippedMs) {
+        state.agents.set(agent.agentId, { ...agent, firstSkippedMs: undefined });
       }
       if (res.status !== "skipped" || res.reason !== "disabled") {
         advanceAgentSchedule(agent, now);
