@@ -486,3 +486,66 @@ export function resolveControlUiLinks(params: {
     wsUrl: `ws://${host}:${port}${wsPath}`,
   };
 }
+// ─── Interrupted-onboarding recovery ─────────────────────────────────────────
+// When the terminal is closed mid-wizard (common on WSL2), a partial
+// openclaw.json containing wizardMetadata is left on disk. The next run
+// sees that metadata and skips the Model/Auth step entirely.
+//
+// Fix: write a sentinel file at wizard start; delete it only on clean exit.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Sentinel file, lives alongside openclaw.json, respects CONFIG_PATH overrides. */
+export const ONBOARD_IN_PROGRESS_MARKER = path.join(
+  path.dirname(CONFIG_PATH),
+  ".onboard-in-progress",
+);
+
+/** Written at wizard startup before any user prompts. */
+export async function markOnboardingInProgress(): Promise<void> {
+  await fs.mkdir(path.dirname(ONBOARD_IN_PROGRESS_MARKER), { recursive: true });
+  await fs.writeFile(
+    ONBOARD_IN_PROGRESS_MARKER,
+    JSON.stringify({ startedAt: new Date().toISOString() }),
+    "utf-8",
+  );
+}
+
+/**
+ * Returns true when a leftover sentinel from a prior run exists,
+ * meaning that run was interrupted before clean completion.
+ */
+export async function isOnboardingInterrupted(): Promise<boolean> {
+  try {
+    await fs.access(ONBOARD_IN_PROGRESS_MARKER);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Removes the sentinel after a successful wizard run or an explicit reset.
+ * Safe to call even when the file is absent.
+ */
+export async function clearOnboardingInProgress(): Promise<void> {
+  try {
+    await fs.unlink(ONBOARD_IN_PROGRESS_MARKER);
+  } catch {
+    // Not present — nothing to do.
+  }
+}
+
+/**
+ * Renames a partial config left from an interrupted run to a backup file
+ * instead of deleting it, so the user can inspect what they entered.
+ * Returns the backup path if a backup was made, undefined otherwise.
+ */
+export async function backupInterruptedConfig(): Promise<string | undefined> {
+  const backupPath = `${CONFIG_PATH}.interrupted-backup.${Date.now()}`;
+  try {
+    await fs.rename(CONFIG_PATH, backupPath);
+    return backupPath;
+  } catch {
+    return undefined;
+  }
+}

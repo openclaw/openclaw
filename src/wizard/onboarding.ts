@@ -19,6 +19,12 @@ import { resolveUserPath } from "../utils.js";
 import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+import {
+  markOnboardingInProgress,
+  isOnboardingInterrupted,
+  clearOnboardingInProgress,
+  backupInterruptedConfig,
+} from "../commands/onboard-helpers.js";
 
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
@@ -76,6 +82,20 @@ export async function runOnboardingWizard(
   prompter: WizardPrompter,
 ) {
   const onboardHelpers = await import("../commands/onboard-helpers.js");
+  const wasInterrupted = await isOnboardingInterrupted();
+  if (wasInterrupted) {
+    const backupPath = await backupInterruptedConfig();
+    const backupNote = backupPath
+      ? `\nPartial config backed up to: ${backupPath}`
+      : "";
+    await prompter.note(
+      "Previous onboarding was interrupted (e.g. terminal was closed).\n" +
+      "Starting fresh — all steps including Model/Auth will run again." +
+      backupNote,
+      "Interrupted setup detected",
+    );
+  }
+  await markOnboardingInProgress();
   onboardHelpers.printWizardHeader(runtime);
   await prompter.intro("OpenClaw onboarding");
   await requireRiskAcknowledgement({ opts, prompter });
@@ -390,6 +410,7 @@ export async function runOnboardingWizard(
     });
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     await writeConfigFile(nextConfig);
+    await clearOnboardingInProgress();
     logConfigUpdated(runtime);
     await prompter.outro("Remote gateway configured.");
     return;
@@ -547,7 +568,7 @@ export async function runOnboardingWizard(
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
-
+  await clearOnboardingInProgress();
   const { finalizeOnboardingWizard } = await import("./onboarding.finalize.js");
   const { launchedTui } = await finalizeOnboardingWizard({
     flow,
