@@ -1229,7 +1229,10 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     : undefined;
   const deep = deepProbeResult?.deep;
 
-  if (deep?.gateway?.attempted && !deep.gateway.ok) {
+  const gatewayProbeScopeLimited = /missing scope:\s*operator\.read/i.test(
+    deep?.gateway?.error ?? "",
+  );
+  if (deep?.gateway?.attempted && !deep.gateway.ok && !gatewayProbeScopeLimited) {
     findings.push({
       checkId: "gateway.probe_failed",
       severity: "warn",
