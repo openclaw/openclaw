@@ -1,5 +1,6 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import type { CronProceduralPlaybookSignalV0 } from "../procedural-playbook-memory-v0.js";
 import type {
   CronDeliveryStatus,
   CronJob,
@@ -111,6 +112,7 @@ export type CronServiceDeps = {
     mode?: "announce" | "webhook";
     accountId?: string;
   }) => Promise<void>;
+  recordProceduralPlaybookSignal?: (signal: CronProceduralPlaybookSignalV0) => void;
   onEvent?: (evt: CronEvent) => void;
 };
 

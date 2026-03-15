@@ -1143,6 +1143,7 @@ export async function executeJobCore(
   return {
     status: res.status,
     error: res.error,
+    errorKind: res.errorKind,
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
@@ -1167,6 +1168,8 @@ export async function executeJob(
   if (!job.state) {
     job.state = {};
   }
+  const previousRunStatus = job.state.lastRunStatus ?? job.state.lastStatus;
+  const previousError = job.state.lastError;
   const startedAt = state.deps.nowMs();
   job.state.runningAtMs = startedAt;
   job.state.lastError = undefined;
@@ -1181,6 +1184,29 @@ export async function executeJob(
     coreResult = await executeJobCore(state, job);
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
+  }
+
+  if (coreResult.status === "error") {
+    state.deps.recordProceduralPlaybookSignal?.({
+      jobId: job.id,
+      jobName: job.name,
+      sessionTarget: job.sessionTarget,
+      payloadKind: job.payload.kind,
+      status: coreResult.status,
+      error: coreResult.error,
+      errorKind: coreResult.errorKind,
+      occurredAtMs: startedAt,
+    });
+  } else if (coreResult.status === "ok" && previousRunStatus === "error" && previousError) {
+    state.deps.recordProceduralPlaybookSignal?.({
+      jobId: job.id,
+      jobName: job.name,
+      sessionTarget: job.sessionTarget,
+      payloadKind: job.payload.kind,
+      status: coreResult.status,
+      error: previousError,
+      occurredAtMs: startedAt,
+    });
   }
 
   const endedAt = state.deps.nowMs();

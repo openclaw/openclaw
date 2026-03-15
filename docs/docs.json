@@ -1360,6 +1360,7 @@
                 "pages": [
                   "design/kilo-gateway-integration",
                   "experiments/onboarding-config-protocol",
+                  "experiments/plans/autonomy-upgrade-roadmap",
                   "experiments/plans/acp-thread-bound-agents",
                   "experiments/plans/acp-unified-streaming-refactor",
                   "experiments/plans/browser-evaluate-cdp-refactor",
