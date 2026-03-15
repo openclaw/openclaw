@@ -53,9 +53,58 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
 }
 
+async function readSymlinkedBootstrapFile(params: {
+  filePath: string;
+}): Promise<WorkspaceGuardedReadResult> {
+  let fd: fs.FileHandle | undefined;
+  try {
+    const lstat = await fs.lstat(params.filePath);
+    if (!lstat.isSymbolicLink()) {
+      return { ok: false, reason: "validation" };
+    }
+
+    const realPath = await fs.realpath(params.filePath);
+
+    // Validate file type BEFORE opening to avoid blocking on FIFOs/special files.
+    const preOpenStat = await fs.lstat(realPath);
+    if (
+      !preOpenStat.isFile() ||
+      preOpenStat.nlink > 1 ||
+      preOpenStat.size > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES
+    ) {
+      return { ok: false, reason: "validation" };
+    }
+
+    fd = await fs.open(realPath, syncFs.constants.O_RDONLY | syncFs.constants.O_NOFOLLOW);
+    const stat = await fd.stat();
+    if (!stat.isFile() || stat.nlink > 1 || stat.size > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+      return { ok: false, reason: "validation" };
+    }
+    // TOCTOU mitigation: ensure the file didn't change between lstat and open.
+    if (preOpenStat.dev !== stat.dev || preOpenStat.ino !== stat.ino) {
+      return { ok: false, reason: "validation" };
+    }
+
+    const identity = workspaceFileIdentity(stat, realPath);
+    const cached = workspaceFileCache.get(params.filePath);
+    if (cached && cached.identity === identity) {
+      return { ok: true, content: cached.content };
+    }
+
+    const content = await fd.readFile("utf-8");
+    workspaceFileCache.set(params.filePath, { content, identity });
+    return { ok: true, content };
+  } catch {
+    return { ok: false, reason: "io" };
+  } finally {
+    await fd?.close();
+  }
+}
+
 async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
+  allowExternalSymlink?: boolean;
 }): Promise<WorkspaceGuardedReadResult> {
   const opened = await openBoundaryFile({
     absolutePath: params.filePath,
@@ -64,6 +113,9 @@ async function readWorkspaceFileWithGuards(params: {
     maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   });
   if (!opened.ok) {
+    if (params.allowExternalSymlink && opened.reason === "validation") {
+      return readSymlinkedBootstrapFile({ filePath: params.filePath });
+    }
     workspaceFileCache.delete(params.filePath);
     return opened;
   }
@@ -525,6 +577,7 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     const loaded = await readWorkspaceFileWithGuards({
       filePath: entry.filePath,
       workspaceDir: resolvedDir,
+      allowExternalSymlink: true,
     });
     if (loaded.ok) {
       result.push({
