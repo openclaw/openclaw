@@ -121,9 +121,11 @@ function getHooksForName<K extends PluginHookName>(
 }
 
 /**
- * Deep-merge two messageMeta bags. Array-valued keys (e.g. displayStripPatterns)
- * are concatenated so multiple plugins / hook phases can each contribute entries
- * without overwriting each other. Scalar keys use last-wins semantics.
+ * Deep-merge two messageMeta bags.  Top-level keys are plugin-namespaced
+ * (e.g. `"memory-lancedb"`) and each plugin's value is an object whose
+ * array-valued keys are concatenated so multiple hook phases can each
+ * contribute entries without overwriting each other. Scalar keys inside a
+ * plugin namespace use last-wins semantics.
  */
 function mergeMessageMeta(
   acc: Record<string, unknown> | undefined,
@@ -139,8 +141,28 @@ function mergeMessageMeta(
   for (const key of Object.keys(next)) {
     const accVal = acc[key];
     const nextVal = next[key];
-    if (Array.isArray(accVal) && Array.isArray(nextVal)) {
-      merged[key] = [...accVal, ...nextVal];
+    // Deep-merge plugin namespace objects (e.g. acc["memory-lancedb"] + next["memory-lancedb"])
+    if (
+      accVal &&
+      nextVal &&
+      typeof accVal === "object" &&
+      !Array.isArray(accVal) &&
+      typeof nextVal === "object" &&
+      !Array.isArray(nextVal)
+    ) {
+      const innerMerged: Record<string, unknown> = {
+        ...(accVal as Record<string, unknown>),
+      };
+      for (const innerKey of Object.keys(nextVal as Record<string, unknown>)) {
+        const a = (accVal as Record<string, unknown>)[innerKey];
+        const b = (nextVal as Record<string, unknown>)[innerKey];
+        if (Array.isArray(a) && Array.isArray(b)) {
+          innerMerged[innerKey] = [...a, ...b];
+        } else {
+          innerMerged[innerKey] = b;
+        }
+      }
+      merged[key] = innerMerged;
     } else {
       merged[key] = nextVal;
     }

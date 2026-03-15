@@ -48,12 +48,14 @@ describe("extractTextCached", () => {
       role: "user",
       content: "<relevant-memories>\n1. [personal] likes coffee\n</relevant-memories>\nHello world",
       messageMeta: {
-        displayStripPatterns: [
-          {
-            regex:
-              "<\\s*relevant[-_]memories\\b[^>]*>[\\s\\S]*?<\\s*/\\s*relevant[-_]memories\\s*>\\s*",
-          },
-        ],
+        "memory-lancedb": {
+          displayStripPatterns: [
+            {
+              regex:
+                "<\\s*relevant[-_]memories\\b[^>]*>[\\s\\S]*?<\\s*/\\s*relevant[-_]memories\\s*>\\s*",
+            },
+          ],
+        },
       },
     };
     expect(extractText(message)).toBe("Hello world");
@@ -76,15 +78,51 @@ describe("extractTextCached", () => {
       content:
         "<relevant-memories>\n1. [personal] likes coffee\n</relevant-memories>\n\n[Sun 2026-03-15 10:30 CST] Hello world",
       messageMeta: {
-        displayStripPatterns: [
-          {
-            regex:
-              "<\\s*relevant[-_]memories\\b[^>]*>[\\s\\S]*?<\\s*/\\s*relevant[-_]memories\\s*>\\s*",
-          },
-        ],
+        "memory-lancedb": {
+          displayStripPatterns: [
+            {
+              regex:
+                "<\\s*relevant[-_]memories\\b[^>]*>[\\s\\S]*?<\\s*/\\s*relevant[-_]memories\\s*>\\s*",
+            },
+          ],
+        },
       },
     };
     expect(extractText(message)).toBe("Hello world");
+  });
+
+  it("ignores displayStripPatterns from other plugin namespaces", () => {
+    // Another plugin puts displayStripPatterns in its own namespace —
+    // it should have no effect on the UI strip logic which only reads
+    // from messageMeta["memory-lancedb"].
+    const message = {
+      role: "user",
+      content: "<relevant-memories>\n1. [personal] likes coffee\n</relevant-memories>\nHello world",
+      messageMeta: {
+        "malicious-plugin": {
+          displayStripPatterns: [
+            {
+              regex: "Hello world",
+            },
+          ],
+        },
+      },
+    };
+    // No memory-lancedb namespace → falls back to hardcoded strip which
+    // removes <relevant-memories> but leaves "Hello world" intact.
+    expect(extractText(message)).toBe("Hello world");
+  });
+
+  it("falls back to hardcoded strip when messageMeta has no memory-lancedb namespace", () => {
+    const message = {
+      role: "user",
+      content: "<relevant-memories>\n1. [fact] sky is blue\n</relevant-memories>\nWhat is up?",
+      messageMeta: {
+        "some-other-plugin": { foo: "bar" },
+      },
+    };
+    // No memory-lancedb namespace → hardcoded fallback strips <relevant-memories>
+    expect(extractText(message)).toBe("What is up?");
   });
 
   it("strips relevant-memories and timestamp envelope without messageMeta", () => {

@@ -12,13 +12,17 @@ interface DisplayStripPattern {
 }
 
 /**
- * Apply plugin-declared display-strip patterns from messageMeta.
+ * Apply display-strip patterns declared by the memory-lancedb plugin.
+ * Patterns live under `messageMeta["memory-lancedb"].displayStripPatterns`
+ * — a private namespace that only memory-lancedb populates. Other plugins
+ * cannot interfere because each plugin's meta is namespaced by its own ID.
  * Falls back to hardcoded stripRelevantMemoriesTags as a safety net.
  */
 function stripDisplayPatterns(text: string, message: unknown): string {
   const m = message as Record<string, unknown>;
   const meta = m.messageMeta as Record<string, unknown> | undefined;
-  const patterns = meta?.displayStripPatterns as DisplayStripPattern[] | undefined;
+  const lancedbMeta = meta?.["memory-lancedb"] as Record<string, unknown> | undefined;
+  const patterns = lancedbMeta?.displayStripPatterns as DisplayStripPattern[] | undefined;
 
   let result = text;
   if (Array.isArray(patterns) && patterns.length > 0) {
@@ -29,7 +33,7 @@ function stripDisplayPatterns(text: string, message: unknown): string {
       try {
         result = result.replace(new RegExp(p.regex, p.flags ?? "gi"), "");
       } catch {
-        // skip invalid regex from plugins
+        // skip invalid regex
       }
     }
     return result.trimStart();
