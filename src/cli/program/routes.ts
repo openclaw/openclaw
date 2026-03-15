@@ -34,6 +34,8 @@ const routeHealth: RouteSpec = {
 
 const routeStatus: RouteSpec = {
   match: (path) => path[0] === "status",
+  // Status runs security audit with channel checks in both text and JSON output,
+  // so plugin registry must be ready for consistent findings.
   loadPlugins: true,
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
