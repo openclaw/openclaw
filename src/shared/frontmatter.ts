@@ -98,6 +98,31 @@ export function resolveOpenClawManifestOs(metadataObj: Record<string, unknown>):
   return normalizeStringList(metadataObj.os);
 }
 
+export function resolveOpenClawManifestPermissions(
+  metadataObj: Record<string, unknown>,
+): { readFiles?: boolean; writeFiles?: boolean; execCommands?: boolean; network?: boolean; sendMessages?: boolean; memory?: boolean; notes?: string[] } | undefined {
+  const p = metadataObj.permissions;
+  if (!p || typeof p !== "object") {
+    return undefined;
+  }
+  const obj = p as Record<string, unknown>;
+  const boolField = (key: string) =>
+    typeof obj[key] === "boolean" ? (obj[key] as boolean) : undefined;
+  const notes = normalizeStringList(obj.notes);
+  const result = {
+    readFiles: boolField("readFiles"),
+    writeFiles: boolField("writeFiles"),
+    execCommands: boolField("execCommands"),
+    network: boolField("network"),
+    sendMessages: boolField("sendMessages"),
+    memory: boolField("memory"),
+    notes: notes.length > 0 ? notes : undefined,
+  };
+  // Return undefined if no fields are set
+  const hasAny = Object.values(result).some((v) => v !== undefined);
+  return hasAny ? result : undefined;
+}
+
 export type ParsedOpenClawManifestInstallBase = {
   raw: Record<string, unknown>;
   kind: string;
