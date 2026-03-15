@@ -6,7 +6,7 @@ import type { ChannelOnboardingAdapter } from "./types.js";
 const setupWizardAdapters = new WeakMap<object, ChannelOnboardingAdapter>();
 
 function resolveChannelOnboardingAdapter(
-  plugin: (typeof listChannelSetupPlugins)[number],
+  plugin: ReturnType<typeof listChannelSetupPlugins>[number],
 ): ChannelOnboardingAdapter | undefined {
   if (plugin.setupWizard) {
     const cached = setupWizardAdapters.get(plugin);

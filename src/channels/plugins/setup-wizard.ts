@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveChannelDefaultAccountId } from "./helpers.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
@@ -59,11 +59,11 @@ export type ChannelSetupWizardAllowFrom = {
   helpTitle?: string;
   helpLines?: string[];
   message: string;
-  placeholder?: string;
-  invalidWithoutCredentialNote?: string;
+  placeholder: string;
+  invalidWithoutCredentialNote: string;
   parseInputs?: (raw: string) => string[];
   parseId: (raw: string) => string | null;
-  resolveEntries?: (params: {
+  resolveEntries: (params: {
     cfg: OpenClawConfig;
     accountId: string;
     credentialValue?: string;
@@ -163,7 +163,10 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
       shouldPromptAccountIds,
       forceAllowFrom,
     }) => {
-      const defaultAccountId = resolveChannelDefaultAccountId({ plugin, cfg });
+      const defaultAccountId =
+        plugin.config.defaultAccountId?.(cfg) ??
+        plugin.config.listAccountIds(cfg)[0] ??
+        DEFAULT_ACCOUNT_ID;
       const accountId = await resolveAccountIdForConfigure({
         cfg,
         prompter,
@@ -234,10 +237,11 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
         undefined;
 
       if (forceAllowFrom && wizard.allowFrom) {
-        if (wizard.allowFrom.helpLines && wizard.allowFrom.helpLines.length > 0) {
+        const allowFrom = wizard.allowFrom;
+        if (allowFrom.helpLines && allowFrom.helpLines.length > 0) {
           await prompter.note(
-            wizard.allowFrom.helpLines.join("\n"),
-            wizard.allowFrom.helpTitle ?? `${plugin.meta.label} allowlist`,
+            allowFrom.helpLines.join("\n"),
+            allowFrom.helpTitle ?? `${plugin.meta.label} allowlist`,
           );
         }
         const existingAllowFrom =
@@ -249,23 +253,21 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
           prompter,
           existing: existingAllowFrom,
           token: resolvedCredentialValue,
-          message: wizard.allowFrom.message,
-          placeholder: wizard.allowFrom.placeholder,
-          label: wizard.allowFrom.helpTitle ?? `${plugin.meta.label} allowlist`,
-          parseInputs: wizard.allowFrom.parseInputs ?? splitOnboardingEntries,
-          parseId: wizard.allowFrom.parseId,
-          invalidWithoutTokenNote: wizard.allowFrom.invalidWithoutCredentialNote,
-          resolveEntries: wizard.allowFrom.resolveEntries
-            ? async ({ entries }) =>
-                wizard.allowFrom!.resolveEntries!({
-                  cfg: next,
-                  accountId,
-                  credentialValue: resolvedCredentialValue,
-                  entries,
-                })
-            : undefined,
+          message: allowFrom.message,
+          placeholder: allowFrom.placeholder,
+          label: allowFrom.helpTitle ?? `${plugin.meta.label} allowlist`,
+          parseInputs: allowFrom.parseInputs ?? splitOnboardingEntries,
+          parseId: allowFrom.parseId,
+          invalidWithoutTokenNote: allowFrom.invalidWithoutCredentialNote,
+          resolveEntries: async ({ entries }) =>
+            allowFrom.resolveEntries({
+              cfg: next,
+              accountId,
+              credentialValue: resolvedCredentialValue,
+              entries,
+            }),
         });
-        next = await wizard.allowFrom.apply({
+        next = await allowFrom.apply({
           cfg: next,
           accountId,
           allowFrom: unique,
