@@ -13,6 +13,7 @@ type ScrollHost = {
   chatLastScrollTop: number | null;
   chatAutoScrollBlockId: string | null;
   chatAutoScrollMode: ChatAutoScrollMode;
+  chatBottomFollowPinned: boolean;
   chatSuppressedBlockId: string | null;
   chatUserNearBottom: boolean;
   chatNewMessagesBelow: boolean;
@@ -146,6 +147,13 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         host.chatAutoScrollMode = effectiveForce
           ? "bottom"
           : (latestBlock?.defaultMode ?? "bottom");
+        host.chatBottomFollowPinned = effectiveForce;
+      } else if (
+        latestBlockId &&
+        host.chatAutoScrollBlockId === latestBlockId &&
+        !host.chatBottomFollowPinned
+      ) {
+        host.chatAutoScrollMode = latestBlock?.defaultMode ?? "bottom";
       }
       const shouldStick = shouldStickToLatestBlock(host, latestBlockId, effectiveForce);
 
@@ -253,6 +261,7 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   host.chatLastScrollTop = container.scrollTop;
   const distanceFromBottom = measureDistanceFromBottom(container);
   host.chatUserNearBottom = distanceFromBottom <= BOTTOM_EPSILON;
+  host.chatBottomFollowPinned = distanceFromBottom <= BOTTOM_EPSILON;
   // Clear the "new messages below" indicator when user scrolls back to bottom.
   if (distanceFromBottom <= BOTTOM_EPSILON) {
     host.chatAutoScrollBlockId = latestBlockId;
@@ -276,6 +285,7 @@ export function resetChatScroll(host: ScrollHost) {
   host.chatLastScrollTop = null;
   host.chatAutoScrollBlockId = null;
   host.chatAutoScrollMode = "bottom";
+  host.chatBottomFollowPinned = false;
   host.chatSuppressedBlockId = null;
   host.chatUserNearBottom = true;
   host.chatNewMessagesBelow = false;
