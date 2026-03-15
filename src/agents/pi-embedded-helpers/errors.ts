@@ -732,6 +732,17 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (
+    /tool_use.*without.*tool_result|tool_result.*without.*tool_use|tool_use.*ids?.*tool_result.*immediately after/i.test(
+      raw,
+    )
+  ) {
+    return (
+      "Session history has a tool call mismatch - please try again. " +
+      "If this persists, use /new to start a fresh session."
+    );
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;

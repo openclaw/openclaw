@@ -62,6 +62,15 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Session history looks corrupted");
     expect(result).toContain("/new");
   });
+  it("returns a friendly message for tool_use/tool_result mismatches", () => {
+    const msg = makeAssistantError(
+      "LLM request rejected: messages.27: `tool_use` ids were found without `tool_result` blocks immediately after: exec17734030655683.",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("tool call mismatch");
+    expect(result).toContain("/new");
+    expect(result).not.toContain("messages.27");
+  });
   it("handles JSON-wrapped role errors", () => {
     const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
     const result = formatAssistantErrorText(msg);
