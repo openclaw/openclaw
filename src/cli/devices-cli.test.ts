@@ -260,6 +260,7 @@ describe("devices cli local fallback", () => {
       paired: [],
     });
     approveDevicePairing.mockResolvedValueOnce({
+      status: "approved",
       requestId: "req-latest",
       device: {
         deviceId: "device-1",
