@@ -92,4 +92,85 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
   });
+
+  it("keeps the message tool enabled for shared callers with a fully resolved delivery target", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "whatsapp",
+      to: "1234567890",
+      accountId: "botnumber",
+    });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "whatsapp",
+      to: "1234567890",
+      accountId: "botnumber",
+      mode: "explicit",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      deliveryContract: "shared",
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
+  });
+
+  it("disables the message tool for shared callers when delivery target lacks accountId", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "whatsapp",
+      to: "1234567890",
+    });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "whatsapp",
+      to: "1234567890",
+      accountId: undefined,
+      mode: "explicit",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      deliveryContract: "shared",
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(true);
+  });
+
+  it("disables the message tool for shared callers when delivery target is implicitly resolved", async () => {
+    // Even with accountId present, an implicit target (resolved via session
+    // history fallback, not from explicit user input) should not enable the
+    // message tool — the agent shouldn't send to a target the user didn't
+    // explicitly specify in the hook payload.
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "whatsapp",
+      to: "1234567890",
+      accountId: "botnumber",
+    });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "whatsapp",
+      to: "1234567890",
+      accountId: "botnumber",
+      mode: "implicit",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      deliveryContract: "shared",
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(true);
+  });
 });

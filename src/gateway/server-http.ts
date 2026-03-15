@@ -80,7 +80,7 @@ const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 
 type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
-  dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
+  dispatchAgentHook: (value: HookAgentDispatchPayload) => string | { ok: false; error: string };
 };
 
 export type HookClientIpConfig = Readonly<{
@@ -581,6 +581,7 @@ export function createHooksRequestHandler(
           deliver: normalized.value.deliver,
           channel: normalized.value.channel,
           to: normalized.value.to ?? null,
+          accountId: normalized.value.accountId ?? null,
           model: normalized.value.model ?? null,
           thinking: normalized.value.thinking ?? null,
           timeoutSeconds: normalized.value.timeoutSeconds ?? null,
@@ -595,14 +596,18 @@ export function createHooksRequestHandler(
         sessionKey: sessionKey.value,
         targetAgentId,
       });
-      const runId = dispatchAgentHook({
+      const result = dispatchAgentHook({
         ...normalized.value,
         idempotencyKey,
         sessionKey: normalizedDispatchSessionKey,
         agentId: targetAgentId,
       });
-      rememberHookRunId(replayKey, runId, now);
-      sendJson(res, 200, { ok: true, runId });
+      if (typeof result !== "string") {
+        sendJson(res, 500, result);
+        return true;
+      }
+      rememberHookRunId(replayKey, result, now);
+      sendJson(res, 200, { ok: true, runId: result });
       return true;
     }
 
@@ -679,7 +684,7 @@ export function createHooksRequestHandler(
             sendJson(res, 200, { ok: true, runId: cachedRunId });
             return true;
           }
-          const runId = dispatchAgentHook({
+          const mappedResult = dispatchAgentHook({
             message: mapped.action.message,
             name: mapped.action.name ?? "Hook",
             idempotencyKey,
@@ -694,8 +699,12 @@ export function createHooksRequestHandler(
             timeoutSeconds: mapped.action.timeoutSeconds,
             allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
           });
-          rememberHookRunId(replayKey, runId, now);
-          sendJson(res, 200, { ok: true, runId });
+          if (typeof mappedResult !== "string") {
+            sendJson(res, 500, mappedResult);
+            return true;
+          }
+          rememberHookRunId(replayKey, mappedResult, now);
+          sendJson(res, 200, { ok: true, runId: mappedResult });
           return true;
         }
       } catch (err) {

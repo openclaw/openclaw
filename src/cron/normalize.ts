@@ -526,6 +526,13 @@ export function normalizeCronJobInput(
   return next;
 }
 
+/**
+ * Normalize a raw cron job input into a validated {@link CronJobCreate}.
+ *
+ * Used by both the cron service (job creation/import) and the gateway hook
+ * dispatch (`/hooks/agent`) to ensure legacy flat fields (`deliver`, `channel`,
+ * `to`) are promoted into a proper `CronDelivery` and `accountId` is preserved.
+ */
 export function normalizeCronJobCreate(
   raw: unknown,
   options?: Omit<NormalizeOptions, "applyDefaults">,

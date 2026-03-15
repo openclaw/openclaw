@@ -152,15 +152,29 @@ function resolveCronToolPolicy(params: {
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryContract: IsolatedDeliveryContract;
 }) {
+  // When the delivery target is fully resolved (explicit mode + accountId),
+  // the runner can handle delivery itself, so the message tool can stay
+  // enabled for shared callers — the skipMessagingToolDelivery guard
+  // (below, ~line 821) prevents duplicate sends when the agent also uses
+  // the message tool to reach the same target.
+  const hasFullyResolvedTarget =
+    params.resolvedDelivery.ok &&
+    params.resolvedDelivery.mode === "explicit" &&
+    Boolean(params.resolvedDelivery.accountId);
   return {
     // Only enforce an explicit message target when the cron delivery target
     // was successfully resolved. When resolution fails the agent should not
     // be blocked by a target it cannot satisfy (#27898).
     requireExplicitMessageTarget: params.deliveryRequested && params.resolvedDelivery.ok,
     // Cron-owned runs always route user-facing delivery through the runner
-    // itself. Shared callers keep the previous behavior so non-cron paths do
-    // not silently lose the message tool when no explicit delivery is active.
-    disableMessageTool: params.deliveryContract === "cron-owned" ? true : params.deliveryRequested,
+    // itself. Shared callers (hooks) disable the message tool only when
+    // delivery is requested but the target is not fully resolved — when the
+    // target IS fully resolved the agent may use the message tool directly
+    // and the runner's skipMessagingToolDelivery guard deduplicates.
+    disableMessageTool:
+      params.deliveryContract === "cron-owned"
+        ? true
+        : params.deliveryRequested && !hasFullyResolvedTarget,
   };
 }
 

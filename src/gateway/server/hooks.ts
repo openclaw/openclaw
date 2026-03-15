@@ -3,6 +3,7 @@ import type { CliDeps } from "../../cli/deps.js";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
+import { normalizeCronJobCreate } from "../../cron/normalize.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -49,15 +50,17 @@ export function createGatewayHooksRequestHandler(params: {
     const mainSessionKey = resolveMainSessionKeyFromConfig();
     const jobId = randomUUID();
     const now = Date.now();
-    const job: CronJob = {
-      id: jobId,
+
+    // Route through the cron normalization pipeline so legacy flat fields
+    // (deliver, channel, to) are promoted into a proper CronDelivery and
+    // accountId is preserved end-to-end.
+    const jobCreate = normalizeCronJobCreate({
       agentId: value.agentId,
       name: value.name,
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
       schedule: { kind: "at", at: new Date(now).toISOString() },
-      sessionTarget: "isolated",
+      // Hook sessions may be reused across runs (explicit or default sessionKey),
+      // so never auto-delete the session after delivery (#43866).
+      deleteAfterRun: false,
       wakeMode: value.wakeMode,
       payload: {
         kind: "agentTurn",
@@ -70,6 +73,18 @@ export function createGatewayHooksRequestHandler(params: {
         to: value.to,
         allowUnsafeExternalContent: value.allowUnsafeExternalContent,
       },
+      ...(value.accountId ? { delivery: { accountId: value.accountId } } : {}),
+    });
+    if (!jobCreate) {
+      logHooks.warn("hook agent: normalizeCronJobCreate returned null");
+      return { ok: false as const, error: "internal: failed to normalize hook payload" };
+    }
+
+    const job: CronJob = {
+      ...jobCreate,
+      id: jobId,
+      createdAtMs: now,
+      updatedAtMs: now,
       state: { nextRunAtMs: now },
     };
 
