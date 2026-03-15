@@ -351,8 +351,19 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     baseUrl?: string,
     private dimensions?: number,
   ) {
+    const isAzure = baseUrl?.includes(".openai.azure.com");
     this.clientPromise = loadOpenAiModule().then(
-      ({ default: OpenAI }) => new OpenAI({ apiKey, baseURL: baseUrl }) as OpenAiEmbeddingClient,
+      ({ default: OpenAI }) =>
+        new OpenAI({
+          apiKey,
+          baseURL: baseUrl,
+          ...(isAzure
+            ? {
+                defaultHeaders: { "api-key": apiKey },
+                defaultQuery: { "api-version": "2024-02-01" },
+              }
+            : {}),
+        }) as OpenAiEmbeddingClient,
     );
   }
 

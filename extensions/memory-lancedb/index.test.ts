@@ -1871,6 +1871,102 @@ describe("memory plugin e2e", () => {
     }
   });
 
+  test("configures Azure OpenAI embedding clients with api-key header and api-version", async () => {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const openAiCtorArgs: unknown[] = [];
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ limit }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        constructor(opts: unknown) {
+          openAiCtorArgs.push(opts);
+        }
+
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      const registeredTools: any[] = [];
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: {
+            apiKey: "azure-key",
+            model: "text-embedding-3-small",
+            baseUrl: "https://example.openai.azure.com/openai/deployments/embed",
+          },
+          dbPath: getDbPath(),
+          autoCapture: false,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        registerTool: (tool: any, opts: any) => {
+          registeredTools.push({ tool, opts });
+        },
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        on: vi.fn(),
+        resolvePath: (p: string) => p,
+      };
+
+      memoryPlugin.register(mockApi as any);
+      const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+      if (!recallTool) {
+        throw new Error("memory_recall tool was not registered");
+      }
+      await recallTool.execute("test-call-azure", { query: "hello azure" });
+
+      expect(openAiCtorArgs).toEqual([
+        expect.objectContaining({
+          apiKey: "azure-key",
+          baseURL: "https://example.openai.azure.com/openai/deployments/embed",
+          defaultHeaders: { "api-key": "azure-key" },
+          defaultQuery: { "api-version": "2024-02-01" },
+        }),
+      ]);
+      expect(embeddingsCreate).toHaveBeenCalledWith({
+        model: "text-embedding-3-small",
+        input: "hello azure",
+      });
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+    }
+  });
+
   test("clears failed database initialization so later tool calls can retry", async () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],

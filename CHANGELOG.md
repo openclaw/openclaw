@@ -183,6 +183,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/LanceDB: configure Azure OpenAI embedding endpoints with the `api-key` header and API version query so Azure-hosted embeddings work without an intermediate proxy. (#47285) Thanks @Restry.
 - fix(discord): gate user allowlist name resolution [AI]. (#79002) Thanks @pgondhi987.
 - fix(msteams): gate startup user allowlist resolution [AI]. (#79003) Thanks @pgondhi987.
 - Harden macOS shell wrapper allowlist parsing [AI]. (#78518) Thanks @pgondhi987.
