@@ -172,11 +172,10 @@ export class TelegramPollingSession {
       return;
     }
     let seeded = false;
-    bot.api.config.use((prev, method, payload, signal) => {
+    bot.api.config.use(async (prev, method, payload, signal) => {
       if (method !== "getUpdates" || seeded) {
-        return prev(method, payload, signal);
+        return await prev(method, payload, signal);
       }
-      seeded = true;
       const requestPayload =
         payload && typeof payload === "object"
           ? { ...(payload as Record<string, unknown>) }
@@ -187,7 +186,9 @@ export class TelegramPollingSession {
       // Let the runner receive the first batch itself, instead of consuming it in a
       // separate confirmation call that can drop updates on some Local Bot API setups.
       requestPayload.offset = Math.max(currentOffset ?? 0, lastUpdateId + 1);
-      return prev(method, requestPayload as typeof payload, signal);
+      const result = await prev(method, requestPayload as typeof payload, signal);
+      seeded = true;
+      return result;
     });
   }
 

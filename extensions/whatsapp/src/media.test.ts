@@ -14,6 +14,7 @@ import {
   loadWebMedia,
   loadWebMediaRaw,
   optimizeImageToJpeg,
+  resolveLocalMediaSource,
 } from "./media.js";
 
 const convertHeicToJpegMock = vi.fn();
@@ -34,6 +35,8 @@ let largeJpegBuffer: Buffer;
 let largeJpegFile = "";
 let tinyPngBuffer: Buffer;
 let tinyPngFile = "";
+let tinyPngNoExtFile = "";
+let tinyPngTextExtFile = "";
 let tinyPngWrongExtFile = "";
 let fakeHeicFile = "";
 let alphaPngBuffer: Buffer;
@@ -88,6 +91,8 @@ beforeAll(async () => {
     .png()
     .toBuffer();
   tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");
+  tinyPngNoExtFile = await writeTempFile(tinyPngBuffer, "");
+  tinyPngTextExtFile = await writeTempFile(tinyPngBuffer, ".txt");
   tinyPngWrongExtFile = await writeTempFile(tinyPngBuffer, ".bin");
   fakeHeicFile = await writeTempFile(Buffer.from("fake-heic"), ".heic");
   alphaPngBuffer = await sharp({
@@ -190,6 +195,38 @@ describe("web media loading", () => {
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
+  });
+
+  it("sniffs loopback local media bytes for extensionless files", async () => {
+    const result = await resolveLocalMediaSource(tinyPngNoExtFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: [resolvePreferredOpenClawTmpDir()],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        filePath: tinyPngNoExtFile,
+        fileName: path.basename(tinyPngNoExtFile),
+        kind: "image",
+        contentType: "image/png",
+      }),
+    );
+  });
+
+  it("sniffs loopback local media bytes when a file is misnamed as text", async () => {
+    const result = await resolveLocalMediaSource(tinyPngTextExtFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: [resolvePreferredOpenClawTmpDir()],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        filePath: tinyPngTextExtFile,
+        fileName: path.basename(tinyPngTextExtFile),
+        kind: "image",
+        contentType: "image/png",
+      }),
+    );
   });
 
   it("normalizes HEIC local files to JPEG output", async () => {

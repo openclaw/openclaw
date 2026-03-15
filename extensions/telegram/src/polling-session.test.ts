@@ -49,10 +49,14 @@ const pollingState = vi.hoisted(() => {
     stop,
   };
 
+  let runnerTask = async () => {
+    await bot.api.getUpdates({ offset: 0, limit: 1, timeout: 30 });
+    abortController?.abort();
+  };
+
   const run = vi.fn(() => ({
     task: async () => {
-      await bot.api.getUpdates({ offset: 0, limit: 1, timeout: 30 });
-      abortController?.abort();
+      await runnerTask();
     },
     stop: vi.fn(async () => undefined),
     isRunning: () => false,
@@ -65,6 +69,10 @@ const pollingState = vi.hoisted(() => {
     reset: () => {
       abortController = undefined;
       middlewares.length = 0;
+      runnerTask = async () => {
+        await bot.api.getUpdates({ offset: 0, limit: 1, timeout: 30 });
+        abortController?.abort();
+      };
       getUpdatesBase.mockReset().mockResolvedValue([]);
       deleteWebhookBase.mockReset().mockResolvedValue(true);
       stop.mockReset().mockResolvedValue(undefined);
@@ -74,6 +82,9 @@ const pollingState = vi.hoisted(() => {
     run,
     setAbortController: (controller: AbortController) => {
       abortController = controller;
+    },
+    setRunnerTask: (task: () => Promise<void>) => {
+      runnerTask = task;
     },
   };
 });
@@ -142,6 +153,48 @@ describe("TelegramPollingSession", () => {
 
     expect(pollingState.getUpdatesBase).toHaveBeenCalledWith({
       offset: 0,
+      limit: 1,
+      timeout: 30,
+    });
+  });
+
+  it("reuses the seeded offset until the first getUpdates succeeds", async () => {
+    const abort = new AbortController();
+    pollingState.setAbortController(abort);
+    pollingState.getUpdatesBase
+      .mockRejectedValueOnce(new Error("transient getUpdates failure"))
+      .mockResolvedValueOnce([]);
+    pollingState.setRunnerTask(async () => {
+      await expect(
+        pollingState.bot.api.getUpdates({ offset: 0, limit: 1, timeout: 30 }),
+      ).rejects.toThrow(/transient getUpdates failure/i);
+      await pollingState.bot.api.getUpdates({ offset: 0, limit: 1, timeout: 30 });
+      abort.abort();
+    });
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: undefined,
+      accountId: "default",
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => 549_076_203,
+      persistUpdateId: vi.fn(async () => undefined),
+      log: vi.fn(),
+      proxyFetch: undefined,
+      runtime: undefined,
+    });
+
+    await session.runUntilAbort();
+
+    expect(pollingState.getUpdatesBase).toHaveBeenCalledTimes(2);
+    expect(pollingState.getUpdatesBase).toHaveBeenNthCalledWith(1, {
+      offset: 549_076_204,
+      limit: 1,
+      timeout: 30,
+    });
+    expect(pollingState.getUpdatesBase).toHaveBeenNthCalledWith(2, {
+      offset: 549_076_204,
       limit: 1,
       timeout: 30,
     });

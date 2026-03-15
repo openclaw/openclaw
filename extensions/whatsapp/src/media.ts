@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { logVerbose, shouldLogVerbose } from "../../../src/globals.js";
 import {
   SafeOpenError,
+  readLocalFileHeadSafely,
   readLocalFileSafely,
   statLocalFileSafely,
 } from "../../../src/infra/fs-safe.js";
@@ -84,6 +85,8 @@ export type LocalMediaSource = {
   fileName?: string;
   kind: MediaKind | undefined;
 };
+
+const LOCAL_MEDIA_SNIFF_BYTES = 8 * 1024;
 
 export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
@@ -203,12 +206,30 @@ export async function resolveLocalMediaSource(
     throw err;
   }
 
-  const contentType = await detectMime({ filePath: mediaUrl });
+  const fileName = path.basename(mediaUrl) || undefined;
+  let contentType = await detectMime({ filePath: mediaUrl });
+  let kind = kindFromMime(contentType);
+
+  if (!path.extname(mediaUrl) || kind === undefined || kind === "document") {
+    const sniffedHead = await readLocalFileHeadSafely({
+      filePath: mediaUrl,
+      bytes: LOCAL_MEDIA_SNIFF_BYTES,
+    });
+    const sniffedContentType = await detectMime({
+      buffer: sniffedHead.buffer,
+      filePath: mediaUrl,
+    });
+    if (sniffedContentType) {
+      contentType = sniffedContentType;
+      kind = kindFromMime(sniffedContentType);
+    }
+  }
+
   return {
     filePath: mediaUrl,
     contentType,
-    fileName: path.basename(mediaUrl) || undefined,
-    kind: kindFromMime(contentType),
+    fileName,
+    kind,
   };
 }
 
