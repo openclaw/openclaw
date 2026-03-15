@@ -3,6 +3,7 @@ import {
   emptyPluginConfigSchema,
   type OpenClawPluginApi,
   type ProviderAuthContext,
+  type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/qwen-portal-auth";
 import { loginQwenPortalOAuth } from "./oauth.js";
 
@@ -12,7 +13,6 @@ const DEFAULT_MODEL = "qwen-portal/coder-model";
 const DEFAULT_BASE_URL = "https://portal.qwen.ai/v1";
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 8192;
-const OAUTH_PLACEHOLDER = "qwen-oauth";
 
 function normalizeBaseUrl(value: string | undefined): string {
   const raw = value?.trim() || DEFAULT_BASE_URL;
@@ -36,6 +36,46 @@ function buildModelDefinition(params: {
   };
 }
 
+function buildProviderCatalog(params: { baseUrl: string; apiKey: string }) {
+  return {
+    baseUrl: params.baseUrl,
+    apiKey: params.apiKey,
+    api: "openai-completions" as const,
+    models: [
+      buildModelDefinition({
+        id: "coder-model",
+        name: "Qwen Coder",
+        input: ["text"],
+      }),
+      buildModelDefinition({
+        id: "vision-model",
+        name: "Qwen Vision",
+        input: ["text", "image"],
+      }),
+    ],
+  };
+}
+
+function resolveCatalog(ctx: ProviderCatalogContext) {
+  const explicitProvider = ctx.config.models?.providers?.[PROVIDER_ID];
+  const apiKey =
+    ctx.resolveProviderApiKey(PROVIDER_ID).apiKey ??
+    (typeof explicitProvider?.apiKey === "string" ? explicitProvider.apiKey.trim() : undefined);
+  if (!apiKey) {
+    return null;
+  }
+
+  const explicitBaseUrl =
+    typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl : undefined;
+
+  return {
+    provider: buildProviderCatalog({
+      baseUrl: normalizeBaseUrl(explicitBaseUrl),
+      apiKey,
+    }),
+  };
+}
+
 const qwenPortalPlugin = {
   id: "qwen-portal-auth",
   name: "Qwen OAuth",
@@ -47,6 +87,9 @@ const qwenPortalPlugin = {
       label: PROVIDER_LABEL,
       docsPath: "/providers/qwen",
       aliases: ["qwen"],
+      catalog: {
+        run: async (ctx: ProviderCatalogContext) => resolveCatalog(ctx),
+      },
       auth: [
         {
           id: "device",
@@ -77,20 +120,7 @@ const qwenPortalPlugin = {
                     providers: {
                       [PROVIDER_ID]: {
                         baseUrl,
-                        apiKey: OAUTH_PLACEHOLDER,
-                        api: "openai-completions",
-                        models: [
-                          buildModelDefinition({
-                            id: "coder-model",
-                            name: "Qwen Coder",
-                            input: ["text"],
-                          }),
-                          buildModelDefinition({
-                            id: "vision-model",
-                            name: "Qwen Vision",
-                            input: ["text", "image"],
-                          }),
-                        ],
+                        models: [],
                       },
                     },
                   },
