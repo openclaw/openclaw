@@ -28,16 +28,16 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
   };
 }
 
-describe("app-tool-stream fallback lifecycle handling", () => {
-  beforeAll(() => {
-    const globalWithWindow = globalThis as typeof globalThis & {
-      window?: Window & typeof globalThis;
-    };
-    if (!globalWithWindow.window) {
-      globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
-    }
-  });
+beforeAll(() => {
+  const globalWithWindow = globalThis as typeof globalThis & {
+    window?: Window & typeof globalThis;
+  };
+  if (!globalWithWindow.window) {
+    globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
+  }
+});
 
+describe("app-tool-stream fallback lifecycle handling", () => {
   it("accepts session-scoped fallback lifecycle events when no run is active", () => {
     vi.useFakeTimers();
     const host = createHost();
@@ -138,5 +138,70 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.fallbackStatus?.phase).toBe("cleared");
     expect(host.fallbackStatus?.previous).toBe("deepinfra/moonshotai/Kimi-K2.5");
     vi.useRealTimers();
+  });
+});
+
+describe("app-tool-stream text segmentation", () => {
+  it("stores only the incremental suffix when multiple tool starts split one cumulative stream", () => {
+    const host = createHost({ chatStream: "我先改规则。" });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-1",
+        args: { command: "npm run build" },
+      },
+    });
+
+    host.chatStream = "我先改规则。build 已经开始了。";
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-2",
+        args: { command: "process poll" },
+      },
+    });
+
+    expect(host.chatStreamSegments).toEqual([
+      { text: "我先改规则。", ts: expect.any(Number) },
+      { text: "build 已经开始了。", ts: expect.any(Number) },
+    ]);
+  });
+
+  it("does not add a duplicate stream segment when a later tool sees unchanged cumulative text", () => {
+    const host = createHost({
+      chatStreamSegments: [{ text: "我先改规则。", ts: Date.now() }],
+      chatStream: "我先改规则。",
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-2",
+        args: { command: "process poll" },
+      },
+    });
+
+    expect(host.chatStreamSegments).toEqual([{ text: "我先改规则。", ts: expect.any(Number) }]);
+    expect(host.chatStream).toBeNull();
   });
 });

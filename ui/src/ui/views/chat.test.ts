@@ -158,6 +158,17 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
   };
 }
 
+function normalizeTextContent(container: HTMLElement): string {
+  return (container.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+function countOccurrences(text: string, needle: string): number {
+  if (!needle) {
+    return 0;
+  }
+  return text.split(needle).length - 1;
+}
+
 describe("chat view", () => {
   it("uses the assistant avatar URL for the welcome state when the identity avatar is only initials", () => {
     const container = document.createElement("div");
@@ -246,6 +257,42 @@ describe("chat view", () => {
     );
     expect(groupedLogo).not.toBeNull();
     expect(groupedLogo?.getAttribute("src")).toBe("/openclaw/favicon.svg");
+  });
+
+  it("deduplicates live stream preview against previously committed stream segments", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          streamSegments: [{ text: "我先改规则。", ts: 1 }],
+          stream: "我先改规则。build 已经开始了。",
+          streamStartedAt: 2,
+        }),
+      ),
+      container,
+    );
+
+    const streamingBubbles = Array.from(
+      container.querySelectorAll<HTMLElement>(".chat-bubble.streaming"),
+    ).map((el) => normalizeTextContent(el));
+    expect(streamingBubbles).toEqual(["我先改规则。", "build 已经开始了。"]);
+  });
+
+  it("shows reading indicator instead of replaying an unchanged cumulative live stream", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          streamSegments: [{ text: "我先改规则。", ts: 1 }],
+          stream: "我先改规则。",
+          streamStartedAt: 2,
+        }),
+      ),
+      container,
+    );
+
+    const text = normalizeTextContent(container);
+    expect(countOccurrences(text, "我先改规则。")).toBe(1);
   });
 
   it("renders compacting indicator as a badge", () => {

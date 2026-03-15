@@ -27,6 +27,7 @@ import {
 } from "../chat/slash-commands.ts";
 import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
 import { icons } from "../icons.ts";
+import { getLiveStreamPreviewText } from "../stream-dedupe.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
@@ -1430,6 +1431,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   // contains text that was streaming before the corresponding tool started.
   // This ensures correct visual ordering: text → tool → text → tool → ...
   const segments = props.streamSegments ?? [];
+  const liveStreamText = getLiveStreamPreviewText(segments, props.stream);
   const maxLen = Math.max(segments.length, tools.length);
   for (let i = 0; i < maxLen; i++) {
     if (i < segments.length && segments[i].text.trim().length > 0) {
@@ -1451,11 +1453,11 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
 
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
+    if ((liveStreamText ?? "").trim().length > 0) {
       items.push({
         kind: "stream",
         key,
-        text: props.stream,
+        text: liveStreamText ?? "",
         startedAt: props.streamStartedAt ?? Date.now(),
       });
     } else {
