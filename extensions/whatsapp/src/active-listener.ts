@@ -30,7 +30,14 @@ export type ActiveWebListener = {
 
 let _currentListener: ActiveWebListener | null = null;
 
-const listeners = new Map<string, ActiveWebListener>();
+type GlobalWithWaListeners = typeof globalThis & {
+  __openclawWaListeners?: Map<string, ActiveWebListener>;
+};
+
+const globalWithWaListeners = globalThis as GlobalWithWaListeners;
+const listeners =
+  globalWithWaListeners.__openclawWaListeners ??
+  (globalWithWaListeners.__openclawWaListeners = new Map<string, ActiveWebListener>());
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
