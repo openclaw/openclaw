@@ -518,11 +518,76 @@ function resolveActiveSessionRow(state: AppViewState) {
   return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
 }
 
+function buildModelRef(provider?: string | null, model?: string | null): string {
+  const modelValue = typeof model === "string" ? model.trim() : "";
+  if (!modelValue) {
+    return "";
+  }
+  const providerValue = typeof provider === "string" ? provider.trim() : "";
+  if (!providerValue) {
+    return modelValue;
+  }
+  const prefix = `${providerValue}/`;
+  if (modelValue.toLowerCase().startsWith(prefix.toLowerCase())) {
+    const trimmedModel = modelValue.slice(prefix.length).trim();
+    return trimmedModel ? `${providerValue}/${trimmedModel}` : modelValue;
+  }
+  return `${providerValue}/${modelValue}`;
+}
+
+function resolveUniqueCatalogProvider(
+  catalog: ModelCatalogEntry[],
+  model: string,
+): string | undefined {
+  const modelValue = model.trim();
+  if (!modelValue || modelValue.includes("/")) {
+    return undefined;
+  }
+  const normalizedModel = modelValue.toLowerCase();
+  const providers = new Set<string>();
+  for (const entry of catalog) {
+    const entryModel = typeof entry.id === "string" ? entry.id.trim() : "";
+    const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
+    if (!entryModel || !provider) {
+      continue;
+    }
+    if (entryModel === modelValue || entryModel.toLowerCase() === normalizedModel) {
+      providers.add(provider);
+      if (providers.size > 1) {
+        return undefined;
+      }
+    }
+  }
+  if (providers.size !== 1) {
+    return undefined;
+  }
+  return providers.values().next().value;
+}
+
 function resolveModelOverrideValue(state: AppViewState): string {
   // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
   const cached = state.chatModelOverrides[state.sessionKey];
   if (typeof cached === "string") {
-    return cached.trim();
+    const cachedValue = cached.trim();
+    if (!cachedValue) {
+      return "";
+    }
+    const activeRow = resolveActiveSessionRow(state);
+    const activeModel = typeof activeRow?.model === "string" ? activeRow.model.trim() : "";
+    if (cachedValue.includes("/")) {
+      if (activeModel && activeModel.toLowerCase() === cachedValue.toLowerCase()) {
+        return buildModelRef(activeRow?.modelProvider, cachedValue);
+      }
+      return cachedValue;
+    }
+    const inferredProvider = resolveUniqueCatalogProvider(
+      state.chatModelCatalog ?? [],
+      cachedValue,
+    );
+    if (activeModel && activeModel.toLowerCase() === cachedValue.toLowerCase()) {
+      return buildModelRef(activeRow?.modelProvider ?? inferredProvider, cachedValue);
+    }
+    return buildModelRef(inferredProvider, cachedValue);
   }
   // cached === null means explicitly cleared to default.
   if (cached === null) {
@@ -531,14 +596,16 @@ function resolveModelOverrideValue(state: AppViewState): string {
   // No local override recorded yet — fall back to server data.
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow) {
-    return typeof activeRow.model === "string" ? activeRow.model.trim() : "";
+    return buildModelRef(activeRow.modelProvider, activeRow.model);
   }
   return "";
 }
 
 function resolveDefaultModelValue(state: AppViewState): string {
-  const model = state.sessionsResult?.defaults?.model;
-  return typeof model === "string" ? model.trim() : "";
+  return buildModelRef(
+    state.sessionsResult?.defaults?.modelProvider,
+    state.sessionsResult?.defaults?.model,
+  );
 }
 
 function buildChatModelOptions(
@@ -563,7 +630,7 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    addOption(buildModelRef(provider, entry.id), provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
   if (currentOverride) {
