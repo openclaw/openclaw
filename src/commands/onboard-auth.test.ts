@@ -473,6 +473,7 @@ describe("applyZaiConfig", () => {
     });
     const ids = cfg.models?.providers?.zai?.models?.map((m) => m.id);
     expect(ids).toContain("glm-5");
+    expect(ids).toContain("glm-5-turbo");
     expect(ids).toContain("glm-4.7");
     expect(ids).toContain("glm-4.7-flash");
     expect(ids).toContain("glm-4.7-flashx");
