@@ -700,4 +700,39 @@ describe("ws connect policy", () => {
       }),
     ).toBe(false);
   });
+
+  test("attests authenticated remote backend clients for inter_session", () => {
+    const backendConnect: ConnectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        version: "1.0.0",
+        platform: "node",
+      },
+      minProtocol: 1,
+      maxProtocol: 1,
+    };
+
+    for (const authMethod of ["token", "password", "device-token", "tailscale"] as const) {
+      expect(
+        resolveInternalBackendClientAttestation({
+          connectParams: backendConnect,
+          hasBrowserOriginHeader: false,
+          initialIsInternalBackendClient: false,
+          authMethod,
+          deviceTokenIssued: false,
+        }),
+      ).toBe(true);
+    }
+
+    expect(
+      resolveInternalBackendClientAttestation({
+        connectParams: backendConnect,
+        hasBrowserOriginHeader: true,
+        initialIsInternalBackendClient: false,
+        authMethod: "token",
+        deviceTokenIssued: false,
+      }),
+    ).toBe(false);
+  });
 });
