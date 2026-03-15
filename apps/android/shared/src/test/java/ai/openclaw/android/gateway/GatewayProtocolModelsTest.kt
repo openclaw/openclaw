@@ -17,7 +17,7 @@ class GatewayProtocolModelsTest {
       }
     """.trimIndent()
 
-    val sessions = GatewaySessionEntry.parseList(json)
+    val sessions = ChatSessionEntry.parseList(json)
     assertEquals(2, sessions.size)
     assertEquals("main", sessions[0].key)
     assertEquals(1710500000L, sessions[0].updatedAtMs)
@@ -28,15 +28,15 @@ class GatewayProtocolModelsTest {
 
   @Test
   fun parseSessionsListReturnsEmptyForInvalidJson() {
-    assertTrue(GatewaySessionEntry.parseList("").isEmpty())
-    assertTrue(GatewaySessionEntry.parseList("{}").isEmpty())
-    assertTrue(GatewaySessionEntry.parseList("{invalid").isEmpty())
+    assertTrue(ChatSessionEntry.parseList("").isEmpty())
+    assertTrue(ChatSessionEntry.parseList("{}").isEmpty())
+    assertTrue(ChatSessionEntry.parseList("{invalid").isEmpty())
   }
 
   @Test
   fun parseSessionsListStripsWhitespaceFromKeys() {
     val json = """{"sessions": [{"key": "  trimmed  ", "updatedAt": null}]}"""
-    val sessions = GatewaySessionEntry.parseList(json)
+    val sessions = ChatSessionEntry.parseList(json)
     assertEquals(1, sessions.size)
     assertEquals("trimmed", sessions[0].key)
   }
