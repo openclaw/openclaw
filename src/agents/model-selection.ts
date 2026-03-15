@@ -622,11 +622,45 @@ export function resolveAllowedModelRef(params: {
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
   });
-  if (!status.allowed) {
-    return { error: `model not allowed: ${status.key}` };
+  if (status.allowed) {
+    return { ref: resolved.ref, key: status.key };
   }
 
-  return { ref: resolved.ref, key: status.key };
+  // When a bare model ID (no provider prefix) is not found under the default
+  // provider, search the catalog for a matching entry from any provider.
+  // This handles the case where a UI model picker or user sends a bare model
+  // ID that belongs to a different provider than the session's current default.
+  // See https://github.com/openclaw/openclaw/issues/46859
+  const { model: bareModel } = splitTrailingAuthProfile(trimmed);
+  if (bareModel && !bareModel.includes("/")) {
+    const allowed = buildAllowedModelSet({
+      cfg: params.cfg,
+      catalog: params.catalog,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+    });
+    const candidates: Array<{ ref: ModelRef; key: string }> = [];
+    for (const entry of params.catalog) {
+      if (entry.id !== bareModel) {
+        continue;
+      }
+      const key = modelKey(entry.provider, entry.id);
+      if (allowed.allowAny || allowed.allowedKeys.has(key)) {
+        candidates.push({ ref: { provider: entry.provider, model: entry.id }, key });
+      }
+    }
+    if (candidates.length === 1) {
+      return candidates[0];
+    }
+    if (candidates.length > 1) {
+      const providers = candidates.map((c) => c.ref.provider).join(", ");
+      return {
+        error: `ambiguous model: ${bareModel} matches multiple providers (${providers}). Use a qualified ref like provider/${bareModel}.`,
+      };
+    }
+  }
+
+  return { error: `model not allowed: ${status.key}` };
 }
 
 export function resolveThinkingDefault(params: {

@@ -453,6 +453,93 @@ describe("model-selection", () => {
       });
     });
 
+    it("resolves bare model id to correct provider via catalog fallback", () => {
+      // Scenario: session default is openai-codex, user picks bare "glm-4.7"
+      // which only exists under the "zhipu" provider. With an explicit allowlist,
+      // "openai-codex/glm-4.7" is not allowed, but "zhipu/glm-4.7" is.
+      // See https://github.com/openclaw/openclaw/issues/46859
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+              "zhipu/glm-4.7": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const catalog = [
+        { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+        { provider: "zhipu", id: "glm-4.7", name: "glm-4.7" },
+      ];
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog,
+        raw: "glm-4.7",
+        defaultProvider: "openai-codex",
+      });
+
+      expect(result).toEqual({
+        key: "zhipu/glm-4.7",
+        ref: { provider: "zhipu", model: "glm-4.7" },
+      });
+    });
+
+    it("returns error when bare model id matches multiple allowed providers", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "provider-a/shared-model": {},
+              "provider-b/shared-model": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const catalog = [
+        { provider: "provider-a", id: "shared-model", name: "shared-model" },
+        { provider: "provider-b", id: "shared-model", name: "shared-model" },
+      ];
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog,
+        raw: "shared-model",
+        defaultProvider: "provider-c",
+      });
+
+      expect(result).toEqual({
+        error: expect.stringContaining("ambiguous model"),
+      });
+    });
+
+    it("resolves bare model id with trailing auth profile via catalog fallback", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+              "zhipu/glm-4.7": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const catalog = [
+        { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+        { provider: "zhipu", id: "glm-4.7", name: "glm-4.7" },
+      ];
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog,
+        raw: "glm-4.7@zhipu:default",
+        defaultProvider: "openai-codex",
+      });
+
+      expect(result).toEqual({
+        key: "zhipu/glm-4.7",
+        ref: { provider: "zhipu", model: "glm-4.7" },
+      });
+    });
+
     it("strips trailing auth profile suffix before allowlist matching", () => {
       const cfg: OpenClawConfig = {
         agents: {
