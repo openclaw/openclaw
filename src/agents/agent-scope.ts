@@ -17,6 +17,15 @@ const log = createSubsystemLogger("agent-scope");
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
+
+function assertNoPathTraversal(configValue: string, fieldName: string): void {
+  const normalized = path.normalize(configValue);
+  if (normalized.includes("..")) {
+    throw new Error(
+      `Security violation: ${fieldName} contains path traversal: ${configValue}`,
+    );
+  }
+}
   // eslint-disable-next-line no-control-regex
   return s.replace(/\0/g, "");
 }
@@ -257,12 +266,14 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
+    assertNoPathTraversal(configured, "workspace");
     return stripNullBytes(resolveUserPath(configured));
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
   if (id === defaultAgentId) {
     const fallback = cfg.agents?.defaults?.workspace?.trim();
     if (fallback) {
+      assertNoPathTraversal(fallback, "workspace");
       return stripNullBytes(resolveUserPath(fallback));
     }
     return stripNullBytes(resolveDefaultAgentWorkspaceDir(process.env));
@@ -331,7 +342,15 @@ export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
   if (configured) {
-    return resolveUserPath(configured);
+    assertNoPathTraversal(configured, "agentDir");
+    const resolved = resolveUserPath(configured);
+    const stateDir = resolveStateDir(process.env);
+    if (!resolved.startsWith(stateDir + path.sep) && resolved !== stateDir) {
+      throw new Error(
+        `Security violation: agentDir resolves outside state directory: ${resolved}`,
+      );
+    }
+    return resolved;
   }
   const root = resolveStateDir(process.env);
   return path.join(root, "agents", id, "agent");
