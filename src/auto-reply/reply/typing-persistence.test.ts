@@ -80,4 +80,28 @@ describe("typing persistence bug fix", () => {
     controller.markDispatchIdle();
     expect(onCleanupSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("should not start the typing loop after cleanup wins during an in-flight start", async () => {
+    let resolveStart: (() => void) | undefined;
+    onReplyStartSpy.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+
+    const startPromise = controller.startTypingLoop();
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+
+    controller.markRunComplete();
+    controller.markDispatchIdle();
+    expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+
+    resolveStart?.();
+    await startPromise;
+
+    vi.advanceTimersByTime(12_000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+    expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+  });
 });

@@ -1,0 +1,1 @@
+- Fix Matrix typing indicator so it clears after final replies instead of lingering until user input.

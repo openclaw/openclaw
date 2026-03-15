@@ -28,6 +28,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   let stopSent = false;
   let closed = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
+  let startInFlight: Promise<void> | undefined;
 
   const startGuard = createTypingStartGuard({
     isSealed: () => closed,
@@ -72,16 +73,29 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     if (closed) {
       return;
     }
-    stopSent = false;
-    startGuard.reset();
-    keepaliveLoop.stop();
-    clearTtlTimer();
-    await fireStart();
-    if (startGuard.isTripped()) {
+    if (startInFlight) {
+      await startInFlight;
       return;
     }
-    keepaliveLoop.start();
-    startTtlTimer(); // Start TTL safety timer
+    if (keepaliveLoop.isRunning()) {
+      startTtlTimer();
+      return;
+    }
+    startInFlight = (async () => {
+      stopSent = false;
+      startGuard.reset();
+      keepaliveLoop.stop();
+      clearTtlTimer();
+      await fireStart();
+      if (closed || startGuard.isTripped()) {
+        return;
+      }
+      keepaliveLoop.start();
+      startTtlTimer(); // Start TTL safety timer
+    })().finally(() => {
+      startInFlight = undefined;
+    });
+    await startInFlight;
   };
 
   const fireStop = () => {
