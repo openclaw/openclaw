@@ -1,6 +1,7 @@
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import { getDefaultLocalRoots } from "../../../extensions/whatsapp/src/media.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { FailoverError } from "../failover-error.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
 
@@ -89,7 +90,11 @@ export function resolveModelFromRegistry(params: {
 }): Model<Api> {
   const model = params.modelRegistry.find(params.provider, params.modelId) as Model<Api> | null;
   if (!model) {
-    throw new Error(`Unknown model: ${params.provider}/${params.modelId}`);
+    throw new FailoverError(`Unknown model: ${params.provider}/${params.modelId}`, {
+      reason: "model_not_found",
+      provider: params.provider,
+      model: params.modelId,
+    });
   }
   return model;
 }

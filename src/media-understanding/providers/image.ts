@@ -1,5 +1,6 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { complete } from "@mariozechner/pi-ai";
+import { FailoverError } from "../../agents/failover-error.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { normalizeModelRef } from "../../agents/model-selection.js";
@@ -27,7 +28,11 @@ export async function describeImageWithModel(
   const resolvedRef = normalizeModelRef(params.provider, params.model);
   const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
   if (!model) {
-    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
+    throw new FailoverError(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`, {
+      reason: "model_not_found",
+      provider: resolvedRef.provider,
+      model: resolvedRef.model,
+    });
   }
   if (!model.input?.includes("image")) {
     throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
