@@ -355,6 +355,37 @@ describe("AcpxRuntime", () => {
     );
   });
 
+  it("classifies silent acpx exits as backend-unavailable errors", async () => {
+    const runtime = sharedFixture?.runtime;
+    expect(runtime).toBeDefined();
+    if (!runtime) {
+      throw new Error("shared runtime fixture missing");
+    }
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:silent-exit",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const events = [];
+    for await (const event of runtime.runTurn({
+      handle,
+      text: "silent-exit",
+      mode: "prompt",
+      requestId: "req-silent-exit",
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        code: "ACP_BACKEND_UNAVAILABLE",
+        message: "acpx exited with code 1",
+      }),
+    );
+  });
+
   it("supports cancel and close using encoded runtime handle state", async () => {
     const { runtime, logPath, config } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
@@ -606,5 +637,21 @@ describe("AcpxRuntime", () => {
       delete process.env.MOCK_ACPX_ENSURE_EMPTY;
       delete process.env.MOCK_ACPX_NEW_EMPTY;
     }
+  });
+
+  it("preserves ACP_SESSION_INIT_FAILED for silent exits during session init", async () => {
+    const { runtime } = await createMockRuntimeFixture();
+
+    // Session-init silent exits should keep stale-session guidance instead of turn-failure guidance.
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:claude:acp:silent-init",
+        agent: "claude",
+        mode: "persistent",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_SESSION_INIT_FAILED",
+      message: "acpx exited with code 1",
+    });
   });
 });
