@@ -43,7 +43,10 @@ export async function probeGateway(opts: {
 
   const disableDeviceIdentity = (() => {
     try {
-      return opts.includeDetails === false && isLoopbackHost(new URL(opts.url).hostname);
+      if (isLoopbackHost(new URL(opts.url).hostname)) {
+        return opts.includeDetails === false || !!opts.auth?.token || !!opts.auth?.password;
+      }
+      return false;
     } catch {
       return false;
     }
