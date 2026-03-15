@@ -42,13 +42,28 @@ describe("Ollama auto-discovery", () => {
 
   it("auto-registers ollama provider when models are discovered locally", async () => {
     setupDiscoveryEnv();
-    globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL) => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL, init?: RequestInit) => {
       if (String(url).includes("/api/tags")) {
         return {
           ok: true,
           json: async () => ({
             models: [{ name: "deepseek-r1:latest" }, { name: "llama3.3:latest" }],
           }),
+        };
+      }
+      if (String(url).includes("/api/show")) {
+        const parsed = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+          name?: string;
+        };
+        if (parsed.name === "deepseek-r1:latest") {
+          return {
+            ok: true,
+            json: async () => ({ model_info: { "deepseek.context_length": 131072 } }),
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({ model_info: { "llama.context_length": 65536 } }),
         };
       }
       throw new Error(`Unexpected fetch: ${url}`);

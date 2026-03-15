@@ -17,7 +17,7 @@ describe("ollama-models", () => {
   });
 
   it("enriches discovered models with context windows from /api/show", async () => {
-    const models: OllamaTagModel[] = [{ name: "llama3:8b" }, { name: "deepseek-r1:14b" }];
+    const models: OllamaTagModel[] = [{ name: "llama3:8b" }, { name: "qwen2.5-vl:7b" }];
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = requestUrl(input);
       if (!url.endsWith("/api/show")) {
@@ -25,7 +25,13 @@ describe("ollama-models", () => {
       }
       const body = JSON.parse(requestBodyText(init?.body)) as { name?: string };
       if (body.name === "llama3:8b") {
-        return jsonResponse({ model_info: { "llama.context_length": 65536 } });
+        return jsonResponse({
+          model_info: { "llama.context_length": 65536 },
+          capabilities: ["completion"],
+        });
+      }
+      if (body.name === "qwen2.5-vl:7b") {
+        return jsonResponse({ capabilities: ["completion", "vision"] });
       }
       return jsonResponse({});
     });
@@ -34,8 +40,8 @@ describe("ollama-models", () => {
     const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
 
     expect(enriched).toEqual([
-      { name: "llama3:8b", contextWindow: 65536 },
-      { name: "deepseek-r1:14b", contextWindow: undefined },
+      { name: "llama3:8b", contextWindow: 65536, input: ["text"] },
+      { name: "qwen2.5-vl:7b", contextWindow: undefined, input: ["text", "image"] },
     ]);
   });
 });

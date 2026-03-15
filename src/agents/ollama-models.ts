@@ -29,9 +29,63 @@ export type OllamaTagsResponse = {
 
 export type OllamaModelWithContext = OllamaTagModel & {
   contextWindow?: number;
+  input?: Array<"text" | "image">;
 };
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
+
+function resolveOllamaModelInput(capabilities: unknown): Array<"text" | "image"> {
+  if (!Array.isArray(capabilities)) {
+    return ["text"];
+  }
+  return capabilities.some(
+    (value) => typeof value === "string" && value.trim().toLowerCase() === "vision",
+  )
+    ? ["text", "image"]
+    : ["text"];
+}
+
+async function queryOllamaShowInfo(
+  apiBase: string,
+  modelName: string,
+): Promise<{ contextWindow?: number; input: Array<"text" | "image"> } | undefined> {
+  try {
+    const response = await fetch(`${apiBase}/api/show`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: modelName }),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!response.ok) {
+      return undefined;
+    }
+    const data = (await response.json()) as {
+      model_info?: Record<string, unknown>;
+      capabilities?: unknown;
+      details?: { capabilities?: unknown };
+    };
+    let contextWindow: number | undefined;
+    if (data.model_info) {
+      for (const [key, value] of Object.entries(data.model_info)) {
+        if (
+          key.endsWith(".context_length") &&
+          typeof value === "number" &&
+          Number.isFinite(value)
+        ) {
+          const candidate = Math.floor(value);
+          if (candidate > 0) {
+            contextWindow = candidate;
+            break;
+          }
+        }
+      }
+    }
+    const input = resolveOllamaModelInput(data.capabilities ?? data.details?.capabilities);
+    return { contextWindow, input };
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Derive the Ollama native API base URL from a configured base URL.
@@ -53,32 +107,8 @@ export async function queryOllamaContextWindow(
   apiBase: string,
   modelName: string,
 ): Promise<number | undefined> {
-  try {
-    const response = await fetch(`${apiBase}/api/show`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: modelName }),
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!response.ok) {
-      return undefined;
-    }
-    const data = (await response.json()) as { model_info?: Record<string, unknown> };
-    if (!data.model_info) {
-      return undefined;
-    }
-    for (const [key, value] of Object.entries(data.model_info)) {
-      if (key.endsWith(".context_length") && typeof value === "number" && Number.isFinite(value)) {
-        const contextWindow = Math.floor(value);
-        if (contextWindow > 0) {
-          return contextWindow;
-        }
-      }
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  }
+  const showInfo = await queryOllamaShowInfo(apiBase, modelName);
+  return showInfo?.contextWindow;
 }
 
 export async function enrichOllamaModelsWithContext(
@@ -91,10 +121,14 @@ export async function enrichOllamaModelsWithContext(
   for (let index = 0; index < models.length; index += concurrency) {
     const batch = models.slice(index, index + concurrency);
     const batchResults = await Promise.all(
-      batch.map(async (model) => ({
-        ...model,
-        contextWindow: await queryOllamaContextWindow(apiBase, model.name),
-      })),
+      batch.map(async (model) => {
+        const showInfo = await queryOllamaShowInfo(apiBase, model.name);
+        return {
+          ...model,
+          contextWindow: showInfo?.contextWindow,
+          input: showInfo?.input ?? ["text"],
+        };
+      }),
     );
     enriched.push(...batchResults);
   }
@@ -110,12 +144,13 @@ export function isReasoningModelHeuristic(modelId: string): boolean {
 export function buildOllamaModelDefinition(
   modelId: string,
   contextWindow?: number,
+  input: Array<"text" | "image"> = ["text"],
 ): ModelDefinitionConfig {
   return {
     id: modelId,
     name: modelId,
     reasoning: isReasoningModelHeuristic(modelId),
-    input: ["text"],
+    input,
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,

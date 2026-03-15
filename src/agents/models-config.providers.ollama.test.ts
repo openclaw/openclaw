@@ -115,7 +115,7 @@ describe("Ollama provider", () => {
     });
   });
 
-  it("discovers per-model context windows from /api/show", async () => {
+  it("discovers per-model context windows and vision input from /api/show", async () => {
     const agentDir = createAgentDir();
     enableDiscoveryEnv();
     const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
@@ -130,7 +130,10 @@ describe("Ollama provider", () => {
         if (parsed.name === "qwen3:32b") {
           return {
             ok: true,
-            json: async () => ({ model_info: { "qwen3.context_length": 131072 } }),
+            json: async () => ({
+              model_info: { "qwen3.context_length": 131072 },
+              capabilities: ["completion", "vision"],
+            }),
           };
         }
         if (parsed.name === "llama3.3:70b") {
@@ -149,7 +152,9 @@ describe("Ollama provider", () => {
     const qwen = models.find((model) => model.id === "qwen3:32b");
     const llama = models.find((model) => model.id === "llama3.3:70b");
     expect(qwen?.contextWindow).toBe(131072);
+    expect(qwen?.input).toEqual(["text", "image"]);
     expect(llama?.contextWindow).toBe(65536);
+    expect(llama?.input).toEqual(["text"]);
     expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 2 });
   });
 

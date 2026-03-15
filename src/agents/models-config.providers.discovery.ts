@@ -86,7 +86,7 @@ async function discoverOllamaModels(
       id: model.name,
       name: model.name,
       reasoning: isReasoningModelHeuristic(model.name),
-      input: ["text"],
+      input: model.input ?? ["text"],
       cost: OLLAMA_DEFAULT_COST,
       contextWindow: model.contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
       maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
