@@ -71,7 +71,7 @@ export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: str
   return Array.from(new Set(resolved));
 }
 
-export function isMemoryPath(relPath: string): boolean {
+export function isMemoryPath(relPath: string, userId?: string): boolean {
   const normalized = normalizeRelPath(relPath);
   if (!normalized) {
     return false;
@@ -79,7 +79,44 @@ export function isMemoryPath(relPath: string): boolean {
   if (normalized === "MEMORY.md" || normalized === "memory.md") {
     return true;
   }
-  return normalized.startsWith("memory/");
+  // Check if path starts with memory/
+  if (!normalized.startsWith("memory/")) {
+    return false;
+  }
+  // If userId is provided (isolation enabled), apply access control
+  if (userId) {
+    const userPrefix = `memory/${userId}/`;
+    // Allow user's own memory directory
+    if (normalized.startsWith(userPrefix)) {
+      return true;
+    }
+    // For paths under memory/ but not under memory/{userId}/
+    // Check if it's a shared file at the root level (not another user's directory)
+    const afterMemory = normalized.slice("memory/".length);
+    // If the path is just "memory/" with no additional segments, allow
+    if (afterMemory.length === 0) {
+      return true;
+    }
+    // If the path contains a slash, it's under a subdirectory
+    // Allow only if it's NOT under another user's directory pattern
+    const firstSegment = afterMemory.split("/")[0];
+    if (!firstSegment) {
+      return false;
+    }
+    // Shared memory files at root level: memory/file.md (no slash after memory/)
+    // This allows memory/2024-01-01.md but blocks memory/other-user/file.md
+    const slashIndex = afterMemory.indexOf("/");
+    if (slashIndex === -1) {
+      // Direct file under memory/ - shared memory
+      return afterMemory.endsWith(".md") || afterMemory.endsWith(".MD");
+    }
+    // Path has a subdirectory - block access to other users' directories
+    // The first segment is a potential userId; if it's not our userId, block
+    // Exception: common non-user directories (but for isolation, we're strict)
+    return false;
+  }
+  // No userId provided (isolation disabled) - allow all memory paths
+  return true;
 }
 
 function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodalSettings): boolean {
@@ -112,10 +149,32 @@ async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimod
   }
 }
 
+/**
+ * Walk a directory and collect files at root level only (not subdirectories).
+ * Used for shared memory directory when isolation is enabled.
+ */
+async function walkRootFiles(dir: string, files: string[], multimodal?: MemoryMultimodalSettings) {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isSymbolicLink() || entry.isDirectory()) {
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    const full = path.join(dir, entry.name);
+    if (!isAllowedMemoryFilePath(full, multimodal)) {
+      continue;
+    }
+    files.push(full);
+  }
+}
+
 export async function listMemoryFiles(
   workspaceDir: string,
   extraPaths?: string[],
   multimodal?: MemoryMultimodalSettings,
+  userId?: string,
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
@@ -140,7 +199,21 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await walkDir(memoryDir, result);
+      if (userId) {
+        // Isolation enabled: walk user-specific directory, then shared root files only
+        const userMemoryDir = path.join(memoryDir, userId);
+        try {
+          const userDirStat = await fs.lstat(userMemoryDir);
+          if (!userDirStat.isSymbolicLink() && userDirStat.isDirectory()) {
+            await walkDir(userMemoryDir, result, multimodal);
+          }
+        } catch {}
+        // Walk only root-level files in shared memory (not subdirectories)
+        await walkRootFiles(memoryDir, result, multimodal);
+      } else {
+        // No isolation: walk entire memory directory
+        await walkDir(memoryDir, result, multimodal);
+      }
     }
   } catch {}
 

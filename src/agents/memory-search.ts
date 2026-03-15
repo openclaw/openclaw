@@ -86,6 +86,13 @@ export type ResolvedMemorySearchConfig = {
     enabled: boolean;
     maxEntries?: number;
   };
+  /**
+   * Memory isolation settings for user-specific memory directories.
+   * When enabled with a userId, memory files are stored in memory/{userId}/.
+   */
+  isolation: {
+    enabled: boolean;
+  };
 };
 
 const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
@@ -302,6 +309,11 @@ function mergeConfig(
     maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
   };
 
+  // Memory isolation: default enabled=true, resolved at runtime with optional userId
+  const isolation = {
+    enabled: true,
+  };
+
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
   const minScore = clampNumber(query.minScore, 0, 1);
   const vectorWeight = clampNumber(hybrid.vectorWeight, 0, 1);
@@ -372,6 +384,7 @@ function mergeConfig(
           ? Math.max(1, Math.floor(cache.maxEntries))
           : undefined,
     },
+    isolation,
   };
 }
 
@@ -402,5 +415,12 @@ export function resolveMemorySearchConfig(
       'agents.*.memorySearch.multimodal does not support memorySearch.fallback. Set fallback to "none".',
     );
   }
-  return resolved;
+  // Merge isolation config from cfg.memory (global memory settings)
+  const isolationConfig = cfg.memory?.isolation;
+  return {
+    ...resolved,
+    isolation: {
+      enabled: isolationConfig?.enabled ?? true,
+    },
+  };
 }
