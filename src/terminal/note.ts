@@ -1,4 +1,5 @@
 import { note as clackNote } from "@clack/prompts";
+import { loggingState } from "../logging/state.js";
 import { visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
 
@@ -158,6 +159,12 @@ export function wrapNoteMessage(
 }
 
 export function note(message: string, title?: string) {
+  if (loggingState.forceConsoleToStderr) {
+    // In RPC/JSON mode keep stdout clean; write notes to stderr as plain text.
+    const prefix = title ? `[${title}] ` : "";
+    process.stderr.write(`${prefix}${message}\n`);
+    return;
+  }
   if (isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)) {
     return;
   }
