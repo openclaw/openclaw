@@ -59,5 +59,12 @@ export function resolveMarkdownTableMode(params: {
     (params.cfg as Record<string, unknown> | undefined)?.[channel]) as
     | MarkdownConfigSection
     | undefined;
-  return resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
+  const resolved = resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
+  // "block" mode relies on Slack Block Kit table attachments and is only
+  // meaningful for the Slack channel.  Coerce to "code" for any other
+  // channel so table content isn't silently dropped from the text stream.
+  if (resolved === "block" && channel !== "slack") {
+    return "code";
+  }
+  return resolved;
 }
