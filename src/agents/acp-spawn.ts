@@ -43,6 +43,10 @@ import {
 } from "../routing/session-key.js";
 import { deliveryContextFromSession, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
+  type AcpSpawnCompletionRelayHandle,
+  startAcpSpawnCompletionRelay,
+} from "./acp-spawn-completion-relay.js";
+import {
   type AcpSpawnParentRelayHandle,
   resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
@@ -683,6 +687,7 @@ export async function spawnAcpDirect(
         })
       : undefined;
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
+  let completionRelay: AcpSpawnCompletionRelayHandle | undefined;
   if (effectiveStreamToParent && parentSessionKey) {
     // Register relay before dispatch so fast lifecycle failures are not missed.
     parentRelay = startAcpSpawnParentStreamRelay({
@@ -713,8 +718,23 @@ export async function spawnAcpDirect(
     if (typeof response?.runId === "string" && response.runId.trim()) {
       childRunId = response.runId.trim();
     }
+    if (
+      parentSessionKey &&
+      !requestThreadBinding &&
+      !effectiveStreamToParent &&
+      requesterOrigin?.channel &&
+      requesterOrigin?.to
+    ) {
+      completionRelay = startAcpSpawnCompletionRelay({
+        runId: childRunId,
+        parentSessionKey,
+        childSessionKey: sessionKey,
+        agentId: targetAgentId,
+      });
+    }
   } catch (err) {
     parentRelay?.dispose();
+    completionRelay?.dispose();
     await cleanupFailedAcpSpawn({
       cfg,
       sessionKey,

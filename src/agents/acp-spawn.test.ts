@@ -34,6 +34,7 @@ const hoisted = vi.hoisted(() => {
   const closeSessionMock = vi.fn();
   const initializeSessionMock = vi.fn();
   const startAcpSpawnParentStreamRelayMock = vi.fn();
+  const startAcpSpawnCompletionRelayMock = vi.fn();
   const resolveAcpSpawnStreamLogPathMock = vi.fn();
   const loadSessionStoreMock = vi.fn();
   const resolveStorePathMock = vi.fn();
@@ -52,6 +53,7 @@ const hoisted = vi.hoisted(() => {
     closeSessionMock,
     initializeSessionMock,
     startAcpSpawnParentStreamRelayMock,
+    startAcpSpawnCompletionRelayMock,
     resolveAcpSpawnStreamLogPathMock,
     loadSessionStoreMock,
     resolveStorePathMock,
@@ -143,6 +145,11 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
     hoisted.startAcpSpawnParentStreamRelayMock(...args),
   resolveAcpSpawnStreamLogPath: (...args: unknown[]) =>
     hoisted.resolveAcpSpawnStreamLogPathMock(...args),
+}));
+
+vi.mock("./acp-spawn-completion-relay.js", () => ({
+  startAcpSpawnCompletionRelay: (...args: unknown[]) =>
+    hoisted.startAcpSpawnCompletionRelayMock(...args),
 }));
 
 const { spawnAcpDirect } = await import("./acp-spawn.js");
@@ -293,6 +300,9 @@ describe("spawnAcpDirect", () => {
     hoisted.sessionBindingListBySessionMock.mockReset().mockReturnValue([]);
     hoisted.sessionBindingUnbindMock.mockReset().mockResolvedValue([]);
     hoisted.startAcpSpawnParentStreamRelayMock
+      .mockReset()
+      .mockImplementation(() => createRelayHandle());
+    hoisted.startAcpSpawnCompletionRelayMock
       .mockReset()
       .mockImplementation(() => createRelayHandle());
     hoisted.resolveAcpSpawnStreamLogPathMock
@@ -589,6 +599,32 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
+  it("starts completion relay for non-thread DM ACP runs", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Reply with final status",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:direct:5915788710",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:5915788710",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.startAcpSpawnCompletionRelayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionKey: "agent:main:telegram:direct:5915788710",
+        agentId: "codex",
+        childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
+        runId: result.runId,
+      }),
+    );
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
   it('streams ACP progress to parent when streamTo="parent"', async () => {
     const firstHandle = createRelayHandle();
     const secondHandle = createRelayHandle();
@@ -633,6 +669,7 @@ describe("spawnAcpDirect", () => {
         emitStartNotice: false,
       }),
     );
+    expect(hoisted.startAcpSpawnCompletionRelayMock).not.toHaveBeenCalled();
     const relayRuns = hoisted.startAcpSpawnParentStreamRelayMock.mock.calls.map(
       (call: unknown[]) => (call[0] as { runId?: string }).runId,
     );
@@ -986,6 +1023,7 @@ describe("spawnAcpDirect", () => {
       .find((request) => request.method === "agent");
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.channel).toBe("telegram");
+    expect(hoisted.startAcpSpawnCompletionRelayMock).not.toHaveBeenCalled();
   });
 
   it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {
