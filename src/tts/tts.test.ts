@@ -36,6 +36,21 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
     authStorage: { profiles: {} },
     modelRegistry: { find: vi.fn() },
   })),
+  resolveModelAsync: vi.fn(async (provider: string, modelId: string) => ({
+    model: {
+      provider,
+      id: modelId,
+      name: modelId,
+      api: "openai-completions",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    },
+    authStorage: { profiles: {} },
+    modelRegistry: { find: vi.fn() },
+  })),
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
