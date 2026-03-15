@@ -1,4 +1,4 @@
-import { isLoopbackHost, normalizeHostHeader } from "./net.js";
+import { isLoopbackHost, normalizeHostHeader, resolveHostName } from "./net.js";
 
 type OriginCheckResult =
   | {
@@ -28,6 +28,7 @@ function parseOrigin(
 
 export function checkBrowserOrigin(params: {
   requestHost?: string;
+  requestForwardedHost?: string;
   origin?: string;
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
@@ -46,16 +47,23 @@ export function checkBrowserOrigin(params: {
   }
 
   const requestHost = normalizeHostHeader(params.requestHost);
-  if (
-    params.allowHostHeaderOriginFallback === true &&
-    requestHost &&
-    parsedOrigin.host === requestHost
-  ) {
-    return { ok: true, matchedBy: "host-header-fallback" };
+  const requestForwardedHost = normalizeHostHeader(params.requestForwardedHost);
+  if (params.allowHostHeaderOriginFallback === true) {
+    if (requestHost && parsedOrigin.host === requestHost) {
+      return { ok: true, matchedBy: "host-header-fallback" };
+    }
+    if (requestForwardedHost && parsedOrigin.host === requestForwardedHost) {
+      return { ok: true, matchedBy: "host-header-fallback" };
+    }
   }
 
-  // Dev fallback only for genuinely local socket clients, not Host-header claims.
-  if (params.isLocalClient && isLoopbackHost(parsedOrigin.hostname)) {
+  const requestHostname = resolveHostName(requestHost);
+  const requestForwardedHostname = resolveHostName(requestForwardedHost);
+  if (
+    params.isLocalClient === true &&
+    isLoopbackHost(parsedOrigin.hostname) &&
+    (isLoopbackHost(requestHostname) || isLoopbackHost(requestForwardedHostname))
+  ) {
     return { ok: true, matchedBy: "local-loopback" };
   }
 
