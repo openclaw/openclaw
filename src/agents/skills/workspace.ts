@@ -556,13 +556,17 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
         hi = mid - 1;
       }
     }
-    const droppedSkills = skillsForPrompt.slice(lo);
+    const charsDropped = skillsForPrompt.slice(lo);
     skillsForPrompt = skillsForPrompt.slice(0, lo);
     truncated = true;
     truncatedReason = "chars";
+    // Collect ALL dropped skills: count-truncated (before binary search) + chars-truncated
+    const countDropped = params.skills.slice(Math.max(0, limits.maxSkillsInPrompt));
+    const allDropped = [...countDropped, ...charsDropped];
+    const uniqueDropped = [...new Map(allDropped.map((s) => [s.name, s])).values()];
     skillsLogger.warn(
-      `Skills truncated due to prompt char limit: included ${skillsForPrompt.length} of ${params.skills.length} skills (limit: ${limits.maxSkillsPromptChars} chars). ` +
-        `Dropped: ${droppedSkills.map((s) => s.name).join(", ")}. ` +
+      `Skills truncated due to prompt limits: included ${skillsForPrompt.length} of ${params.skills.length} skills (maxSkillsInPrompt: ${limits.maxSkillsInPrompt}, maxSkillsPromptChars: ${limits.maxSkillsPromptChars}). ` +
+        `Dropped: ${uniqueDropped.map((s) => s.name).join(", ")}. ` +
         `Increase skills.limits.maxSkillsPromptChars in config to include all skills.`,
     );
   }
