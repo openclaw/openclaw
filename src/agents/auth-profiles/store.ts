@@ -379,6 +379,36 @@ function loadAuthProfileStoreForAgent(
   const authPath = resolveAuthStorePath(agentDir);
   const asStore = loadCoercedStore(authPath);
   if (asStore) {
+    // Fix #41634: Prune ghost profiles that are not in the configured order.
+    // This prevents profiles from accumulating indefinitely when repairOAuthProfileIdMismatch
+    // or other code creates new profile entries without cleaning up old ones.
+    if (asStore.order && typeof asStore.order === "object") {
+      const validProfileIds = new Set<string>();
+      for (const profiles of Object.values(asStore.order)) {
+        if (Array.isArray(profiles)) {
+          for (const profileId of profiles) {
+            validProfileIds.add(profileId);
+          }
+        }
+      }
+      // Also keep profiles that are explicitly configured (lastGood values are profile IDs)
+      if (asStore.lastGood) {
+        for (const profileId of Object.values(asStore.lastGood)) {
+          validProfileIds.add(profileId);
+        }
+      }
+      // Remove ghost profiles not in any valid list
+      for (const profileId of Object.keys(asStore.profiles)) {
+        if (!validProfileIds.has(profileId)) {
+          delete asStore.profiles[profileId];
+          // Also clean up orphaned usageStats entries
+          if (asStore.usageStats) {
+            delete asStore.usageStats[profileId];
+          }
+          log.info("pruned ghost auth profile", { profileId, agentDir });
+        }
+      }
+    }
     // Runtime secret activation must remain read-only:
     // sync external CLI credentials in-memory, but never persist while readOnly.
     const synced = syncExternalCliCredentials(asStore);
@@ -414,33 +444,6 @@ function loadAuthProfileStoreForAgent(
   const mergedOAuth = mergeOAuthFileIntoStore(store);
   // Keep external CLI credentials visible in runtime even during read-only loads.
   const syncedCli = syncExternalCliCredentials(store);
-
-  // Fix #41634: Prune ghost profiles that are not in the configured order.
-  // This prevents profiles from accumulating indefinitely when repairOAuthProfileIdMismatch
-  // or other code creates new profile entries without cleaning up old ones.
-  if (store.order && typeof store.order === "object") {
-    const validProfileIds = new Set<string>();
-    for (const profiles of Object.values(store.order)) {
-      if (Array.isArray(profiles)) {
-        for (const profileId of profiles) {
-          validProfileIds.add(profileId);
-        }
-      }
-    }
-    // Also keep profiles that are explicitly configured (lastGood keys)
-    if (store.lastGood) {
-      for (const profileId of Object.keys(store.lastGood)) {
-        validProfileIds.add(profileId);
-      }
-    }
-    // Remove ghost profiles not in any valid list
-    for (const profileId of Object.keys(store.profiles)) {
-      if (!validProfileIds.has(profileId)) {
-        delete store.profiles[profileId];
-        log.info("pruned ghost auth profile", { profileId, agentDir });
-      }
-    }
-  }
 
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
   const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth || syncedCli);
