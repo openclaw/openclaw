@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
@@ -8,6 +9,10 @@ import {
 } from "../../gateway/session-utils.fs.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  cleanupHandoffFiles,
+  createModelHandoff,
+} from "./model-handoff.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -724,6 +729,139 @@ async function withSessionStoreLock<T>(
   });
 
   return await promise;
+}
+
+/**
+ * Clear persisted model/provider fields from all session entries that do not
+ * have an explicit user-set model override.  This forces sessions to re-resolve
+ * the default model from the current config on their next turn, which is the
+ * desired behavior when the operator changes the default model via config.
+ */
+export async function clearSessionModelFields(storePath: string): Promise<number> {
+  return await withSessionStoreLock(storePath, async () => {
+    const store = loadSessionStore(storePath, { skipCache: true });
+    let cleared = 0;
+    for (const [, entry] of Object.entries(store)) {
+      if (!entry) {
+        continue;
+      }
+      // Preserve explicit user-set overrides (/model command).
+      if (entry.modelOverride || entry.providerOverride) {
+        continue;
+      }
+      if (entry.model || entry.modelProvider) {
+        delete entry.model;
+        delete entry.modelProvider;
+        cleared++;
+      }
+    }
+    if (cleared > 0) {
+      await saveSessionStoreUnlocked(storePath, store, { skipMaintenance: true });
+    }
+    return cleared;
+  });
+}
+
+/**
+ * Archive session transcripts and create handoff files when the default model changes.
+ * For each session without an explicit user-set model override:
+ * 1. Extract recent user messages from the old transcript (ignoring assistant responses).
+ * 2. Write a structured handoff file with user context only.
+ * 3. Archive the old transcript so it's no longer loaded as conversation history.
+ * 4. Assign a new sessionId so the new model starts with a clean session.
+ *
+ * This prevents behavioral pattern pollution (e.g. a broken model's tool-avoidance habits)
+ * from contaminating the new model, while preserving the user's recent intent/context.
+ */
+export async function archiveAndHandoffOnModelChange(params: {
+  storePath: string;
+  previousModel?: string;
+  previousProvider?: string;
+  newModel?: string;
+}): Promise<{ archived: number; handoffs: number }> {
+  const { storePath } = params;
+  return await withSessionStoreLock(storePath, async () => {
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const sessionsDir = path.dirname(storePath);
+    let archived = 0;
+    let handoffs = 0;
+
+    for (const [sessionKey, entry] of Object.entries(store)) {
+      if (!entry) {
+        continue;
+      }
+      // Preserve sessions with explicit user-set model overrides (/model command).
+      if (entry.modelOverride || entry.providerOverride) {
+        continue;
+      }
+
+      // Resolve the transcript file path
+      const sessionFile = entry.sessionFile?.trim();
+      const transcriptPath = sessionFile
+        ? path.resolve(sessionsDir, sessionFile)
+        : path.join(sessionsDir, `${entry.sessionId}.jsonl`);
+
+      if (!fs.existsSync(transcriptPath)) {
+        // No transcript to archive — just clear stale model fields so the
+        // session picks up the new default model on its next turn.
+        if (entry.model || entry.modelProvider || entry.contextTokens) {
+          delete entry.model;
+          delete entry.modelProvider;
+          delete entry.contextTokens;
+          archived++; // count as "touched" so the store is saved below
+        }
+        continue;
+      }
+
+      // Step 1: Create handoff (extract user messages before archiving)
+      const handoff = createModelHandoff({
+        sessionsDir,
+        sessionKey,
+        transcriptPath,
+        previousModel: params.previousModel ?? entry.model,
+        previousProvider: params.previousProvider ?? entry.modelProvider,
+        newModel: params.newModel,
+      });
+
+      // Step 2: Archive the old transcript
+      const archivedPaths = archiveSessionTranscripts({
+        sessionId: entry.sessionId,
+        storePath,
+        sessionFile: entry.sessionFile,
+        reason: "reset",
+      });
+
+      if (archivedPaths.length > 0) {
+        archived++;
+
+        // Update the handoff with the archive path
+        if (handoff && archivedPaths[0]) {
+          handoff.archivePath = archivedPaths[0];
+        }
+        if (handoff) {
+          handoffs++;
+        }
+      }
+
+      // Step 3: Assign a new session ID so the new model starts clean
+      entry.sessionId = crypto.randomUUID();
+      delete entry.sessionFile;
+      delete entry.model;
+      delete entry.modelProvider;
+      delete entry.contextTokens;
+      entry.systemSent = false;
+      entry.updatedAt = Date.now();
+    }
+
+    if (archived > 0 || handoffs > 0) {
+      await saveSessionStoreUnlocked(storePath, store, { skipMaintenance: true });
+    }
+
+    // Clean up old handoff files
+    cleanupHandoffFiles(sessionsDir);
+
+    return { archived, handoffs };
+  });
 }
 
 export async function updateSessionStoreEntry(params: {

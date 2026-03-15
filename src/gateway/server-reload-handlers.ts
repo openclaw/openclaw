@@ -1,9 +1,12 @@
+import { listAgentIds } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { isRestartEnabled } from "../config/commands.js";
 import type { loadConfig } from "../config/config.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { archiveAndHandoffOnModelChange, clearSessionModelFields } from "../config/sessions/store.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -113,6 +116,52 @@ export function createGatewayReloadHandlers(params: {
         onSkipped: () =>
           params.logHooks.info("skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)"),
       });
+    }
+
+    if (plan.resetSessionModels) {
+      const agentIds = listAgentIds(nextConfig);
+      let totalArchived = 0;
+      let totalHandoffs = 0;
+      let totalCleared = 0;
+      for (const agentId of agentIds) {
+        try {
+          const storePath = resolveStorePath(nextConfig.session?.store, { agentId });
+          const result = await archiveAndHandoffOnModelChange({
+            storePath,
+            newModel: nextConfig.agents?.defaults?.model,
+          });
+          totalArchived += result.archived;
+          totalHandoffs += result.handoffs;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            // Fall back to clearing model fields only if handoff fails.
+            try {
+              const storePath = resolveStorePath(nextConfig.session?.store, { agentId });
+              const cleared = await clearSessionModelFields(storePath);
+              totalCleared += cleared;
+            } catch (fallbackErr) {
+              if ((fallbackErr as NodeJS.ErrnoException).code !== "ENOENT") {
+                params.logReload.warn(
+                  `fallback clearSessionModelFields also failed for agent ${agentId}: ${String(fallbackErr)}`,
+                );
+              }
+            }
+            params.logReload.warn(
+              `failed to archive/handoff sessions for agent ${agentId}: ${String(err)}`,
+            );
+          }
+        }
+      }
+      if (totalArchived > 0 || totalHandoffs > 0) {
+        params.logReload.info(
+          `model change: archived ${totalArchived} session(s), created ${totalHandoffs} handoff(s) for new default model`,
+        );
+      }
+      if (totalCleared > 0) {
+        params.logReload.info(
+          `cleared persisted model from ${totalCleared} session(s) (fallback)`,
+        );
+      }
     }
 
     if (plan.restartChannels.size > 0) {
