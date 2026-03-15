@@ -218,7 +218,7 @@ enum ExecApprovalsPromptPresenter {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Allow this command?"
-        alert.informativeText = "Review the command details before allowing."
+        alert.informativeText = "Review the full command below before allowing."
         alert.accessoryView = self.buildAccessoryView(request)
 
         alert.addButton(withTitle: "Allow Once")
@@ -245,7 +245,7 @@ enum ExecApprovalsPromptPresenter {
         stack.spacing = 8
         stack.alignment = .leading
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
+        stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 420).isActive = true
 
         let commandTitle = NSTextField(labelWithString: "Command")
         commandTitle.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
@@ -256,7 +256,7 @@ enum ExecApprovalsPromptPresenter {
         commandText.isSelectable = true
         commandText.drawsBackground = true
         commandText.backgroundColor = NSColor.textBackgroundColor
-        commandText.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        commandText.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize + 1, weight: .regular)
         commandText.string = request.command
         commandText.textContainerInset = NSSize(width: 6, height: 6)
         commandText.textContainer?.lineFragmentPadding = 0
@@ -267,14 +267,14 @@ enum ExecApprovalsPromptPresenter {
         let commandScroll = NSScrollView()
         commandScroll.borderType = .lineBorder
         commandScroll.hasVerticalScroller = true
-        commandScroll.hasHorizontalScroller = false
+        commandScroll.hasHorizontalScroller = true
         commandScroll.autohidesScrollers = true
         commandScroll.documentView = commandText
         commandScroll.translatesAutoresizingMaskIntoConstraints = false
-        commandScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
-        commandScroll.widthAnchor.constraint(lessThanOrEqualToConstant: 440).isActive = true
-        commandScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
-        commandScroll.heightAnchor.constraint(lessThanOrEqualToConstant: 120).isActive = true
+        commandScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 420).isActive = true
+        commandScroll.widthAnchor.constraint(lessThanOrEqualToConstant: 560).isActive = true
+        commandScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 80).isActive = true
+        commandScroll.heightAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
         stack.addArrangedSubview(commandScroll)
 
         let contextTitle = NSTextField(labelWithString: "Context")
