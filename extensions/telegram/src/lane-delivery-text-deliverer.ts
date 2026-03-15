@@ -246,6 +246,16 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     stream.update(args.text);
     const materializedMessageId = await stream.materialize?.();
     if (typeof materializedMessageId !== "number") {
+      // Guard against ambiguous failures: if a send was attempted but the
+      // response was lost (network timeout), the message may have landed.
+      // Retain instead of falling back to avoid duplicate final messages.
+      if (stream.sendMayHaveLanded?.()) {
+        params.log(
+          `telegram: ${args.laneName} draft materialize may have landed despite missing message id; retaining to avoid duplicate`,
+        );
+        params.markDelivered();
+        return true;
+      }
       params.log(
         `telegram: ${args.laneName} draft preview materialize produced no message id; falling back to standard send`,
       );
