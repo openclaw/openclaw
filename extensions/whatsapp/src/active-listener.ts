@@ -28,9 +28,28 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-let _currentListener: ActiveWebListener | null = null;
+// ---------------------------------------------------------------------------
+// Singleton listener registry – must survive bundler chunk-splitting.
+//
+// When the bundler (tsdown / Rollup) code-splits this module into multiple
+// output chunks, each chunk receives its own copy of module-scoped variables.
+// That causes `setActiveWebListener` (called from the inbound/monitor path)
+// and `requireActiveWebListener` (called from the outbound/send path) to
+// operate on *different* Maps, so outbound sends always throw
+// "No active WhatsApp Web listener" even though the socket is alive.
+//
+// Anchoring the Map on `globalThis` guarantees a single shared instance
+// regardless of how many chunks import this file.
+// See: https://github.com/openclaw/openclaw/issues/45171
+// ---------------------------------------------------------------------------
 
-const listeners = new Map<string, ActiveWebListener>();
+declare global {
+  // eslint-disable-next-line no-var
+  var __openclaw_wa_web_listeners: Map<string, ActiveWebListener> | undefined;
+}
+
+const listeners: Map<string, ActiveWebListener> = (globalThis.__openclaw_wa_web_listeners ??=
+  new Map<string, ActiveWebListener>());
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -72,9 +91,6 @@ export function setActiveWebListener(
     listeners.delete(id);
   } else {
     listeners.set(id, listener);
-  }
-  if (id === DEFAULT_ACCOUNT_ID) {
-    _currentListener = listener;
   }
 }
 
