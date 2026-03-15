@@ -117,6 +117,11 @@ function toThreadBindingTargetKind(raw: BindingTargetKind): "subagent" | "acp" {
   return raw === "subagent" ? "subagent" : "acp";
 }
 
+function isDirectConversationBindingId(value?: string | null): boolean {
+  const trimmed = value?.trim();
+  return Boolean(trimmed && /^(user:|channel:)/i.test(trimmed));
+}
+
 function toSessionBindingRecord(
   record: ThreadBindingRecord,
   defaults: { idleTimeoutMs: number; maxAgeMs: number },
@@ -265,6 +270,8 @@ export function createThreadBindingManager(
       const cfg = resolveCurrentCfg();
       let threadId = normalizeThreadId(bindParams.threadId);
       let channelId = bindParams.channelId?.trim() || "";
+      const directConversationBinding =
+        isDirectConversationBindingId(threadId) || isDirectConversationBindingId(channelId);
 
       if (!threadId && bindParams.createThread) {
         if (!channelId) {
@@ -286,6 +293,10 @@ export function createThreadBindingManager(
 
       if (!threadId) {
         return null;
+      }
+
+      if (!channelId && directConversationBinding) {
+        channelId = threadId;
       }
 
       if (!channelId) {
@@ -310,12 +321,12 @@ export function createThreadBindingManager(
       const targetKind = normalizeTargetKind(bindParams.targetKind, targetSessionKey);
       let webhookId = bindParams.webhookId?.trim() || "";
       let webhookToken = bindParams.webhookToken?.trim() || "";
-      if (!webhookId || !webhookToken) {
+      if (!directConversationBinding && (!webhookId || !webhookToken)) {
         const cachedWebhook = findReusableWebhook({ accountId, channelId });
         webhookId = cachedWebhook.webhookId ?? "";
         webhookToken = cachedWebhook.webhookToken ?? "";
       }
-      if (!webhookId || !webhookToken) {
+      if (!directConversationBinding && (!webhookId || !webhookToken)) {
         const createdWebhook = await createWebhookForChannel({
           cfg,
           accountId,
@@ -511,6 +522,9 @@ export function createThreadBindingManager(
                 }),
               }),
             });
+            continue;
+          }
+          if (isDirectConversationBindingId(binding.threadId)) {
             continue;
           }
           try {
