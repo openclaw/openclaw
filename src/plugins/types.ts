@@ -445,7 +445,9 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "before_llm_call"
+  | "after_llm_call";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -472,6 +474,8 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_ended",
   "gateway_start",
   "gateway_stop",
+  "before_llm_call",
+  "after_llm_call",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -487,6 +491,7 @@ export const isPluginHookName = (hookName: unknown): hookName is PluginHookName 
 export const PROMPT_INJECTION_HOOK_NAMES = [
   "before_prompt_build",
   "before_agent_start",
+  "before_llm_call",
 ] as const satisfies readonly PluginHookName[];
 
 export type PromptInjectionHookName = (typeof PROMPT_INJECTION_HOOK_NAMES)[number];
@@ -886,6 +891,59 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// ============================================================================
+// LLM Call Hooks
+// ============================================================================
+
+// before_llm_call hook (modifying — sequential)
+export type PluginHookBeforeLlmCallEvent = {
+  messages: AgentMessage[];
+  systemPrompt: string;
+  model: string;
+  iteration: number;
+  tools: Array<{ name: string; description?: string }>;
+  tokenEstimate?: number;
+};
+
+export type PluginHookBeforeLlmCallResult = {
+  messages?: AgentMessage[];
+  systemPrompt?: string;
+  tools?: Array<{ name: string }>;
+  block?: boolean;
+  blockReason?: string;
+};
+
+// after_llm_call hook (modifying — sequential)
+// ONLY fires when the LLM response includes tool calls. Text-only responses
+// do not trigger this hook — use before_response_emit for output inspection.
+// Plugins can block all tool execution or filter individual tool calls.
+// Decisions are stored as a Promise and enforced deterministically by the
+// tool wrapper before each tool executes.
+export type PluginHookAfterLlmCallEvent = {
+  response: AgentMessage;
+  toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+  iteration: number;
+  model: string;
+  /** Wall-clock LLM call duration. Reserved for future use — not yet populated. */
+  latencyMs?: number;
+  /** Token usage for this call. Reserved for future use — not yet populated. */
+  tokenUsage?: { input: number; output: number };
+};
+
+export type PluginHookAfterLlmCallResult = {
+  /** If true, block ALL tool execution for this turn. */
+  block?: boolean;
+  /** Reason for blocking. Only surfaced when `block: true` is set.
+   *  For per-tool filtering (via `toolCalls`), the generic message
+   *  "Tool call X filtered by after_llm_call hook" is used instead. */
+  blockReason?: string;
+  /** Filtered tool calls — only tools whose `id` appears in this list will execute.
+   *  `name` and `arguments` are included for plugin convenience (logging, auditing)
+   *  but are NOT enforced — the gate filters by `id` only. To modify tool arguments
+   *  before execution, use the `before_tool_call` hook instead. Omit to allow all. */
+  toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -984,6 +1042,14 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  before_llm_call: (
+    event: PluginHookBeforeLlmCallEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeLlmCallResult | void> | PluginHookBeforeLlmCallResult | void;
+  after_llm_call: (
+    event: PluginHookAfterLlmCallEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookAfterLlmCallResult | void> | PluginHookAfterLlmCallResult | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {
