@@ -660,12 +660,34 @@ function maybeLoadDotEnvForConfig(env: NodeJS.ProcessEnv): void {
   loadDotEnv({ quiet: true });
 }
 
+/**
+ * Recursively strip dangerous prototype-pollution keys (`__proto__`,
+ * `constructor`, `prototype`) from a parsed JSON5 value.
+ */
+function stripPrototypePollutionKeys(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stripPrototypePollutionKeys);
+  }
+  if (value !== null && typeof value === "object") {
+    const clean: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      if (isBlockedObjectKey(key)) {
+        continue;
+      }
+      clean[key] = stripPrototypePollutionKeys((value as Record<string, unknown>)[key]);
+    }
+    return clean;
+  }
+  return value;
+}
+
 export function parseConfigJson5(
   raw: string,
   json5: { parse: (value: string) => unknown } = JSON5,
 ): ParseConfigJson5Result {
   try {
-    return { ok: true, parsed: json5.parse(raw) };
+    const parsed = json5.parse(raw);
+    return { ok: true, parsed: stripPrototypePollutionKeys(parsed) };
   } catch (err) {
     return { ok: false, error: String(err) };
   }
@@ -691,7 +713,7 @@ function resolveConfigIncludesForRead(
         rootRealDir,
         ioFs: deps.fs,
       }),
-    parseJson: (raw) => deps.json5.parse(raw),
+    parseJson: (raw) => stripPrototypePollutionKeys(deps.json5.parse(raw)),
   });
 }
 
@@ -747,7 +769,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         return {};
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
-      const parsed = deps.json5.parse(raw);
+      const parsed = stripPrototypePollutionKeys(deps.json5.parse(raw));
       const readResolution = resolveConfigForRead(
         resolveConfigIncludesForRead(parsed, configPath, deps),
         deps.env,
@@ -1102,7 +1124,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
               rootRealDir,
               ioFs: deps.fs,
             }),
-          parseJson: (raw) => deps.json5.parse(raw),
+          parseJson: (raw) => stripPrototypePollutionKeys(deps.json5.parse(raw)),
         });
         const collected = new Map<string, string>();
         collectEnvRefPaths(resolvedIncludes, "", collected);

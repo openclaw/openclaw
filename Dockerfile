@@ -134,7 +134,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git openssl
+      procps hostname curl git lsof openssl
 
 RUN chown node:node /app
 
@@ -145,6 +145,7 @@ COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
 COPY --from=runtime-assets --chown=node:node /app/extensions ./extensions
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
+COPY --from=runtime-assets --chown=node:node /app/src ./src
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
