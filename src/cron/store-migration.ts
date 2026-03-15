@@ -30,12 +30,18 @@ function incrementIssue(issues: CronStoreIssues, key: CronStoreIssueKey) {
 function normalizePayloadKind(payload: Record<string, unknown>) {
   const raw = typeof payload.kind === "string" ? payload.kind.trim().toLowerCase() : "";
   if (raw === "agentturn") {
-    payload.kind = "agentTurn";
-    return true;
+    if (payload.kind !== "agentTurn") {
+      payload.kind = "agentTurn";
+      return true;
+    }
+    return false;
   }
   if (raw === "systemevent") {
-    payload.kind = "systemEvent";
-    return true;
+    if (payload.kind !== "systemEvent") {
+      payload.kind = "systemEvent";
+      return true;
+    }
+    return false;
   }
   return false;
 }
@@ -445,11 +451,25 @@ export function normalizeStoredCronJobs(
 
     const payloadKind =
       payloadRecord && typeof payloadRecord.kind === "string" ? payloadRecord.kind : "";
-    const normalizedSessionTarget =
-      typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
-    if (normalizedSessionTarget === "main" || normalizedSessionTarget === "isolated") {
-      if (raw.sessionTarget !== normalizedSessionTarget) {
-        raw.sessionTarget = normalizedSessionTarget;
+    const rawSessionTarget = typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim() : "";
+    const loweredSessionTarget = rawSessionTarget.toLowerCase();
+    if (loweredSessionTarget === "main" || loweredSessionTarget === "isolated") {
+      if (raw.sessionTarget !== loweredSessionTarget) {
+        raw.sessionTarget = loweredSessionTarget;
+        mutated = true;
+      }
+    } else if (loweredSessionTarget.startsWith("session:")) {
+      const customSessionId = rawSessionTarget.slice(8).trim();
+      if (customSessionId) {
+        const normalizedSessionTarget = `session:${customSessionId}`;
+        if (raw.sessionTarget !== normalizedSessionTarget) {
+          raw.sessionTarget = normalizedSessionTarget;
+          mutated = true;
+        }
+      }
+    } else if (loweredSessionTarget === "current") {
+      if (raw.sessionTarget !== "isolated") {
+        raw.sessionTarget = "isolated";
         mutated = true;
       }
     } else {
@@ -463,7 +483,10 @@ export function normalizeStoredCronJobs(
     const sessionTarget =
       typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
     const isIsolatedAgentTurn =
-      sessionTarget === "isolated" || (sessionTarget === "" && payloadKind === "agentTurn");
+      sessionTarget === "isolated" ||
+      sessionTarget === "current" ||
+      sessionTarget.startsWith("session:") ||
+      (sessionTarget === "" && payloadKind === "agentTurn");
     const hasDelivery = delivery && typeof delivery === "object" && !Array.isArray(delivery);
     const normalizedLegacy = normalizeLegacyDeliveryInput({
       delivery: hasDelivery ? (delivery as Record<string, unknown>) : null,

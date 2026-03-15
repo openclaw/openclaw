@@ -1,17 +1,17 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../../config/config.js";
-import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
-import { resolvePollMaxSelections } from "../../polls.js";
 import {
   createTelegramActionGate,
   resolveTelegramPollActionGateState,
-} from "../../telegram/accounts.js";
-import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
+} from "../../../extensions/telegram/src/accounts.js";
+import type {
+  TelegramButtonStyle,
+  TelegramInlineButtons,
+} from "../../../extensions/telegram/src/button-types.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
-} from "../../telegram/inline-buttons.js";
-import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
+} from "../../../extensions/telegram/src/inline-buttons.js";
+import { resolveTelegramReactionLevel } from "../../../extensions/telegram/src/reaction-level.js";
 import {
   createForumTopicTelegram,
   deleteMessageTelegram,
@@ -20,9 +20,12 @@ import {
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
-} from "../../telegram/send.js";
-import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
-import { resolveTelegramToken } from "../../telegram/token.js";
+} from "../../../extensions/telegram/src/send.js";
+import { getCacheStats, searchStickers } from "../../../extensions/telegram/src/sticker-cache.js";
+import { resolveTelegramToken } from "../../../extensions/telegram/src/token.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
+import { resolvePollMaxSelections } from "../../polls.js";
 import {
   jsonResult,
   readNumberParam,
@@ -154,6 +157,7 @@ export async function handleTelegramAction(
     let reactionResult: Awaited<ReturnType<typeof reactMessageTelegram>>;
     try {
       reactionResult = await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
+        cfg,
         token,
         remove,
         accountId: accountId ?? undefined,
@@ -237,6 +241,7 @@ export async function handleTelegramAction(
       );
     }
     const result = await sendMessageTelegram(to, content, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
       mediaUrl: mediaUrl || undefined,
@@ -247,6 +252,7 @@ export async function handleTelegramAction(
       quoteText: quoteText ?? undefined,
       asVoice: readBooleanParam(params, "asVoice"),
       silent: readBooleanParam(params, "silent"),
+      forceDocument: readBooleanParam(params, "forceDocument") ?? false,
     });
     return jsonResult({
       ok: true,
@@ -293,6 +299,7 @@ export async function handleTelegramAction(
         durationHours: durationHours ?? undefined,
       },
       {
+        cfg,
         token,
         accountId: accountId ?? undefined,
         replyToMessageId: replyToMessageId ?? undefined,
@@ -327,6 +334,7 @@ export async function handleTelegramAction(
       );
     }
     await deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
     });
@@ -367,6 +375,7 @@ export async function handleTelegramAction(
       );
     }
     const result = await editMessageTelegram(chatId ?? "", messageId ?? 0, content, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
       buttons,
@@ -399,6 +408,7 @@ export async function handleTelegramAction(
       );
     }
     const result = await sendStickerTelegram(to, fileId, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
       replyToMessageId: replyToMessageId ?? undefined,
@@ -454,6 +464,7 @@ export async function handleTelegramAction(
       );
     }
     const result = await createForumTopicTelegram(chatId ?? "", name, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
       iconColor: iconColor ?? undefined,

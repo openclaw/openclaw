@@ -16,7 +16,7 @@ If you use `OPENROUTER_API_KEY`, an `sk-or-...` key in `tools.web.search.perplex
 
 ## Getting a Perplexity API key
 
-1. Create a Perplexity account at <https://www.perplexity.ai/settings/api>
+1. Create a Perplexity account at [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api)
 2. Generate an API key in the dashboard
 3. Store the key in config or set `PERPLEXITY_API_KEY` in the Gateway environment.
 
@@ -71,10 +71,13 @@ Optional legacy controls:
 
 **Via config:** run `openclaw configure --section web`. It stores the key in
 `~/.openclaw/openclaw.json` under `tools.web.search.perplexity.apiKey`.
+That field also accepts SecretRef objects.
 
 **Via environment:** set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
 in the Gateway process environment. For a gateway install, put it in
 `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
+
+If `provider: "perplexity"` is configured and the Perplexity key SecretRef is unresolved with no env fallback, startup/reload fails fast.
 
 ## Tool parameters
 

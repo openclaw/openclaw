@@ -14,6 +14,19 @@ describe("resolveWindowsLobsterSpawn", () => {
   let tempDir = "";
   const originalProcessState = snapshotPlatformPathEnv();
 
+  async function expectUnwrappedShim(params: {
+    scriptPath: string;
+    shimPath: string;
+    shimLine: string;
+  }) {
+    await createWindowsCmdShimFixture(params);
+
+    const target = resolveWindowsLobsterSpawn(params.shimPath, ["run", "noop"], process.env);
+    expect(target.command).toBe(process.execPath);
+    expect(target.argv).toEqual([params.scriptPath, "run", "noop"]);
+    expect(target.windowsHide).toBe(true);
+  }
+
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-win-spawn-"));
     setProcessPlatform("win32");
@@ -30,31 +43,21 @@ describe("resolveWindowsLobsterSpawn", () => {
   it("unwraps cmd shim with %dp0% token", async () => {
     const scriptPath = path.join(tempDir, "shim-dist", "lobster-cli.cjs");
     const shimPath = path.join(tempDir, "shim", "lobster.cmd");
-    await createWindowsCmdShimFixture({
+    await expectUnwrappedShim({
       shimPath,
       scriptPath,
       shimLine: `"%dp0%\\..\\shim-dist\\lobster-cli.cjs" %*`,
     });
-
-    const target = resolveWindowsLobsterSpawn(shimPath, ["run", "noop"], process.env);
-    expect(target.command).toBe(process.execPath);
-    expect(target.argv).toEqual([scriptPath, "run", "noop"]);
-    expect(target.windowsHide).toBe(true);
   });
 
   it("unwraps cmd shim with %~dp0% token", async () => {
     const scriptPath = path.join(tempDir, "shim-dist", "lobster-cli.cjs");
     const shimPath = path.join(tempDir, "shim", "lobster.cmd");
-    await createWindowsCmdShimFixture({
+    await expectUnwrappedShim({
       shimPath,
       scriptPath,
       shimLine: `"%~dp0%\\..\\shim-dist\\lobster-cli.cjs" %*`,
     });
-
-    const target = resolveWindowsLobsterSpawn(shimPath, ["run", "noop"], process.env);
-    expect(target.command).toBe(process.execPath);
-    expect(target.argv).toEqual([scriptPath, "run", "noop"]);
-    expect(target.windowsHide).toBe(true);
   });
 
   it("ignores node.exe shim entries and picks lobster script", async () => {

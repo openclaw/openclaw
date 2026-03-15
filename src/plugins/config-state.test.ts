@@ -145,4 +145,52 @@ describe("resolveEnableState", () => {
     );
     expect(state).toEqual({ enabled: false, reason: "disabled in config" });
   });
+
+  it("disables workspace plugins by default when they are only auto-discovered from the workspace", () => {
+    const state = resolveEnableState("workspace-helper", "workspace", normalizePluginsConfig({}));
+    expect(state).toEqual({
+      enabled: false,
+      reason: "workspace plugin (disabled by default)",
+    });
+  });
+
+  it("allows workspace plugins when explicitly listed in plugins.allow", () => {
+    const state = resolveEnableState(
+      "workspace-helper",
+      "workspace",
+      normalizePluginsConfig({
+        allow: ["workspace-helper"],
+      }),
+    );
+    expect(state).toEqual({ enabled: true });
+  });
+
+  it("allows workspace plugins when explicitly enabled in plugin entries", () => {
+    const state = resolveEnableState(
+      "workspace-helper",
+      "workspace",
+      normalizePluginsConfig({
+        entries: {
+          "workspace-helper": {
+            enabled: true,
+          },
+        },
+      }),
+    );
+    expect(state).toEqual({ enabled: true });
+  });
+
+  it("does not let the default memory slot auto-enable an untrusted workspace plugin", () => {
+    const state = resolveEnableState(
+      "memory-core",
+      "workspace",
+      normalizePluginsConfig({
+        slots: { memory: "memory-core" },
+      }),
+    );
+    expect(state).toEqual({
+      enabled: false,
+      reason: "workspace plugin (disabled by default)",
+    });
+  });
 });

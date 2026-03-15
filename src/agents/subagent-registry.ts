@@ -45,6 +45,7 @@ import {
   countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
   findRunIdsByChildSessionKeyFromRuns,
+  listRunsForControllerFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForRequesterFromRuns,
   resolveRequesterForChildSessionFromRuns,
@@ -533,6 +534,18 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     return false;
   }
   const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
+  const finalizeAnnounceCleanup = (didAnnounce: boolean) => {
+    void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce).catch((err) => {
+      defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
+      const current = subagentRuns.get(runId);
+      if (!current || current.cleanupCompletedAt) {
+        return;
+      }
+      current.cleanupHandled = false;
+      persistSubagentRuns();
+    });
+  };
+
   void runSubagentAnnounceFlow({
     childSessionKey: entry.childSessionKey,
     childRunId: entry.runId,
@@ -554,13 +567,13 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
   })
     .then((didAnnounce) => {
-      void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
+      finalizeAnnounceCleanup(didAnnounce);
     })
     .catch((error) => {
       defaultRuntime.log(
         `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
       );
-      void finalizeSubagentCleanup(runId, entry.cleanup, false);
+      finalizeAnnounceCleanup(false);
     });
   return true;
 }
@@ -1146,6 +1159,7 @@ export function replaceSubagentRunAfterSteer(params: {
 export function registerSubagentRun(params: {
   runId: string;
   childSessionKey: string;
+  controllerSessionKey?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
@@ -1173,6 +1187,7 @@ export function registerSubagentRun(params: {
   subagentRuns.set(params.runId, {
     runId: params.runId,
     childSessionKey: params.childSessionKey,
+    controllerSessionKey: params.controllerSessionKey ?? params.requesterSessionKey,
     requesterSessionKey: params.requesterSessionKey,
     requesterOrigin,
     requesterDisplayKey: params.requesterDisplayKey,
@@ -1417,6 +1432,13 @@ export function listSubagentRunsForRequester(
   options?: { requesterRunId?: string },
 ): SubagentRunRecord[] {
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
+}
+
+export function listSubagentRunsForController(controllerSessionKey: string): SubagentRunRecord[] {
+  return listRunsForControllerFromRuns(
+    getSubagentRunsSnapshotForRead(subagentRuns),
+    controllerSessionKey,
+  );
 }
 
 export function countActiveRunsForSession(requesterSessionKey: string): number {

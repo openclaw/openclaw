@@ -48,6 +48,19 @@ export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
   });
 }
 
+export function createBlockReplyContentKey(payload: ReplyPayload): string {
+  const text = payload.text?.trim() ?? "";
+  const mediaList = payload.mediaUrls?.length
+    ? payload.mediaUrls
+    : payload.mediaUrl
+      ? [payload.mediaUrl]
+      : [];
+  // Content-only key used for final-payload suppression after block streaming.
+  // This intentionally ignores replyToId so a streamed threaded payload and the
+  // later final payload still collapse when they carry the same content.
+  return JSON.stringify({ text, mediaList });
+}
+
 const withTimeout = async <T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -80,6 +93,7 @@ export function createBlockReplyPipeline(params: {
 }): BlockReplyPipeline {
   const { onBlockReply, timeoutMs, coalescing, buffer } = params;
   const sentKeys = new Set<string>();
+  const sentContentKeys = new Set<string>();
   const pendingKeys = new Set<string>();
   const seenKeys = new Set<string>();
   const bufferedKeys = new Set<string>();
@@ -95,6 +109,7 @@ export function createBlockReplyPipeline(params: {
       return;
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
+    const contentKey = createBlockReplyContentKey(payload);
     if (!bypassSeenCheck) {
       if (seenKeys.has(payloadKey)) {
         return;
@@ -130,6 +145,7 @@ export function createBlockReplyPipeline(params: {
           return;
         }
         sentKeys.add(payloadKey);
+        sentContentKeys.add(contentKey);
         didStream = true;
       })
       .catch((err) => {
@@ -238,8 +254,8 @@ export function createBlockReplyPipeline(params: {
     didStream: () => didStream,
     isAborted: () => aborted,
     hasSentPayload: (payload) => {
-      const payloadKey = createBlockReplyPayloadKey(payload);
-      return sentKeys.has(payloadKey);
+      const payloadKey = createBlockReplyContentKey(payload);
+      return sentContentKeys.has(payloadKey);
     },
   };
 }

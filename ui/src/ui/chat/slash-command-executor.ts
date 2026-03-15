@@ -3,15 +3,21 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
-import { isSubagentSessionKey, parseAgentSessionKey } from "../../../../src/routing/session-key.js";
+import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
+import {
+  formatThinkingLevels,
+  normalizeThinkLevel,
+  normalizeVerboseLevel,
+  resolveThinkingDefaultForModel,
+} from "../../../../src/auto-reply/thinking.js";
+import {
+  DEFAULT_AGENT_ID,
+  DEFAULT_MAIN_KEY,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../../../src/routing/session-key.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type {
-  AgentsListResult,
-  GatewaySessionRow,
-  HealthSummary,
-  ModelCatalogEntry,
-  SessionsListResult,
-} from "../types.ts";
+import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../types.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 
 export type SlashCommandResult = {
@@ -27,6 +33,10 @@ export type SlashCommandResult = {
     | "clear"
     | "toggle-focus"
     | "navigate-usage";
+  /** Optional session-level directive changes that the caller should mirror locally. */
+  sessionPatch?: {
+    model?: string | null;
+  };
 };
 
 export async function executeSlashCommand(
@@ -38,8 +48,6 @@ export async function executeSlashCommand(
   switch (commandName) {
     case "help":
       return executeHelp();
-    case "status":
-      return await executeStatus(client);
     case "new":
       return { content: "Starting new session...", action: "new-session" };
     case "reset":
@@ -56,6 +64,8 @@ export async function executeSlashCommand(
       return await executeModel(client, sessionKey, args);
     case "think":
       return await executeThink(client, sessionKey, args);
+    case "fast":
+      return await executeFast(client, sessionKey, args);
     case "verbose":
       return await executeVerbose(client, sessionKey, args);
     case "export":
@@ -92,27 +102,6 @@ function executeHelp(): SlashCommandResult {
   return { content: lines.join("\n") };
 }
 
-async function executeStatus(client: GatewayBrowserClient): Promise<SlashCommandResult> {
-  try {
-    const health = await client.request<HealthSummary>("health", {});
-    const status = health.ok ? "Healthy" : "Degraded";
-    const agentCount = health.agents?.length ?? 0;
-    const sessionCount = health.sessions?.count ?? 0;
-    const lines = [
-      `**System Status:** ${status}`,
-      `**Agents:** ${agentCount}`,
-      `**Sessions:** ${sessionCount}`,
-      `**Default Agent:** ${health.defaultAgentId || "none"}`,
-    ];
-    if (health.durationMs) {
-      lines.push(`**Response:** ${health.durationMs}ms`);
-    }
-    return { content: lines.join("\n") };
-  } catch (err) {
-    return { content: `Failed to fetch status: ${String(err)}` };
-  }
-}
-
 async function executeCompact(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -132,10 +121,12 @@ async function executeModel(
 ): Promise<SlashCommandResult> {
   if (!args) {
     try {
-      const sessions = await client.request<SessionsListResult>("sessions.list", {});
-      const session = sessions?.sessions?.find((s: GatewaySessionRow) => s.key === sessionKey);
+      const [sessions, models] = await Promise.all([
+        client.request<SessionsListResult>("sessions.list", {}),
+        client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
+      ]);
+      const session = resolveCurrentSession(sessions, sessionKey);
       const model = session?.model || sessions?.defaults?.model || "default";
-      const models = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {});
       const available = models?.models?.map((m: ModelCatalogEntry) => m.id) ?? [];
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
@@ -154,7 +145,11 @@ async function executeModel(
 
   try {
     await client.request("sessions.patch", { key: sessionKey, model: args.trim() });
-    return { content: `Model set to \`${args.trim()}\`.`, action: "refresh" };
+    return {
+      content: `Model set to \`${args.trim()}\`.`,
+      action: "refresh",
+      sessionPatch: { model: args.trim() },
+    };
   } catch (err) {
     return { content: `Failed to set model: ${String(err)}` };
   }
@@ -165,18 +160,32 @@ async function executeThink(
   sessionKey: string,
   args: string,
 ): Promise<SlashCommandResult> {
-  const valid = ["off", "low", "medium", "high"];
-  const level = args.trim().toLowerCase();
+  const rawLevel = args.trim();
 
-  if (!level) {
-    return {
-      content: `Usage: \`/think <${valid.join("|")}>\``,
-    };
+  if (!rawLevel) {
+    try {
+      const { session, models } = await loadThinkingCommandState(client, sessionKey);
+      return {
+        content: formatDirectiveOptions(
+          `Current thinking level: ${resolveCurrentThinkingLevel(session, models)}.`,
+          formatThinkingLevels(session?.modelProvider, session?.model),
+        ),
+      };
+    } catch (err) {
+      return { content: `Failed to get thinking level: ${String(err)}` };
+    }
   }
-  if (!valid.includes(level)) {
-    return {
-      content: `Invalid thinking level \`${level}\`. Choose: ${valid.map((v) => `\`${v}\``).join(", ")}`,
-    };
+
+  const level = normalizeThinkLevel(rawLevel);
+  if (!level) {
+    try {
+      const session = await loadCurrentSession(client, sessionKey);
+      return {
+        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingLevels(session?.modelProvider, session?.model)}.`,
+      };
+    } catch (err) {
+      return { content: `Failed to validate thinking level: ${String(err)}` };
+    }
   }
 
   try {
@@ -195,17 +204,26 @@ async function executeVerbose(
   sessionKey: string,
   args: string,
 ): Promise<SlashCommandResult> {
-  const valid = ["on", "off", "full"];
-  const level = args.trim().toLowerCase();
+  const rawLevel = args.trim();
 
+  if (!rawLevel) {
+    try {
+      const session = await loadCurrentSession(client, sessionKey);
+      return {
+        content: formatDirectiveOptions(
+          `Current verbose level: ${normalizeVerboseLevel(session?.verboseLevel) ?? "off"}.`,
+          "on, full, off",
+        ),
+      };
+    } catch (err) {
+      return { content: `Failed to get verbose level: ${String(err)}` };
+    }
+  }
+
+  const level = normalizeVerboseLevel(rawLevel);
   if (!level) {
     return {
-      content: `Usage: \`/verbose <${valid.join("|")}>\``,
-    };
-  }
-  if (!valid.includes(level)) {
-    return {
-      content: `Invalid verbose level \`${level}\`. Choose: ${valid.map((v) => `\`${v}\``).join(", ")}`,
+      content: `Unrecognized verbose level "${rawLevel}". Valid levels: off, on, full.`,
     };
   }
 
@@ -220,13 +238,51 @@ async function executeVerbose(
   }
 }
 
+async function executeFast(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+): Promise<SlashCommandResult> {
+  const rawMode = args.trim().toLowerCase();
+
+  if (!rawMode || rawMode === "status") {
+    try {
+      const session = await loadCurrentSession(client, sessionKey);
+      return {
+        content: formatDirectiveOptions(
+          `Current fast mode: ${resolveCurrentFastMode(session)}.`,
+          "status, on, off",
+        ),
+      };
+    } catch (err) {
+      return { content: `Failed to get fast mode: ${String(err)}` };
+    }
+  }
+
+  if (rawMode !== "on" && rawMode !== "off") {
+    return {
+      content: `Unrecognized fast mode "${args.trim()}". Valid levels: status, on, off.`,
+    };
+  }
+
+  try {
+    await client.request("sessions.patch", { key: sessionKey, fastMode: rawMode === "on" });
+    return {
+      content: `Fast mode ${rawMode === "on" ? "enabled" : "disabled"}.`,
+      action: "refresh",
+    };
+  } catch (err) {
+    return { content: `Failed to set fast mode: ${String(err)}` };
+  }
+}
+
 async function executeUsage(
   client: GatewayBrowserClient,
   sessionKey: string,
 ): Promise<SlashCommandResult> {
   try {
     const sessions = await client.request<SessionsListResult>("sessions.list", {});
-    const session = sessions?.sessions?.find((s: GatewaySessionRow) => s.key === sessionKey);
+    const session = resolveCurrentSession(sessions, sessionKey);
     if (!session) {
       return { content: "No active session." };
     }
@@ -300,13 +356,21 @@ async function executeKill(
         client.request<{ aborted?: boolean }>("chat.abort", { sessionKey: key }),
       ),
     );
+    const rejected = results.filter((entry) => entry.status === "rejected");
     const successCount = results.filter(
       (entry) =>
         entry.status === "fulfilled" && (entry.value as { aborted?: boolean })?.aborted !== false,
     ).length;
     if (successCount === 0) {
-      const firstFailure = results.find((entry) => entry.status === "rejected");
-      throw firstFailure?.reason ?? new Error("abort failed");
+      if (rejected.length === 0) {
+        return {
+          content:
+            target.toLowerCase() === "all"
+              ? "No active sub-agent runs to abort."
+              : `No active runs matched \`${target}\`.`,
+        };
+      }
+      throw rejected[0]?.reason ?? new Error("abort failed");
     }
 
     if (target.toLowerCase() === "all") {
@@ -340,7 +404,12 @@ function resolveKillTargets(
   }
 
   const keys = new Set<string>();
-  const currentParsed = parseAgentSessionKey(currentSessionKey);
+  const normalizedCurrentSessionKey = currentSessionKey.trim().toLowerCase();
+  const currentParsed = parseAgentSessionKey(normalizedCurrentSessionKey);
+  const currentAgentId =
+    currentParsed?.agentId ??
+    (normalizedCurrentSessionKey === DEFAULT_MAIN_KEY ? DEFAULT_AGENT_ID : undefined);
+  const sessionIndex = buildSessionIndex(sessions);
   for (const session of sessions) {
     const key = session?.key?.trim();
     if (!key || !isSubagentSessionKey(key)) {
@@ -348,21 +417,149 @@ function resolveKillTargets(
     }
     const normalizedKey = key.toLowerCase();
     const parsed = parseAgentSessionKey(normalizedKey);
-    // For "all", only match subagents belonging to the current session's agent
-    const belongsToCurrentSession =
-      currentParsed?.agentId != null && parsed?.agentId === currentParsed.agentId;
+    const belongsToCurrentSession = isWithinCurrentSessionSubtree(
+      normalizedKey,
+      normalizedCurrentSessionKey,
+      sessionIndex,
+      currentAgentId,
+      parsed?.agentId,
+    );
     const isMatch =
       (normalizedTarget === "all" && belongsToCurrentSession) ||
-      normalizedKey === normalizedTarget ||
-      (parsed?.agentId ?? "") === normalizedTarget ||
-      normalizedKey.endsWith(`:subagent:${normalizedTarget}`) ||
-      normalizedKey === `subagent:${normalizedTarget}` ||
-      (belongsToCurrentSession && normalizedKey.endsWith(`:subagent:${normalizedTarget}`));
+      (belongsToCurrentSession && normalizedKey === normalizedTarget) ||
+      (belongsToCurrentSession &&
+        ((parsed?.agentId ?? "") === normalizedTarget ||
+          normalizedKey.endsWith(`:subagent:${normalizedTarget}`) ||
+          normalizedKey === `subagent:${normalizedTarget}`));
     if (isMatch) {
       keys.add(key);
     }
   }
   return [...keys];
+}
+
+function isWithinCurrentSessionSubtree(
+  candidateSessionKey: string,
+  currentSessionKey: string,
+  sessionIndex: Map<string, GatewaySessionRow>,
+  currentAgentId: string | undefined,
+  candidateAgentId: string | undefined,
+): boolean {
+  if (!currentAgentId || candidateAgentId !== currentAgentId) {
+    return false;
+  }
+
+  const currentAliases = resolveEquivalentSessionKeys(currentSessionKey, currentAgentId);
+  const seen = new Set<string>();
+  let parentSessionKey = normalizeSessionKey(sessionIndex.get(candidateSessionKey)?.spawnedBy);
+  while (parentSessionKey && !seen.has(parentSessionKey)) {
+    if (currentAliases.has(parentSessionKey)) {
+      return true;
+    }
+    seen.add(parentSessionKey);
+    parentSessionKey = normalizeSessionKey(sessionIndex.get(parentSessionKey)?.spawnedBy);
+  }
+
+  // Older gateways may not include spawnedBy on session rows yet; keep prefix
+  // matching for nested subagent sessions as a compatibility fallback.
+  return isSubagentSessionKey(currentSessionKey)
+    ? candidateSessionKey.startsWith(`${currentSessionKey}:subagent:`)
+    : false;
+}
+
+function buildSessionIndex(sessions: GatewaySessionRow[]): Map<string, GatewaySessionRow> {
+  const index = new Map<string, GatewaySessionRow>();
+  for (const session of sessions) {
+    const normalizedKey = normalizeSessionKey(session?.key);
+    if (!normalizedKey) {
+      continue;
+    }
+    index.set(normalizedKey, session);
+  }
+  return index;
+}
+
+function normalizeSessionKey(key?: string | null): string | undefined {
+  const normalized = key?.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function resolveEquivalentSessionKeys(
+  currentSessionKey: string,
+  currentAgentId: string | undefined,
+): Set<string> {
+  const keys = new Set<string>([currentSessionKey]);
+  if (currentAgentId === DEFAULT_AGENT_ID) {
+    const canonicalDefaultMain = `agent:${DEFAULT_AGENT_ID}:main`;
+    if (currentSessionKey === DEFAULT_MAIN_KEY) {
+      keys.add(canonicalDefaultMain);
+    } else if (currentSessionKey === canonicalDefaultMain) {
+      keys.add(DEFAULT_MAIN_KEY);
+    }
+  }
+  return keys;
+}
+
+function formatDirectiveOptions(text: string, options: string): string {
+  return `${text}\nOptions: ${options}.`;
+}
+
+async function loadCurrentSession(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+): Promise<GatewaySessionRow | undefined> {
+  const sessions = await client.request<SessionsListResult>("sessions.list", {});
+  return resolveCurrentSession(sessions, sessionKey);
+}
+
+function resolveCurrentSession(
+  sessions: SessionsListResult | undefined,
+  sessionKey: string,
+): GatewaySessionRow | undefined {
+  const normalizedSessionKey = normalizeSessionKey(sessionKey);
+  const currentAgentId =
+    parseAgentSessionKey(normalizedSessionKey ?? "")?.agentId ??
+    (normalizedSessionKey === DEFAULT_MAIN_KEY ? DEFAULT_AGENT_ID : undefined);
+  const aliases = normalizedSessionKey
+    ? resolveEquivalentSessionKeys(normalizedSessionKey, currentAgentId)
+    : new Set<string>();
+  return sessions?.sessions?.find((session: GatewaySessionRow) => {
+    const key = normalizeSessionKey(session.key);
+    return key ? aliases.has(key) : false;
+  });
+}
+
+async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey: string) {
+  const [sessions, models] = await Promise.all([
+    client.request<SessionsListResult>("sessions.list", {}),
+    client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
+  ]);
+  return {
+    session: resolveCurrentSession(sessions, sessionKey),
+    models: models?.models ?? [],
+  };
+}
+
+function resolveCurrentThinkingLevel(
+  session: GatewaySessionRow | undefined,
+  models: ModelCatalogEntry[],
+): string {
+  const persisted = normalizeThinkLevel(session?.thinkingLevel);
+  if (persisted) {
+    return persisted;
+  }
+  if (!session?.modelProvider || !session.model) {
+    return "off";
+  }
+  return resolveThinkingDefaultForModel({
+    provider: session.modelProvider,
+    model: session.model,
+    catalog: models,
+  });
+}
+
+function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
+  return session?.fastMode === true ? "on" : "off";
 }
 
 function fmtTokens(n: number): string {
