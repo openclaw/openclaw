@@ -535,7 +535,7 @@ function registerEventHandlers(
           },
           message: {
             message_id: `bot-menu:${eventKey}:${event.timestamp ?? Date.now()}`,
-            chat_id: `p2p:${operatorOpenId}`,
+            chat_id: `open_id:${operatorOpenId}`,
             chat_type: "p2p",
             message_type: "text",
             content: JSON.stringify({
