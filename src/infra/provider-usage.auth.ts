@@ -144,6 +144,7 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
 async function resolveOAuthToken(params: {
   provider: UsageProviderId;
   agentDir?: string;
+  profileId?: string;
 }): Promise<ProviderAuth | null> {
   const cfg = loadConfig();
   const store = ensureAuthProfileStore(params.agentDir, {
@@ -155,10 +156,14 @@ async function resolveOAuthToken(params: {
     provider: params.provider,
   });
   const deduped = dedupeProfileIds(order);
+  const profileIds = params.profileId ? [params.profileId, ...deduped] : deduped;
 
-  for (const profileId of deduped) {
+  for (const profileId of dedupeProfileIds(profileIds)) {
     const cred = store.profiles[profileId];
     if (!cred || (cred.type !== "oauth" && cred.type !== "token")) {
+      continue;
+    }
+    if (normalizeProviderId(cred.provider) !== normalizeProviderId(params.provider)) {
       continue;
     }
     try {
@@ -226,6 +231,7 @@ export async function resolveProviderAuths(params: {
   providers: UsageProviderId[];
   auth?: ProviderAuth[];
   agentDir?: string;
+  profileId?: string;
 }): Promise<ProviderAuth[]> {
   if (params.auth) {
     return params.auth;
@@ -263,6 +269,7 @@ export async function resolveProviderAuths(params: {
     const auth = await resolveOAuthToken({
       provider,
       agentDir: params.agentDir,
+      profileId: params.profileId,
     });
     if (auth) {
       auths.push(auth);

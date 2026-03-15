@@ -267,6 +267,7 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
 type LoginOptions = {
   provider?: string;
   method?: string;
+  profileId?: string;
   setDefault?: boolean;
 };
 
@@ -365,6 +366,25 @@ async function runBuiltInOpenAICodexLogin(params: {
   }
 }
 
+export function resolveLoginProfiles(params: {
+  result: ProviderAuthResult;
+  requestedProfileId?: string;
+}): ProviderAuthResult["profiles"] {
+  const requestedProfileId = params.requestedProfileId?.trim();
+  if (!requestedProfileId) {
+    return params.result.profiles;
+  }
+
+  if (params.result.profiles.length !== 1) {
+    throw new Error(
+      "--profile-id requires exactly one returned auth profile from the selected auth method.",
+    );
+  }
+
+  const [profile] = params.result.profiles;
+  return [{ ...profile, profileId: requestedProfileId }];
+}
+
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error("models auth login requires an interactive TTY.");
@@ -451,7 +471,12 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     },
   });
 
-  for (const profile of result.profiles) {
+  const resolvedProfiles = resolveLoginProfiles({
+    result,
+    requestedProfileId: opts.profileId,
+  });
+
+  for (const profile of resolvedProfiles) {
     upsertAuthProfile({
       profileId: profile.profileId,
       credential: profile.credential,
@@ -464,7 +489,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     if (result.configPatch) {
       next = mergeConfigPatch(next, result.configPatch);
     }
-    for (const profile of result.profiles) {
+    for (const profile of resolvedProfiles) {
       next = applyAuthProfileConfig(next, {
         profileId: profile.profileId,
         provider: profile.credential.provider,
@@ -478,7 +503,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   });
 
   logConfigUpdated(runtime);
-  for (const profile of result.profiles) {
+  for (const profile of resolvedProfiles) {
     runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
     );

@@ -522,12 +522,28 @@ export function buildStatusMessage(args: StatusArgs): string {
   const runtime = { label: resolveRuntimeLabel(args) };
 
   const updatedAt = entry?.updatedAt;
+  const sessionKeyText = args.sessionKey ?? "unknown";
   const sessionLine = [
-    `Session: ${args.sessionKey ?? "unknown"}`,
+    `Session: ${sessionKeyText}`,
     typeof updatedAt === "number" ? `updated ${formatTimeAgo(now - updatedAt)}` : "no activity",
   ]
     .filter(Boolean)
     .join(" • ");
+
+  const keyParts = sessionKeyText.split(":");
+  const agentIdx = keyParts.indexOf("agent");
+  const agentFromKey = agentIdx >= 0 ? keyParts[agentIdx + 1] : undefined;
+  const providerFromEntry = entry?.channel ?? entry?.origin?.provider;
+  const providerFromKey =
+    ["slack", "discord", "telegram", "signal", "whatsapp", "irc", "imessage"].find((p) =>
+      keyParts.includes(p),
+    ) ?? undefined;
+  const displayProvider = providerFromEntry ?? providerFromKey;
+  const channelIdx = keyParts.indexOf("channel");
+  const channelFromKey = channelIdx >= 0 ? keyParts[channelIdx + 1] : undefined;
+  const channelDisplay = displayProvider
+    ? `${displayProvider}${channelFromKey ? `/${channelFromKey}` : ""}`
+    : undefined;
 
   const isGroupSession =
     entry?.chatType === "group" ||
@@ -678,6 +694,8 @@ export function buildStatusMessage(args: StatusArgs): string {
     `📚 ${contextLine}`,
     mediaLine,
     args.usageLine,
+    agentFromKey ? `🪪 Agent: ${agentFromKey}` : null,
+    channelDisplay ? `💬 Channel: ${channelDisplay}` : null,
     `🧵 ${sessionLine}`,
     args.subagentsLine,
     `⚙️ ${optionsLine}`,
