@@ -102,7 +102,7 @@ export function hasWsSession(sessionId: string): boolean {
 
 type AnyMessage = Message & { role: string; content: unknown };
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
-type ReplayModelInfo = { input?: ReadonlyArray<string> };
+type ReplayModelInfo = { input?: ReadonlyArray<string>; api?: string };
 
 function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -187,6 +187,7 @@ function contentToOpenAIParts(content: unknown, modelOverride?: ReplayModelInfo)
   }
 
   const includeImages = supportsImageInput(modelOverride);
+  const useImageUrl = modelOverride?.api === "openai-completions";
   const parts: ContentPart[] = [];
   for (const part of content as Array<{
     type?: string;
@@ -208,14 +209,23 @@ function contentToOpenAIParts(content: unknown, modelOverride?: ReplayModelInfo)
     }
 
     if (part.type === "image" && typeof part.data === "string") {
-      parts.push({
-        type: "input_image",
-        source: {
-          type: "base64",
-          media_type: part.mimeType ?? "image/jpeg",
-          data: part.data,
-        },
-      });
+      if (useImageUrl) {
+        parts.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${part.mimeType ?? "image/jpeg"};base64,${part.data}`,
+          },
+        });
+      } else {
+        parts.push({
+          type: "input_image",
+          source: {
+            type: "base64",
+            media_type: part.mimeType ?? "image/jpeg",
+            data: part.data,
+          },
+        });
+      }
       continue;
     }
 
@@ -225,12 +235,27 @@ function contentToOpenAIParts(content: unknown, modelOverride?: ReplayModelInfo)
       typeof part.source === "object" &&
       typeof (part.source as { type?: unknown }).type === "string"
     ) {
-      parts.push({
-        type: "input_image",
-        source: part.source as
+      if (useImageUrl) {
+        const source = part.source as
           | { type: "url"; url: string }
-          | { type: "base64"; media_type: string; data: string },
-      });
+          | { type: "base64"; media_type: string; data: string };
+        parts.push({
+          type: "image_url",
+          image_url: {
+            url:
+              source.type === "url"
+                ? source.url
+                : `data:${source.media_type};base64,${source.data}`,
+          },
+        });
+      } else {
+        parts.push({
+          type: "input_image",
+          source: part.source as
+            | { type: "url"; url: string }
+            | { type: "base64"; media_type: string; data: string },
+        });
+      }
     }
   }
   return parts;
