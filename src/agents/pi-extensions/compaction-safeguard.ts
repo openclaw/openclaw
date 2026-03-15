@@ -907,8 +907,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let droppedSummary: string | undefined;
 
       if (tokensBefore !== undefined) {
+        const budgetTrimmedForSummary = trimToolResultsForSummarization(messagesToSummarize);
         const summarizableTokens =
-          estimateMessagesTokens(messagesToSummarize) + estimateMessagesTokens(turnPrefixMessages);
+          estimateMessagesTokens(budgetTrimmedForSummary.messages) +
+          estimateMessagesTokens(prefixMessagesForSummary);
         const newContentTokens = Math.max(0, Math.floor(tokensBefore - summarizableTokens));
         // Apply SAFETY_MARGIN so token underestimates don't trigger unnecessary pruning
         const maxHistoryTokens = Math.floor(contextWindowTokens * maxHistoryShare * SAFETY_MARGIN);
