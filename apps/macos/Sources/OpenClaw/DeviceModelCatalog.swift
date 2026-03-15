@@ -128,9 +128,11 @@ enum DeviceModelCatalog {
             return bundle
         }
 
+#if SWIFT_PACKAGE
         if let bundle = self.bundleIfContainsDeviceModels(Bundle.module) {
             return bundle
         }
+#endif
         return nil
     }
 

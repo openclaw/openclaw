@@ -3,79 +3,30 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
+    <string>$(DEVELOPMENT_LANGUAGE)</string>
     <key>CFBundleExecutable</key>
-    <string>OpenClaw</string>
+    <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
-    <string>ai.openclaw.mac</string>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>OpenClaw</string>
+    <string>$(PRODUCT_NAME)</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2026.3.11</string>
+    <string>1.0</string>
     <key>CFBundleVersion</key>
-    <string>202603110</string>
-    <key>CFBundleIconFile</key>
-    <string>OpenClaw</string>
-    <key>CFBundleURLTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleURLName</key>
-            <string>ai.openclaw.mac.deeplink</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-                <string>openclaw</string>
-            </array>
-        </dict>
-    </array>
-    <key>LSMinimumSystemVersion</key>
-    <string>15.0</string>
-    <key>LSUIElement</key>
-    <true/>
-
-    <key>OpenClawBuildTimestamp</key>
-    <string></string>
-    <key>OpenClawGitCommit</key>
-    <string></string>
-
-    <key>NSUserNotificationUsageDescription</key>
-    <string>OpenClaw needs notification permission to show alerts for agent actions.</string>
-    <key>NSScreenCaptureDescription</key>
-    <string>OpenClaw captures the screen when the agent needs screenshots for context.</string>
+    <string>1</string>
     <key>NSCameraUsageDescription</key>
-    <string>OpenClaw can capture photos or short video clips when requested by the agent.</string>
-	<key>NSLocationUsageDescription</key>
-	<string>OpenClaw can share your location when requested by the agent.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>OpenClaw can share your location when requested by the agent.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>OpenClaw can share your location when requested by the agent.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>OpenClaw needs the mic for Voice Wake tests and agent audio capture.</string>
+    <string>OpenClaw uses the camera to capture photos and short videos for camera tools and node capabilities.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>OpenClaw uses location to provide location-aware tools and automation when requested.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>OpenClaw uses location to provide location-aware tools and automation when requested.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>OpenClaw uses the microphone for voice wake, push-to-talk, and audio capture.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>OpenClaw needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
-    <key>NSRemindersUsageDescription</key>
-    <string>OpenClaw can access Reminders when requested by the agent for the apple-reminders skill.</string>
-
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsArbitraryLoadsInWebContent</key>
-        <true/>
-        <key>NSExceptionDomains</key>
-        <dict>
-            <key>100.100.100.100</key>
-            <dict>
-                <key>NSExceptionAllowsInsecureHTTPLoads</key>
-                <true/>
-                <key>NSIncludesSubdomains</key>
-                <true/>
-            </dict>
-        </dict>
-    </dict>
+    <string>OpenClaw uses speech recognition to transcribe voice input for wake word and voice commands.</string>
 </dict>
 </plist>
