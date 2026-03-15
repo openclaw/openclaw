@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 - Browser/profiles: drop the auto-created `chrome-relay` browser profile; users who need the Chrome extension relay must now create their own profile via `openclaw browser create-profile`. (#45777) Thanks @odysseus0.
 - Docs/Mintlify: fix MDX marker syntax on Perplexity, Model Providers, Moonshot, and exec approvals pages so local docs preview no longer breaks rendering or leaves stale pages unpublished. (#46695) Thanks @velvet-shark.
 - Node/startup: remove leftover debug `console.log("node host PATH: ...")` that printed the resolved PATH on every `openclaw node run` invocation. (#46411)
+- Mattermost/message actions: keep edit and delete available when reactions are disabled, while still gating react on the configured reactions setting. (#25295) thanks @Luna2026-a11y.
 
 ## 2026.3.13
 
