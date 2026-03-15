@@ -1,87 +1,30 @@
 ---
-summary: "OpenClaw macOS release checklist (Sparkle feed, packaging, signing)"
+summary: "Maintainer macOS release procedure lives in the private maintainer repo"
 read_when:
-  - Cutting or validating a OpenClaw macOS release
-  - Updating the Sparkle appcast or feed assets
+  - Looking for the maintainer macOS release procedure
+  - Tracing macOS release packaging in this repo
 title: "macOS Release"
 ---
 
-# OpenClaw macOS release (Sparkle)
+# OpenClaw macOS release
 
-This app now ships Sparkle auto-updates. Release builds must be Developer ID–signed, zipped, and published with a signed appcast entry.
+The macOS release procedure lives in the private `openclaw/maintainers` repo.
+This public repo keeps the packaging scripts and appcast source, but not the
+maintainer runbook.
 
-## Prereqs
+Maintainers: use the private release manual:
 
-- Developer ID Application cert installed (example: `Developer ID Application: <Developer Name> (<TEAMID>)`).
-- Sparkle private key path set in the environment as `SPARKLE_PRIVATE_KEY_FILE` (path to your Sparkle ed25519 private key; public key baked into Info.plist).
-- Notary credentials (keychain profile or API key) for `xcrun notarytool` if you want Gatekeeper-safe DMG/zip distribution.
-  - Maintainers: keep local key paths, profile names, and bootstrap commands in the private [maintainer release docs](https://github.com/openclaw/maintainers/tree/main/release).
-- `pnpm` deps installed (`pnpm install --config.node-linker=hoisted`).
-- Sparkle tools are fetched automatically via SwiftPM at `apps/macos/.build/artifacts/sparkle/Sparkle/bin/` (`sign_update`, `generate_appcast`, etc.).
+- [`release/README.md`](https://github.com/openclaw/maintainers/blob/main/release/README.md)
 
-## Build & package
+Public code and asset references in this repo:
 
-Notes:
+- [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
+- [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh)
+- [`scripts/create-dmg.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/create-dmg.sh)
+- [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)
+- [`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh)
+- [`apps/macos/Sources/OpenClaw/Resources/Info.plist`](https://github.com/openclaw/openclaw/blob/main/apps/macos/Sources/OpenClaw/Resources/Info.plist)
+- [`appcast.xml`](https://github.com/openclaw/openclaw/blob/main/appcast.xml)
 
-- `APP_BUILD` maps to `CFBundleVersion`/`sparkle:version`; keep it numeric + monotonic (no `-beta`), or Sparkle compares it as equal.
-- If `APP_BUILD` is omitted, `scripts/package-mac-app.sh` derives a Sparkle-safe default from `APP_VERSION` (`YYYYMMDDNN`: stable defaults to `90`, prereleases use a suffix-derived lane) and uses the higher of that value and git commit count.
-- You can still override `APP_BUILD` explicitly when release engineering needs a specific monotonic value.
-- For `BUILD_CONFIG=release`, `scripts/package-mac-app.sh` now defaults to universal (`arm64 x86_64`) automatically. You can still override with `BUILD_ARCHS=arm64` or `BUILD_ARCHS=x86_64`. For local/dev builds (`BUILD_CONFIG=debug`), it defaults to the current architecture (`$(uname -m)`).
-- Use [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh) for release artifacts (zip + DMG + notarization). Use [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) for local/dev packaging.
-
-```bash
-# From repo root; set release IDs so Sparkle feed is enabled.
-# This command builds release artifacts without notarization.
-# APP_BUILD must be numeric + monotonic for Sparkle compare.
-# Default is auto-derived from APP_VERSION when omitted.
-SKIP_NOTARIZE=1 \
-BUNDLE_ID=ai.openclaw.mac \
-APP_VERSION=2026.3.13 \
-BUILD_CONFIG=release \
-SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
-scripts/package-mac-dist.sh
-
-# `package-mac-dist.sh` already creates the zip + DMG.
-# If you used `package-mac-app.sh` directly instead, create them manually:
-# If you want notarization/stapling in this step, use the NOTARIZE command below.
-ditto -c -k --sequesterRsrc --keepParent dist/OpenClaw.app dist/OpenClaw-2026.3.13.zip
-
-# Optional: build a styled DMG for humans (drag to /Applications)
-scripts/create-dmg.sh dist/OpenClaw.app dist/OpenClaw-2026.3.13.dmg
-
-# Recommended: build + notarize/staple zip + DMG
-# First, create or select a keychain profile once:
-#   xcrun notarytool store-credentials "<profile-name>" \
-#     --apple-id "<apple-id>" --team-id "<team-id>" --password "<app-specific-password>"
-NOTARIZE=1 NOTARYTOOL_PROFILE=<profile-name> \
-BUNDLE_ID=ai.openclaw.mac \
-APP_VERSION=2026.3.13 \
-BUILD_CONFIG=release \
-SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
-scripts/package-mac-dist.sh
-
-# Optional: ship dSYM alongside the release
-ditto -c -k --keepParent apps/macos/.build/release/OpenClaw.app.dSYM dist/OpenClaw-2026.3.13.dSYM.zip
-```
-
-## Appcast entry
-
-Use the release note generator so Sparkle renders formatted HTML notes:
-
-```bash
-SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh dist/OpenClaw-2026.3.13.zip https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml
-```
-
-Generates HTML release notes from `CHANGELOG.md` (via [`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh)) and embeds them in the appcast entry.
-Commit the updated `appcast.xml` alongside the release assets (zip + dSYM) when publishing.
-
-## Publish & verify
-
-- Upload `OpenClaw-2026.3.13.zip` (and `OpenClaw-2026.3.13.dSYM.zip`) to the GitHub release for tag `v2026.3.13`.
-- Ensure the raw appcast URL matches the baked feed: `https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`.
-- Sanity checks:
-  - `curl -I https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml` returns 200.
-  - `curl -I <enclosure url>` returns 200 after assets upload.
-  - On a previous public build, run “Check for Updates…” from the About tab and verify Sparkle installs the new build cleanly.
-
-Definition of done: signed app + appcast are published, update flow works from an older installed version, and release assets are attached to the GitHub release.
+Signing material, Sparkle keys, notarization credentials, GitHub release steps,
+and operator verification stay in the maintainer repo.
