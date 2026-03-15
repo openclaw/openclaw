@@ -273,6 +273,13 @@ Override via config:
 }
 ```
 
+Notes:
+
+- `tools.profile` runs before `tools.subagents.tools`. If a profile already removed a tool, a later `tools.subagents.tools.allow` entry does not restore it.
+- `tools.subagents.tools.allow` is allow-only. Use it when you want a tight sub-agent subset.
+- To add tools on top of a profile, use `tools.alsoAllow` or `agents.list[].tools.alsoAllow`.
+- To re-enable tools from the default sub-agent denylist without switching to allow-only mode, use `tools.subagents.tools.alsoAllow`.
+
 ## Concurrency
 
 Sub-agents use a dedicated in-process queue lane:

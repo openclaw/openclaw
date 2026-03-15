@@ -6,11 +6,13 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
+  isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveSubagentToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
 describe("pi-tools.policy", () => {
   it("treats * in allow as allow-all", () => {
@@ -93,6 +95,57 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     } as unknown as OpenClawConfig;
     const policy = resolveSubagentToolPolicy(cfg, 1);
     expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(false);
+  });
+
+  it("does not let subagent allow restore browser or web tools removed by the coding profile", () => {
+    const cfg = {
+      agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+      tools: {
+        profile: "coding",
+        subagents: {
+          tools: {
+            allow: ["read", "write", "edit", "browser", "web_search", "web_fetch"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const profilePolicy = resolveToolProfilePolicy("coding");
+    const subagentPolicy = resolveSubagentToolPolicy(cfg, 1);
+    expect(isToolAllowedByPolicies("read", [profilePolicy, subagentPolicy])).toBe(true);
+    expect(isToolAllowedByPolicies("browser", [profilePolicy, subagentPolicy])).toBe(false);
+    expect(isToolAllowedByPolicies("web_search", [profilePolicy, subagentPolicy])).toBe(false);
+    expect(isToolAllowedByPolicies("web_fetch", [profilePolicy, subagentPolicy])).toBe(false);
+  });
+
+  it("uses alsoAllow to add browser and web tools on top of the coding profile", () => {
+    const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy("coding"), [
+      "browser",
+      "web_search",
+      "web_fetch",
+    ]);
+    const subagentPolicy = resolveSubagentToolPolicy(baseCfg, 1);
+    expect(isToolAllowedByPolicies("browser", [profilePolicy, subagentPolicy])).toBe(true);
+    expect(isToolAllowedByPolicies("web_search", [profilePolicy, subagentPolicy])).toBe(true);
+    expect(isToolAllowedByPolicies("web_fetch", [profilePolicy, subagentPolicy])).toBe(true);
+  });
+
+  it("keeps deny precedence for browser and web tools even when allow and alsoAllow match", () => {
+    const cfg = {
+      agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+      tools: {
+        subagents: {
+          tools: {
+            allow: ["browser", "web_search"],
+            alsoAllow: ["browser", "web_fetch"],
+            deny: ["browser", "web_fetch"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1);
+    expect(isToolAllowedByPolicyName("browser", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("web_fetch", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("web_search", policy)).toBe(true);
   });
 
   it("does not create a restrictive allowlist when only alsoAllow is configured", () => {

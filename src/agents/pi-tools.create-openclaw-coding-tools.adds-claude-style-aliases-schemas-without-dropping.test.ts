@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { findUnsupportedSchemaKeywords } from "./pi-embedded-runner/google.js";
@@ -394,6 +395,53 @@ describe("createOpenClawCodingTools", () => {
       },
     });
     expect(tools.map((tool) => tool.name)).toEqual(["read"]);
+  });
+
+  it("does not let subagent allow restore browser removed by the coding profile", () => {
+    const tools = createOpenClawCodingTools({
+      sessionKey: "agent:main:subagent:issue-41577",
+      config: {
+        tools: {
+          profile: "coding",
+          subagents: {
+            tools: {
+              allow: ["read", "write", "edit", "browser", "web_search", "web_fetch"],
+            },
+          },
+        },
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("read")).toBe(true);
+    expect(names.has("write")).toBe(true);
+    expect(names.has("edit")).toBe(true);
+    expect(names.has("browser")).toBe(false);
+  });
+
+  it("uses tools.alsoAllow to add browser on top of the coding profile", () => {
+    const config = {
+      tools: {
+        profile: "coding",
+        alsoAllow: ["browser", "web_search", "web_fetch"],
+      },
+    } as const satisfies OpenClawConfig;
+    const mainNames = new Set(
+      createOpenClawCodingTools({
+        sessionKey: "agent:main:main",
+        config,
+      }).map((tool) => tool.name),
+    );
+    const subagentNames = new Set(
+      createOpenClawCodingTools({
+        sessionKey: "agent:main:subagent:issue-41577-also-allow",
+        config,
+      }).map((tool) => tool.name),
+    );
+
+    for (const names of [mainNames, subagentNames]) {
+      expect(names.has("read")).toBe(true);
+      expect(names.has("browser")).toBe(true);
+    }
   });
 
   it("applies tool profiles before allow/deny policies", () => {

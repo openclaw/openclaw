@@ -1523,6 +1523,7 @@ Environment alternatives:
 Notes:
 
 - If you use allowlists, add `web_search`/`web_fetch` or `group:web`.
+- `tools.profile` runs before later allowlists. If a profile excluded web tools, use `tools.alsoAllow` to add them; `tools.allow` and `tools.subagents.tools.allow` do not restore tools filtered out earlier by the profile.
 - `web_fetch` is enabled by default (unless explicitly disabled).
 - Daemons read env vars from `~/.openclaw/.env` (or the service environment).
 

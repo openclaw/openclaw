@@ -385,4 +385,5 @@ Notes:
 - See [Firecrawl](/tools/firecrawl) for key setup and service details.
 - Responses are cached (default 15 minutes) to reduce repeated fetches.
 - If you use tool profiles/allowlists, add `web_search`/`web_fetch` or `group:web`.
+- `tools.profile` runs before later allowlists. If a profile filtered out `web_search`/`web_fetch`, add them with `tools.alsoAllow` instead of expecting `tools.allow` or `tools.subagents.tools.allow` to restore them later.
 - If the API key is missing, `web_search` returns a short setup hint with a docs link.
