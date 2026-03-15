@@ -22,6 +22,9 @@ import { downloadInboundMedia } from "./media.js";
 import { createWebSendApi } from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
+const WA_CONNECT_TIMEOUT_MS = 15_000;
+const WA_PRESENCE_UPDATE_TIMEOUT_MS = 5_000;
+
 export async function monitorWebInbox(options: {
   verbose: boolean;
   accountId: string;
@@ -40,7 +43,12 @@ export async function monitorWebInbox(options: {
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
   });
-  await waitForWaConnection(sock);
+  await Promise.race([
+    waitForWaConnection(sock),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("waitForWaConnection timeout")), WA_CONNECT_TIMEOUT_MS);
+    }),
+  ]);
   const connectedAtMs = Date.now();
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
@@ -57,7 +65,15 @@ export async function monitorWebInbox(options: {
   };
 
   try {
-    await sock.sendPresenceUpdate("available");
+    await Promise.race([
+      sock.sendPresenceUpdate("available"),
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new Error("presence update timeout")),
+          WA_PRESENCE_UPDATE_TIMEOUT_MS,
+        );
+      }),
+    ]);
     if (shouldLogVerbose()) {
       logVerbose("Sent global 'available' presence on connect");
     }
