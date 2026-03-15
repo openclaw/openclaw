@@ -191,7 +191,11 @@ describe("recordTokenUsage", () => {
     const memoryDir = path.join(tmpDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
     const lockPath = path.join(memoryDir, "token-usage.json.lock");
-    await fs.writeFile(lockPath, String(deadPid));
+    // withFileLock (plugin-sdk) stores {pid, createdAt} — match that format.
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: deadPid, createdAt: new Date().toISOString() }),
+    );
 
     // recordTokenUsage must detect the stale lock, reclaim it, and succeed.
     await recordTokenUsage({
