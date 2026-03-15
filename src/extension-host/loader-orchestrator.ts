@@ -7,8 +7,6 @@ import {
   getCachedExtensionHostRegistry,
   setCachedExtensionHostRegistry,
 } from "../extension-host/loader-cache.js";
-import { finalizeExtensionHostRegistryLoad } from "../extension-host/loader-finalize.js";
-import { processExtensionHostPluginCandidate } from "../extension-host/loader-flow.js";
 import {
   buildExtensionHostProvenanceIndex,
   compareExtensionHostDuplicateCandidateOrder,
@@ -21,15 +19,16 @@ import { clearPluginCommands } from "../plugins/commands.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "../plugins/config-state.js";
 import { discoverOpenClawPlugins } from "../plugins/discovery.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
-import {
-  createPluginRegistry,
-  type PluginRecord,
-  type PluginRegistry,
-} from "../plugins/registry.js";
+import { createPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime, type CreatePluginRuntimeOptions } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginModule, PluginLogger } from "../plugins/types.js";
 import { resolvePluginSdkAlias, resolvePluginSdkScopedAliasMap } from "./loader-compat.js";
+import {
+  createExtensionHostLoaderSession,
+  finalizeExtensionHostLoaderSession,
+  processExtensionHostLoaderSessionCandidate,
+} from "./loader-session.js";
 
 export type ExtensionHostPluginLoadOptions = {
   config?: OpenClawConfig;
@@ -187,43 +186,34 @@ export function loadExtensionHostPluginRegistry(
     });
   });
 
-  const seenIds = new Map<string, PluginRecord["origin"]>();
-  const memorySlot = normalized.slots.memory;
-  let selectedMemoryPluginId: string | null = null;
-  let memorySlotMatched = false;
+  const session = createExtensionHostLoaderSession({
+    registry,
+    logger,
+    env,
+    provenance,
+    cacheEnabled,
+    cacheKey,
+    memorySlot: normalized.slots.memory,
+    setCachedRegistry: setCachedExtensionHostRegistry,
+    activateRegistry: activateExtensionHostRegistry,
+  });
 
   for (const candidate of orderedCandidates) {
     const manifestRecord = manifestByRoot.get(candidate.rootDir);
     if (!manifestRecord) {
       continue;
     }
-    const processed = processExtensionHostPluginCandidate({
+    processExtensionHostLoaderSessionCandidate({
+      session,
       candidate,
       manifestRecord,
       normalizedConfig: normalized,
       rootConfig: cfg,
       validateOnly,
-      logger,
-      registry,
-      seenIds,
-      selectedMemoryPluginId,
       createApi,
       loadModule: (safeSource) => getJiti()(safeSource) as OpenClawPluginModule,
     });
-    selectedMemoryPluginId = processed.selectedMemoryPluginId;
-    memorySlotMatched ||= processed.memorySlotMatched;
   }
 
-  return finalizeExtensionHostRegistryLoad({
-    registry,
-    memorySlot,
-    memorySlotMatched,
-    provenance,
-    logger,
-    env,
-    cacheEnabled,
-    cacheKey,
-    setCachedRegistry: setCachedExtensionHostRegistry,
-    activateRegistry: activateExtensionHostRegistry,
-  });
+  return finalizeExtensionHostLoaderSession(session);
 }
