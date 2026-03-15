@@ -34,7 +34,8 @@ function formatTable(data, columns) {
     data.forEach(row => {
         output += '|';
         columns.forEach(col => {
-            const value = String(row[col.key] || '-');
+            const cellValue = row[col.key];
+            const value = String(cellValue !== undefined && cellValue !== null ? cellValue : '-');
             output += ` ${value.padEnd(widths[col.key] - 1)}|`;
         });
         output += '\n';
