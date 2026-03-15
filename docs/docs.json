@@ -1102,6 +1102,10 @@
                 "group": "Providers",
                 "pages": [
                   "providers/anthropic",
+                  "providers/openai",
+                  "providers/openrouter",
+                  "providers/litellm",
+                  "providers/azure-openai",
                   "providers/bedrock",
                   "providers/cloudflare-ai-gateway",
                   "providers/claude-max-api-proxy",
