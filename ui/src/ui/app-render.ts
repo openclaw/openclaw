@@ -623,6 +623,7 @@ export function renderApp(state: AppViewState) {
                 cronEnabled: state.cronStatus?.enabled ?? null,
                 cronNext,
                 lastChannelsRefresh: state.channelsLastSuccess,
+                health: state.healthResult,
                 usageResult: state.usageResult,
                 sessionsResult: state.sessionsResult,
                 skillsReport: state.skillsReport,

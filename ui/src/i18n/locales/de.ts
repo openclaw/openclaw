@@ -12,6 +12,7 @@ export const de: TranslationMap = {
     enabled: "Aktiviert",
     disabled: "Deaktiviert",
     na: "k. A.",
+    issues: "Probleme",
     docs: "Dokumentation",
     resources: "Ressourcen",
   },

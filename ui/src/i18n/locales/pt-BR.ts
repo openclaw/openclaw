@@ -11,6 +11,7 @@ export const pt_BR: TranslationMap = {
     enabled: "Ativado",
     disabled: "Desativado",
     na: "n/a",
+    issues: "Problemas",
     version: "Versão",
     docs: "Docs",
     resources: "Recursos",

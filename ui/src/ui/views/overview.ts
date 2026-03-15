@@ -10,6 +10,7 @@ import type {
   AttentionItem,
   CronJob,
   CronStatus,
+  HealthSummary,
   SessionsListResult,
   SessionsUsageResult,
   SkillStatusReport,
@@ -36,6 +37,7 @@ export type OverviewProps = {
   cronEnabled: boolean | null;
   cronNext: number | null;
   lastChannelsRefresh: number | null;
+  health: HealthSummary | null;
   // New dashboard data
   usageResult: SessionsUsageResult | null;
   sessionsResult: SessionsListResult | null;
@@ -341,6 +343,12 @@ export function renderOverview(props: OverviewProps) {
             <div class="stat-label">${t("overview.snapshot.status")}</div>
             <div class="stat-value ${props.connected ? "ok" : "warn"}">
               ${props.connected ? t("common.ok") : t("common.offline")}
+            </div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">${t("common.health")}</div>
+            <div class="stat-value ${!props.connected ? "" : props.health?.ok ? "ok" : props.health ? "warn" : ""}">
+              ${!props.connected || props.health == null ? t("common.na") : props.health.ok ? t("common.ok") : t("common.issues")}
             </div>
           </div>
           <div class="stat">
