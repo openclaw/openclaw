@@ -84,6 +84,17 @@ async function resolveGatewayProbeSnapshot(params: {
   const gatewayMode = isRemoteMode ? "remote" : "local";
   const gatewayProbeAuthResolution = resolveGatewayProbeAuthResolution(params.cfg);
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
+  if (!gatewayProbeAuthWarning) {
+    const mode = params.cfg.gateway?.auth?.mode;
+    const auth = gatewayProbeAuthResolution.auth;
+    if (mode === "token" && !auth.token) {
+      gatewayProbeAuthWarning =
+        "gateway.auth.token SecretRef is unresolved in this command path; probing without configured auth credentials.";
+    } else if (mode === "password" && !auth.password) {
+      gatewayProbeAuthWarning =
+        "gateway.auth.password SecretRef is unresolved in this command path; probing without configured auth credentials.";
+    }
+  }
   const gatewayProbe = remoteUrlMissing
     ? null
     : await probeGateway({
