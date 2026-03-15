@@ -149,6 +149,8 @@ export async function ensureSkillSnapshot(params: {
   cfg: OpenClawConfig;
   /** If provided, only load skills with these names (for per-channel skill filtering) */
   skillFilter?: string[];
+  /** Whether the active agent runs in a sandbox container. */
+  sandboxed?: boolean;
 }): Promise<{
   sessionEntry?: SessionEntry;
   skillsSnapshot?: SessionEntry["skillsSnapshot"];
@@ -174,6 +176,7 @@ export async function ensureSkillSnapshot(params: {
     workspaceDir,
     cfg,
     skillFilter,
+    sandboxed,
   } = params;
 
   let nextEntry = sessionEntry;
@@ -195,7 +198,7 @@ export async function ensureSkillSnapshot(params: {
         ? buildWorkspaceSkillSnapshot(workspaceDir, {
             config: cfg,
             skillFilter,
-            eligibility: { remote: remoteEligibility },
+            eligibility: { sandboxed, remote: remoteEligibility },
             snapshotVersion,
           })
         : current.skillsSnapshot;
@@ -214,7 +217,7 @@ export async function ensureSkillSnapshot(params: {
     ? buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfg,
         skillFilter,
-        eligibility: { remote: remoteEligibility },
+        eligibility: { sandboxed, remote: remoteEligibility },
         snapshotVersion,
       })
     : (nextEntry?.skillsSnapshot ??
@@ -223,7 +226,7 @@ export async function ensureSkillSnapshot(params: {
         : buildWorkspaceSkillSnapshot(workspaceDir, {
             config: cfg,
             skillFilter,
-            eligibility: { remote: remoteEligibility },
+            eligibility: { sandboxed, remote: remoteEligibility },
             snapshotVersion,
           })));
   if (

@@ -3,7 +3,9 @@ import {
   listAgentIds,
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
@@ -37,11 +39,17 @@ export function listSkillCommandsForWorkspace(params: {
   workspaceDir: string;
   cfg: OpenClawConfig;
   skillFilter?: string[];
+  agentId?: string;
 }): SkillCommandSpec[] {
+  // The main workspace targets the main agent session.  In "non-main" sandbox
+  // mode the main session is *not* sandboxed, so we only flag sandboxed when
+  // the session runs inside a container (mode is "all" or "non-main").
+  const effectiveAgentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
+  const sandboxed = resolveSandboxConfigForAgent(params.cfg, effectiveAgentId).mode !== "off";
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     config: params.cfg,
     skillFilter: params.skillFilter,
-    eligibility: { remote: getRemoteSkillEligibility() },
+    eligibility: { sandboxed, remote: getRemoteSkillEligibility() },
     reservedNames: listReservedChatSlashCommandNames(),
   });
 }
@@ -87,7 +95,10 @@ export function listSkillCommandsForAgents(params: {
   const entries: SkillCommandSpec[] = [];
   // Group by canonical workspace to avoid duplicate registration when multiple
   // agents share the same directory (#5717), while still honoring per-agent filters.
-  const workspaceFilters = new Map<string, { workspaceDir: string; skillFilter?: string[] }>();
+  const workspaceFilters = new Map<
+    string,
+    { workspaceDir: string; skillFilter?: string[]; sandboxed: boolean }
+  >();
   for (const agentId of agentIds) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     if (!fs.existsSync(workspaceDir)) {
@@ -103,21 +114,25 @@ export function listSkillCommandsForAgents(params: {
     }
     const skillFilter = resolveAgentSkillsFilter(params.cfg, agentId);
     const existing = workspaceFilters.get(canonicalDir);
+    const agentSandboxed = resolveSandboxConfigForAgent(params.cfg, agentId).mode !== "off";
     if (existing) {
       existing.skillFilter = mergeSkillFilters(existing.skillFilter, skillFilter);
+      // If any agent sharing this workspace is sandboxed, mark as sandboxed
+      existing.sandboxed = existing.sandboxed || agentSandboxed;
       continue;
     }
     workspaceFilters.set(canonicalDir, {
       workspaceDir,
       skillFilter,
+      sandboxed: agentSandboxed,
     });
   }
 
-  for (const { workspaceDir, skillFilter } of workspaceFilters.values()) {
+  for (const { workspaceDir, skillFilter, sandboxed } of workspaceFilters.values()) {
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       config: params.cfg,
       skillFilter,
-      eligibility: { remote: getRemoteSkillEligibility() },
+      eligibility: { sandboxed, remote: getRemoteSkillEligibility() },
       reservedNames: used,
     });
     for (const command of commands) {
