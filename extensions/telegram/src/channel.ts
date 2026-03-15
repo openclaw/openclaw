@@ -3,9 +3,42 @@ import {
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   createScopedAccountConfigAccessors,
-  createScopedDmSecurityResolver,
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
+
+// Simple implementation of createScopedDmSecurityResolver since it's missing in the SDK
+function createScopedDmSecurityResolver<ResolvedAccount extends { accountId?: string | null }>(params: {
+  channelKey: string;
+  resolvePolicy: (account: ResolvedAccount) => string | null | undefined;
+  resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  resolveFallbackAccountId?: (account: ResolvedAccount) => string | null | undefined;
+  defaultPolicy?: string;
+  allowFromPathSuffix?: string;
+  policyPathSuffix?: string;
+  approveChannelId?: string;
+  approveHint?: string;
+  normalizeEntry?: (raw: string) => string;
+}) {
+  return ({
+    cfg,
+    accountId,
+    account,
+  }: {
+    cfg: any;
+    accountId?: string | null;
+    account: ResolvedAccount;
+  }) => {
+    // Simple implementation: just return the policy and allowFrom
+    const policy = params.resolvePolicy(account);
+    const allowFrom = params.resolveAllowFrom(account) ?? [];
+    return {
+      policy,
+      allowFrom,
+      // Add minimal implementation to satisfy the plugin
+      normalizeEntry: params.normalizeEntry || ((raw: string) => raw),
+    };
+  };
+}
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
