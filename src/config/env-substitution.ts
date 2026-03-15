@@ -135,7 +135,7 @@ function substituteString(
 }
 
 export function containsEnvVarReference(value: string): boolean {
-  if (!value.includes("$")) {
+  if (typeof value !== "string" || !value.includes("$")) {
     return false;
   }
 
