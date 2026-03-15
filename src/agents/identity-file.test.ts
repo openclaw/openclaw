@@ -16,6 +16,12 @@ describe("parseIdentityMarkdown", () => {
     expect(parsed).toEqual({});
   });
 
+  it("parses avatar path wrapped in markdown backticks", () => {
+    const content = "\n- **Avatar:** `avatars/avatar.png`\n";
+    const parsed = parseIdentityMarkdown(content);
+    expect(parsed.avatar).toBe("avatars/avatar.png");
+  });
+
   it("parses explicit identity values", () => {
     const content = `
 - **Name:** Samantha
