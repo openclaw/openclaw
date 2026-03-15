@@ -131,6 +131,12 @@ That means the group-related config keys below exist in the schema, but were not
 - If `groupAllowFrom` is unset, Zalo falls back to `allowFrom` for sender checks.
 - Runtime note: if `channels.zalo` is missing entirely, runtime still falls back to `groupPolicy="allowlist"` for safety.
 
+The group policy values (when group access is available on your bot surface) are:
+
+- `groupPolicy: "disabled"` — blocks all group messages.
+- `groupPolicy: "open"` — allows any group member (mention-gated).
+- `groupPolicy: "allowlist"` — fail-closed default; only allowed senders are accepted.
+
 If you are using a different Zalo bot product surface and have verified working group behavior, document that separately rather than assuming it matches the Marketplace-bot flow.
 
 ## Long-polling vs webhook
@@ -159,21 +165,21 @@ If you are using a different Zalo bot product surface and have verified working 
 
 ## Capabilities
 
-| Feature                     | Status                                                                  |
-| --------------------------- | ----------------------------------------------------------------------- |
-| Direct messages             | ✅ Supported                                                            |
-| Groups                      | ❌ Not available in current Marketplace-bot testing                     |
-| Media (inbound images)      | ⚠️ Limited / verify in your environment                                 |
-| Plain URLs in text          | ✅ Supported                                                            |
-| Link previews               | ⚠️ Unreliable / no reply observed in current Marketplace-bot testing    |
-| Reactions                   | ❌ Not supported                                                        |
-| Stickers                    | ⚠️ Received but no normal agent reply observed                          |
-| Voice notes / audio / video | ❌ No normal agent reply observed in current Marketplace-bot testing    |
-| File attachments            | ❌ No normal agent reply observed in current Marketplace-bot testing    |
-| Threads                     | ❌ Not supported                                                        |
-| Polls                       | ❌ Not supported                                                        |
-| Native commands             | ❌ Not supported                                                        |
-| Streaming                   | ⚠️ Blocked (2000 char limit)                                            |
+| Feature                     | Status                                                               |
+| --------------------------- | -------------------------------------------------------------------- |
+| Direct messages             | ✅ Supported                                                         |
+| Groups                      | ❌ Not available in current Marketplace-bot testing                  |
+| Media (inbound images)      | ⚠️ Limited / verify in your environment                              |
+| Plain URLs in text          | ✅ Supported                                                         |
+| Link previews               | ⚠️ Unreliable / no reply observed in current Marketplace-bot testing |
+| Reactions                   | ❌ Not supported                                                     |
+| Stickers                    | ⚠️ Received but no normal agent reply observed                       |
+| Voice notes / audio / video | ❌ No normal agent reply observed in current Marketplace-bot testing |
+| File attachments            | ❌ No normal agent reply observed in current Marketplace-bot testing |
+| Threads                     | ❌ Not supported                                                     |
+| Polls                       | ❌ Not supported                                                     |
+| Native commands             | ❌ Not supported                                                     |
+| Streaming                   | ⚠️ Blocked (2000 char limit)                                         |
 
 ## Delivery targets (CLI/cron)
 
@@ -198,6 +204,8 @@ If you are using a different Zalo bot product surface and have verified working 
 ## Configuration reference (Zalo)
 
 Full configuration: [Configuration](/gateway/configuration)
+
+The flat top-level keys (`channels.zalo.botToken`, `channels.zalo.dmPolicy`, and similar) are a legacy single-account shorthand. Prefer `channels.zalo.accounts.<id>.*` for new configs. Both forms are still documented here because they exist in the schema.
 
 Provider options:
 
