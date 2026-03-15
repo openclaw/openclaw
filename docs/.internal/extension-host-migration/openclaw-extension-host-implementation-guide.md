@@ -87,6 +87,7 @@ What has been implemented so far:
 - runtime registration normalization has started in `src/extension-host/runtime-registrations.ts` for channel, provider, HTTP-route, gateway-method, tool, CLI, service, command, context-engine, and hook registrations
 - low-risk runtime compatibility writes for channel, provider, gateway-method, HTTP-route, tool, CLI, service, command, context-engine, and hook registrations now route through `src/extension-host/registry-writes.ts`
 - legacy internal-hook bridging and typed prompt-injection compatibility policy now route through `src/extension-host/hook-compat.ts`
+- compatibility `OpenClawPluginApi` composition and logger shaping now route through `src/extension-host/plugin-api.ts`
 - several static and lookup consumers now read through the host boundary or resolved-extension model:
   - channel registry and dock lookups
   - message-channel normalization
@@ -133,6 +134,7 @@ How it has been done:
 - by moving duplicate precedence, config enablement, and early memory-slot gating into explicit host-owned activation-policy outcomes instead of leaving them inline in the loader flow
 - by turning provenance-based untracked-extension warnings and final memory-slot warnings into explicit host-owned finalization-policy results before the finalizer applies them
 - by extracting legacy internal-hook bridging and typed prompt-injection compatibility policy into a host-owned hook-compat helper while leaving actual hook execution ownership unchanged
+- by extracting compatibility `OpenClawPluginApi` composition and logger shaping into a host-owned plugin-api helper while keeping the concrete registration callbacks in the legacy registry surface
 - by moving central readers first, so later lifecycle and compatibility work can land on one boundary instead of many ad hoc call sites
 - by adding focused tests for each extracted seam before widening the boundary further
 
@@ -157,6 +159,15 @@ Committed implementation slices so far:
 - `52495d23d5` `Plugins: extract loader runtime factories`
 - `6e187ffb62` `Plugins: extract loader bootstrap`
 - `234a540720` `Plugins: extract loader session runner`
+- `a98443c39d` `Plugins: extract loader execution setup`
+- `c9323aa016` `Plugins: extract loader preflight`
+- `0df51ae6b4` `Plugins: extract loader pipeline`
+- `e557b39cb2` `Plugins: extract loader host state`
+- `07c3ae9c87` `Plugins: extract low-risk registry writes`
+- `bc71592270` `Plugins: extend registry write helpers`
+- `27fc645484` `Plugins: extend registry writes for hooks`
+- `b407d7f476` `Plugins: extract hook compatibility`
+- `a1e1dcc01a` `Plugins: extract plugin api facade`
 - `89414ed857` `Docs: track extension host migration internally`
 - `d8af1eceaf` `Docs: refresh extension host migration status`
 

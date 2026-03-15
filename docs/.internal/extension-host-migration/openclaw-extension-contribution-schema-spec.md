@@ -41,6 +41,7 @@ What has been implemented:
 - the first runtime registration normalization helpers now exist in `src/extension-host/runtime-registrations.ts` for channel, provider, HTTP-route, gateway-method, tool, CLI, service, command, context-engine, and hook writes
 - low-risk runtime compatibility writes for channel, provider, gateway-method, HTTP-route, tool, CLI, service, command, context-engine, and hook registrations now route through `src/extension-host/registry-writes.ts`
 - legacy internal-hook bridging and typed prompt-injection compatibility policy now route through `src/extension-host/hook-compat.ts`
+- compatibility `OpenClawPluginApi` composition and logger shaping now route through `src/extension-host/plugin-api.ts`
 - plugin SDK alias resolution now routes through `src/extension-host/loader-compat.ts`
 - loader alias-wired module loader creation now routes through `src/extension-host/loader-module-loader.ts`
 - loader cache key construction and registry cache control now route through `src/extension-host/loader-cache.ts`
@@ -90,6 +91,7 @@ How it has been implemented:
 - by moving duplicate precedence, config enablement, and early memory-slot gating into explicit host-owned activation-policy outcomes before broadening the schema-driven host lifecycle model
 - by turning provenance-based untracked-extension warnings and final memory-slot warnings into explicit host-owned finalization-policy results before broadening the schema-driven host lifecycle model
 - by extracting legacy internal-hook bridging and typed prompt-injection compatibility policy into a host-owned hook-compat helper while leaving actual hook execution ownership unchanged
+- by extracting compatibility `OpenClawPluginApi` composition and logger shaping into a host-owned plugin-api helper while keeping the concrete registration callbacks in the legacy registry surface
 
 What remains pending:
 
