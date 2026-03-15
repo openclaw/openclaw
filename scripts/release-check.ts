@@ -251,17 +251,28 @@ function formatPackUnpackedSizeBudgetError(params: {
 }
 
 export function collectPackUnpackedSizeErrors(results: Iterable<PackResult>): string[] {
+  const entries = Array.from(results);
   const errors: string[] = [];
-  for (const [index, entry] of Array.from(results).entries()) {
+  let checkedCount = 0;
+
+  for (const [index, entry] of entries.entries()) {
     if (typeof entry.unpackedSize !== "number" || !Number.isFinite(entry.unpackedSize)) {
       continue;
     }
+    checkedCount += 1;
     if (entry.unpackedSize <= npmPackUnpackedSizeBudgetBytes) {
       continue;
     }
     const label = resolvePackResultLabel(entry, index);
     errors.push(formatPackUnpackedSizeBudgetError({ label, unpackedSize: entry.unpackedSize }));
   }
+
+  if (entries.length > 0 && checkedCount === 0) {
+    errors.push(
+      "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
+    );
+  }
+
   return errors;
 }
 

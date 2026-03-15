@@ -183,4 +183,15 @@ describe("collectPackUnpackedSizeErrors", () => {
       "openclaw-2026.3.12.tgz unpackedSize 224002564 bytes (213.6 MiB) exceeds budget 167772160 bytes (160.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
     ]);
   });
+
+  it("fails closed when npm pack output omits unpackedSize for every result", () => {
+    expect(
+      collectPackUnpackedSizeErrors([
+        { filename: "openclaw-2026.3.14.tgz" },
+        { filename: "openclaw-extra.tgz", unpackedSize: Number.NaN },
+      ]),
+    ).toEqual([
+      "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
+    ]);
+  });
 });
