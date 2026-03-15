@@ -715,7 +715,7 @@ Useful harvested behavior:
 
 Important rule:
 
-- keep these as host-owned runtime registries or backend families
+- keep these inside host-owned runtime registries for typed backend families
 - do not widen `registerProvider(...)` into the permanent universal surface for every runtime subsystem
 - if search is directly agent-visible, model it as `capability.agent-tool` instead of treating it as a generic provider family
 

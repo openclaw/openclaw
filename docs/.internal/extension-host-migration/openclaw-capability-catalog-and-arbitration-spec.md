@@ -561,7 +561,7 @@ Selection rules for these subsystem runtimes should preserve the useful parts of
 
 Architecture rule:
 
-- keep those selection and envelope rules inside host-owned subsystem runtime registries or typed backend families
+- keep those selection and envelope rules inside host-owned subsystem runtime registries for typed backend families
 - do not widen provider-integration or legacy plugin-provider APIs into a universal surface for unrelated runtime subsystems
 - if search is agent-visible, publish it through canonical tool catalogs; reserve runtime-backend modeling for search backends that are consumed internally by the host or another subsystem
 
