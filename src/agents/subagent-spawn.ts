@@ -371,6 +371,29 @@ export async function spawnSubagentDirect(
       };
     }
   }
+
+  // Check target agent's allowedBy restriction (bidirectional authorization)
+  if (targetAgentId !== requesterAgentId) {
+    const targetConfig = resolveAgentConfig(cfg, targetAgentId);
+    const allowedBy = targetConfig?.subagents?.allowedBy;
+    if (allowedBy != null) {
+      const allowedByAny = allowedBy.some((v) => v.trim() === "*");
+      if (!allowedByAny) {
+        const normalizedRequesterId = requesterAgentId.toLowerCase();
+        const allowedBySet = new Set(
+          allowedBy
+            .filter((v) => v.trim() && v.trim() !== "*")
+            .map((v) => normalizeAgentId(v).toLowerCase()),
+        );
+        if (!allowedBySet.has(normalizedRequesterId)) {
+          return {
+            status: "forbidden",
+            error: `Target agent "${targetAgentId}" does not allow being spawned by "${requesterAgentId}"`,
+          };
+        }
+      }
+    }
+  }
   const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg,
