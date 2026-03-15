@@ -4,8 +4,21 @@ import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/
 
 registerAppMountHooks();
 
+const originalVisualViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
+const originalUserAgent = Object.getOwnPropertyDescriptor(window.navigator, "userAgent");
+const originalPlatform = Object.getOwnPropertyDescriptor(window.navigator, "platform");
+const originalMaxTouchPoints = Object.getOwnPropertyDescriptor(window.navigator, "maxTouchPoints");
+
 function mountApp(pathname: string) {
   return mountTestApp(pathname);
+}
+
+function restoreProperty(target: object, key: string, descriptor?: PropertyDescriptor) {
+  if (descriptor) {
+    Object.defineProperty(target, key, descriptor);
+    return;
+  }
+  Reflect.deleteProperty(target, key);
 }
 
 function nextFrame() {
@@ -324,6 +337,48 @@ describe("control UI routing", () => {
     }
 
     expect(getComputedStyle(chat).paddingTop).toBe("0px");
+  });
+
+  it("only enables the iOS shell lock on the chat tab", async () => {
+    Object.defineProperty(window.navigator, "userAgent", {
+      configurable: true,
+      value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+    });
+    Object.defineProperty(window.navigator, "platform", {
+      configurable: true,
+      value: "iPhone",
+    });
+    Object.defineProperty(window.navigator, "maxTouchPoints", {
+      configurable: true,
+      value: 5,
+    });
+    Object.defineProperty(window, "visualViewport", {
+      configurable: true,
+      value: Object.assign(new EventTarget(), { width: 400, height: 800 }),
+    });
+    try {
+      const chatApp = mountApp("/chat");
+      await chatApp.updateComplete;
+
+      expect(chatApp.hasAttribute("data-ios-shell-lock")).toBe(true);
+
+      chatApp.remove();
+      const sessionsApp = mountApp("/sessions");
+      await sessionsApp.updateComplete;
+
+      expect(sessionsApp.hasAttribute("data-ios-shell-lock")).toBe(false);
+    } finally {
+      restoreProperty(window, "visualViewport", originalVisualViewport);
+      restoreProperty(window.navigator, "userAgent", originalUserAgent);
+      restoreProperty(window.navigator, "platform", originalPlatform);
+      restoreProperty(window.navigator, "maxTouchPoints", originalMaxTouchPoints);
+      document.documentElement.removeAttribute("data-ios-mobile");
+      document.documentElement.removeAttribute("data-ios-keyboard-open");
+      document.documentElement.removeAttribute("data-ios-shell-lock");
+      document.body.removeAttribute("data-ios-mobile");
+      document.body.removeAttribute("data-ios-keyboard-open");
+      document.body.removeAttribute("data-ios-shell-lock");
+    }
   });
 
   it("keeps mobile chat controls on one row as header actions grow", async () => {
