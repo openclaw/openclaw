@@ -1997,4 +1997,92 @@ describe("createTelegramBot", () => {
     const sessionKey = eventOptions.sessionKey ?? "";
     expect(sessionKey).not.toContain(":topic:");
   });
+
+  it("enqueues system event for custom emoji reactions", async () => {
+    enqueueSystemEventSpy.mockReset();
+    wasSentByBotSpy.mockReturnValue(true);
+
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 508 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada", username: "ada_bot" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "custom_emoji", custom_emoji_id: "5368324170671202286" }],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+      "Telegram custom emoji reaction added: custom_emoji_id=5368324170671202286 by Ada (@ada_bot) on msg 42",
+      expect.objectContaining({
+        contextKey: expect.stringContaining(
+          "telegram:reaction:add:1234:42:9:custom_emoji:5368324170671202286",
+        ),
+      }),
+    );
+  });
+
+  it("handles mixed emoji and custom emoji reactions in same update", async () => {
+    enqueueSystemEventSpy.mockReset();
+    wasSentByBotSpy.mockReturnValue(true);
+
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 509 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [
+          { type: "emoji", emoji: "👍" },
+          { type: "custom_emoji", custom_emoji_id: "5368324170671202286" },
+        ],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(2);
+    expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Telegram reaction added: 👍"),
+      expect.any(Object),
+    );
+    expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+      expect.stringContaining("custom_emoji_id=5368324170671202286"),
+      expect.any(Object),
+    );
+  });
+
+  it("does not enqueue event when only custom emoji is removed (not added)", async () => {
+    enqueueSystemEventSpy.mockReset();
+    wasSentByBotSpy.mockReturnValue(true);
+
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 510 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [{ type: "custom_emoji", custom_emoji_id: "5368324170671202286" }],
+        new_reaction: [],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
 });

@@ -1,4 +1,4 @@
-import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
+import type { Message, ReactionTypeCustomEmoji, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../../src/agents/agent-scope.js";
 import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
 import {
@@ -811,17 +811,25 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      // Detect added reactions.
+      // Detect added reactions (both standard emoji and custom emoji).
       const oldEmojis = new Set(
         reaction.old_reaction
           .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
           .map((r) => r.emoji),
       );
+      const oldCustomEmojis = new Set(
+        reaction.old_reaction
+          .filter((r): r is ReactionTypeCustomEmoji => r.type === "custom_emoji")
+          .map((r) => r.custom_emoji_id),
+      );
       const addedReactions = reaction.new_reaction
         .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
         .filter((r) => !oldEmojis.has(r.emoji));
+      const addedCustomReactions = reaction.new_reaction
+        .filter((r): r is ReactionTypeCustomEmoji => r.type === "custom_emoji")
+        .filter((r) => !oldCustomEmojis.has(r.custom_emoji_id));
 
-      if (addedReactions.length === 0) {
+      if (addedReactions.length === 0 && addedCustomReactions.length === 0) {
         return;
       }
 
@@ -868,6 +876,15 @@ export const registerTelegramHandlers = ({
           contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
         });
         logVerbose(`telegram: reaction event enqueued: ${text}`);
+      }
+      for (const r of addedCustomReactions) {
+        const customEmojiId = r.custom_emoji_id;
+        const text = `Telegram custom emoji reaction added: custom_emoji_id=${customEmojiId} by ${senderLabel} on msg ${messageId}`;
+        enqueueSystemEvent(text, {
+          sessionKey,
+          contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:custom_emoji:${customEmojiId}`,
+        });
+        logVerbose(`telegram: custom emoji reaction event enqueued: ${text}`);
       }
     } catch (err) {
       runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
