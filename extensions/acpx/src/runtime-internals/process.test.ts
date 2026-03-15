@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWindowsCmdShimFixture } from "../../../shared/windows-cmd-shim-test-fixtures.js";
 import {
+  ensurePlatformPathDefaults,
   resolveSpawnCommand,
   spawnAndCollect,
   type SpawnCommandCache,
@@ -230,6 +231,53 @@ describe("resolveSpawnCommand", () => {
     expect(second.command).toBe("C:\\node\\node.exe");
     expect(first.args[0]).toBe(scriptPath);
     expect(second.args[0]).toBe(scriptPath);
+  });
+});
+
+describe("ensurePlatformPathDefaults", () => {
+  it("adds macOS system admin paths when missing", () => {
+    const env = ensurePlatformPathDefaults(
+      {
+        PATH: "/usr/local/bin:/usr/bin:/bin",
+      },
+      "darwin",
+    );
+
+    expect(env.PATH?.split(":")).toEqual([
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
+  });
+
+  it("does not duplicate macOS system admin paths when already present", () => {
+    const env = ensurePlatformPathDefaults(
+      {
+        PATH: "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      },
+      "darwin",
+    );
+
+    expect(env.PATH?.split(":")).toEqual([
+      "/usr/local/bin",
+      "/usr/sbin",
+      "/usr/bin",
+      "/sbin",
+      "/bin",
+    ]);
+  });
+
+  it("leaves non-macOS paths unchanged", () => {
+    const env = ensurePlatformPathDefaults(
+      {
+        PATH: "/usr/local/bin:/usr/bin:/bin",
+      },
+      "linux",
+    );
+
+    expect(env.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
   });
 });
 
