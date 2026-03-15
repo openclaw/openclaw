@@ -23,7 +23,11 @@ const MemoryGetSchema = Type.Object({
   lines: Type.Optional(Type.Number()),
 });
 
-function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
+function resolveMemoryToolContext(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+  senderId?: string;
+}) {
   const cfg = options.config;
   if (!cfg) {
     return null;
@@ -36,7 +40,9 @@ function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessi
     return null;
   }
   // Extract userId for memory isolation (direct message sessions)
-  const userId = extractUserIdFromSessionKey(options.agentSessionKey);
+  // Fall back to senderId from inbound context for channel/group sessions
+  const sessionUserId = extractUserIdFromSessionKey(options.agentSessionKey);
+  const userId = sessionUserId ?? options.senderId;
   return { cfg, agentId, userId: userId ?? undefined };
 }
 
@@ -64,6 +70,7 @@ function createMemoryTool(params: {
   options: {
     config?: OpenClawConfig;
     agentSessionKey?: string;
+    senderId?: string;
   };
   label: string;
   name: string;
@@ -75,7 +82,11 @@ function createMemoryTool(params: {
     userId?: string;
   }) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
-  const ctx = resolveMemoryToolContext(params.options);
+  const ctx = resolveMemoryToolContext({
+    config: params.options.config,
+    agentSessionKey: params.options.agentSessionKey,
+    senderId: params.options.senderId,
+  });
   if (!ctx) {
     return null;
   }
@@ -91,6 +102,7 @@ function createMemoryTool(params: {
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
+  senderId?: string;
 }): AnyAgentTool | null {
   return createMemoryTool({
     options,
@@ -147,6 +159,7 @@ export function createMemorySearchTool(options: {
 export function createMemoryGetTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
+  senderId?: string;
 }): AnyAgentTool | null {
   return createMemoryTool({
     options,
