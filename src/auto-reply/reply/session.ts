@@ -367,9 +367,16 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
+      persistedLabel = entry.label;
+    }
+    // Preserve model/provider overrides from the entry when the session is
+    // still fresh (subagent spawns write modelOverride via sessions.patch
+    // before the first message) or when an explicit reset was triggered.
+    // Skip on stale rollovers so yesterday's override doesn't leak into
+    // a brand-new daily session.
+    if (entry && (freshEntry || resetTriggered)) {
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
-      persistedLabel = entry.label;
     }
   }
 
