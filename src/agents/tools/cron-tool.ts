@@ -144,6 +144,21 @@ async function buildReminderContextLines(params: {
   }
 }
 
+function extractThreadIdFromSessionKey(sessionKey: string): string | null {
+  const normalized = sessionKey.toLowerCase();
+  const idx = normalized.lastIndexOf(":thread:");
+  if (idx <= 0) {
+    return null;
+  }
+  const suffix = sessionKey.slice(idx + ":thread:".length);
+  // Thread suffix is <chatId>:<threadId> — the thread ID is the last segment.
+  const lastColon = suffix.lastIndexOf(":");
+  if (lastColon > 0) {
+    return suffix.slice(lastColon + 1).trim() || null;
+  }
+  return suffix.trim() || null;
+}
+
 function stripThreadSuffixFromSessionKey(sessionKey: string): string {
   const normalized = sessionKey.toLowerCase();
   const idx = normalized.lastIndexOf(":thread:");
@@ -200,7 +215,14 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
     channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
   }
 
-  const delivery: CronDelivery = { mode: "announce", to: peerId };
+  let to = peerId;
+  // Preserve Telegram thread context: convert :thread:<chatId>:<topicId> to <peerId>:topic:<topicId>
+  const threadId = extractThreadIdFromSessionKey(rawSessionKey);
+  if (threadId && channel === "telegram") {
+    to = `${peerId}:topic:${threadId}`;
+  }
+
+  const delivery: CronDelivery = { mode: "announce", to };
   if (channel) {
     delivery.channel = channel;
   }
