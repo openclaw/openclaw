@@ -4,14 +4,14 @@ vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
 }));
 vi.mock("../agents/model-selection.js", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
+  const actual = await importOriginal();
   return { ...actual, buildAllowedModelSet: vi.fn() };
 });
 vi.mock("../terminal/note.js", () => ({ note: vi.fn() }));
 
-import type { OpenClawConfig } from "../config/config.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { buildAllowedModelSet } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { note } from "../terminal/note.js";
 import { noteSyntheticAllowlistGaps } from "./doctor-synthetic-allowlist.js";
 
@@ -38,6 +38,20 @@ describe("noteSyntheticAllowlistGaps", () => {
 
   it("skips when allowlist is empty", async () => {
     await noteSyntheticAllowlistGaps(makeCfg({}));
+    expect(mockLoadModelCatalog).not.toHaveBeenCalled();
+    expect(mockNote).not.toHaveBeenCalled();
+  });
+
+  it("skips when allowAny is true", async () => {
+    const catalog = [{ id: "gpt-5.4", name: "gpt-5.4", provider: "openai" }];
+    mockLoadModelCatalog.mockResolvedValue(catalog);
+    mockBuildAllowedModelSet.mockReturnValue({
+      allowAny: true,
+      allowedCatalog: catalog,
+      allowedKeys: new Set(["openai/gpt-5.4"]),
+    });
+
+    await noteSyntheticAllowlistGaps(makeCfg({ "anthropic/claude-opus-4-6": {} }));
     expect(mockNote).not.toHaveBeenCalled();
   });
 
@@ -69,7 +83,7 @@ describe("noteSyntheticAllowlistGaps", () => {
     mockLoadModelCatalog.mockResolvedValue(catalog);
     mockBuildAllowedModelSet.mockReturnValue({
       allowAny: false,
-      allowedCatalog: [catalog[0]!, catalog[3]!],
+      allowedCatalog: [catalog[0], catalog[3]],
       allowedKeys: new Set(["openai-codex/gpt-5.4", "anthropic/claude-opus-4-6"]),
     });
 
@@ -78,7 +92,7 @@ describe("noteSyntheticAllowlistGaps", () => {
     );
 
     expect(mockNote).toHaveBeenCalledTimes(1);
-    const noteText = mockNote.mock.calls[0]![0] as string;
+    const noteText = mockNote.mock.calls[0][0];
     expect(noteText).toContain("2 synthetic model");
     expect(noteText).toContain("openai/gpt-5.4");
     expect(noteText).toContain("openai/gpt-5.4-pro");
@@ -92,7 +106,7 @@ describe("noteSyntheticAllowlistGaps", () => {
     mockLoadModelCatalog.mockResolvedValue(catalog);
     mockBuildAllowedModelSet.mockReturnValue({
       allowAny: false,
-      allowedCatalog: [catalog[1]!],
+      allowedCatalog: [catalog[1]],
       allowedKeys: new Set(["anthropic/claude-opus-4-6"]),
     });
 
@@ -110,7 +124,7 @@ describe("noteSyntheticAllowlistGaps", () => {
     });
 
     await noteSyntheticAllowlistGaps(makeCfg({ "anthropic/claude-opus-4-6": {} }));
-    const noteText = mockNote.mock.calls[0]![0] as string;
+    const noteText = mockNote.mock.calls[0][0];
     expect(noteText).toContain("1 synthetic model available");
     expect(noteText).not.toContain("models available");
   });

@@ -6,11 +6,16 @@ import type { OpenClawConfig } from "../config/config.js";
 import { note } from "../terminal/note.js";
 
 /**
- * Known providers whose models may appear in the runtime catalog via
- * `applySyntheticCatalogFallbacks()`. Only these are checked to avoid
- * false positives from Pi SDK registry models.
+ * The exact provider/id pairs created by `applySyntheticCatalogFallbacks()`.
+ * Only these are checked to avoid false positives from real catalog models
+ * that happen to share the same provider.
  */
-const SYNTHETIC_FALLBACK_PROVIDERS = new Set(["openai", "openai-codex"]);
+const SYNTHETIC_FALLBACK_KEYS = new Set([
+  "openai/gpt-5.4",
+  "openai/gpt-5.4-pro",
+  "openai-codex/gpt-5.4",
+  "openai-codex/gpt-5.3-codex-spark",
+]);
 
 /**
  * Warn when synthetic catalog fallback models are present in the runtime
@@ -28,19 +33,22 @@ export async function noteSyntheticAllowlistGaps(cfg: OpenClawConfig): Promise<v
   }
 
   const catalog = await loadModelCatalog({ config: cfg });
-  const { allowedKeys } = buildAllowedModelSet({
+  const { allowAny, allowedKeys } = buildAllowedModelSet({
     cfg,
     catalog,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+  if (allowAny) {
+    return; // all models are allowed; nothing to warn about
+  }
 
   const gaps: Array<{ provider: string; id: string }> = [];
   for (const entry of catalog) {
-    if (!SYNTHETIC_FALLBACK_PROVIDERS.has(entry.provider.toLowerCase())) {
+    const key = modelKey(entry.provider, entry.id);
+    if (!SYNTHETIC_FALLBACK_KEYS.has(key)) {
       continue;
     }
-    const key = modelKey(entry.provider, entry.id);
     if (!allowedKeys.has(key)) {
       gaps.push(entry);
     }
