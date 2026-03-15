@@ -165,6 +165,9 @@ async function runCleanupSteps(
       if (!hasError) {
         firstError = err;
         hasError = true;
+        log.warn(
+          `embedded attempt cleanup failed during ${step.label}: ${describeUnknownError(err)}`,
+        );
         continue;
       }
 
