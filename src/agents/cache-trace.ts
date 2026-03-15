@@ -74,6 +74,8 @@ type CacheTraceConfig = {
 
 type CacheTraceWriter = QueuedFileWriter;
 
+// Capped to prevent unbounded growth in long-running processes.
+const MAX_TRACE_WRITERS = 32;
 const writers = new Map<string, CacheTraceWriter>();
 
 function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
@@ -101,6 +103,13 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
 }
 
 function getWriter(filePath: string): CacheTraceWriter {
+  // Evict oldest writer if at capacity.
+  if (!writers.has(filePath) && writers.size >= MAX_TRACE_WRITERS) {
+    const oldest = writers.keys().next().value;
+    if (oldest !== undefined) {
+      writers.delete(oldest);
+    }
+  }
   return getQueuedFileWriter(writers, filePath);
 }
 

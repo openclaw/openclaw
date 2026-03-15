@@ -49,6 +49,12 @@ export function applyDiscoveredContextWindows(params: {
     // Callers that know the active provider should use resolveContextTokensForModel,
     // which tries the provider-qualified key first and falls back here.
     if (existing === undefined || contextWindow < existing) {
+      if (existing === undefined && params.cache.size >= MAX_MODEL_CACHE_ENTRIES) {
+        const oldest = params.cache.keys().next().value;
+        if (oldest !== undefined) {
+          params.cache.delete(oldest);
+        }
+      }
       params.cache.set(model.id, contextWindow);
     }
   }
@@ -78,6 +84,8 @@ export function applyConfiguredContextWindows(params: {
   }
 }
 
+// Capped to prevent unbounded growth if model ids are dynamic.
+const MAX_MODEL_CACHE_ENTRIES = 256;
 const MODEL_CACHE = new Map<string, number>();
 let loadPromise: Promise<void> | null = null;
 let configuredConfig: OpenClawConfig | undefined;
