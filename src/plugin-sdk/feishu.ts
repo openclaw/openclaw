@@ -11,6 +11,8 @@ export {
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { logTypingFailure } from "../channels/logging.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
+export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export { createActionGate } from "../agents/tools/common.js";
 export type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
@@ -29,6 +31,7 @@ export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js
 export type {
   BaseProbeResult,
   ChannelGroupContext,
+  ChannelMessageActionName,
   ChannelMeta,
   ChannelOutboundAdapter,
 } from "../channels/plugins/types.js";
