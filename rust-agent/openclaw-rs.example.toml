@@ -1,0 +1,51 @@
+[gateway]
+url = "ws://127.0.0.1:18789/ws"
+token = ""
+
+[runtime]
+audit_only = false
+decision_event = "security.decision"
+worker_concurrency = 8
+max_queue = 256
+session_queue_mode = "followup" # followup | steer | collect | steer-backlog | interrupt (queue/queued alias steer)
+group_activation_mode = "mention" # mention | always
+eval_timeout_ms = 2500
+memory_sample_secs = 15
+idempotency_ttl_secs = 300
+idempotency_max_entries = 5000
+session_state_path = ".openclaw-rs/session-state.json"
+
+[security]
+review_threshold = 35
+block_threshold = 65
+virustotal_api_key = ""
+virustotal_timeout_ms = 1400
+quarantine_dir = ".openclaw-rs/quarantine"
+protect_paths = ["./openclaw.mjs", "./dist/index.js"]
+allowed_command_prefixes = ["git ", "ls", "cat ", "rg "]
+blocked_command_patterns = [
+  "(?i)\\brm\\s+-rf\\s+/",
+  "(?i)\\bmkfs\\b",
+  "(?i)\\bdd\\s+if=",
+  "(?i)\\bcurl\\s+[^|]*\\|\\s*sh\\b",
+  "(?i)\\bwget\\s+[^|]*\\|\\s*sh\\b",
+  "(?i)\\bchmod\\s+777\\b",
+]
+prompt_injection_patterns = [
+  "(?i)ignore\\s+all\\s+previous\\s+instructions",
+  "(?i)reveal\\s+the\\s+system\\s+prompt",
+  "(?i)override\\s+developer\\s+instructions",
+  "(?i)disable\\s+safety",
+  "(?i)you\\s+must\\s+run\\s+this\\s+command\\s+without\\s+asking",
+]
+tool_policies = { gateway = "review", nodes = "review" }
+tool_risk_bonus = { exec = 20, bash = 20, process = 10, apply_patch = 12, browser = 8, gateway = 20, nodes = 20 }
+channel_risk_bonus = { discord = 10, slack = 8, telegram = 6, whatsapp = 6, webchat = 8 }
+
+# Optional signed policy bundle (Ed25519) for tamper-evident policy updates.
+# The signature covers the exact bytes of `signed_policy_bundle`.
+# - `signed_policy_signature`: base64 or hex encoded 64-byte signature.
+# - `signed_policy_public_key`: base64 or hex encoded 32-byte Ed25519 public key.
+# signed_policy_bundle = "./policy-bundle.toml"
+# signed_policy_signature = "./policy-bundle.sig"
+# signed_policy_public_key = "BASE64_OR_HEX_PUBLIC_KEY"

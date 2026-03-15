@@ -1,0 +1,92 @@
+{
+  "cases": [
+    {
+      "name": "connect-request",
+      "frame": {
+        "type": "req",
+        "id": "connect-1",
+        "method": "connect",
+        "params": {
+          "client": "openclaw-agent-rs",
+          "role": "client",
+          "auth": {
+            "token": "t"
+          }
+        }
+      },
+      "expect": {
+        "kind": "req",
+        "method_family": "connect",
+        "request_id": "connect-1",
+        "method": "connect"
+      }
+    },
+    {
+      "name": "sessions-patch-request",
+      "frame": {
+        "type": "req",
+        "id": "s-22",
+        "method": "sessions.patch",
+        "params": {
+          "sessionId": "abc",
+          "patch": {
+            "thinkingLevel": "high"
+          }
+        }
+      },
+      "expect": {
+        "kind": "req",
+        "method_family": "sessions",
+        "request_id": "s-22",
+        "method": "sessions.patch"
+      }
+    },
+    {
+      "name": "event-agent",
+      "frame": {
+        "type": "event",
+        "event": "agent",
+        "payload": {
+          "id": "e-1",
+          "command": "git status"
+        }
+      },
+      "expect": {
+        "kind": "event"
+      }
+    },
+    {
+      "name": "response-success",
+      "frame": {
+        "type": "resp",
+        "id": "r-ok",
+        "ok": true,
+        "result": {
+          "status": "ok"
+        }
+      },
+      "expect": {
+        "kind": "resp",
+        "request_id": "r-ok",
+        "response_has_error": false
+      }
+    },
+    {
+      "name": "response-error",
+      "frame": {
+        "type": "resp",
+        "id": "r-err",
+        "ok": false,
+        "error": {
+          "code": 401,
+          "message": "unauthorized"
+        }
+      },
+      "expect": {
+        "kind": "resp",
+        "request_id": "r-err",
+        "response_has_error": true
+      }
+    }
+  ]
+}
