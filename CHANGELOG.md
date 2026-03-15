@@ -59,6 +59,10 @@ Docs: https://docs.openclaw.ai
 - ACP: require admin scope for mutating internal actions. (#46789) Thanks @tdjackey and @vincentkoc.
 - Gateway/config validation: stop treating the implicit default memory slot as a required explicit plugin config, so startup no longer fails with `plugins.slots.memory: plugin not found: memory-core` when `memory-core` was only inferred. (#47494) Thanks @ngutman.
 
+### Fixes
+
+- Message/tool schema: make channel capability probing secret-safe so unresolved Telegram or Slack SecretRefs no longer crash the whole `message` tool or block explicit sends on other channels.
+
 ## 2026.3.13
 
 ### Changes
