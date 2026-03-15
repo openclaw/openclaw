@@ -58,6 +58,13 @@ function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRe
   ).length;
 }
 
+function countIdMismatchWarnings(registry: ReturnType<typeof loadPluginManifestRegistry>): number {
+  return registry.diagnostics.filter(
+    (diagnostic) =>
+      diagnostic.level === "warn" && diagnostic.message?.includes("plugin id mismatch"),
+  ).length;
+}
+
 function prepareLinkedManifestFixture(params: { id: string; mode: "symlink" | "hardlink" }): {
   rootDir: string;
   linked: boolean;
@@ -278,6 +285,21 @@ describe("loadPluginManifestRegistry", () => {
     ];
 
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+  });
+
+  it("suppresses provider alias mismatch warnings for bundled provider plugins", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "ollama", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "ollama-provider",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(countIdMismatchWarnings(registry)).toBe(0);
   });
 
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {

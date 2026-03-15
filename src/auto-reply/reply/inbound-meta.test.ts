@@ -18,14 +18,6 @@ function parseConversationInfoPayload(text: string): Record<string, unknown> {
   return JSON.parse(match[1]) as Record<string, unknown>;
 }
 
-function parseSenderInfoPayload(text: string): Record<string, unknown> {
-  const match = text.match(/Sender \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
-  if (!match?.[1]) {
-    throw new Error("missing sender info json block");
-  }
-  return JSON.parse(match[1]) as Record<string, unknown>;
-}
-
 describe("buildInboundMetaSystemPrompt", () => {
   it("includes session-stable routing fields", () => {
     const prompt = buildInboundMetaSystemPrompt({
@@ -122,7 +114,7 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
-  it("includes message identifiers for direct external-channel chats", () => {
+  it("omits conversation info for direct external-channel chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       OriginatingChannel: "whatsapp",
@@ -131,22 +123,17 @@ describe("buildInboundUserContextPrefix", () => {
       SenderE164: " +15551234567 ",
     } as TemplateContext);
 
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["message_id"]).toBe("short-id");
-    expect(conversationInfo["message_id_full"]).toBeUndefined();
-    expect(conversationInfo["sender"]).toBe("+15551234567");
-    expect(conversationInfo["conversation_label"]).toBeUndefined();
+    expect(text).toBe("");
   });
 
-  it("includes message identifiers for direct chats when channel is inferred from Provider", () => {
+  it("omits conversation info for direct chats when channel is inferred from Provider", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       Provider: "whatsapp",
       MessageSid: "provider-only-id",
     } as TemplateContext);
 
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["message_id"]).toBe("provider-only-id");
+    expect(text).toBe("");
   });
 
   it("does not treat group chats as direct based on sender id", () => {
@@ -194,16 +181,45 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["sender"]).toBe("Tyler");
   });
 
-  it("includes sender metadata block for direct chats", () => {
+  it("omits sender metadata block for direct chats without extra context", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       SenderName: "Tyler",
       SenderId: "+15551234567",
     } as TemplateContext);
 
-    const senderInfo = parseSenderInfoPayload(text);
-    expect(senderInfo["label"]).toBe("Tyler (+15551234567)");
-    expect(senderInfo["id"]).toBe("+15551234567");
+    expect(text).toBe("");
+  });
+
+  it("keeps reply context blocks for direct chats", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      ReplyToBody: "quoted text",
+      ReplyToSender: "Alice",
+    } as TemplateContext);
+
+    expect(text).toContain("Replied message (untrusted, for context):");
+    expect(text).not.toContain("Conversation info (untrusted metadata):");
+    expect(text).not.toContain("Sender (untrusted metadata):");
+  });
+
+  it("keeps history blocks for direct chats only when multiple entries exist", () => {
+    const single = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      InboundHistory: [{ sender: "a", body: "one", timestamp: 1 }],
+    } as TemplateContext);
+    expect(single).toBe("");
+
+    const multi = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      InboundHistory: [
+        { sender: "a", body: "one", timestamp: 1 },
+        { sender: "a", body: "two", timestamp: 2 },
+      ],
+    } as TemplateContext);
+    expect(multi).toContain("Chat history since last reply (untrusted, for context):");
+    expect(multi).not.toContain("Conversation info (untrusted metadata):");
+    expect(multi).not.toContain("Sender (untrusted metadata):");
   });
 
   it("includes formatted timestamp in conversation info when provided", () => {

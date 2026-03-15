@@ -50,6 +50,20 @@ const registryCache = new Map<string, { expiresAt: number; registry: PluginManif
 // Keep a short cache window to collapse bursty reloads during startup flows.
 const DEFAULT_MANIFEST_CACHE_MS = 1000;
 
+const PLUGIN_ID_EQUIVALENTS: Readonly<Record<string, string>> = {
+  "ollama-provider": "ollama",
+  "sglang-provider": "sglang",
+  "vllm-provider": "vllm",
+};
+
+function normalizePluginIdHint(idHint?: string): string | undefined {
+  const trimmed = idHint?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return PLUGIN_ID_EQUIVALENTS[trimmed] ?? trimmed;
+}
+
 export function clearPluginManifestRegistryCache(): void {
   registryCache.clear();
 }
@@ -229,7 +243,8 @@ export function loadPluginManifestRegistry(params: {
     }
     const manifest = manifestRes.manifest;
 
-    if (candidate.idHint && candidate.idHint !== manifest.id) {
+    const normalizedIdHint = normalizePluginIdHint(candidate.idHint);
+    if (normalizedIdHint && normalizedIdHint !== manifest.id) {
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,

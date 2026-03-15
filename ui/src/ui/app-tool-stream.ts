@@ -1,4 +1,5 @@
 import { truncateText } from "./format.ts";
+import { getIncrementalStreamText } from "./stream-dedupe.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -437,8 +438,13 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.
+    // Chat deltas are cumulative for the whole run, so only keep the suffix
+    // that was not already committed by earlier stream segments.
     if (host.chatStream && host.chatStream.trim().length > 0) {
-      host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
+      const incrementalText = getIncrementalStreamText(host.chatStreamSegments, host.chatStream);
+      if (incrementalText.trim().length > 0) {
+        host.chatStreamSegments = [...host.chatStreamSegments, { text: incrementalText, ts: now }];
+      }
       host.chatStream = null;
       host.chatStreamStartedAt = null;
     }
