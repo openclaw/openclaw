@@ -131,6 +131,7 @@ function createHost() {
     chatMessages: [],
     chatToolMessages: [],
     chatStreamSegments: [],
+    chatStreamSegmentOffset: 0,
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
