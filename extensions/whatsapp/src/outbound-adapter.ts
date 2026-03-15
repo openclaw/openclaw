@@ -1,8 +1,8 @@
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk";
 import { chunkText } from "../../../src/auto-reply/chunk.js";
 import { sendTextMediaPayload } from "../../../src/channels/plugins/outbound/direct-text-media.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
 import { shouldLogVerbose } from "../../../src/globals.js";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { resolveWhatsAppOutboundTarget } from "../../../src/whatsapp/resolve-outbound-target.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 

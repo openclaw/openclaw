@@ -1,3 +1,4 @@
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk";
 import {
   buildAccountScopedDmSecurityPolicy,
   createScopedAccountConfigAccessors,
@@ -30,7 +31,6 @@ import {
   type ChannelPlugin,
   type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk/signal";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { getSignalRuntime } from "./runtime.js";
 
 const signalMessageActions: ChannelMessageActionAdapter = {
