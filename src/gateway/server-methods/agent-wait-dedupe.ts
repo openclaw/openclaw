@@ -5,6 +5,7 @@ export type AgentWaitTerminalSnapshot = {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  result?: unknown;
 };
 
 const AGENT_WAITERS_BY_RUN_ID = new Map<string, Set<() => void>>();
@@ -72,6 +73,7 @@ export function readTerminalSnapshotFromDedupeEntry(
         endedAt?: unknown;
         error?: unknown;
         summary?: unknown;
+        result?: unknown;
       }
     | undefined;
   const status = typeof payload?.status === "string" ? payload.status : undefined;
@@ -87,6 +89,7 @@ export function readTerminalSnapshotFromDedupeEntry(
       : typeof payload?.summary === "string"
         ? payload.summary
         : entry.error?.message;
+  const result = payload?.result;
 
   if (status === "ok" || status === "timeout") {
     return {
@@ -94,6 +97,7 @@ export function readTerminalSnapshotFromDedupeEntry(
       startedAt,
       endedAt,
       error: status === "timeout" ? errorMessage : undefined,
+      result,
     };
   }
   if (status === "error" || !entry.ok) {

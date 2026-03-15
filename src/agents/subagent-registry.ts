@@ -20,6 +20,7 @@ import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import {
   captureSubagentCompletionReply,
+  extractAgentWaitResultText,
   runSubagentAnnounceFlow,
   type SubagentRunOutcome,
 } from "./subagent-announce.js";
@@ -1226,6 +1227,10 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       startedAt?: number;
       endedAt?: number;
       error?: string;
+      result?: unknown;
+      output?: unknown;
+      content?: unknown;
+      summary?: unknown;
     }>({
       method: "agent.wait",
       params: {
@@ -1255,6 +1260,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       mutated = true;
     }
     const waitError = typeof wait.error === "string" ? wait.error : undefined;
+    const waitResultText = extractAgentWaitResultText(wait);
     const outcome: SubagentRunOutcome =
       wait.status === "error"
         ? { status: "error", error: waitError }
@@ -1264,6 +1270,14 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     if (!runOutcomesEqual(entry.outcome, outcome)) {
       entry.outcome = outcome;
       mutated = true;
+    }
+    if (waitResultText) {
+      const nextFrozenResultText = capFrozenResultText(waitResultText);
+      if (entry.frozenResultText !== nextFrozenResultText) {
+        entry.frozenResultText = nextFrozenResultText;
+        entry.frozenResultCapturedAt = Date.now();
+        mutated = true;
+      }
     }
     if (mutated) {
       persistSubagentRuns();

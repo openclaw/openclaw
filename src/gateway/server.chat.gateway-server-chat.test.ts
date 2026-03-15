@@ -631,6 +631,30 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("agent.wait returns the deduped agent result payload when the run finishes without lifecycle history", async () => {
+    const agentSpy = vi.mocked(agentCommand);
+    agentSpy.mockResolvedValueOnce("gateway final answer" as never);
+
+    await withMainSessionStore(async () => {
+      const runId = "idem-wait-agent-result";
+      const agentRes = await rpcReq(ws, "agent", {
+        sessionKey: "main",
+        message: "return the final answer",
+        idempotencyKey: runId,
+      });
+      expect(agentRes.ok).toBe(true);
+      expect(agentRes.payload?.status).toBe("accepted");
+
+      const waitRes = await rpcReq(ws, "agent.wait", {
+        runId,
+        timeoutMs: 1_000,
+      });
+      expect(waitRes.ok).toBe(true);
+      expect(waitRes.payload?.status).toBe("ok");
+      expect(waitRes.payload?.result).toBe("gateway final answer");
+    });
+  });
+
   test("agent.wait ignores stale chat dedupe when an agent run with the same runId is in flight", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     let resolveAgentRun: (() => void) | undefined;

@@ -66,8 +66,42 @@ describe("agent wait dedupe helper", () => {
       startedAt: 100,
       endedAt: 200,
       error: undefined,
+      result: undefined,
     });
     expect(__testing.getWaiterCount(runId)).toBe(0);
+  });
+
+  it("preserves terminal agent result payloads from dedupe snapshots", () => {
+    const dedupe = new Map();
+    const runId = "run-agent-result";
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: 123,
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+          startedAt: 10,
+          endedAt: 20,
+          result: "final answer",
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "ok",
+      startedAt: 10,
+      endedAt: 20,
+      error: undefined,
+      result: "final answer",
+    });
   });
 
   it("keeps stale chat dedupe blocked while agent dedupe is in-flight", async () => {
@@ -144,6 +178,7 @@ describe("agent wait dedupe helper", () => {
       startedAt: 1,
       endedAt: 2,
       error: undefined,
+      result: undefined,
     });
   });
 
@@ -194,6 +229,7 @@ describe("agent wait dedupe helper", () => {
       startedAt: 123,
       endedAt: 456,
       error: undefined,
+      result: undefined,
     });
   });
 
@@ -255,6 +291,7 @@ describe("agent wait dedupe helper", () => {
       startedAt: 3,
       endedAt: 4,
       error: "still running",
+      result: undefined,
     });
   });
 

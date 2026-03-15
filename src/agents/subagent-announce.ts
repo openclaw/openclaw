@@ -342,6 +342,26 @@ export async function captureSubagentCompletionReply(
   });
 }
 
+export function extractAgentWaitResultText(wait: unknown): string | undefined {
+  if (!wait || typeof wait !== "object") {
+    return undefined;
+  }
+  const payload = wait as {
+    result?: unknown;
+    output?: unknown;
+    content?: unknown;
+    summary?: unknown;
+  };
+  const candidates = [payload.result, payload.output, payload.content, payload.summary];
+  for (const candidate of candidates) {
+    const text = extractToolResultText(candidate)?.trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
 function describeSubagentOutcome(outcome?: SubagentRunOutcome): string {
   if (!outcome) {
     return "unknown";
@@ -1202,6 +1222,10 @@ export async function runSubagentAnnounceFlow(params: {
         startedAt?: number;
         endedAt?: number;
         error?: string;
+        result?: unknown;
+        output?: unknown;
+        content?: unknown;
+        summary?: unknown;
       }>({
         method: "agent.wait",
         params: {
@@ -1211,12 +1235,16 @@ export async function runSubagentAnnounceFlow(params: {
         timeoutMs: waitMs + 2000,
       });
       const waitError = typeof wait?.error === "string" ? wait.error : undefined;
+      const waitResultText = extractAgentWaitResultText(wait);
       if (wait?.status === "timeout") {
         outcome = { status: "timeout" };
       } else if (wait?.status === "error") {
         outcome = { status: "error", error: waitError };
       } else if (wait?.status === "ok") {
         outcome = { status: "ok" };
+      }
+      if (!reply && waitResultText) {
+        reply = waitResultText;
       }
       if (typeof wait?.startedAt === "number" && !params.startedAt) {
         params.startedAt = wait.startedAt;
