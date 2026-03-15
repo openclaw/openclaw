@@ -41,7 +41,8 @@ What has been implemented:
 - the first runtime registration normalization helpers now exist in `src/extension-host/runtime-registrations.ts` for channel, provider, HTTP-route, gateway-method, tool, CLI, service, command, context-engine, and hook writes
 - plugin SDK alias resolution now routes through `src/extension-host/loader-compat.ts`
 - loader cache key construction and registry cache control now route through `src/extension-host/loader-cache.ts`
-- loader provenance, duplicate-order, and warning policy now route through `src/extension-host/loader-policy.ts`
+- loader provenance, duplicate-order, and record/error policy now route through `src/extension-host/loader-policy.ts`
+- loader discovery policy outcomes now route through `src/extension-host/loader-discovery-policy.ts`
 - loader initial candidate planning and record creation now route through `src/extension-host/loader-records.ts`
 - loader entry-path opening and module import now route through `src/extension-host/loader-import.ts`
 - loader module-export resolution, config validation, and memory-slot load decisions now route through `src/extension-host/loader-runtime.ts`
@@ -65,6 +66,7 @@ How it has been implemented:
 - by making the first loader compatibility, candidate-planning, import-flow, runtime-decision, register-flow, candidate-orchestration, top-level load orchestration, record-state with compatibility lifecycle mapping, and finalization helpers explicit host-owned seams before introducing a versioned compatibility layer
 - by turning the compatibility record-state layer into an enforced loader lifecycle state machine before broadening the schema-driven host lifecycle model
 - by moving mutable activation state into a host-owned loader session before broadening the schema-driven host lifecycle model
+- by turning open-allowlist discovery warnings into explicit host-owned discovery-policy results before broadening the schema-driven host lifecycle model
 - by moving duplicate precedence, config enablement, and early memory-slot gating into explicit host-owned activation-policy outcomes before broadening the schema-driven host lifecycle model
 - by turning provenance-based untracked-extension warnings and final memory-slot warnings into explicit host-owned finalization-policy results before broadening the schema-driven host lifecycle model
 

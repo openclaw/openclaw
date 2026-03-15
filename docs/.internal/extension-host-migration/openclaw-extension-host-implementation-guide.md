@@ -62,7 +62,8 @@ What has been implemented so far:
 - an initial Phase 0 inventory now exists in `src/extension-host/cutover-inventory.md`
 - plugin SDK alias resolution now routes through `src/extension-host/loader-compat.ts`
 - loader cache key construction and registry cache control now route through `src/extension-host/loader-cache.ts`
-- loader provenance, duplicate-order, and warning policy now route through `src/extension-host/loader-policy.ts`
+- loader provenance, duplicate-order, and record/error policy now route through `src/extension-host/loader-policy.ts`
+- loader discovery policy outcomes now route through `src/extension-host/loader-discovery-policy.ts`
 - loader initial candidate planning and record creation now route through `src/extension-host/loader-records.ts`
 - loader entry-path opening and module import now route through `src/extension-host/loader-import.ts`
 - loader module-export resolution, config validation, and memory-slot load decisions now route through `src/extension-host/loader-runtime.ts`
@@ -108,6 +109,7 @@ How it has been done:
 - by turning that compatibility `lifecycleState` field into an enforced loader lifecycle state machine with readiness promotion during finalization
 - by moving the remaining top-level loader orchestration into a host-owned module so `src/plugins/loader.ts` becomes a compatibility facade instead of the real owner
 - by moving mutable activation state such as seen-id tracking, memory-slot selection, and finalization inputs into a host-owned loader session instead of leaving them in top-level loader variables
+- by turning open-allowlist discovery warnings into explicit host-owned discovery-policy results before the orchestrator logs them
 - by moving duplicate precedence, config enablement, and early memory-slot gating into explicit host-owned activation-policy outcomes instead of leaving them inline in the loader flow
 - by turning provenance-based untracked-extension warnings and final memory-slot warnings into explicit host-owned finalization-policy results before the finalizer applies them
 - by moving central readers first, so later lifecycle and compatibility work can land on one boundary instead of many ad hoc call sites
@@ -129,13 +131,14 @@ Committed implementation slices so far:
 - `da9aad0c0f` `Plugins: add loader activation session`
 - `fc51ce2867` `Plugins: add loader activation policy`
 - `fd7488e10a` `Plugins: add loader finalization policy`
+- `97e2af7f97` `Plugins: add loader discovery policy`
 - `89414ed857` `Docs: track extension host migration internally`
 - `d8af1eceaf` `Docs: refresh extension host migration status`
 
 What is still missing for these phases:
 
 - keeping the cutover inventory current as more surfaces move
-- broader lifecycle ownership beyond the loader state machine, session-owned activation state, and explicit activation-policy and finalization-policy outcomes, remaining policy gate ownership, and broad host-owned registries described for Phase 2
+- broader lifecycle ownership beyond the loader state machine, session-owned activation state, and explicit discovery-policy, activation-policy, and finalization-policy outcomes, remaining policy gate ownership, and broad host-owned registries described for Phase 2
 - minimal SDK compatibility work beyond preserving current behavior indirectly through existing loading
 - any pilot migration, event pipeline, canonical catalog, or arbitration implementation
 
@@ -325,7 +328,7 @@ Current implementation status:
 - the host owns the active registry state
 - the host exposes a resolved-extension registry view for static consumers
 - plugin skills, plugin auto-enable, and config validation indexing now consume host-owned resolved-extension data
-- activation, loader cache control, loader policy, loader activation-policy outcomes, loader finalization-policy outcomes, loader candidate planning, loader import flow, loader runtime decisions, loader post-import register flow, loader candidate orchestration, loader top-level load orchestration, loader session state, loader record-state helpers, and loader finalization now route through `src/extension-host/*`
+- activation, loader cache control, loader policy, loader discovery-policy outcomes, loader activation-policy outcomes, loader finalization-policy outcomes, loader candidate planning, loader import flow, loader runtime decisions, loader post-import register flow, loader candidate orchestration, loader top-level load orchestration, loader session state, loader record-state helpers, and loader finalization now route through `src/extension-host/*`
 - broader lifecycle state ownership beyond the loader state machine, activation states, policy evaluation, and broad host-owned registries are still not implemented
 
 ### Phase 3: Build compatibility bridges
@@ -493,7 +496,7 @@ If you want the lowest-risk start, do this first:
 Status of this slice:
 
 - steps 2 through 6 are underway
-- step 1 is still missing as a formal artifact
+- step 1 has landed as `src/extension-host/cutover-inventory.md`
 - steps 7 and 8 have not started
 
 Concrete landings from this slice:
