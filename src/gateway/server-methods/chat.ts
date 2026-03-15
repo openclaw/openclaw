@@ -204,16 +204,27 @@ function resolveChatSendOriginatingRoute(params: {
     isConfiguredMainSessionScope &&
     params.hasConnectedClient &&
     (isFromGatewayCliClient || !hasClientMetadata);
+  const canInheritWebchatTelegramRoute = Boolean(
+    isFromWebchatClient &&
+    sessionChannelHint === "telegram" &&
+    routeChannelCandidate === "telegram" &&
+    !isChannelAgnosticSessionScope &&
+    (isChannelScopedSession || hasLegacyChannelPeerShape),
+  );
 
-  // Webchat clients never inherit external delivery routes. Configured-main
+  // Webchat clients stay internal by default. The one exception here is
+  // Telegram channel-scoped sessions, where Webchat should be able to mirror
+  // replies back into the originating Telegram conversation. Configured-main
   // sessions are stricter than channel-scoped sessions: only CLI callers, or
   // legacy callers with no client metadata, may inherit the last external route.
   const canInheritDeliverableRoute = Boolean(
-    !isFromWebchatClient &&
     sessionChannelHint &&
     sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
-    ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
-      canInheritConfiguredMainRoute),
+    (canInheritWebchatTelegramRoute ||
+      (!isFromWebchatClient &&
+        ((!isChannelAgnosticSessionScope &&
+          (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
+          canInheritConfiguredMainRoute))),
   );
   const hasDeliverableRoute =
     canInheritDeliverableRoute &&
